@@ -1,7 +1,6 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import { reviewerForRole } from "@roundhouse/core";
 import { observeResponse } from "@roundhouse/response-observer";
 
 const routingHeaders = [
@@ -12,7 +11,9 @@ const routingHeaders = [
 ] as const;
 const researchRoles = new Set(["qualify", "reproduce", "plan"]);
 
-export type BrokerEnv = Cloudflare.Env;
+export type BrokerEnv = Omit<Cloudflare.Env, "ROUTING_ROUTES"> & {
+  readonly ROUTING_ROUTES?: string;
+};
 
 interface RawAiBinding {
   run(
@@ -31,6 +32,7 @@ interface RawAiBinding {
 }
 
 export interface BrokerRoute {
+  readonly provider: "openai" | "anthropic" | "moonshotai";
   readonly model: string;
   readonly reasoningEffort: string;
   readonly rule:
@@ -44,13 +46,41 @@ export interface BrokerRoute {
     | "review-data-v1";
 }
 
+const defaultRoutes: Readonly<
+  Record<string, Pick<BrokerRoute, "provider" | "model">>
+> = {
+  plan: { provider: "anthropic", model: "anthropic/claude-opus-4.8" },
+  implement: { provider: "openai", model: "openai/gpt-5.6-sol" },
+  "review-holistic": {
+    provider: "anthropic",
+    model: "anthropic/claude-fable-5",
+  },
+  "review-security": { provider: "moonshotai", model: "moonshotai/kimi-k3" },
+  "review-data": { provider: "moonshotai", model: "moonshotai/kimi-k3" },
+};
+
+function configuredRoutes(env: BrokerEnv) {
+  const value = (env as BrokerEnv & { ROUTING_ROUTES?: string }).ROUTING_ROUTES;
+  if (!value) return defaultRoutes;
+  try {
+    return { ...defaultRoutes, ...(JSON.parse(value) as typeof defaultRoutes) };
+  } catch {
+    throw new Error("invalid_routing_configuration");
+  }
+}
+
 export function selectRoute(request: Request, env: BrokerEnv): BrokerRoute {
   for (const header of routingHeaders)
     if (!request.headers.get(header)) throw new Error(`missing_${header}`);
   const role = request.headers.get("x-roundhouse-role")!;
-  const reviewer = reviewerForRole(role);
+  const configured = configuredRoutes(env)[role];
+  const model = configured?.model ?? env.ROUTING_MODEL;
+  const provider = configured?.provider ?? model.split("/", 1)[0] ?? "";
+  if (!["openai", "anthropic", "moonshotai"].includes(provider))
+    throw new Error("invalid_routing_provider");
   return {
-    model: reviewer?.model ?? env.ROUTING_MODEL,
+    provider: provider as BrokerRoute["provider"],
+    model,
     reasoningEffort: env.ROUTING_REASONING_EFFORT,
     rule:
       role === "review-holistic"
@@ -74,6 +104,7 @@ export function selectRoute(request: Request, env: BrokerEnv): BrokerRoute {
 function routingResponseHeaders(response: Response, route: BrokerRoute) {
   const headers = new Headers(response.headers);
   headers.set("x-roundhouse-routing-model", route.model);
+  headers.set("x-roundhouse-routing-provider", route.provider);
   headers.set("x-roundhouse-routing-effort", route.reasoningEffort);
   headers.set("x-roundhouse-routing-rule", route.rule);
   return headers;

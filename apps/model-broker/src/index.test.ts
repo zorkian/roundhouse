@@ -35,6 +35,7 @@ function request(body: Record<string, unknown> = { model: "untrusted-model" }) {
 describe("model broker", () => {
   it("keeps routing policy behind a semantic envelope", () => {
     expect(selectRoute(request(), env)).toEqual({
+      provider: "openai",
       model: "openai/gpt-5.6-sol",
       reasoningEffort: "low",
       rule: "qualification-default-v1",
@@ -45,6 +46,7 @@ describe("model broker", () => {
     const reproduction = request();
     reproduction.headers.set("x-roundhouse-role", "reproduce");
     expect(selectRoute(reproduction, env)).toEqual({
+      provider: "openai",
       model: "openai/gpt-5.6-sol",
       reasoningEffort: "low",
       rule: "reproduction-default-v1",
@@ -56,7 +58,8 @@ describe("model broker", () => {
     planning.headers.set("x-roundhouse-role", "plan");
     planning.headers.set("x-roundhouse-task-type", "planning");
     expect(selectRoute(planning, env)).toEqual({
-      model: "openai/gpt-5.6-sol",
+      provider: "anthropic",
+      model: "anthropic/claude-opus-4.8",
       reasoningEffort: "low",
       rule: "planning-default-v1",
     });
@@ -67,6 +70,7 @@ describe("model broker", () => {
     implementation.headers.set("x-roundhouse-role", "implement");
     implementation.headers.set("x-roundhouse-task-type", "implementation");
     expect(selectRoute(implementation, env)).toEqual({
+      provider: "openai",
       model: "openai/gpt-5.6-sol",
       reasoningEffort: "low",
       rule: "implementation-default-v1",
@@ -78,6 +82,7 @@ describe("model broker", () => {
     review.headers.set("x-roundhouse-role", "review");
     review.headers.set("x-roundhouse-task-type", "review");
     expect(selectRoute(review, env)).toEqual({
+      provider: "openai",
       model: "openai/gpt-5.6-sol",
       reasoningEffort: "low",
       rule: "review-default-v1",
@@ -85,17 +90,33 @@ describe("model broker", () => {
   });
 
   it.each([
-    ["review-holistic", "review-holistic-v1"],
-    ["review-security", "review-security-v1"],
-    ["review-data", "review-data-v1"],
-  ] as const satisfies readonly (readonly [string, BrokerRoute["rule"]])[])(
+    [
+      "review-holistic",
+      "review-holistic-v1",
+      "anthropic",
+      "anthropic/claude-fable-5",
+    ],
+    [
+      "review-security",
+      "review-security-v1",
+      "moonshotai",
+      "moonshotai/kimi-k3",
+    ],
+    ["review-data", "review-data-v1", "moonshotai", "moonshotai/kimi-k3"],
+  ] as const satisfies readonly (readonly [
+    string,
+    BrokerRoute["rule"],
+    BrokerRoute["provider"],
+    string,
+  ])[])(
     "routes the %s role to the proven Codex-compatible model",
-    (role, rule) => {
+    (role, rule, provider, model) => {
       const review = request();
       review.headers.set("x-roundhouse-role", role);
       review.headers.set("x-roundhouse-task-type", "review");
       expect(selectRoute(review, env)).toEqual({
-        model: "openai/gpt-5.6-sol",
+        provider,
+        model,
         reasoningEffort: "low",
         rule,
       });

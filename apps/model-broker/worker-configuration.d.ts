@@ -4,6 +4,7 @@ interface __BaseEnv_Env {
   AI: Ai;
   AI_GATEWAY_ID: "roundhouse-v2-development";
   ROUTING_MODEL: "openai/gpt-5.6-sol";
+  ROUTING_ROUTES: string;
   ROUTING_REASONING_EFFORT: "low";
 }
 declare namespace Cloudflare {

@@ -164,6 +164,7 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
   const routing = {
     ...attempt.routing,
     model: response.headers.get("x-roundhouse-routing-model"),
+    provider: response.headers.get("x-roundhouse-routing-provider"),
     reasoningEffort: response.headers.get("x-roundhouse-routing-effort"),
     rule: response.headers.get("x-roundhouse-routing-rule"),
   };
@@ -182,7 +183,15 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
     },
     async onComplete() {
       const usage = response.ok
-        ? extractModelUsage(responseText, attemptId, routing.model ?? "unknown")
+        ? extractModelUsage(
+            responseText,
+            attemptId,
+            routing.model ?? "unknown",
+            {
+              provider: routing.provider ?? undefined,
+              routingRule: routing.rule ?? undefined,
+            },
+          )
         : undefined;
       if (usage) {
         try {
@@ -221,6 +230,7 @@ export function extractModelUsage(
   text: string,
   attemptId: string,
   routedModel: string,
+  routing: { provider?: string; routingRule?: string } = {},
 ): ModelUsage | undefined {
   const candidates = text.trim().startsWith("{")
     ? [text]
@@ -282,6 +292,8 @@ export function extractModelUsage(
     callId,
     attemptId,
     model,
+    configuredModel: routedModel,
+    ...routing,
     ...(inputTokens === undefined ? {} : { inputTokens }),
     ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
     ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
