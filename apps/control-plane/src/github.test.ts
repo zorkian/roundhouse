@@ -1697,6 +1697,45 @@ describe("GitHub intake", () => {
     ]);
   });
 
+  it("retries failed work from an authorized start command", async () => {
+    const repository = new IntakeRepository();
+    const wakeups: Wakeup[] = [];
+    await acceptGitHubComment(
+      await delivery("delivery-start"),
+      env,
+      repository,
+      async (wakeup) => {
+        wakeups.push(wakeup);
+      },
+      github(),
+    );
+    await repository.transition("run_123_issue_42", 1, {
+      status: "failed",
+      stage: "integrate",
+    });
+
+    await expect(
+      acceptGitHubComment(
+        await delivery("delivery-retry-failed"),
+        env,
+        repository,
+        async (wakeup) => {
+          wakeups.push(wakeup);
+        },
+        github(),
+      ),
+    ).resolves.toBe("accepted");
+    await expect(repository.get("run_123_issue_42")).resolves.toMatchObject({
+      status: "active",
+      stage: "integrate",
+      revision: 3,
+    });
+    expect(wakeups).toEqual([
+      { runId: "run_123_issue_42", expectedRevision: 1 },
+      { runId: "run_123_issue_42", expectedRevision: 3 },
+    ]);
+  });
+
   it("does not resume cancelled work while the issue is closed", async () => {
     const repository = new IntakeRepository();
     await acceptGitHubComment(

@@ -1240,13 +1240,43 @@ export async function acceptGitHubComment(
   });
   if (!fresh) return "duplicate";
   if (existing) {
+    const concludedQualification = await concludedNoChangeQualification(
+      repository,
+      run,
+    );
     const resumable =
       run.status === "waiting" ||
-      (await concludedNoChangeQualification(repository, run)) ||
+      concludedQualification ||
+      (run.status === "failed" && payload.issue?.state === "open") ||
       (run.status === "cancelled" && payload.issue?.state === "open") ||
       (run.status === "succeeded" &&
         (run.stage === "merge" || run.stage === "implement") &&
         payload.issue?.state === "open");
+    console.log(
+      JSON.stringify({
+        message: "github_start_resume_decision",
+        runId: run.id,
+        revision: run.revision,
+        status: run.status,
+        stage: run.stage,
+        issueState: payload.issue?.state ?? null,
+        resumable,
+        reason:
+          run.status === "waiting"
+            ? "waiting"
+            : concludedQualification
+              ? "concluded_qualification"
+              : run.status === "failed" && payload.issue?.state === "open"
+                ? "failed"
+                : run.status === "cancelled" && payload.issue?.state === "open"
+                  ? "cancelled"
+                  : run.status === "succeeded" &&
+                      (run.stage === "merge" || run.stage === "implement") &&
+                      payload.issue?.state === "open"
+                    ? "completed_work"
+                    : "not_resumable",
+      }),
+    );
     if (resumable) {
       const issue = run.issue ?? {
         title: payload.issue?.title ?? "",

@@ -1411,7 +1411,11 @@ describe("single coordinator", () => {
     ).toEqual({
       status: "active",
       stage: "integrate",
-      heads: { reviewedHead: "b".repeat(40) },
+      heads: {
+        reviewedHead: "b".repeat(40),
+        targetBaseHead: null,
+        integrationHead: null,
+      },
     });
     expect(
       reviewTransition({
@@ -1629,6 +1633,91 @@ describe("single coordinator", () => {
     expect(submitted).toHaveLength(3);
   });
 
+  it("does not reuse an older integration cycle when a reviewed candidate re-enters integration", async () => {
+    const store = new MemoryRunRepository();
+    const candidate = "b".repeat(40);
+    const oldBase = "d".repeat(40);
+    const oldResolution = "e".repeat(40);
+    await store.create(
+      runFixture({
+        revision: 12,
+        stage: "integrate",
+        currentNodeId: "integrate",
+        currentHead: candidate,
+        candidateHead: candidate,
+        reviewedHead: candidate,
+        targetBaseHead: undefined,
+        integrationHead: undefined,
+      }),
+    );
+    await store.createAttempt({
+      id: "run_slice_rev_8",
+      runId: input.id,
+      runRevision: 8,
+      kind: "agent",
+      stage: "integrate",
+      role: "conflict-resolution",
+      state: "created",
+      deadlineAt: 1_000,
+      baseCommit: oldBase,
+      expectedHead: candidate,
+    });
+    await store.completeAttempt("run_slice_rev_8", 8, oldResolution, {
+      integration: {
+        status: "clean",
+        candidateHead: candidate,
+        baseHead: oldBase,
+        head: oldResolution,
+      },
+    });
+    await store.createAttempt({
+      id: "run_slice_rev_9",
+      runId: input.id,
+      runRevision: 9,
+      kind: "agent",
+      stage: "integrate",
+      role: "review-integration",
+      state: "created",
+      deadlineAt: 1_000,
+      baseCommit: oldBase,
+      expectedHead: oldResolution,
+    });
+    await store.completeAttempt("run_slice_rev_9", 9, oldResolution, {
+      review: {
+        status: "changes_requested",
+        findings: [{ title: "Old integration finding" }],
+      },
+    });
+    const submitted: Attempt[] = [];
+
+    await expect(
+      coordinate(
+        store,
+        {
+          submit: async (attempt: Attempt) => {
+            submitted.push(attempt);
+          },
+        },
+        { runId: input.id, expectedRevision: 12 },
+        100,
+      ),
+    ).resolves.toBe("dispatched");
+
+    expect(submitted).toHaveLength(1);
+    expect(submitted[0]).toMatchObject({
+      role: "integrate",
+      baseCommit: input.baseCommit,
+      expectedHead: candidate,
+    });
+    expect(
+      store.events.some(
+        (event) =>
+          event.kind === "integration_role_selected" &&
+          event.payload.reason === "mechanical_integration_required",
+      ),
+    ).toBe(true);
+  });
+
   it("rejects integration results with mismatched candidate or base identities", () => {
     const candidate = "b".repeat(40);
     const base = "d".repeat(40);
@@ -1776,6 +1865,64 @@ describe("single coordinator", () => {
       role: "integrate",
       stage: "integrate",
       expectedHead: candidate,
+    });
+  });
+
+  it("resolves a reintegration conflict from the published branch head", async () => {
+    const store = new MemoryRunRepository();
+    const reviewed = "b".repeat(40);
+    const published = "e".repeat(40);
+    const movedBase = "f".repeat(40);
+    await store.create(
+      runFixture({
+        revision: 10,
+        stage: "integrate",
+        currentNodeId: "integrate",
+        currentHead: published,
+        candidateHead: reviewed,
+        reviewedHead: reviewed,
+        targetBaseHead: movedBase,
+      }),
+    );
+    await store.createAttempt({
+      id: "run_slice_rev_9",
+      runId: input.id,
+      runRevision: 9,
+      kind: "agent",
+      stage: "integrate",
+      role: "integrate",
+      state: "completed",
+      deadlineAt: 1_000,
+      baseCommit: input.baseCommit,
+      expectedHead: reviewed,
+      acceptedHead: reviewed,
+      result: {
+        integration: {
+          status: "conflict",
+          candidateHead: reviewed,
+          baseHead: movedBase,
+          conflicts: [{ path: "src/route.ts", hunks: "@@" }],
+        },
+      },
+    });
+    const submitted: Attempt[] = [];
+    await expect(
+      coordinate(
+        store,
+        {
+          submit: async (attempt: Attempt) => {
+            submitted.push(attempt);
+          },
+        },
+        { runId: input.id, expectedRevision: 10 },
+        100,
+      ),
+    ).resolves.toBe("dispatched");
+    expect(submitted[0]).toMatchObject({
+      role: "conflict-resolution",
+      stage: "integrate",
+      baseCommit: movedBase,
+      expectedHead: published,
     });
   });
 
