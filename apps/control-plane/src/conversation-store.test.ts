@@ -354,6 +354,151 @@ describe("D1 conversation repository", () => {
     sqlite.close();
   });
 
+  it("orders recent conversations by the latest delivery update", async () => {
+    const sqlite = new DatabaseSync(":memory:");
+    sqlite.exec("PRAGMA foreign_keys=ON");
+    sqlite.exec(
+      "CREATE TABLE repositories (id TEXT PRIMARY KEY, github_id TEXT NOT NULL UNIQUE, profile_version TEXT NOT NULL, profile_json TEXT NOT NULL, created_at INTEGER NOT NULL)",
+    );
+    sqlite.exec(
+      readFileSync(
+        new URL("../migrations/0017_conversations.sql", import.meta.url),
+        "utf8",
+      ),
+    );
+    sqlite.exec(
+      readFileSync(
+        new URL("../migrations/0018_conversation_titles.sql", import.meta.url),
+        "utf8",
+      ),
+    );
+    sqlite
+      .prepare("INSERT INTO repositories VALUES (?1,?2,?3,?4,?5)")
+      .run(
+        "repo_123",
+        "123",
+        "profile",
+        JSON.stringify({ repository: "octo/project", installationId: 99 }),
+        1,
+      );
+    let now = 100;
+    const repository = new D1ConversationRepository(
+      sqliteD1(sqlite),
+      () => now,
+    );
+    await repository.create({
+      id: "stale-conversation",
+      repositoryId: "repo_123",
+      creatorGithubUserId: 7,
+      creatorGithubLogin: "octocat",
+      sourceCommit: "a".repeat(40),
+      profileHash: "b".repeat(64),
+      context: {
+        model: { id: "openai/gpt-5.6-sol", reasoning: "high" },
+        defaultBranch: "main",
+      },
+      turnId: "stale-turn",
+      messageId: "stale-message",
+      message: inbound("stale-external", "Prepare a delivery", now),
+    });
+    await repository.claimTurn("stale-turn");
+    await repository.completeMessageTurn(
+      "stale-turn",
+      "stale-reply",
+      "Here is the delivery plan.",
+    );
+    await repository.requestBrief({
+      conversationId: "stale-conversation",
+      creatorGithubUserId: 7,
+      turnId: "stale-brief-turn",
+    });
+    await repository.claimTurn("stale-brief-turn");
+    await repository.completeBriefTurn("stale-brief-turn", "stale-brief", {
+      title: "Prepare delivery",
+      outcome: "Prepare the requested delivery.",
+      acceptanceCriteria: [],
+      constraints: [],
+      evidence: [],
+      uncertainties: [],
+    });
+    now = 110;
+    await repository.approveBriefAndRequestPromotion({
+      conversationId: "stale-conversation",
+      creatorGithubUserId: 7,
+      creatorGithubLogin: "octocat",
+      briefId: "stale-brief",
+      title: "Prepare delivery",
+      outcome: "Prepare the requested delivery.",
+      acceptanceCriteria: [],
+      constraints: [],
+      evidence: [],
+      uncertainties: [],
+      promotionId: "stale-promotion",
+      uiSessionHash: "session-hash",
+    });
+
+    now = 200;
+    await repository.create({
+      id: "recent-conversation",
+      repositoryId: "repo_123",
+      creatorGithubUserId: 7,
+      creatorGithubLogin: "octocat",
+      sourceCommit: "a".repeat(40),
+      profileHash: "b".repeat(64),
+      context: {
+        model: { id: "openai/gpt-5.6-sol", reasoning: "high" },
+        defaultBranch: "main",
+      },
+      turnId: "recent-turn",
+      messageId: "recent-message",
+      message: inbound("recent-external", "A more recent conversation", now),
+    });
+    await expect(repository.list(7, ["123"])).resolves.toMatchObject([
+      { id: "recent-conversation", updatedAt: 200 },
+      { id: "stale-conversation", updatedAt: 110 },
+    ]);
+
+    now = 300;
+    await expect(repository.claimPromotion("stale-promotion")).resolves.toBe(
+      true,
+    );
+    await expect(repository.list(7, ["123"])).resolves.toMatchObject([
+      {
+        id: "stale-conversation",
+        promotionState: "requested",
+        updatedAt: 300,
+      },
+      { id: "recent-conversation", updatedAt: 200 },
+    ]);
+
+    now = 400;
+    await repository.recordPromotionIssue(
+      "stale-promotion",
+      482,
+      "https://github.test/octo/project/issues/482",
+    );
+    await expect(repository.list(7, ["123"])).resolves.toMatchObject([
+      {
+        id: "stale-conversation",
+        promotionState: "issue_created",
+        updatedAt: 400,
+      },
+      { id: "recent-conversation", updatedAt: 200 },
+    ]);
+
+    now = 500;
+    await repository.rejectPromotion("stale-promotion", "github_failure");
+    await expect(repository.list(7, ["123"])).resolves.toMatchObject([
+      {
+        id: "stale-conversation",
+        promotionState: "rejected",
+        updatedAt: 500,
+      },
+      { id: "recent-conversation", updatedAt: 200 },
+    ]);
+    sqlite.close();
+  });
+
   it("does not query private conversation data without current repository access", async () => {
     const db = {
       prepare: () => {

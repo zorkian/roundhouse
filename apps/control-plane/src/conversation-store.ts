@@ -387,14 +387,15 @@ export class D1ConversationRepository {
     if (!authorizedGithubIds.length) return [];
     const rows = await this.db
       .prepare(
-        `SELECT c.id,c.title,c.status,c.updated_at,r.profile_json,p.state AS promotion_state,
-                p.issue_number,p.issue_url
+        `SELECT c.id,c.title,c.status,
+                CASE WHEN p.updated_at>c.updated_at THEN p.updated_at ELSE c.updated_at END AS updated_at,
+                r.profile_json,p.state AS promotion_state,p.issue_number,p.issue_url
          FROM conversations c
          JOIN repositories r ON r.id=c.repository_id
          LEFT JOIN conversation_promotions p ON p.conversation_id=c.id
          WHERE c.creator_github_user_id=?1
            AND r.github_id IN (${placeholders(authorizedGithubIds, 2)})
-         ORDER BY c.updated_at DESC LIMIT 50`,
+         ORDER BY CASE WHEN p.updated_at>c.updated_at THEN p.updated_at ELSE c.updated_at END DESC LIMIT 50`,
       )
       .bind(creatorGithubUserId, ...authorizedGithubIds)
       .all<{
