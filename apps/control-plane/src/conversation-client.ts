@@ -45,7 +45,7 @@ export const conversationPollClientScript = `(function () {
     for (var i = 0; i < state.messages.length; i += 1) {
       var update = state.messages[i];
       var current = messageElement(update.id);
-      if (current && current.outerHTML === update.html) continue;
+      if (current && current.getAttribute("data-version") === update.version) continue;
       var next = element(update.html);
       if (!next) continue;
       if (current) current.replaceWith(next); else messages.appendChild(next);

@@ -404,10 +404,19 @@ describe("conversation UI", () => {
     expect(html).toContain('data-message-id="message"');
     expect(html).toContain('id="conversation-live-status"');
     expect(html).toContain('role="status" aria-live="polite"');
+    expect(html).toContain(
+      ".sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px",
+    );
 
     const state = renderConversationPollState(active, "message-id");
     expect(state.polling).toBe(true);
-    expect(state.messages[0]).toMatchObject({ id: "message" });
+    expect(state.messages[0]).toMatchObject({
+      id: "message",
+      version: expect.any(String),
+    });
+    expect(state.messages[0]?.html).toContain(
+      `data-version="${state.messages[0]?.version}"`,
+    );
     expect(state.status.key).toBe("turn:running");
   });
 
