@@ -10,6 +10,7 @@ import {
   type RunSnapshot,
   type Wakeup,
 } from "@roundhouse/core";
+import { aggregatedReview } from "./aggregated-review.js";
 
 export interface AttemptDispatcher {
   submit(attempt: Attempt, run: RunSnapshot): Promise<void>;
@@ -168,13 +169,6 @@ function selectedSpecialists(attempt: Attempt): readonly string[] | undefined {
 }
 
 function aggregateReviews(attempts: readonly Attempt[]): Attempt {
-  const findings = attempts.flatMap((attempt) => {
-    const review = attempt.result?.review as
-      Record<string, unknown> | undefined;
-    return Array.isArray(review?.findings)
-      ? review.findings.map((finding) => ({ reviewer: attempt.role, finding }))
-      : [];
-  });
   const changesRequested = attempts.some((attempt) => {
     const review = attempt.result?.review as
       Record<string, unknown> | undefined;
@@ -196,14 +190,10 @@ function aggregateReviews(attempts: readonly Attempt[]): Attempt {
   return {
     ...source,
     result: {
-      review: {
-        status: changesRequested ? "changes_requested" : "clean",
-        findings,
-        reviewers: attempts.map((attempt) => ({
-          role: attempt.role,
-          routing: attempt.routing,
-        })),
-      },
+      review: aggregatedReview(
+        attempts,
+        changesRequested ? "changes_requested" : "clean",
+      ),
     },
   };
 }

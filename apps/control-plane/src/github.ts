@@ -438,9 +438,10 @@ function reviewComment(attempt: Attempt): string {
       ? ["", `Reviewed commit \`${attempt.expectedHead}\`. CI is next.`]
       : findings.flatMap((finding) => {
           const file = String(finding.file ?? "").trim();
+          const reviewer = String(finding.reviewer ?? "").trim();
           return [
             "",
-            `- **${String(finding.title ?? "Finding")}**${file ? ` (\`${file}\`)` : ""}: ${String(finding.details ?? "")}`,
+            `- **${reviewer ? `${reviewer}: ` : ""}${String(finding.title ?? "Finding")}**${file ? ` (\`${file}\`)` : ""}: ${String(finding.details ?? "")}`,
           ];
         })),
   ].join("\n");
