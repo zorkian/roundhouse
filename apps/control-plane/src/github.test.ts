@@ -67,6 +67,22 @@ async function reportedBody(
   return reported;
 }
 
+async function reportedBodyWithDetails(run: RunSnapshot, attempt: Attempt) {
+  let reported = "";
+  const reporter = new GitHubStageReporter(
+    {
+      get: async <T>() => [] as T,
+      post: async <T>(_path: string, value: unknown) => {
+        reported = String((value as { body?: unknown }).body ?? "");
+        return {} as T;
+      },
+    },
+    "https://roundhouse.example",
+  );
+  await reporter.report(run, attempt);
+  return reported;
+}
+
 async function delivery(
   id: string,
   command = "/roundhouse-dev start",
@@ -101,6 +117,98 @@ async function delivery(
 }
 
 describe("GitHub intake", () => {
+  it("links generated issue comments to run details", async () => {
+    const run = createRun({
+      id: "run_links",
+      repository: "zorkian/roundhouse",
+      issueNumber: 42,
+      baseCommit: "a".repeat(40),
+      profileVersion: "v2",
+    });
+    const body = await reportedBodyWithDetails(run, {
+      id: "qualification",
+      runId: run.id,
+      runRevision: 1,
+      kind: "agent",
+      stage: "qualify",
+      role: "qualify",
+      state: "completed",
+      deadlineAt: 1,
+      baseCommit: run.baseCommit,
+      expectedHead: run.currentHead,
+      result: { qualification: { classification: "feature", summary: "Ready" } },
+    });
+    expect(body).toContain(
+      "[View Roundhouse run details](https://roundhouse.example/repositories/zorkian/roundhouse/issues/42)",
+    );
+  });
+
+  it("links pull requests to run details and GitHub's Files changed view", async () => {
+    const patched: unknown[] = [];
+    const reporter = new GitHubStageReporter(
+      {
+        get: async <T>(path: string) =>
+          (path.endsWith("/pulls?state=open&head=zorkian%3Aroundhouse%2Fissue-42")
+            ? [
+                {
+                  number: 99,
+                  html_url: "https://github.com/zorkian/roundhouse/pull/99",
+                  head: { sha: "b".repeat(40) },
+                },
+              ]
+            : []) as T,
+        post: async <T>() => ({}) as T,
+        patch: async <T>(_path: string, value: unknown) => {
+          patched.push(value);
+          return {} as T;
+        },
+      },
+      "https://roundhouse.example",
+    );
+    const run = createRun({
+      id: "run_pr_links",
+      repository: "zorkian/roundhouse",
+      issueNumber: 42,
+      baseCommit: "a".repeat(40),
+      profileVersion: "v2",
+    });
+    await reporter.report(run, {
+      id: "implementation",
+      runId: run.id,
+      runRevision: 1,
+      kind: "agent",
+      stage: "implement",
+      role: "developer",
+      state: "completed",
+      deadlineAt: 1,
+      baseCommit: run.baseCommit,
+      expectedHead: run.currentHead,
+      acceptedHead: "b".repeat(40),
+      result: {
+        implementation: {
+          summary: "Implemented",
+          pullRequestBody: "A friendly summary.",
+          validation: [
+            { command: "npm test", output: "secret detailed output" },
+          ],
+        },
+      },
+    });
+    expect(patched[0]).toMatchObject({
+      body: expect.stringContaining(
+        "[View Roundhouse run details](https://roundhouse.example/repositories/zorkian/roundhouse/issues/42)",
+      ),
+    });
+    expect(patched[0]).toMatchObject({
+      body: expect.stringContaining(
+        "[View Files changed](https://github.com/zorkian/roundhouse/pull/99/files)",
+      ),
+    });
+    expect(patched[0]).toMatchObject({
+      body: expect.not.stringContaining("secret detailed output"),
+    });
+  });
+
   it("verifies the raw delivery body before parsing", async () => {
     const raw = '{"comment":{"body":"/roundhouse-dev start"}}';
     const signature = await signCallback("webhook-secret", raw);

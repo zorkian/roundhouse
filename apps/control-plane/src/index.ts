@@ -326,8 +326,16 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
     if (detailsMatch) {
       if (request.method !== "GET")
         return json({ error: "method_not_allowed" }, 405, { allow: "GET" });
+      let repository: string;
+      try {
+        repository = `${decodeURIComponent(
+          detailsMatch[1],
+        )}/${decodeURIComponent(detailsMatch[2])}`;
+      } catch {
+        return json({ error: "not_found" }, 404);
+      }
       const details = await new D1RunRepository(env.DB).detailsByIssue(
-        `${decodeURIComponent(detailsMatch[1])}/${decodeURIComponent(detailsMatch[2])}`,
+        repository,
         Number(detailsMatch[3]),
       );
       if (!details) return json({ error: "not_found" }, 404);

@@ -3,9 +3,86 @@
 
 import { describe, expect, it } from "vitest";
 import type { RunDetails } from "./d1-store.js";
+import { D1RunRepository, type D1Like } from "./d1-store.js";
 import { renderRunDetails } from "./run-details.js";
 
 describe("run details", () => {
+  it("assembles the current run and chronological attempts by repository issue", async () => {
+    const calls: { sql: string; values: unknown[] }[] = [];
+    const db: D1Like = {
+      prepare(sql: string) {
+        const call = { sql, values: [] as unknown[] };
+        calls.push(call);
+        const statement = {
+          bind: (...values: unknown[]) => {
+            call.values = values;
+            return statement;
+          },
+          first: async () => ({
+            document_json: JSON.stringify({
+              schemaVersion: 2,
+              id: "current-run",
+              repository: "zorkian/roundhouse",
+              issueNumber: 281,
+              baseCommit: "base",
+              currentHead: "head",
+              profileVersion: "v2",
+              status: "active",
+              stage: "review",
+              revision: 4,
+            }),
+            created_at: 10,
+            updated_at: 20,
+          }),
+          all: async () => ({
+            meta: {},
+            results: [
+              {
+                id: "first",
+                run_id: "current-run",
+                run_revision: 1,
+                kind: "agent",
+                stage: "qualify",
+                role: "qualifier",
+                state: "completed",
+                deadline_at: 9,
+                base_commit: "base",
+                expected_head: "base",
+                accepted_head: null,
+                result_json: '{"qualification":{"summary":"ok"}}',
+                routing_json: '{"provider":"openai","model":"model-a"}',
+                created_at: 11,
+                updated_at: 12,
+              },
+            ],
+          }),
+          run: async () => ({ meta: {} }),
+        };
+        return statement;
+      },
+    };
+    const details = await new D1RunRepository(db).detailsByIssue(
+      "zorkian/roundhouse",
+      281,
+    );
+    expect(calls[0]?.values).toEqual(["zorkian/roundhouse", 281]);
+    expect(calls[1]?.sql).toContain("ORDER BY created_at ASC,id ASC");
+    expect(calls[1]?.values).toEqual(["current-run"]);
+    expect(details).toMatchObject({
+      run: { id: "current-run" },
+      createdAt: 10,
+      updatedAt: 20,
+      attempts: [
+        {
+          id: "first",
+          createdAt: 11,
+          updatedAt: 12,
+          routing: { provider: "openai", model: "model-a" },
+        },
+      ],
+    });
+  });
+
   it("renders recorded evidence, commit history, routing, and escaped text", () => {
     const details: RunDetails = {
       run: {
