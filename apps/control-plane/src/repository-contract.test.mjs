@@ -98,6 +98,15 @@ class LocalD1 {
         "utf8",
       ),
     );
+    this.database.exec(
+      readFileSync(
+        new URL(
+          "../migrations/0012_durable_attempt_completion.sql",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    );
   }
 
   prepare(sql) {
@@ -207,6 +216,15 @@ function repositoryContract(label, createRepository) {
         nodeId: "qualify",
         runRevision: 1,
       });
+      await expect(
+        repository.completedNodeAttempts(run.id, "qualify", 2),
+      ).resolves.toMatchObject([
+        {
+          id: attempt.id,
+          nodeId: "qualify",
+          runRevision: 1,
+        },
+      ]);
       await expect(
         repository.completeAttempt(attempt.id, 1, "b".repeat(40), {
           outcome: "ok",
@@ -675,4 +693,70 @@ it("renews a D1 attempt lease from recorded activity", async () => {
   await expect(repository.expiredLeases(700)).resolves.toEqual([
     { runId: run.id, expectedRevision: 1 },
   ]);
+});
+
+it("preserves a completed execution for settlement-only recovery", async () => {
+  const repository = new D1RunRepository(new LocalD1(), () => 100);
+  const run = createRun({ ...input, id: "run_execution_record" });
+  await repository.create(run);
+  const attempt = {
+    id: "run_execution_record_rev_1",
+    runId: run.id,
+    runRevision: 1,
+    kind: "agent",
+    stage: "implement",
+    role: "implement",
+    state: "created",
+    deadlineAt: 200,
+    baseCommit: run.baseCommit,
+    expectedHead: run.currentHead,
+  };
+  await repository.claimLease(
+    run.id,
+    1,
+    { attemptId: attempt.id, runRevision: 1, expiresAt: 200 },
+    100,
+  );
+  await repository.createAttempt(attempt);
+  await repository.markDispatched(attempt.id);
+  const completion = {
+    attemptId: attempt.id,
+    expectedRevision: 1,
+    checkpoint: {
+      repositoryId: "repository-id",
+      repository: run.id,
+      baseCommit: run.baseCommit,
+      inputHead: run.currentHead,
+      outputHead: "b".repeat(40),
+      ref: `refs/heads/roundhouse/${run.id}`,
+      changedPaths: ["src/fix.ts"],
+    },
+    artifactTokenId: "artifact-token",
+    result: { implementation: { status: "completed" } },
+  };
+
+  await expect(
+    repository.recordAttemptExecution(attempt.id, 1, completion),
+  ).resolves.toBe("recorded");
+  await expect(repository.getAttempt(attempt.id)).resolves.toMatchObject({
+    state: "executed",
+  });
+  await expect(repository.getAttemptCompletion(attempt.id)).resolves.toEqual(
+    completion,
+  );
+  await expect(
+    repository.recordAttemptExecution(attempt.id, 1, completion),
+  ).resolves.toBe("duplicate");
+  await expect(
+    repository.createAttempt({ ...attempt, deadlineAt: 400 }),
+  ).resolves.toBe("exists");
+  await expect(repository.getAttempt(attempt.id)).resolves.toMatchObject({
+    state: "executed",
+    deadlineAt: 200,
+  });
+  await expect(
+    repository.completeAttempt(attempt.id, 1, "b".repeat(40), {
+      implementation: { status: "completed" },
+    }),
+  ).resolves.toBe("completed");
 });

@@ -254,6 +254,7 @@ export function validateCheckpointIdentity(
     ref: string;
     profile?: AppliedProfile;
     protectedPaths?: readonly string[];
+    enforcePathPolicy?: boolean;
   },
 ): void {
   if (
@@ -268,6 +269,7 @@ export function validateCheckpointIdentity(
   if (checkpoint.ref !== expected.ref) throw new Error("unexpected_ref");
   if (!/^[a-f0-9]{40}$/.test(checkpoint.outputHead))
     throw new Error("invalid_output_head");
+  if (expected.enforcePathPolicy === false) return;
   if (expected.profile) {
     for (const path of checkpoint.changedPaths)
       assertPathAllowed(expected.profile, path);

@@ -412,6 +412,7 @@ function workflowAdvanceForAttempt(run: RunSnapshot, attempt: Attempt) {
     run: {
       revision: run.revision,
       mergeMode: run.profile?.merge?.mode ?? "automatic",
+      hasCandidate: Boolean(run.candidateHead),
     },
   });
   return { workflow, nodeId, node, advance };
@@ -438,6 +439,7 @@ export function graphCompletedTransition(run: RunSnapshot, attempt: Attempt) {
       waitingReason: advance.waitingReason ?? null,
       condition: advance.selected.when ?? null,
       executor: node.executor,
+      hadCandidate: Boolean(run.candidateHead),
     }),
   );
   return {
@@ -471,6 +473,7 @@ async function recordWorkflowTransition(
     waitingReason: next.waitingReason ?? null,
     inputHead: attempt.expectedHead,
     outputHead: attempt.acceptedHead ?? attempt.expectedHead,
+    hadCandidate: Boolean(run.candidateHead),
     runRevision: next.revision,
   });
 }

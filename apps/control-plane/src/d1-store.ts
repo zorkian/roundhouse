@@ -18,6 +18,7 @@ import {
   type RunTransition,
   type Wakeup,
 } from "@roundhouse/core";
+import type { AttemptCompletion } from "./callback.js";
 
 interface Result<T> {
   results?: T[];
@@ -51,6 +52,8 @@ type AttemptRow = {
   result_json: string | null;
   routing_json: string | null;
 };
+
+export type AttemptExecutionRecordOutcome = "recorded" | "duplicate" | "stale";
 
 export interface RunDetails {
   readonly run: RunSnapshot;
@@ -525,7 +528,7 @@ export class D1RunRepository implements RunRepository {
     if ((result.meta.changes ?? 0) === 1) return "created";
     await this.db
       .prepare(
-        "UPDATE attempts SET state='created', deadline_at=?1, updated_at=?2 WHERE id=?3 AND run_id=?4 AND run_revision=?5 AND state!='completed'",
+        "UPDATE attempts SET state='created', completion_json=NULL, deadline_at=?1, updated_at=?2 WHERE id=?3 AND run_id=?4 AND run_revision=?5 AND state NOT IN ('executed','completed')",
       )
       .bind(
         attempt.deadlineAt,
@@ -547,6 +550,62 @@ export class D1RunRepository implements RunRepository {
       .run();
   }
 
+  async recordAttemptExecution(
+    attemptId: string,
+    expectedRevision: number,
+    completion: AttemptCompletion,
+  ): Promise<AttemptExecutionRecordOutcome> {
+    const attempt = await this.getAttempt(attemptId);
+    if (!attempt || attempt.runRevision !== expectedRevision) return "stale";
+    if (attempt.state === "completed") return "duplicate";
+    if (attempt.state === "executed") {
+      const recorded = await this.getAttemptCompletion(attemptId);
+      return JSON.stringify(recorded) === JSON.stringify(completion)
+        ? "duplicate"
+        : "stale";
+    }
+    const updated = await this.db
+      .prepare(
+        "UPDATE attempts SET state='executed',completion_json=?1,updated_at=?2 WHERE id=?3 AND run_revision=?4 AND state IN ('created','dispatched') AND EXISTS (SELECT 1 FROM runs WHERE id=attempts.run_id AND revision=?4 AND status='active')",
+      )
+      .bind(JSON.stringify(completion), this.now(), attemptId, expectedRevision)
+      .run();
+    return (updated.meta.changes ?? 0) === 1 ? "recorded" : "stale";
+  }
+
+  async getAttemptCompletion(
+    attemptId: string,
+  ): Promise<AttemptCompletion | undefined> {
+    const row = await this.db
+      .prepare("SELECT completion_json FROM attempts WHERE id=?1")
+      .bind(attemptId)
+      .first<{ completion_json: string | null }>();
+    return row?.completion_json
+      ? (JSON.parse(row.completion_json) as AttemptCompletion)
+      : undefined;
+  }
+
+  async renewExecutedAttemptLease(
+    attemptId: string,
+    expiresAt: number,
+  ): Promise<boolean> {
+    const now = this.now();
+    const attempt = await this.db
+      .prepare(
+        "UPDATE attempts SET deadline_at=?1,updated_at=?2 WHERE id=?3 AND state='executed'",
+      )
+      .bind(expiresAt, now, attemptId)
+      .run();
+    if ((attempt.meta.changes ?? 0) !== 1) return false;
+    const run = await this.db
+      .prepare(
+        "UPDATE runs SET lease_expires_at=?1,updated_at=?2 WHERE lease_attempt_id=?3 AND lease_revision=(SELECT run_revision FROM attempts WHERE id=?3) AND status='active'",
+      )
+      .bind(expiresAt, now, attemptId)
+      .run();
+    return (run.meta.changes ?? 0) === 1;
+  }
+
   async completeAttempt(
     attemptId: string,
     expectedRevision: number,
@@ -558,7 +617,7 @@ export class D1RunRepository implements RunRepository {
     if (attempt.state === "completed") return "duplicate";
     const updated = await this.db
       .prepare(
-        "UPDATE attempts SET state='completed', accepted_head=?1, result_json=?2, updated_at=?3 WHERE id=?4 AND run_revision=?5 AND state IN ('created','dispatched') AND EXISTS (SELECT 1 FROM runs WHERE id=attempts.run_id AND revision=?5)",
+        "UPDATE attempts SET state='completed', accepted_head=?1, result_json=?2, updated_at=?3 WHERE id=?4 AND run_revision=?5 AND state IN ('created','dispatched','executed') AND EXISTS (SELECT 1 FROM runs WHERE id=attempts.run_id AND revision=?5)",
       )
       .bind(
         acceptedHead,
@@ -589,7 +648,7 @@ export class D1RunRepository implements RunRepository {
     if (attempt.state === "completed") return "stale";
     const updated = await this.db
       .prepare(
-        "UPDATE attempts SET state='failed', result_json=?1, updated_at=?2 WHERE id=?3 AND run_revision=?4 AND state IN ('created','dispatched')",
+        "UPDATE attempts SET state='failed', result_json=?1, updated_at=?2 WHERE id=?3 AND run_revision=?4 AND state IN ('created','dispatched','executed')",
       )
       .bind(JSON.stringify(result), this.now(), attemptId, expectedRevision)
       .run();
@@ -634,6 +693,20 @@ export class D1RunRepository implements RunRepository {
     return row ? attemptFromRow(row) : undefined;
   }
 
+  async completedNodeAttempts(
+    runId: string,
+    nodeId: string,
+    beforeRevision: number,
+  ): Promise<readonly Attempt[]> {
+    const result = await this.db
+      .prepare(
+        "SELECT id,run_id,run_revision,kind,node_id,executor,stage,role,state,deadline_at,base_commit,expected_head,accepted_head,result_json,routing_json FROM attempts WHERE run_id=?1 AND node_id=?2 AND state='completed' AND run_revision<?3 ORDER BY run_revision,id",
+      )
+      .bind(runId, nodeId, beforeRevision)
+      .all<AttemptRow>();
+    return (result.results ?? []).map(attemptFromRow);
+  }
+
   async consumedCiEvidence(
     runId: string,
     evidenceKey: string,
@@ -668,6 +741,22 @@ export class D1RunRepository implements RunRepository {
     return (result.results ?? []).map((row) => ({
       runId: row.id,
       expectedRevision: row.revision,
+    }));
+  }
+
+  async expiredAttemptLeases(
+    now: number,
+  ): Promise<readonly (Wakeup & { readonly attemptId: string })[]> {
+    const result = await this.db
+      .prepare(
+        "SELECT id,revision,lease_attempt_id FROM runs WHERE status='active' AND stage IN ('qualify','reproduce','plan','implement','review','integrate','merge') AND lease_expires_at<=?1 AND lease_attempt_id IS NOT NULL",
+      )
+      .bind(now)
+      .all<{ id: string; revision: number; lease_attempt_id: string }>();
+    return (result.results ?? []).map((row) => ({
+      runId: row.id,
+      expectedRevision: row.revision,
+      attemptId: row.lease_attempt_id,
     }));
   }
 

@@ -101,7 +101,7 @@ export class MemoryRunRepository implements RunRepository {
   async createAttempt(attempt: Attempt): Promise<"created" | "exists"> {
     const existing = this.attempts.get(attempt.id);
     if (existing) {
-      if (existing.state !== "completed")
+      if (!["executed", "completed"].includes(existing.state))
         this.attempts.set(attempt.id, {
           ...existing,
           state: "created",
@@ -194,6 +194,26 @@ export class MemoryRunRepository implements RunRepository {
           attempt.runRevision < beforeRevision,
       )
       .sort((left, right) => right.runRevision - left.runRevision)[0];
+  }
+
+  async completedNodeAttempts(
+    runId: string,
+    nodeId: string,
+    beforeRevision: number,
+  ): Promise<readonly Attempt[]> {
+    return [...this.attempts.values()]
+      .filter(
+        (attempt) =>
+          attempt.runId === runId &&
+          attempt.nodeId === nodeId &&
+          attempt.state === "completed" &&
+          attempt.runRevision < beforeRevision,
+      )
+      .sort(
+        (left, right) =>
+          left.runRevision - right.runRevision ||
+          left.id.localeCompare(right.id),
+      );
   }
 
   async consumedCiEvidence(

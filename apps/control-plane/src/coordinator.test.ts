@@ -14,6 +14,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   acceptCallback,
   callbackPayload,
+  CheckpointRejectedError,
   signCallback,
   type AttemptCallback,
 } from "./callback.js";
@@ -22,6 +23,7 @@ import {
   attemptInactivityMilliseconds,
   ciTransition,
   coordinate,
+  graphCompletedTransition,
   implementationTransition,
   integrateTransition,
   mergeTransition,
@@ -456,6 +458,108 @@ describe("single coordinator", () => {
         result: { outcome: "tampered" },
       }),
     ).resolves.toBe("unauthorized");
+  });
+
+  it("pauses a deterministically rejected checkpoint instead of redispatching it", async () => {
+    const store = new MemoryRunRepository();
+    await store.create(createRun(input));
+    await coordinate(
+      store,
+      { submit: async () => undefined },
+      { runId: input.id, expectedRevision: 1 },
+      100,
+    );
+    const attempt = await store.getAttempt("run_slice_rev_1");
+    if (!attempt) throw new Error("missing_attempt");
+    const callback = await callbackFor(
+      attempt,
+      "b".repeat(40),
+      "checkpoint-rejection-secret",
+    );
+    await expect(
+      acceptCallback(
+        store,
+        "checkpoint-rejection-secret",
+        {
+          validate: async () => {
+            throw new CheckpointRejectedError(
+              422,
+              '{"error":"invalid_checkpoint","detail":"protected_path_changed"}',
+            );
+          },
+        },
+        callback,
+      ),
+    ).resolves.toBe("rejected");
+    await expect(store.get(input.id)).resolves.toMatchObject({
+      status: "waiting",
+      stage: "qualify",
+      waitingReason: "checkpoint_rejected",
+      revision: 2,
+    });
+    await expect(store.getAttempt(attempt.id)).resolves.toMatchObject({
+      state: "failed",
+      result: {
+        failure: {
+          reason: "checkpoint_rejected",
+          source: "checkpoint_validator",
+          status: 422,
+          detail:
+            '{"error":"invalid_checkpoint","detail":"protected_path_changed"}',
+        },
+      },
+    });
+    await expect(
+      acceptCallback(
+        store,
+        "checkpoint-rejection-secret",
+        { validate: async () => undefined },
+        callback,
+      ),
+    ).resolves.toBe("rejected");
+    await expect(store.get(input.id)).resolves.toMatchObject({
+      status: "waiting",
+      waitingReason: "checkpoint_rejected",
+      revision: 2,
+    });
+  });
+
+  it("leaves transient checkpoint validation failures recoverable", async () => {
+    const store = new MemoryRunRepository();
+    await store.create(createRun(input));
+    await coordinate(
+      store,
+      { submit: async () => undefined },
+      { runId: input.id, expectedRevision: 1 },
+      100,
+    );
+    const attempt = await store.getAttempt("run_slice_rev_1");
+    if (!attempt) throw new Error("missing_attempt");
+    const callback = await callbackFor(
+      attempt,
+      "b".repeat(40),
+      "transient-validation-secret",
+    );
+    await expect(
+      acceptCallback(
+        store,
+        "transient-validation-secret",
+        {
+          validate: async () => {
+            throw new Error("checkpoint_validator_unavailable");
+          },
+        },
+        callback,
+      ),
+    ).rejects.toThrow("checkpoint_validator_unavailable");
+    await expect(store.get(input.id)).resolves.toMatchObject({
+      status: "active",
+      stage: "qualify",
+      revision: 1,
+    });
+    await expect(store.getAttempt(attempt.id)).resolves.toMatchObject({
+      state: "dispatched",
+    });
   });
 
   it("recovers callback loss and interruption through lease expiry", async () => {
@@ -1339,6 +1443,45 @@ describe("single coordinator", () => {
     expect(implementationTransition(attempt)).toEqual({
       status: "succeeded",
       stage: "implement",
+      acceptedHead: head,
+    });
+  });
+
+  it("returns screenshot evidence to review when a candidate already exists", () => {
+    const head = "b".repeat(40);
+    const run = {
+      ...createRun(input),
+      status: "active" as const,
+      stage: "implement" as const,
+      currentNodeId: "implement",
+      currentHead: head,
+      candidateHead: head,
+      revision: 12,
+    };
+    const attempt = {
+      id: "run_slice_rev_12",
+      runId: input.id,
+      runRevision: 12,
+      kind: "agent",
+      stage: "implement",
+      role: "implement",
+      state: "completed",
+      deadlineAt: 1_000,
+      baseCommit: input.baseCommit,
+      expectedHead: head,
+      acceptedHead: head,
+      result: {
+        implementation: {
+          summary: "Added the requested visual evidence",
+          screenshots: [{ url: "https://example.test/screenshot" }],
+        },
+      },
+    } satisfies Attempt;
+
+    expect(graphCompletedTransition(run, attempt)).toEqual({
+      status: "active",
+      stage: "review",
+      currentNodeId: "review",
       acceptedHead: head,
     });
   });

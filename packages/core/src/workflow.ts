@@ -117,6 +117,8 @@ nodes:
               equals: false
             - path: attempt.hasScreenshots
               equals: true
+            - path: run.hasCandidate
+              equals: false
         terminal: succeeded
       - when:
           exists: attempt.acceptedHead
