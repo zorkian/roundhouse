@@ -609,9 +609,16 @@ describe("V2 control plane", () => {
     expect(response.headers.get("content-security-policy")).toContain(
       "frame-ancestors 'none'",
     );
+    expect(response.headers.get("content-security-policy")).toContain(
+      "img-src https://avatars.githubusercontent.com",
+    );
     const body = await response.text();
     expect(body).toContain("Development runs across enrolled repositories");
     expect(body).toContain('<a href="/usage">Model usage</a>');
+    expect(body).toContain('<a class="site-brand" href="/">Roundhouse</a>');
+    expect(body).toContain('<a href="/">Runs</a>');
+    expect(body).toContain('src="https://avatars.githubusercontent.com/u/7"');
+    expect(body).toContain('<span class="site-login">octocat</span>');
     expect(body).toContain("Sign out");
 
     for (const path of [

@@ -160,7 +160,10 @@ describe("renderModelUsage", () => {
       ],
       endAt,
     );
-    const html = renderModelUsage(summary, { githubLogin: "octocat" });
+    const html = renderModelUsage(summary, {
+      githubUserId: 7,
+      githubLogin: "octocat",
+    });
     expect(html).toContain("Model usage");
     expect(html).toContain(new Date(summary.startAt).toISOString());
     expect(html).toContain(new Date(summary.endAt).toISOString());
@@ -173,7 +176,10 @@ describe("renderModelUsage", () => {
     expect(html).toContain('class="legend"');
     expect(html).toContain("aria-label");
     expect(html).toContain("Usage by model for the past 30 days");
-    expect(html).toContain('<a href="/">Dashboard</a>');
+    expect(html).toContain('<a href="/">Runs</a>');
+    expect(html).toContain('src="https://avatars.githubusercontent.com/u/7"');
+    expect(html).toContain(`alt="octocat's GitHub avatar"`);
+    expect(html).toContain('<span class="site-login">octocat</span>');
   });
 
   it("discloses partial token and cost data instead of treating it as zero", () => {

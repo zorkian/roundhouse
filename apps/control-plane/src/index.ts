@@ -108,7 +108,7 @@ function html(value: string, status = 200, forms = false): Response {
     status,
     headers: {
       "cache-control": "no-store",
-      "content-security-policy": `default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action ${forms ? "'self'" : "'none'"}; frame-ancestors 'none'`,
+      "content-security-policy": `default-src 'none'; img-src https://avatars.githubusercontent.com; script-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action ${forms ? "'self'" : "'none'"}; frame-ancestors 'none'`,
       "content-type": "text/html; charset=utf-8",
       // same-origin keeps referrers on our own navigations while omitting them
       // cross-origin. no-referrer can cause browsers to send Origin: null on
@@ -619,7 +619,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
           renderConversationIndex(
             repositories,
             recent,
-            uiSession!.githubLogin,
+            uiSession!,
             url.searchParams.get("error") ?? undefined,
           ),
         );
@@ -725,7 +725,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
         return uiConversationHtml(
           renderConversation(
             conversation,
-            uiSession!.githubLogin,
+            uiSession!,
             url.searchParams.get("notice") ?? undefined,
           ),
         );
@@ -849,9 +849,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
           durationMs: Date.now() - queryStartedAt,
         }),
       );
-      return uiHtml(
-        renderDashboard(runs, { githubLogin: uiSession!.githubLogin }),
-      );
+      return uiHtml(renderDashboard(runs, uiSession!));
     }
     if (url.pathname === "/usage" && isPublicUiRequest()) {
       if (request.method !== "GET")
@@ -877,9 +875,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
           durationMs: Date.now() - queryStartedAt,
         }),
       );
-      return uiHtml(
-        renderModelUsage(summary, { githubLogin: uiSession!.githubLogin }),
-      );
+      return uiHtml(renderModelUsage(summary, uiSession!));
     }
     const workflowMatch = url.pathname.match(
       /^\/repositories\/([^/]+)\/([^/]+)\/workflow$/,
@@ -955,6 +951,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
           );
           return uiHtml(
             renderWorkflowView(snapshotRun, {
+              user: uiSession!,
               source: "snapshot",
               notice:
                 "The current default-branch profile could not be loaded, so this page is showing the latest stored run snapshot instead.",
@@ -1004,7 +1001,12 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
             nodes: Object.keys(currentWorkflow.nodes).length,
           }),
         );
-        return uiHtml(renderWorkflowView(run, { source: "default_branch" }));
+        return uiHtml(
+          renderWorkflowView(run, {
+            user: uiSession!,
+            source: "default_branch",
+          }),
+        );
       }
       let input: { source?: unknown; sourceCommit?: unknown };
       try {
@@ -1096,7 +1098,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
           nodes: Object.keys(details.run.profile.workflow.nodes).length,
         }),
       );
-      return uiHtml(renderWorkflowView(details.run));
+      return uiHtml(renderWorkflowView(details.run, { user: uiSession! }));
     }
     const detailsMatch = url.pathname.match(
       /^\/repositories\/([^/]+)\/([^/]+)\/issues\/(\d+)$/,
@@ -1121,7 +1123,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
         uiSession!.repositoryIds,
       );
       if (!details) return uiHtml(renderNotFoundPage(), 404);
-      return uiHtml(renderRunDetails(details));
+      return uiHtml(renderRunDetails(details, uiSession!));
     }
     if (url.pathname === "/attempts/completion") {
       const startedAt = Date.now();
