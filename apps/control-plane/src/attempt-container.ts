@@ -132,9 +132,14 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
   const attempt = await repository.getAttempt(attemptId);
   if (
     !attempt ||
-    !["qualify", "reproduce", "plan", "implement", "review"].includes(
-      attempt.stage,
-    ) ||
+    ![
+      "qualify",
+      "reproduce",
+      "plan",
+      "implement",
+      "review",
+      "integrate",
+    ].includes(attempt.stage) ||
     !["created", "dispatched"].includes(attempt.state) ||
     attempt.deadlineAt <= Date.now()
   ) {
@@ -169,7 +174,7 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
     "x-roundhouse-task-type",
     attempt.stage === "plan"
       ? "planning"
-      : attempt.stage === "implement"
+      : attempt.stage === "implement" || attempt.role === "conflict-resolution"
         ? "implementation"
         : attempt.stage === "review"
           ? "review"

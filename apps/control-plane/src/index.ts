@@ -85,9 +85,15 @@ export function successorWakeup(
   processed: Wakeup,
 ): Wakeup | undefined {
   return run?.status === "active" &&
-    new Set(["reproduce", "plan", "implement", "review", "ci", "merge"]).has(
-      run.stage,
-    ) &&
+    new Set([
+      "reproduce",
+      "plan",
+      "implement",
+      "review",
+      "integrate",
+      "ci",
+      "merge",
+    ]).has(run.stage) &&
     run.revision === processed.expectedRevision + 1
     ? { runId: run.id, expectedRevision: run.revision }
     : undefined;
@@ -261,12 +267,18 @@ class ContainerDispatcher implements AttemptDispatcher {
     const taskType =
       attempt.stage === "plan"
         ? "planning"
-        : attempt.stage === "implement"
+        : attempt.stage === "implement" ||
+            attempt.role === "conflict-resolution"
           ? "implementation"
           : attempt.stage === "review"
             ? "review"
             : "validation";
-    const route = await this.resolveModelRoute(attempt, taskType);
+    // Mechanical integration is a no-model operation; only conflict
+    // resolution routes to an implementation model.
+    const route =
+      attempt.role === "integrate"
+        ? undefined
+        : await this.resolveModelRoute(attempt, taskType);
     const repository = await this.artifacts.ensure(
       workspaceName(attempt.runId),
     );
@@ -323,7 +335,9 @@ class ContainerDispatcher implements AttemptDispatcher {
       }
       await repository.revokeToken(bootstrapToken.id);
     }
-    const access = attempt.stage === "implement" ? "write" : "read";
+    const access = ["implement", "integrate"].includes(attempt.stage)
+      ? "write"
+      : "read";
     const token = await repository.createToken(access, 30 * 60);
     const qualificationAttempt = [
       "reproduce",
@@ -371,12 +385,54 @@ class ContainerDispatcher implements AttemptDispatcher {
       attempt.stage === "implement"
         ? await this.runs.latestCompletedAttempt(run.id, "ci", run.revision)
         : undefined;
+    const conflictedIntegration =
+      attempt.role === "conflict-resolution"
+        ? await this.runs.latestCompletedAttempt(
+            run.id,
+            "integrate",
+            run.revision,
+          )
+        : undefined;
+    const conflictedOutcome = conflictedIntegration?.result?.integration as
+      Record<string, unknown> | undefined;
     const qualification = qualificationAttempt?.result?.qualification;
     const reproduction = reproductionAttempt?.result?.reproduction;
     const plan = planAttempt?.result?.plan;
     const implementation = implementationAttempt?.result?.implementation;
     const review = reviewAttempt ? aggregatedReview(reviewAttempts) : undefined;
     const ci = ciAttempt?.result?.ci;
+    const integrateEvidence =
+      attempt.role === "conflict-resolution"
+        ? {
+            qualification:
+              qualification ??
+              (
+                await this.runs.latestCompletedAttempt(
+                  run.id,
+                  "qualify",
+                  run.revision,
+                )
+              )?.result?.qualification,
+            plan:
+              plan ??
+              (
+                await this.runs.latestCompletedAttempt(
+                  run.id,
+                  "plan",
+                  run.revision,
+                )
+              )?.result?.plan,
+            implementation:
+              implementation ??
+              (
+                await this.runs.latestCompletedAttempt(
+                  run.id,
+                  "implement",
+                  run.revision,
+                )
+              )?.result?.implementation,
+          }
+        : undefined;
     const reviewer = reviewerForRole(attempt.role);
     const sameRevisionReviews =
       attempt.stage === "review"
@@ -411,7 +467,7 @@ class ContainerDispatcher implements AttemptDispatcher {
               ...(ci ? { ci } : {}),
             }
           : undefined,
-      routing: route,
+      ...(route ? { routing: route } : {}),
       ...(reviewer ? { reviewer } : {}),
       artifact: {
         repositoryId: repository.id,
@@ -423,14 +479,37 @@ class ContainerDispatcher implements AttemptDispatcher {
         access: token.access,
         ref: workspaceRef(attempt.runId),
       },
-      ...(attempt.stage === "implement" &&
-      (ci as Record<string, unknown> | undefined)?.reason === "base_conflict"
+      ...(attempt.stage === "integrate"
         ? {
             upstream: {
               remote: `https://github.com/${run.repository}.git`,
               hostname: "github.com",
-              branch: "main",
+              branch: run.githubDefaultBranch ?? "main",
             },
+            integration: {
+              candidateHead: run.reviewedHead ?? run.currentHead,
+              ...(typeof conflictedOutcome?.baseHead === "string"
+                ? { baseHead: conflictedOutcome.baseHead }
+                : {}),
+              ...(Array.isArray(conflictedOutcome?.conflicts)
+                ? { conflicts: conflictedOutcome.conflicts }
+                : {}),
+            },
+            ...(integrateEvidence
+              ? {
+                  context: {
+                    ...(integrateEvidence.qualification
+                      ? { qualification: integrateEvidence.qualification }
+                      : {}),
+                    ...(integrateEvidence.plan
+                      ? { plan: integrateEvidence.plan }
+                      : {}),
+                    ...(integrateEvidence.implementation
+                      ? { implementation: integrateEvidence.implementation }
+                      : {}),
+                  },
+                }
+              : {}),
           }
         : {}),
     };
@@ -490,7 +569,7 @@ class ContainerCheckpointValidator implements CheckpointValidator {
           throw new Error("run_profile_missing");
         })(),
     });
-    if (attempt.stage !== "implement") {
+    if (!["implement", "integrate"].includes(attempt.stage)) {
       try {
         validateReadOnlyCheckpoint(input.checkpoint);
       } finally {
@@ -498,6 +577,16 @@ class ContainerCheckpointValidator implements CheckpointValidator {
       }
       return;
     }
+    const conflicted =
+      attempt.role === "conflict-resolution"
+        ? ((
+            await this.repository.latestCompletedAttempt(
+              run.id,
+              "integrate",
+              attempt.runRevision,
+            )
+          )?.result?.integration as Record<string, unknown> | undefined)
+        : undefined;
     const token = await artifact.createToken("read", 5 * 60);
     try {
       const response = await observeResponse(
@@ -512,6 +601,18 @@ class ContainerCheckpointValidator implements CheckpointValidator {
                 baseCommit: run.baseCommit,
                 profile: run.profile,
                 checkpoint: input.checkpoint,
+                ...(conflicted
+                  ? {
+                      integration: {
+                        ...(typeof conflicted.baseHead === "string"
+                          ? { baseHead: conflicted.baseHead }
+                          : {}),
+                        ...(Array.isArray(conflicted.conflicts)
+                          ? { conflicts: conflicted.conflicts }
+                          : {}),
+                      },
+                    }
+                  : {}),
                 artifact: {
                   repositoryId: artifact.id,
                   repository: artifact.name,
@@ -658,7 +759,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       const attempt = await repository.getAttempt(attemptId);
       if (
         !attempt ||
-        attempt.stage !== "implement" ||
+        !["implement", "integrate"].includes(attempt.stage) ||
         !["created", "dispatched"].includes(attempt.state) ||
         attempt.deadlineAt <= Date.now()
       )

@@ -163,33 +163,51 @@ export class GitHubCiAutomation {
     private readonly github: GitHubAutomationApi,
   ) {}
 
+  // The reviewed candidate keeps its identity when only its base moved; the
+  // integration commit is the head CI and merge must bind to.
+  private reviewedHead(run: RunSnapshot): string {
+    return run.reviewedHead ?? run.currentHead;
+  }
+
+  private async latestBaseHead(run: RunSnapshot): Promise<string | undefined> {
+    const branch = run.githubDefaultBranch ?? "main";
+    const reference = await this.github.get<{
+      readonly object?: { readonly sha?: string };
+    }>(`/repos/${run.repository}/git/ref/heads/${encodeURIComponent(branch)}`);
+    const sha = reference.object?.sha;
+    return sha && /^[a-f0-9]{40}$/.test(sha) ? sha : undefined;
+  }
+
+  // A moved or conflicted target branch sends the run back to last-mile
+  // integration with the same reviewed candidate instead of restarting
+  // general implementation.
+  private async reintegrate(run: RunSnapshot): Promise<"recorded" | "stale"> {
+    const next = await this.repository.transition(run.id, run.revision, {
+      status: "active",
+      stage: "integrate",
+    });
+    return next ? "recorded" : "stale";
+  }
+
   async reconcileCi(
     run: RunSnapshot,
     now = Date.now(),
   ): Promise<"recorded" | "pending" | "stale"> {
     if (run.status !== "active" || run.stage !== "ci") return "stale";
     const review = await aggregateReview(this.repository, run);
-    if (!exactAttempt(review, "review", run.currentHead, "clean"))
+    if (!exactAttempt(review, "review", this.reviewedHead(run), "clean"))
       return "stale";
+    if (run.integrationHead && run.integrationHead !== run.currentHead)
+      return "stale";
+    if (run.targetBaseHead) {
+      const latestBase = await this.latestBaseHead(run);
+      if (latestBase && latestBase !== run.targetBaseHead)
+        return this.reintegrate(run);
+    }
     let pull = await pullRequest(this.github, run);
     if (!pull || pull.state !== "open" || pull.head.sha !== run.currentHead)
       return "stale";
-    if (pull.mergeable === false)
-      return this.recordCi(
-        run,
-        pull,
-        [
-          {
-            name: "Pull request base",
-            status: "completed",
-            conclusion: "failure",
-            head_sha: run.currentHead,
-          },
-        ],
-        "failure",
-        now,
-        "base_conflict",
-      );
+    if (pull.mergeable === false) return this.reintegrate(run);
     let checks = await checkRuns(this.github, run);
     if (!checksCompleted(checks, run.currentHead)) return "pending";
     if (!checksSucceeded(checks, run.currentHead))
@@ -206,7 +224,7 @@ export class GitHubCiAutomation {
       current.status !== "active" ||
       current.stage !== "ci" ||
       current.currentHead !== run.currentHead ||
-      !exactAttempt(currentReview, "review", run.currentHead, "clean") ||
+      !exactAttempt(currentReview, "review", this.reviewedHead(run), "clean") ||
       !pull ||
       pull.state !== "open" ||
       pull.draft ||
@@ -224,7 +242,6 @@ export class GitHubCiAutomation {
     checks: readonly CheckRun[],
     status: "success" | "failure",
     now: number,
-    reason?: "base_conflict",
   ): Promise<"recorded" | "stale"> {
     const attempt: Attempt = {
       id: immutableAttemptId(run.id, run.revision),
@@ -246,8 +263,8 @@ export class GitHubCiAutomation {
       {
         ci: {
           status,
-          ...(reason ? { reason } : {}),
           head: run.currentHead,
+          ...(run.targetBaseHead ? { baseHead: run.targetBaseHead } : {}),
           pullRequest: { number: pull.number, html_url: pull.html_url },
           checks: checkEvidence(checks),
         },
@@ -272,8 +289,13 @@ export class GitHubCiAutomation {
       checkRuns(this.github, run),
     ]);
     if (
-      !exactAttempt(review, "review", run.currentHead, "clean") ||
+      !exactAttempt(review, "review", this.reviewedHead(run), "clean") ||
       !exactAttempt(ci, "ci", run.currentHead, "success") ||
+      (run.integrationHead !== undefined &&
+        run.integrationHead !== run.currentHead) ||
+      (run.targetBaseHead !== undefined &&
+        (ci?.result?.ci as Record<string, unknown> | undefined)?.baseHead !==
+          run.targetBaseHead) ||
       !pull ||
       pull.head.sha !== run.currentHead
     )

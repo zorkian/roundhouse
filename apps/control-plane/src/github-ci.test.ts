@@ -160,7 +160,9 @@ function github(
     readonly status: string;
     readonly conclusion: string | null;
   }[] = [],
+  options: { checkSha?: string; baseSha?: string } = {},
 ) {
+  const checkSha = options.checkSha ?? head;
   let draft = true;
   const get = vi.fn(async (path: string) => {
     if (path.includes("/pulls?state="))
@@ -177,6 +179,8 @@ function github(
         merge_commit_sha: null,
         head: { sha: prHead },
       };
+    if (path.includes("/git/ref/heads/"))
+      return { object: { sha: options.baseSha ?? "e".repeat(40) } };
     if (path.includes("/check-runs?"))
       return {
         total_count: 1 + additionalChecks.length,
@@ -185,12 +189,12 @@ function github(
             name: "Check",
             status: "completed",
             conclusion: checkConclusion,
-            head_sha: head,
+            head_sha: checkSha,
             html_url: "https://github.test/check/1",
           },
           ...additionalChecks.map((check, index) => ({
             ...check,
-            head_sha: head,
+            head_sha: checkSha,
             html_url: `https://github.test/check/${index + 2}`,
           })),
         ],
@@ -345,7 +349,7 @@ describe("GitHub exact-head CI and merge", () => {
     });
   });
 
-  it("returns a conflicted exact head to implementation instead of waiting for checks", async () => {
+  it("returns a conflicted pull request to integration instead of implementation", async () => {
     const { repository, run } = await setupCi();
     const api = github(head, "success", false);
     const automation = new GitHubCiAutomation(repository, api.api);
@@ -353,20 +357,38 @@ describe("GitHub exact-head CI and merge", () => {
     await expect(automation.reconcileCi(run, 100)).resolves.toBe("recorded");
     await expect(
       repository.getAttempt(`${run.id}_rev_6`),
-    ).resolves.toMatchObject({
-      result: {
-        ci: {
-          status: "failure",
-          reason: "base_conflict",
-          head,
-          checks: [
-            {
-              name: "Pull request base",
-              conclusion: "failure",
-            },
-          ],
-        },
-      },
+    ).resolves.toBeUndefined();
+    await expect(repository.get(run.id)).resolves.toMatchObject({
+      status: "active",
+      stage: "integrate",
+      revision: 7,
+      currentHead: head,
+    });
+  });
+
+  it("returns the run to integration when the target branch moved", async () => {
+    const { repository, run } = await setupCi();
+    const moved = await repository.transition(run.id, run.revision, {
+      status: "active",
+      stage: "ci",
+      heads: { targetBaseHead: "e".repeat(40) },
+    });
+    if (!moved) throw new Error("run_missing");
+    const api = github(head, "success", true, [], {
+      baseSha: "9".repeat(40),
+    });
+    await expect(
+      new GitHubCiAutomation(repository, api.api).reconcileCi(moved, 100),
+    ).resolves.toBe("recorded");
+    expect(api.get).not.toHaveBeenCalledWith(
+      expect.stringContaining("/check-runs?"),
+    );
+    await expect(repository.get(run.id)).resolves.toMatchObject({
+      status: "active",
+      stage: "integrate",
+      revision: 8,
+      currentHead: head,
+      targetBaseHead: "e".repeat(40),
     });
   });
 
@@ -386,6 +408,127 @@ describe("GitHub exact-head CI and merge", () => {
     await expect(
       new GitHubCiAutomation(repository, api.api).reconcileCi(run),
     ).resolves.toBe("recorded");
+  });
+
+  const integration = "f".repeat(40);
+  const targetBase = "e".repeat(40);
+  async function setupIntegrated() {
+    const { repository, run } = await setupCi();
+    const next = await repository.transition(run.id, run.revision, {
+      status: "active",
+      stage: "ci",
+      acceptedHead: integration,
+      heads: {
+        candidateHead: head,
+        reviewedHead: head,
+        targetBaseHead: targetBase,
+        integrationHead: integration,
+      },
+    });
+    if (!next) throw new Error("run_missing");
+    return { repository, run: next };
+  }
+
+  it("runs CI and merge against the validated integration head", async () => {
+    const { repository, run } = await setupIntegrated();
+    const api = github(integration, "success", true, [], {
+      checkSha: integration,
+      baseSha: targetBase,
+    });
+    const automation = new GitHubCiAutomation(repository, api.api);
+
+    await expect(automation.reconcileCi(run, 100)).resolves.toBe("recorded");
+    await expect(
+      repository.getAttempt(`${run.id}_rev_7`),
+    ).resolves.toMatchObject({
+      stage: "ci",
+      expectedHead: integration,
+      acceptedHead: integration,
+      result: {
+        ci: { status: "success", head: integration, baseHead: targetBase },
+      },
+    });
+
+    await coordinate(
+      repository,
+      { submit: async () => undefined },
+      { runId: run.id, expectedRevision: 7 },
+      101,
+    );
+    const merging = await repository.get(run.id);
+    expect(merging).toMatchObject({
+      status: "active",
+      stage: "merge",
+      currentHead: integration,
+      reviewedHead: head,
+      targetBaseHead: targetBase,
+      integrationHead: integration,
+    });
+    if (!merging) throw new Error("merge_run_missing");
+    await expect(automation.merge(merging, 200)).resolves.toBe("recorded");
+    expect(api.put).toHaveBeenCalledWith(
+      "/repos/zorkian/roundhouse/pulls/73/merge",
+      { sha: integration, merge_method: "merge" },
+    );
+  });
+
+  it("rejects merge when the pull-request head is not the integration head", async () => {
+    const { repository, run } = await setupIntegrated();
+    const api = github(head, "success", true, [], {
+      checkSha: integration,
+      baseSha: targetBase,
+    });
+    const automation = new GitHubCiAutomation(repository, api.api);
+    await expect(automation.reconcileCi(run, 100)).resolves.toBe("stale");
+  });
+
+  it("rejects merge when CI does not bind the recorded base head", async () => {
+    const { repository, run } = await setupIntegrated();
+    const ci: Attempt = {
+      id: `${run.id}_rev_7`,
+      runId: run.id,
+      runRevision: run.revision,
+      kind: "external",
+      stage: "ci",
+      role: "github-checks",
+      state: "created",
+      deadlineAt: 1_000,
+      baseCommit: run.baseCommit,
+      expectedHead: integration,
+    };
+    await repository.createAttempt(ci);
+    await repository.completeAttempt(ci.id, ci.runRevision, integration, {
+      ci: { status: "success", head: integration, baseHead: "0".repeat(40) },
+    });
+    const merging = await repository.transition(run.id, run.revision, {
+      status: "active",
+      stage: "merge",
+    });
+    if (!merging) throw new Error("merge_run_missing");
+    const api = github(integration, "success", true, [], {
+      checkSha: integration,
+      baseSha: targetBase,
+    });
+    await expect(
+      new GitHubCiAutomation(repository, api.api).merge(merging, 200),
+    ).resolves.toBe("stale");
+    expect(api.put).not.toHaveBeenCalled();
+  });
+
+  it("rejects merge when the current head is not the validated integration head", async () => {
+    const { repository, run } = await setupCi();
+    const drifted = await repository.transition(run.id, run.revision, {
+      status: "active",
+      stage: "merge",
+      acceptedHead: head,
+      heads: { integrationHead: integration },
+    });
+    if (!drifted) throw new Error("run_missing");
+    const api = github();
+    await expect(
+      new GitHubCiAutomation(repository, api.api).merge(drifted, 200),
+    ).resolves.toBe("stale");
+    expect(api.put).not.toHaveBeenCalled();
   });
 
   it("accepts a signed completed check suite only for the active exact head", async () => {

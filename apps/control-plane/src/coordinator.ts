@@ -126,6 +126,7 @@ export function implementationTransition(attempt: Attempt) {
     status: "active",
     stage: "review",
     acceptedHead: attempt.acceptedHead,
+    heads: { candidateHead: attempt.acceptedHead },
   } as const;
 }
 
@@ -134,10 +135,49 @@ export function reviewTransition(attempt: Attempt) {
   if (!outcome || typeof outcome !== "object")
     return { status: "failed", stage: "review" } as const;
   const status = (outcome as Record<string, unknown>).status;
-  if (status === "clean") return { status: "active", stage: "ci" } as const;
+  if (status === "clean")
+    return {
+      status: "active",
+      stage: "integrate",
+      heads: { reviewedHead: attempt.expectedHead },
+    } as const;
   if (status === "changes_requested")
     return { status: "active", stage: "implement" } as const;
   return { status: "failed", stage: "review" } as const;
+}
+
+export function integrateTransition(attempt: Attempt) {
+  const outcome = attempt.result?.integration as
+    Record<string, unknown> | undefined;
+  const baseHead = outcome?.baseHead;
+  if (
+    !outcome ||
+    typeof baseHead !== "string" ||
+    !/^[a-f0-9]{40}$/.test(baseHead)
+  )
+    return { status: "failed", stage: "integrate" } as const;
+  if (outcome.status === "conflict")
+    return {
+      status: "active",
+      stage: "integrate",
+      heads: { targetBaseHead: baseHead },
+    } as const;
+  if (
+    outcome.status === "clean" &&
+    outcome.head === attempt.acceptedHead &&
+    attempt.acceptedHead &&
+    attempt.acceptedHead !== attempt.expectedHead
+  )
+    return {
+      status: "active",
+      stage: "ci",
+      acceptedHead: attempt.acceptedHead,
+      heads: {
+        targetBaseHead: baseHead,
+        integrationHead: attempt.acceptedHead,
+      },
+    } as const;
+  return { status: "failed", stage: "integrate" } as const;
 }
 
 export function ciTransition(attempt: Attempt) {
@@ -181,6 +221,7 @@ function completedTransition(attempt: Attempt) {
   if (attempt.stage === "plan") return planTransition(attempt);
   if (attempt.stage === "implement") return implementationTransition(attempt);
   if (attempt.stage === "review") return reviewTransition(attempt);
+  if (attempt.stage === "integrate") return integrateTransition(attempt);
   if (attempt.stage === "ci") return ciTransition(attempt);
   if (attempt.stage === "merge") return mergeTransition(attempt);
   return undefined;
@@ -341,11 +382,33 @@ export async function coordinate(
     return "dispatched";
   }
   if (
-    !new Set(["qualify", "reproduce", "plan", "implement", "review"]).has(
-      run.stage,
-    )
+    !new Set([
+      "qualify",
+      "reproduce",
+      "plan",
+      "implement",
+      "review",
+      "integrate",
+    ]).has(run.stage)
   )
     return "stale";
+  // A conflicted mechanical integration is followed by exactly one narrowly
+  // scoped conflict-resolution attempt for the same reviewed candidate; any
+  // other integrate wakeup retries the no-model mechanical merge.
+  const integrateRole = async (): Promise<string> => {
+    if (run.stage !== "integrate") return run.stage;
+    const previous = await repository.latestCompletedAttempt(
+      run.id,
+      "integrate",
+      run.revision,
+    );
+    const integration = previous?.result?.integration as
+      Record<string, unknown> | undefined;
+    return integration?.status === "conflict"
+      ? "conflict-resolution"
+      : "integrate";
+  };
+  const role = await integrateRole();
   const claimed = await repository.claimLease(
     run.id,
     run.revision,
@@ -366,11 +429,14 @@ export async function coordinate(
     runRevision: run.revision,
     kind: "agent",
     stage: run.stage,
-    role: run.stage,
+    role,
     state: "created",
     deadlineAt: now + leaseMilliseconds,
     baseCommit: run.baseCommit,
-    expectedHead: run.currentHead,
+    expectedHead:
+      run.stage === "integrate"
+        ? (run.reviewedHead ?? run.currentHead)
+        : run.currentHead,
   };
   const created = await repository.createAttempt(attempt);
   const durable = await repository.getAttempt(attemptId);

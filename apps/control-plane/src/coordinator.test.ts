@@ -21,6 +21,7 @@ import {
   ciTransition,
   coordinate,
   implementationTransition,
+  integrateTransition,
   mergeTransition,
   planTransition,
   reviewTransition,
@@ -118,17 +119,28 @@ async function callbackFor(
                       : {}),
                   },
                 }
-              : {
-                  outcome: "ok",
-                  checkpoint: head,
-                  qualification: {
-                    classification,
-                    summary:
-                      classification === "bug"
-                        ? "Eligible bug"
-                        : "No change needed",
+              : attempt.stage === "integrate"
+                ? {
+                    outcome: "ok",
+                    checkpoint: head,
+                    integration: {
+                      status: "clean",
+                      candidateHead: attempt.expectedHead,
+                      baseHead: "d".repeat(40),
+                      head,
+                    },
+                  }
+                : {
+                    outcome: "ok",
+                    checkpoint: head,
+                    qualification: {
+                      classification,
+                      summary:
+                        classification === "bug"
+                          ? "Eligible bug"
+                          : "No change needed",
+                    },
                   },
-                },
   };
   return {
     ...unsigned,
@@ -1221,10 +1233,11 @@ describe("single coordinator", () => {
       status: "active",
       stage: "review",
       acceptedHead: head,
+      heads: { candidateHead: head },
     });
   });
 
-  it("advances a clean review to CI and returns findings to implementation", () => {
+  it("advances a clean review to integration and returns findings to implementation", () => {
     const attempt = {
       id: "run_slice_rev_5",
       runId: input.id,
@@ -1242,7 +1255,11 @@ describe("single coordinator", () => {
         ...attempt,
         result: { review: { status: "clean", findings: [] } },
       }),
-    ).toEqual({ status: "active", stage: "ci" });
+    ).toEqual({
+      status: "active",
+      stage: "integrate",
+      heads: { reviewedHead: "b".repeat(40) },
+    });
     expect(
       reviewTransition({
         ...attempt,
@@ -1254,6 +1271,232 @@ describe("single coordinator", () => {
         },
       }),
     ).toEqual({ status: "active", stage: "implement" });
+  });
+
+  it("integrates a reviewed candidate with the selected base", () => {
+    const candidate = "b".repeat(40);
+    const base = "d".repeat(40);
+    const integration = "e".repeat(40);
+    const attempt = {
+      id: "run_slice_rev_6",
+      runId: input.id,
+      runRevision: 6,
+      kind: "agent",
+      stage: "integrate",
+      role: "integrate",
+      state: "completed",
+      deadlineAt: 1_000,
+      baseCommit: input.baseCommit,
+      expectedHead: candidate,
+      acceptedHead: integration,
+      result: {
+        integration: {
+          status: "clean",
+          candidateHead: candidate,
+          baseHead: base,
+          head: integration,
+        },
+      },
+    } satisfies Attempt;
+    expect(integrateTransition(attempt)).toEqual({
+      status: "active",
+      stage: "ci",
+      acceptedHead: integration,
+      heads: { targetBaseHead: base, integrationHead: integration },
+    });
+    expect(
+      integrateTransition({
+        ...attempt,
+        acceptedHead: candidate,
+        result: {
+          integration: {
+            status: "conflict",
+            candidateHead: candidate,
+            baseHead: base,
+            conflicts: [{ path: "src/route.ts", hunks: "@@" }],
+          },
+        },
+      }),
+    ).toEqual({
+      status: "active",
+      stage: "integrate",
+      heads: { targetBaseHead: base },
+    });
+    expect(
+      integrateTransition({
+        ...attempt,
+        result: {
+          integration: { status: "clean", baseHead: base, head: candidate },
+        },
+      }),
+    ).toEqual({ status: "failed", stage: "integrate" });
+  });
+
+  it("dispatches mechanical integration without a model and conflict resolution exactly once", async () => {
+    const store = new MemoryRunRepository();
+    const candidate = "b".repeat(40);
+    const base = "d".repeat(40);
+    const resolved = "e".repeat(40);
+    await store.create({
+      ...createRun(input),
+      revision: 6,
+      stage: "integrate" as const,
+      currentHead: candidate,
+      candidateHead: candidate,
+      reviewedHead: candidate,
+    });
+    const submitted: Attempt[] = [];
+    const dispatcher = {
+      submit: async (attempt: Attempt) => {
+        submitted.push(attempt);
+      },
+    };
+    // Mechanical integration is dispatched for the reviewed candidate.
+    await expect(
+      coordinate(
+        store,
+        dispatcher,
+        { runId: input.id, expectedRevision: 6 },
+        100,
+      ),
+    ).resolves.toBe("dispatched");
+    expect(submitted[0]).toMatchObject({
+      role: "integrate",
+      stage: "integrate",
+      expectedHead: candidate,
+    });
+    // A duplicate wakeup does not dispatch a second integration attempt.
+    await expect(
+      coordinate(
+        store,
+        dispatcher,
+        { runId: input.id, expectedRevision: 6 },
+        101,
+      ),
+    ).resolves.toBe("duplicate");
+    expect(submitted).toHaveLength(1);
+    // A conflicted mechanical merge keeps the run in integration and routes
+    // the next wakeup to one narrowly scoped conflict-resolution attempt.
+    await store.completeAttempt(submitted[0]!.id, 6, candidate, {
+      integration: {
+        status: "conflict",
+        candidateHead: candidate,
+        baseHead: base,
+        conflicts: [{ path: "src/route.ts", hunks: "@@" }],
+      },
+    });
+    await coordinate(
+      store,
+      { submit: async () => undefined },
+      { runId: input.id, expectedRevision: 6 },
+      102,
+    );
+    await expect(store.get(input.id)).resolves.toMatchObject({
+      status: "active",
+      stage: "integrate",
+      revision: 7,
+      targetBaseHead: base,
+      reviewedHead: candidate,
+    });
+    await expect(
+      coordinate(
+        store,
+        dispatcher,
+        { runId: input.id, expectedRevision: 7 },
+        103,
+      ),
+    ).resolves.toBe("dispatched");
+    expect(submitted[1]).toMatchObject({
+      role: "conflict-resolution",
+      stage: "integrate",
+      expectedHead: candidate,
+    });
+    // The resolved integration commit advances to CI with every identity bound.
+    await store.completeAttempt(submitted[1]!.id, 7, resolved, {
+      integration: {
+        status: "clean",
+        candidateHead: candidate,
+        baseHead: base,
+        head: resolved,
+        resolution: {
+          summary: "Resolved",
+          resolvedFiles: ["src/route.ts"],
+          validation: [],
+        },
+      },
+    });
+    await coordinate(
+      store,
+      { submit: async () => undefined },
+      { runId: input.id, expectedRevision: 7 },
+      104,
+    );
+    await expect(store.get(input.id)).resolves.toMatchObject({
+      status: "active",
+      stage: "ci",
+      revision: 8,
+      currentHead: resolved,
+      candidateHead: candidate,
+      reviewedHead: candidate,
+      targetBaseHead: base,
+      integrationHead: resolved,
+    });
+    expect(submitted).toHaveLength(2);
+  });
+
+  it("retries mechanical integration against a moved base without repeating earlier stages", async () => {
+    const store = new MemoryRunRepository();
+    const candidate = "b".repeat(40);
+    await store.create({
+      ...createRun(input),
+      revision: 8,
+      stage: "integrate" as const,
+      currentHead: candidate,
+      candidateHead: candidate,
+      reviewedHead: candidate,
+      targetBaseHead: "d".repeat(40),
+    });
+    // The previous integration generation completed cleanly against an older
+    // base; a moved base retries the no-model mechanical merge, not conflict
+    // resolution or general implementation.
+    await store.createAttempt({
+      id: "run_slice_rev_6",
+      runId: input.id,
+      runRevision: 6,
+      kind: "agent",
+      stage: "integrate",
+      role: "integrate",
+      state: "created",
+      deadlineAt: 1_000,
+      baseCommit: input.baseCommit,
+      expectedHead: candidate,
+    });
+    await store.completeAttempt("run_slice_rev_6", 6, "e".repeat(40), {
+      integration: {
+        status: "clean",
+        candidateHead: candidate,
+        baseHead: "d".repeat(40),
+        head: "e".repeat(40),
+      },
+    });
+    const submitted: Attempt[] = [];
+    await expect(
+      coordinate(
+        store,
+        {
+          submit: async (attempt: Attempt) => {
+            submitted.push(attempt);
+          },
+        },
+        { runId: input.id, expectedRevision: 8 },
+        100,
+      ),
+    ).resolves.toBe("dispatched");
+    expect(submitted[0]).toMatchObject({
+      role: "integrate",
+      stage: "integrate",
+      expectedHead: candidate,
+    });
   });
 
   it("requires exact successful CI before merge", () => {
@@ -1338,7 +1581,11 @@ describe("single coordinator", () => {
       if (!dispatched) throw new Error("attempt_not_dispatched");
       expect(dispatched.expectedHead).toBe(previousHead);
       const outputHead =
-        dispatched.stage === "implement" ? "b".repeat(40) : previousHead;
+        dispatched.stage === "implement"
+          ? "b".repeat(40)
+          : dispatched.stage === "integrate"
+            ? "c".repeat(40)
+            : previousHead;
       const callback = await callbackFor(
         dispatched,
         outputHead,
@@ -1350,7 +1597,9 @@ describe("single coordinator", () => {
       const current = await store.get(input.id);
       if (
         current?.status === "active" &&
-        new Set(["reproduce", "plan", "implement", "review"]).has(current.stage)
+        new Set(["reproduce", "plan", "implement", "review", "integrate"]).has(
+          current.stage,
+        )
       )
         wakeups.push({ runId: current.id, expectedRevision: current.revision });
     }
@@ -1360,12 +1609,17 @@ describe("single coordinator", () => {
       "plan",
       "implement",
       "review",
+      "integrate",
     ]);
     await expect(store.get(input.id)).resolves.toMatchObject({
       status: "active",
       stage: "ci",
-      revision: 6,
-      currentHead: previousHead,
+      revision: 7,
+      currentHead: "c".repeat(40),
+      candidateHead: "b".repeat(40),
+      reviewedHead: "b".repeat(40),
+      targetBaseHead: "d".repeat(40),
+      integrationHead: "c".repeat(40),
     });
   });
 });

@@ -571,6 +571,7 @@ export class GitHubStageReporter implements AttemptReporter {
   async report(run: RunSnapshot, attempt: Attempt): Promise<void> {
     if (attempt.stage === "implement" && run.status === "failed") return;
     if (attempt.stage === "ci") return;
+    if (attempt.stage === "integrate") return;
     if (attempt.stage === "merge") {
       if (run.status !== "succeeded") return;
       const merge = attempt.result?.merge as
