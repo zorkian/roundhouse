@@ -404,15 +404,21 @@ export class GitHubCiAutomation {
       throw new CiDiagnosticsError(
         `workflow attempt for failed check "${check.name}" has no failed jobs`,
       );
-    const link = actionsJobLink(check.html_url);
-    if (link && link.runId !== workflowRun.id)
+    // GitHub exposes the check-to-job association in details_url as
+    // /actions/runs/{run}/job/{job}. The check must bind to its concrete
+    // failed job; guessing at every failed job in the workflow would attach
+    // unrelated logs to the repair assignment, so an unbindable check waits.
+    const link = actionsJobLink(check.details_url);
+    if (!link)
+      throw new CiDiagnosticsError(
+        `failed check "${check.name}" does not link to its GitHub Actions job`,
+      );
+    if (link.runId !== workflowRun.id)
       throw new CiDiagnosticsError(
         `failed check "${check.name}" does not bind to its workflow run`,
       );
-    const selected = link
-      ? failedJobs.filter((job) => job.id === link.jobId)
-      : failedJobs;
-    if (link && !selected.length)
+    const selected = failedJobs.filter((job) => job.id === link.jobId);
+    if (!selected.length)
       throw new CiDiagnosticsError(
         `failed check "${check.name}" has no failed job matching its Actions link`,
       );
@@ -422,13 +428,16 @@ export class GitHubCiAutomation {
         throw new CiDiagnosticsError(
           `a failed job for check "${check.name}" is malformed`,
         );
-      if (job.head_sha && job.head_sha !== run.currentHead)
+      // The job must prove it belongs to the exact candidate and selected
+      // workflow attempt before its log becomes evidence; missing metadata
+      // is treated the same as a mismatch.
+      if (job.head_sha !== run.currentHead)
         throw new CiDiagnosticsError(
-          `failed job "${job.name}" moved off the candidate head during diagnostics retrieval`,
+          `failed job "${job.name}" is not bound to the exact candidate head`,
         );
-      if (Number.isSafeInteger(job.run_attempt) && job.run_attempt !== attempt)
+      if (job.run_attempt !== attempt)
         throw new CiDiagnosticsError(
-          `failed job "${job.name}" belongs to a different workflow attempt`,
+          `failed job "${job.name}" is not bound to workflow attempt ${attempt}`,
         );
       const steps: readonly NonNullable<WorkflowJob["steps"]>[number][] =
         Array.isArray(job.steps) ? job.steps : [];

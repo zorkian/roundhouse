@@ -231,10 +231,13 @@ function githubFailure({
   workflowHead = candidate,
   jobHead = candidate,
   runAttempt = 1,
+  jobAttempt = runAttempt,
   checkRunId = 11,
   checkSuiteId = 21,
   workflowRunId = 31,
   jobId = 41,
+  detailsUrl,
+  secondJobFailed = false,
   workflowRunFound = true,
   jobsMalformed = false,
   noFailedJobs = false,
@@ -243,18 +246,22 @@ function githubFailure({
   readonly candidate?: string;
   readonly checkHead?: string;
   readonly workflowHead?: string;
-  readonly jobHead?: string;
+  readonly jobHead?: string | null;
   readonly runAttempt?: number;
+  readonly jobAttempt?: number | null;
   readonly checkRunId?: number;
   readonly checkSuiteId?: number;
   readonly workflowRunId?: number;
   readonly jobId?: number;
+  readonly detailsUrl?: string | null;
+  readonly secondJobFailed?: boolean;
   readonly workflowRunFound?: boolean;
   readonly jobsMalformed?: boolean;
   readonly noFailedJobs?: boolean;
   readonly logError?: boolean;
 } = {}) {
-  const checkUrl = `https://github.test/zorkian/roundhouse/actions/runs/${workflowRunId}/job/${jobId}`;
+  const jobUrl = `https://github.test/zorkian/roundhouse/actions/runs/${workflowRunId}/job/${jobId}`;
+  const checkDetailsUrl = detailsUrl === undefined ? jobUrl : detailsUrl;
   const get = vi.fn(async (path: string) => {
     if (path.includes("/pulls?state="))
       return [{ number: 73, html_url: "https://github.test/pull/73" }];
@@ -280,7 +287,10 @@ function githubFailure({
             status: "completed",
             conclusion: "failure",
             head_sha: checkHead,
-            html_url: checkUrl,
+            html_url: `https://github.test/zorkian/roundhouse/runs/${jobId}`,
+            ...(checkDetailsUrl === null
+              ? {}
+              : { details_url: checkDetailsUrl }),
             check_suite: { id: checkSuiteId },
           },
         ],
@@ -317,9 +327,9 @@ function githubFailure({
                 name: "test",
                 status: "completed",
                 conclusion: noFailedJobs ? "success" : "failure",
-                head_sha: jobHead,
-                run_attempt: runAttempt,
-                html_url: checkUrl,
+                ...(jobHead === null ? {} : { head_sha: jobHead }),
+                ...(jobAttempt === null ? {} : { run_attempt: jobAttempt }),
+                html_url: jobUrl,
                 steps: [
                   { name: "Check out", conclusion: "success" },
                   {
@@ -332,8 +342,8 @@ function githubFailure({
                 id: jobId + 1,
                 name: "build",
                 status: "completed",
-                conclusion: "success",
-                head_sha: jobHead,
+                conclusion: secondJobFailed ? "failure" : "success",
+                head_sha: jobHead ?? candidate,
                 run_attempt: runAttempt,
               },
             ],
@@ -565,7 +575,7 @@ describe("GitHub exact-head CI and merge", () => {
         name: "test",
         status: "completed",
         conclusion: "failure",
-        url: "https://github.test/zorkian/roundhouse/actions/runs/31/job/41",
+        url: "https://github.test/zorkian/roundhouse/runs/41",
       },
     ]);
     expect(ci.diagnostics.notice).toContain("untrusted");
@@ -580,7 +590,7 @@ describe("GitHub exact-head CI and merge", () => {
           id: 11,
           name: "test",
           conclusion: "failure",
-          url: "https://github.test/zorkian/roundhouse/actions/runs/31/job/41",
+          url: "https://github.test/zorkian/roundhouse/runs/41",
         },
         workflowRun: {
           id: 31,
@@ -634,6 +644,25 @@ describe("GitHub exact-head CI and merge", () => {
     );
     expect(repairCi.diagnostics.failures[0].jobs[0].log).toContain(
       "File t/customtext-module.t needs tidying",
+    );
+  });
+
+  it("binds a failed check to only its own failed job when the workflow has several", async () => {
+    const { repository, run } = await setupCi();
+    const api = githubFailure({ secondJobFailed: true });
+    const automation = new GitHubCiAutomation(repository, api.api);
+
+    await expect(automation.reconcileCi(run, 100)).resolves.toBe("recorded");
+    const ci = (await repository.getAttempt(`${run.id}_rev_6`))?.result
+      ?.ci as Record<string, any>;
+    expect(ci.reason).toBeUndefined();
+    expect(ci.diagnostics.failures).toHaveLength(1);
+    expect(ci.diagnostics.failures[0].jobs).toHaveLength(1);
+    expect(ci.diagnostics.failures[0].jobs[0].id).toBe(41);
+    expect(ci.diagnostics.failures[0].jobs[0].name).toBe("test");
+    expect(api.getText).toHaveBeenCalledTimes(1);
+    expect(api.getText).toHaveBeenCalledWith(
+      "/repos/zorkian/roundhouse/actions/jobs/41/logs",
     );
   });
 
@@ -854,7 +883,43 @@ describe("GitHub exact-head CI and merge", () => {
     [
       "a failed job that moved off the candidate head",
       { jobHead: "e".repeat(40) },
-      "moved off the candidate head during diagnostics retrieval",
+      "is not bound to the exact candidate head",
+    ],
+    [
+      "a failed job without candidate-head metadata",
+      { jobHead: null },
+      "is not bound to the exact candidate head",
+    ],
+    [
+      "a failed job that belongs to a different workflow attempt",
+      { jobAttempt: 2 },
+      "is not bound to workflow attempt 1",
+    ],
+    [
+      "a failed job without workflow-attempt metadata",
+      { jobAttempt: null },
+      "is not bound to workflow attempt 1",
+    ],
+    [
+      "a failed check without a GitHub Actions job link",
+      { detailsUrl: null },
+      "does not link to its GitHub Actions job",
+    ],
+    [
+      "a failed check whose Actions link names another workflow run",
+      {
+        detailsUrl:
+          "https://github.test/zorkian/roundhouse/actions/runs/99/job/41",
+      },
+      "does not bind to its workflow run",
+    ],
+    [
+      "a failed check whose Actions link names a job that did not fail",
+      {
+        detailsUrl:
+          "https://github.test/zorkian/roundhouse/actions/runs/31/job/42",
+      },
+      "has no failed job matching its Actions link",
     ],
     ["malformed workflow jobs", { jobsMalformed: true }, "malformed"],
     [
