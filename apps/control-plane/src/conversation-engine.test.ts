@@ -375,6 +375,53 @@ describe("conversation engine", () => {
     },
   );
 
+  it("maps and records Moonshot/Kimi effort through the Chat Completions adapter", async () => {
+    const route = {
+      ...responsesRoute,
+      provider: "moonshotai",
+      model: "moonshotai/kimi-k3",
+      protocol: "openai-completions" as const,
+      runtime: runtimeCapabilitiesForModel("moonshotai/kimi-k3")!,
+      requestedEffort: "high" as const,
+    };
+    const modelBroker = broker([
+      Response.json(route),
+      Response.json({
+        id: "kimi-response",
+        model: "kimi-k3",
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              content: JSON.stringify({
+                title: "Explain Kimi effort mapping",
+                reply: "Kimi answer",
+              }),
+            },
+          },
+        ],
+        usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5 },
+      }),
+    ]);
+
+    const result = await executeConversationTurn(
+      modelBroker,
+      github,
+      conversation,
+      turn,
+    );
+
+    const request = modelBroker.fetch.mock.calls[1]![0] as Request;
+    await expect(request.clone().json()).resolves.toMatchObject({
+      reasoning_effort: "high",
+    });
+    expect(result.usage[0]).toMatchObject({
+      model: "moonshotai/kimi-k3",
+      requestedEffort: "high",
+      resolvedEffort: "high",
+    });
+  });
+
   it("creates a validated editable brief and deterministic promotion markers", async () => {
     const brief = {
       title: "Add conversational entry",
