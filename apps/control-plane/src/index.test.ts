@@ -296,11 +296,13 @@ function withUiSession(
             values = bound;
             return statement;
           },
-          first: async () => null,
-          run: async () => {
+          // Mirrors UPDATE ... RETURNING: no concurrent writes in these
+          // tests, so the proposed expiration is the persisted one.
+          first: async () => {
             renewals?.push(Number(values[0]));
-            return { meta: {} };
+            return { expires_at: Number(values[0]) };
           },
+          run: async () => ({ meta: {} }),
           all: async () => ({ meta: {}, results: [] }),
         };
         return statement as unknown as ReturnType<D1Like["prepare"]>;

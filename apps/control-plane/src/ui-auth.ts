@@ -424,18 +424,18 @@ export async function validateUiSession(
   // signed in. The session token itself is unchanged.
   const renewalStartedAt = Date.now();
   const previousExpiresAt = row.expires_at;
-  // Renewal is monotonic: if a later-started request already wrote a newer
-  // expiration, keep the later value so concurrent activity never moves the
-  // persisted deadline backward or out of sync with an issued cookie.
-  const renewedExpiresAt = Math.max(
-    previousExpiresAt,
-    startedAt + uiSessionLifetimeMs,
-  );
-  await env.DB.prepare(
-    "UPDATE ui_sessions SET expires_at = MAX(expires_at, ?1) WHERE session_hash = ?2",
+  // Renewal is monotonic and atomic: MAX() keeps any newer expiration a
+  // concurrent request may have written, and RETURNING yields the actual
+  // persisted deadline so the issued cookie can never be out of sync with
+  // the database, even if a write lands between our SELECT and UPDATE.
+  const updated = await env.DB.prepare(
+    "UPDATE ui_sessions SET expires_at = MAX(expires_at, ?1) WHERE session_hash = ?2 RETURNING expires_at",
   )
-    .bind(renewedExpiresAt, await sha256Hex(token))
-    .run();
+    .bind(startedAt + uiSessionLifetimeMs, await sha256Hex(token))
+    .first<{ expires_at: number }>();
+  const renewedExpiresAt =
+    updated?.expires_at ??
+    Math.max(previousExpiresAt, startedAt + uiSessionLifetimeMs);
   log("ui_session_renewed", {
     outcome: "renewed",
     githubUserId: row.github_user_id,

@@ -28,6 +28,9 @@ function authDb(options?: {
     expiresAt: number;
     createdAt?: number;
   }[];
+  // Hook invoked after the session SELECT but before the renewal UPDATE
+  // commits, to simulate a concurrent write landing in between.
+  beforeRenewalCommit?: (hash: string) => void;
 }) {
   const states = new Map<string, { expiresAt: number; cookieHash: string }>();
   const sessions = new Map(
@@ -63,6 +66,20 @@ function authDb(options?: {
                   state_cookie_hash: state.cookieHash,
                 };
           }
+          if (sql.includes("UPDATE ui_sessions SET expires_at")) {
+            // Mirrors UPDATE ... MAX() ... RETURNING: apply any concurrent
+            // write that landed after our SELECT, keep the later deadline,
+            // and return the actual persisted expiration.
+            const hash = String(values[1]);
+            options?.beforeRenewalCommit?.(hash);
+            const session = sessions.get(hash);
+            if (!session) return null;
+            session.expires_at = Math.max(
+              session.expires_at,
+              Number(values[0]),
+            );
+            return { expires_at: session.expires_at };
+          }
           if (sql.includes("FROM ui_sessions")) {
             return sessions.get(String(values[0])) ?? null;
           }
@@ -96,15 +113,6 @@ function authDb(options?: {
             });
           if (sql.includes("DELETE FROM ui_sessions WHERE session_hash"))
             sessions.delete(String(values[0]));
-          if (sql.includes("UPDATE ui_sessions SET expires_at")) {
-            const session = sessions.get(String(values[1]));
-            // Mirrors the SQL MAX() so renewal is monotonic under overlap.
-            if (session)
-              session.expires_at = Math.max(
-                session.expires_at,
-                Number(values[0]),
-              );
-          }
           if (sql.includes("DELETE FROM ui_sessions WHERE expires_at"))
             for (const [hash, session] of sessions)
               if (session.expires_at <= Number(values[0]))
@@ -497,6 +505,36 @@ describe("GitHub UI sign-in", () => {
       const preserved = Date.now() + 90 * 24 * 60 * 60 * 1000;
       expect(session?.expiresAt).toBe(preserved);
       expect(sessions.get(hash)?.expires_at).toBe(preserved);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("returns the expiration from the atomic update when a concurrent write lands after the SELECT", async () => {
+    const token = "valid-token";
+    const hash = await sha256Hex(token);
+    vi.useFakeTimers();
+    try {
+      const { db, sessions } = authDb({
+        sessions: [{ hash, expiresAt: Date.now() + 60_000 }],
+        // Simulate a concurrent request extending the same session after
+        // this request's SELECT but before its UPDATE commits.
+        beforeRenewalCommit: (updatedHash) => {
+          sessions.get(updatedHash)!.expires_at =
+            Date.now() + 60 * 24 * 60 * 60 * 1000;
+        },
+      });
+      const session = await validateUiSession(
+        new Request("https://v2.invalid/", {
+          headers: { cookie: `${uiSessionCookie}=${token}` },
+        }),
+        env(db),
+      );
+      // The cookie expiration must match the actual persisted deadline
+      // (the concurrent writer's later value), not the stale local one.
+      const persisted = Date.now() + 60 * 24 * 60 * 60 * 1000;
+      expect(session?.expiresAt).toBe(persisted);
+      expect(sessions.get(hash)?.expires_at).toBe(persisted);
     } finally {
       vi.useRealTimers();
     }
