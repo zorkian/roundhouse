@@ -75,6 +75,12 @@ describe("D1 conversation repository", () => {
         "utf8",
       ),
     );
+    sqlite.exec(
+      readFileSync(
+        new URL("../migrations/0018_conversation_titles.sql", import.meta.url),
+        "utf8",
+      ),
+    );
     sqlite
       .prepare("INSERT INTO repositories VALUES (?1,?2,?3,?4,?5)")
       .run(
@@ -129,6 +135,7 @@ describe("D1 conversation repository", () => {
     expect(await repository.pendingWakeups(now)).toHaveLength(1);
     await expect(repository.claimTurn("turn-1")).resolves.toMatchObject({
       state: "running",
+      ordinal: 1,
       attempts: 1,
     });
     await repository.recordModelUsage([
@@ -157,8 +164,18 @@ describe("D1 conversation repository", () => {
         "turn-1",
         "message-2",
         "Let's clarify first.",
+        "Plan conversation title persistence",
       ),
     ).resolves.toBe(true);
+    await expect(
+      repository.get(ids.conversation, 7, ["123"]),
+    ).resolves.toMatchObject({
+      title: "Plan conversation title persistence",
+      messages: [
+        { role: "user", body: "What should we build?" },
+        { role: "assistant", body: "Let's clarify first." },
+      ],
+    });
 
     now += 1;
     await expect(
@@ -184,6 +201,7 @@ describe("D1 conversation repository", () => {
       "turn-2",
       "message-4",
       "Ready for a brief.",
+      "Replace the original conversation title",
     );
 
     now += 1;
@@ -303,6 +321,7 @@ describe("D1 conversation repository", () => {
       repository.get(ids.conversation, 7, ["123"]),
     ).resolves.toMatchObject({
       status: "promoted",
+      title: "Plan conversation title persistence",
       promotion: { state: "accepted", issueNumber: 42, runId: "run-42" },
       currentBrief: { state: "approved", title: "Build the flow" },
       links: [
@@ -316,6 +335,14 @@ describe("D1 conversation repository", () => {
         { role: "assistant", direction: "outbound" },
       ],
     });
+    await expect(repository.list(7, ["123"])).resolves.toEqual([
+      expect.objectContaining({
+        id: ids.conversation,
+        title: "Plan conversation title persistence",
+        repository: "octo/project",
+      }),
+    ]);
+    await expect(repository.list(7, ["999"])).resolves.toEqual([]);
     await expect(
       repository.get(ids.conversation, 8, ["123"]),
     ).resolves.toBeUndefined();

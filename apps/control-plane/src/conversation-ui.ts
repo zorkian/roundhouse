@@ -42,10 +42,10 @@ export function renderConversationIndex(
     .join("");
   const recent = conversations.length
     ? conversations
-        .map(
-          (conversation) =>
-            `<div class="conversation"><div><a href="/conversations/${encodeURIComponent(conversation.id)}"><strong>${escapeHtml(conversation.repository)}</strong></a><div class="status">${escapeHtml(conversation.promotionState ?? conversation.status)} · ${escapeHtml(new Date(conversation.updatedAt).toLocaleString("en-US", { timeZone: "UTC" }))} UTC</div></div>${conversation.issueUrl ? `<a href="${escapeHtml(conversation.issueUrl)}">Issue #${conversation.issueNumber}</a>` : ""}</div>`,
-        )
+        .map((conversation) => {
+          const title = conversation.title?.trim() || "New conversation";
+          return `<div class="conversation"><div><a href="/conversations/${encodeURIComponent(conversation.id)}"><strong>${escapeHtml(title)}</strong></a><div class="status">${escapeHtml(conversation.repository)} · ${escapeHtml(conversation.promotionState ?? conversation.status)} · ${escapeHtml(new Date(conversation.updatedAt).toLocaleString("en-US", { timeZone: "UTC" }))} UTC</div></div>${conversation.issueUrl ? `<a href="${escapeHtml(conversation.issueUrl)}">Issue #${escapeHtml(conversation.issueNumber)}</a>` : ""}</div>`;
+        })
         .join("")
     : '<p class="muted">No conversations yet.</p>';
   return page(

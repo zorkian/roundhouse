@@ -104,7 +104,76 @@ describe("conversation Queue worker", () => {
     expect(broker.fetch).not.toHaveBeenCalled();
   });
 
-  it("turns at-least-once wakeups into one persisted reply and one usage call", async () => {
+  it("does not persist either first-turn field when structured output is invalid", async () => {
+    const route = {
+      provider: "openai",
+      model: "openai/gpt-5.6-sol",
+      protocol: "openai-responses",
+      transport: "cloudflare-provider-native",
+      thinkingLevel: "high",
+      runtime: runtimeCapabilitiesForModel("openai/gpt-5.6-sol"),
+      rule: "profile-conversation-v2",
+    };
+    const repository = {
+      turn: vi.fn(async () => ({ state: "pending" })),
+      claimTurn: vi.fn(async () => ({
+        id: "turn-1",
+        kind: "message",
+        ordinal: 1,
+      })),
+      getForTurn: vi.fn(async () => ({
+        id: "b1f486ff-7744-49f9-ab78-f74e8409fc2b",
+        repository: { name: "octo/project", installationId: 99 },
+        sourceCommit: "a".repeat(40),
+        profileHash: "b".repeat(64),
+        context: {
+          model: { id: "openai/gpt-5.6-sol", reasoning: "high" },
+          defaultBranch: "main",
+        },
+        messages: [],
+      })),
+      renewTurn: vi.fn(async () => true),
+      recordTurnRoute: vi.fn(async () => undefined),
+      recordModelUsage: vi.fn(async () => undefined),
+      completeMessageTurn: vi.fn(async () => true),
+      retryTurn: vi.fn(async () => undefined),
+    } as unknown as D1ConversationRepository;
+    const broker = {
+      fetch: vi
+        .fn()
+        .mockResolvedValueOnce(Response.json(route))
+        .mockResolvedValueOnce(
+          Response.json({
+            output_text: JSON.stringify({
+              title: "Too few words",
+              reply: "A normal reply.",
+            }),
+            usage: { total_tokens: 7 },
+          }),
+        ),
+    };
+    await expect(
+      processConversationWakeup(
+        repository,
+        { MODEL_BROKER: broker } as never,
+        { kind: "turn", id: "turn-1" },
+        1,
+        new Map(),
+        {
+          github: {
+            get: vi.fn(async () => ({ private: false })),
+          } as unknown as GitHubApi,
+        },
+      ),
+    ).resolves.toBe("retry");
+    expect(repository.completeMessageTurn).not.toHaveBeenCalled();
+    expect(repository.retryTurn).toHaveBeenCalledWith(
+      "turn-1",
+      "conversation_first_reply_invalid",
+    );
+  });
+
+  it("turns at-least-once wakeups into one persisted title, reply, and usage calls", async () => {
     const sqlite = new DatabaseSync(":memory:");
     sqlite.exec("PRAGMA foreign_keys=ON");
     sqlite.exec(
@@ -116,6 +185,12 @@ describe("conversation Queue worker", () => {
     sqlite.exec(
       readFileSync(
         new URL("../migrations/0017_conversations.sql", import.meta.url),
+        "utf8",
+      ),
+    );
+    sqlite.exec(
+      readFileSync(
+        new URL("../migrations/0018_conversation_titles.sql", import.meta.url),
         "utf8",
       ),
     );
@@ -169,8 +244,23 @@ describe("conversation Queue worker", () => {
     const responses = [
       Response.json(route),
       Response.json({
+        id: "response-tool",
+        output: [
+          {
+            type: "function_call",
+            name: "read_repository_file",
+            arguments: '{"path":"README.md"}',
+            call_id: "call-1",
+          },
+        ],
+        usage: { input_tokens: 8, output_tokens: 4, total_tokens: 12 },
+      }),
+      Response.json({
         id: "response-1",
-        output_text: "Yes. I have not started delivery.",
+        output_text: JSON.stringify({
+          title: "Clarify conversation delivery status",
+          reply: "Yes. I have not started delivery.",
+        }),
         usage: { input_tokens: 10, output_tokens: 7, total_tokens: 17 },
       }),
     ];
@@ -192,7 +282,17 @@ describe("conversation Queue worker", () => {
       [webConversationAdapter.name, webConversationAdapter],
     ]);
     const github = {
-      get: vi.fn(async () => ({ private: false })),
+      get: vi.fn(async (path: string) => {
+        if (path === "/repos/octo/project") return { private: false };
+        if (path.includes("/contents/README.md"))
+          return {
+            type: "file",
+            encoding: "base64",
+            size: 4,
+            content: btoa("body"),
+          };
+        throw new Error(`unexpected_github_path:${path}`);
+      }),
     } as unknown as GitHubApi;
     await expect(
       processConversationWakeup(
@@ -217,6 +317,7 @@ describe("conversation Queue worker", () => {
     const completed = await repository.get(conversationId, 7, ["123"]);
     expect(completed).not.toHaveProperty("activeTurn");
     expect(completed).toMatchObject({
+      title: "Clarify conversation delivery status",
       messages: [
         { role: "user", body: "Is this a question?" },
         { role: "assistant", body: "Yes. I have not started delivery." },
@@ -226,22 +327,20 @@ describe("conversation Queue worker", () => {
       sqlite
         .prepare("SELECT COUNT(*) AS count FROM conversation_model_usage")
         .get(),
-    ).toEqual({ count: 1 });
-    await expect(
-      new D1RunRepository(sqliteD1(sqlite)).usageForRepositories(
-        ["123"],
-        0,
-        Date.now() + 1_000,
-      ),
-    ).resolves.toEqual([
+    ).toEqual({ count: 2 });
+    const usage = await new D1RunRepository(
+      sqliteD1(sqlite),
+    ).usageForRepositories(["123"], 0, Date.now() + 1_000);
+    expect(usage).toHaveLength(2);
+    expect(usage).toContainEqual(
       expect.objectContaining({
         callId: "response-1",
         source: "conversation",
         totalTokens: 17,
         costUsd: expect.any(Number),
       }),
-    ]);
-    expect(broker.fetch).toHaveBeenCalledTimes(2);
+    );
+    expect(broker.fetch).toHaveBeenCalledTimes(3);
     sqlite.close();
   });
 });
