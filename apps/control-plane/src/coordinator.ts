@@ -1005,11 +1005,16 @@ async function finalizePromotion(
     : undefined;
   if (promoter && winner && judgement)
     await promoter.promote(run, winner, judgement);
+  // The winner's result and accepted head are reconstructed from the bound
+  // winner attempt rather than the selected attempt: attempt creation does
+  // not persist result/acceptedHead, so a promotion interrupted after the
+  // selection insert would otherwise complete the canonical attempt with an
+  // empty result and the input head on recovery.
   await repository.completeAttempt(
     selected.id,
     run.revision,
-    selected.acceptedHead ?? selected.expectedHead,
-    selected.result ?? {},
+    winner?.acceptedHead ?? selected.acceptedHead ?? selected.expectedHead,
+    winner?.result ?? selected.result ?? {},
   );
   const completed = (await repository.getAttempt(selected.id)) ?? selected;
   const payload = {

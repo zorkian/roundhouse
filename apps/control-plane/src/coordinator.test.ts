@@ -1,6 +1,8 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
+import { readdirSync, readFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import {
   createRun,
   compileWorkflow,
@@ -18,6 +20,7 @@ import {
   signCallback,
   type AttemptCallback,
 } from "./callback.js";
+import { D1RunRepository } from "./d1-store.js";
 import {
   aggregateReviewAttempts,
   attemptOutcomeTransition,
@@ -33,6 +36,63 @@ import {
   reviewTransition,
   reproductionTransition,
 } from "./coordinator.js";
+
+// Minimal D1-compatible harness backed by in-memory SQLite, mirroring
+// repository-contract.test.mjs, so persistence-backed recovery behavior is
+// tested against the deployed data store instead of the in-memory
+// repository (which retains fields D1 drops).
+class LocalD1Statement {
+  values: unknown[] = [];
+
+  constructor(private readonly statement: any) {}
+
+  bind(...values: unknown[]) {
+    this.values = values;
+    return this;
+  }
+
+  async first() {
+    return this.statement.get(...this.values);
+  }
+
+  async run() {
+    const result = this.statement.run(...this.values);
+    return { meta: { changes: Number(result.changes) } };
+  }
+
+  async all() {
+    return { results: this.statement.all(...this.values), meta: {} };
+  }
+}
+
+class LocalD1 {
+  private readonly database = new DatabaseSync(":memory:");
+
+  constructor() {
+    const migrations = new URL("../migrations/", import.meta.url);
+    for (const migration of readdirSync(migrations).filter((name) =>
+      name.endsWith(".sql"),
+    ))
+      this.database.exec(readFileSync(new URL(migration, migrations), "utf8"));
+  }
+
+  prepare(sql: string) {
+    return new LocalD1Statement(this.database.prepare(sql));
+  }
+
+  async batch(statements: LocalD1Statement[]) {
+    this.database.exec("BEGIN");
+    try {
+      const results = [];
+      for (const statement of statements) results.push(await statement.run());
+      this.database.exec("COMMIT");
+      return results;
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+}
 
 const sourceCommit = "a".repeat(40);
 const workflow = await compileWorkflow(
@@ -2309,6 +2369,77 @@ nodes:
     expect(promoted[0]).toBe(submitted[0]!.id);
     const canonical = await store.getAttempt("run_competition_rev_1");
     expect(canonical?.state).toBe("completed");
+    await expect(store.get(competition.id)).resolves.toMatchObject({
+      status: "succeeded",
+    });
+  });
+
+  // Same interrupted-promotion scenario against the D1-backed store, which
+  // drops the in-memory-only result/acceptedHead on attempt creation. The
+  // recovered canonical attempt must still complete with the winner's result
+  // and accepted commit, reconstructed from the durable winner attempt.
+  it("recovers the winner result and head from durable state after an interrupted publication", async () => {
+    const competition = await competitionInput();
+    const store = new D1RunRepository(new LocalD1() as never);
+    await store.create(createRun(competition));
+    const submitted: Attempt[] = [];
+    const dispatcher = {
+      submit: async (attempt: Attempt) => {
+        submitted.push(attempt);
+      },
+    };
+    let failPromotion = true;
+    const promoted: string[] = [];
+    const promoter = {
+      promote: async (_run: RunSnapshot, winner: Attempt) => {
+        if (failPromotion) throw new Error("publication_interrupted");
+        promoted.push(winner.id);
+      },
+    };
+    const wakeup = { runId: competition.id, expectedRevision: 1 };
+    const step = (now: number) =>
+      coordinate(
+        store,
+        dispatcher,
+        wakeup,
+        now,
+        undefined,
+        undefined,
+        promoter,
+      );
+    await step(100);
+    const winnerHead = "e".repeat(40);
+    for (const candidate of [...submitted])
+      await store.completeAttempt(
+        candidate.id,
+        1,
+        candidate.competition?.purpose === "candidate" &&
+          candidate.competition.candidateId === "alpha"
+          ? winnerHead
+          : candidate.expectedHead,
+        qualificationResult(candidate.role),
+      );
+    await step(101);
+    const judge = submitted.find(
+      (attempt) => attempt.role === "qualify-judge",
+    )!;
+    await store.completeAttempt(judge.id, 1, judge.expectedHead, judgement());
+    // The selection is inserted durably, then publication fails.
+    await expect(step(102)).rejects.toThrow("publication_interrupted");
+    const recorded = await store.getAttempt("run_competition_rev_1");
+    expect(recorded?.competition?.purpose).toBe("selected");
+    expect(recorded?.result).toBeUndefined();
+    // Recovery completes the canonical attempt with the winner's result and
+    // accepted head even though the selection row never stored them.
+    failPromotion = false;
+    await expect(step(103)).resolves.toBe("dispatched");
+    expect(promoted).toEqual([submitted[0]!.id]);
+    const canonical = await store.getAttempt("run_competition_rev_1");
+    expect(canonical?.state).toBe("completed");
+    expect(canonical?.acceptedHead).toBe(winnerHead);
+    expect(canonical?.result).toEqual(
+      qualificationResult("qualify-candidate-alpha"),
+    );
     await expect(store.get(competition.id)).resolves.toMatchObject({
       status: "succeeded",
     });
