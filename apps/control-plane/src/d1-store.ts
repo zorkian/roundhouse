@@ -45,6 +45,16 @@ type AttemptRow = {
   routing_json: string | null;
 };
 
+export interface RunDetails {
+  readonly run: RunSnapshot;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+  readonly attempts: readonly (Attempt & {
+    readonly createdAt: number;
+    readonly updatedAt: number;
+  })[];
+}
+
 function attemptFromRow(row: AttemptRow): Attempt {
   return {
     id: row.id,
@@ -119,6 +129,36 @@ export class D1RunRepository implements RunRepository {
       .bind(runId)
       .first<RunRow>();
     return row ? (JSON.parse(row.document_json) as RunSnapshot) : undefined;
+  }
+
+  async detailsByIssue(
+    repository: string,
+    issueNumber: number,
+  ): Promise<RunDetails | undefined> {
+    const row = await this.db
+      .prepare(
+        "SELECT r.document_json,r.created_at,r.updated_at FROM repositories p JOIN work_items w ON w.repository_id=p.id JOIN runs r ON r.id=w.current_run_id WHERE p.github_id=?1 AND w.issue_number=?2",
+      )
+      .bind(repository, issueNumber)
+      .first<{ document_json: string; created_at: number; updated_at: number }>();
+    if (!row) return undefined;
+    const run = JSON.parse(row.document_json) as RunSnapshot;
+    const result = await this.db
+      .prepare(
+        "SELECT id,run_id,run_revision,kind,stage,role,state,deadline_at,base_commit,expected_head,accepted_head,result_json,routing_json,created_at,updated_at FROM attempts WHERE run_id=?1 ORDER BY created_at ASC,id ASC",
+      )
+      .bind(run.id)
+      .all<AttemptRow & { created_at: number; updated_at: number }>();
+    return {
+      run,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      attempts: (result.results ?? []).map((attempt) => ({
+        ...attemptFromRow(attempt),
+        createdAt: attempt.created_at,
+        updatedAt: attempt.updated_at,
+      })),
+    };
   }
 
   async transition(
