@@ -33,6 +33,7 @@ export interface DeliveryBrief {
   readonly revision: number;
   readonly state: "draft" | "approved" | "superseded";
   readonly title: string;
+  readonly body: string;
   readonly outcome: string;
   readonly acceptanceCriteria: readonly string[];
   readonly constraints: readonly string[];
@@ -222,6 +223,7 @@ type BriefRow = {
   revision: number;
   state: DeliveryBrief["state"];
   title: string;
+  body: string;
   outcome: string;
   acceptance_criteria_json: string;
   constraints_json: string;
@@ -307,6 +309,7 @@ function briefFromRow(row: BriefRow): DeliveryBrief {
     revision: row.revision,
     state: row.state,
     title: row.title,
+    body: row.body,
     outcome: row.outcome,
     acceptanceCriteria: JSON.parse(row.acceptance_criteria_json) as string[],
     constraints: JSON.parse(row.constraints_json) as string[],
@@ -349,6 +352,23 @@ function placeholders(values: readonly unknown[], offset = 1): string {
 
 function wakeupOutboxId(wakeup: ConversationWakeup): string {
   return `conversation:${wakeup.kind}:${wakeup.id}`;
+}
+
+function initialBriefBody(
+  brief: Pick<
+    DeliveryBrief,
+    | "outcome"
+    | "acceptanceCriteria"
+    | "constraints"
+    | "evidence"
+    | "uncertainties"
+  >,
+): string {
+  const section = (heading: string, items: readonly string[]) =>
+    items.length
+      ? `\n\n## ${heading}\n\n${items.map((item) => `- ${item}`).join("\n")}`
+      : "";
+  return `## Outcome\n\n${brief.outcome}${section("Acceptance criteria", brief.acceptanceCriteria)}${section("Constraints", brief.constraints)}${section("Evidence and decisions", brief.evidence)}${section("Remaining uncertainties", brief.uncertainties)}\n`;
 }
 
 export class D1ConversationRepository {
@@ -708,60 +728,111 @@ export class D1ConversationRepository {
     readonly conversationId: string;
     readonly creatorGithubUserId: number;
     readonly turnId: string;
-  }): Promise<boolean> {
+    readonly messageId?: string;
+    readonly message?: CanonicalInboundMessage;
+  }): Promise<"created" | "duplicate" | "unavailable"> {
+    const duplicate = await this.db
+      .prepare("SELECT id FROM conversation_turns WHERE id=?1")
+      .bind(input.turnId)
+      .first<{ id: string }>();
+    if (duplicate) return "duplicate";
     const time = this.now();
-    const results = await this.db.batch([
-      this.db
-        .prepare(
-          `INSERT INTO conversation_turns
-           (id,conversation_id,triggering_message_id,kind,state,source_commit,configured_model,configured_reasoning,model_route_json,result_message_id,result_brief_id,ordinal,attempts,lease_expires_at,error_code,created_at,updated_at,completed_at)
-           SELECT ?1,c.id,NULL,'brief','pending',c.source_commit,
-                  json_extract(c.context_json,'$.model.id'),
-                  json_extract(c.context_json,'$.model.reasoning'),
-                  NULL,NULL,NULL,
-                  (SELECT COALESCE(MAX(ordinal),0)+1 FROM conversation_turns WHERE conversation_id=c.id),
-                  0,NULL,NULL,?2,?2,NULL
-           FROM conversations c
-           WHERE c.id=?3 AND c.creator_github_user_id=?4 AND c.status='open'
-             AND c.active_turn_id IS NULL
-             AND NOT EXISTS (SELECT 1 FROM conversation_promotions p WHERE p.conversation_id=c.id)`,
-        )
-        .bind(
-          input.turnId,
-          time,
+    const messageStatement =
+      input.message && input.messageId
+        ? [
+            this.db
+              .prepare(
+                `INSERT INTO conversation_messages
+                 (id,conversation_id,turn_id,direction,role,actor_id,actor_login,adapter,adapter_installation,external_conversation_id,external_message_id,ordinal,body,created_at)
+                 SELECT ?1,?2,?3,'inbound','user',?4,?5,?6,?7,?8,?9,
+                        (SELECT COALESCE(MAX(ordinal),0)+1 FROM conversation_messages WHERE conversation_id=?2),
+                        ?10,?11
+                 FROM conversations c
+                 WHERE c.id=?2 AND c.creator_github_user_id=?12 AND c.status='open'
+                   AND c.active_turn_id IS NULL
+                   AND NOT EXISTS (SELECT 1 FROM conversation_promotions p WHERE p.conversation_id=c.id)`,
+              )
+              .bind(
+                input.messageId,
+                input.conversationId,
+                input.turnId,
+                input.message.verifiedActorId,
+                input.message.verifiedActorLogin,
+                input.message.adapter,
+                input.message.adapterInstallation,
+                input.message.externalConversationId,
+                input.message.externalMessageId,
+                input.message.body,
+                input.message.sentAt,
+                input.creatorGithubUserId,
+              ),
+          ]
+        : [];
+    const trigger = input.messageId ?? null;
+    try {
+      const results = await this.db.batch([
+        ...messageStatement,
+        this.db
+          .prepare(
+            `INSERT INTO conversation_turns
+             (id,conversation_id,triggering_message_id,kind,state,source_commit,configured_model,configured_reasoning,model_route_json,result_message_id,result_brief_id,ordinal,attempts,lease_expires_at,error_code,created_at,updated_at,completed_at)
+             SELECT ?1,c.id,?2,'brief','pending',c.source_commit,
+                    json_extract(c.context_json,'$.model.id'),
+                    json_extract(c.context_json,'$.model.reasoning'),
+                    NULL,NULL,NULL,
+                    (SELECT COALESCE(MAX(ordinal),0)+1 FROM conversation_turns WHERE conversation_id=c.id),
+                    0,NULL,NULL,?3,?3,NULL
+             FROM conversations c
+             WHERE c.id=?4 AND c.creator_github_user_id=?5 AND c.status='open'
+               AND c.active_turn_id IS NULL
+               AND NOT EXISTS (SELECT 1 FROM conversation_promotions p WHERE p.conversation_id=c.id)
+               ${input.messageId ? "AND EXISTS (SELECT 1 FROM conversation_messages WHERE id=?2 AND conversation_id=c.id)" : ""}`,
+          )
+          .bind(
+            input.turnId,
+            trigger,
+            time,
+            input.conversationId,
+            input.creatorGithubUserId,
+          ),
+        this.db
+          .prepare(
+            `UPDATE conversation_delivery_briefs SET state='superseded',updated_at=?1
+             WHERE id=(SELECT current_brief_id FROM conversations WHERE id=?2)
+               AND state='draft' AND EXISTS (SELECT 1 FROM conversation_turns WHERE id=?3 AND state='pending')`,
+          )
+          .bind(time, input.conversationId, input.turnId),
+        this.db
+          .prepare(
+            `UPDATE conversations SET active_turn_id=?1,current_brief_id=NULL,updated_at=?2
+             WHERE id=?3 AND creator_github_user_id=?4 AND active_turn_id IS NULL
+               AND EXISTS (SELECT 1 FROM conversation_turns WHERE id=?1 AND state='pending')`,
+          )
+          .bind(
+            input.turnId,
+            time,
+            input.conversationId,
+            input.creatorGithubUserId,
+          ),
+        this.turnOutboxStatement(
           input.conversationId,
-          input.creatorGithubUserId,
-        ),
-      this.db
-        .prepare(
-          `UPDATE conversation_delivery_briefs SET state='superseded',updated_at=?1
-           WHERE id=(SELECT current_brief_id FROM conversations WHERE id=?2)
-             AND state='draft'
-             AND EXISTS (
-               SELECT 1 FROM conversation_turns
-               WHERE id=?3 AND conversation_id=?2 AND state='pending'
-             )`,
-        )
-        .bind(time, input.conversationId, input.turnId),
-      this.db
-        .prepare(
-          `UPDATE conversations SET active_turn_id=?1,current_brief_id=NULL,updated_at=?2
-           WHERE id=?3 AND creator_github_user_id=?4 AND active_turn_id IS NULL
-             AND EXISTS (SELECT 1 FROM conversation_turns WHERE id=?1 AND state='pending')`,
-        )
-        .bind(
-          input.turnId,
+          { kind: "turn", id: input.turnId },
           time,
-          input.conversationId,
-          input.creatorGithubUserId,
         ),
-      this.turnOutboxStatement(
-        input.conversationId,
-        { kind: "turn", id: input.turnId },
-        time,
-      ),
-    ]);
-    return (results[0]?.meta.changes ?? 0) === 1;
+      ]);
+      return (results[messageStatement.length]?.meta.changes ?? 0) === 1
+        ? "created"
+        : "unavailable";
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes("UNIQUE"))
+        throw error;
+      return (await this.db
+        .prepare("SELECT id FROM conversation_turns WHERE id=?1")
+        .bind(input.turnId)
+        .first<{ id: string }>())
+        ? "duplicate"
+        : "unavailable";
+    }
   }
 
   private async getById(
@@ -1062,7 +1133,13 @@ export class D1ConversationRepository {
     briefId: string,
     brief: Omit<
       DeliveryBrief,
-      "id" | "revision" | "state" | "sourceCommit" | "createdAt" | "updatedAt"
+      | "id"
+      | "revision"
+      | "state"
+      | "body"
+      | "sourceCommit"
+      | "createdAt"
+      | "updatedAt"
     >,
   ): Promise<boolean> {
     const turn = await this.turn(turnId);
@@ -1082,14 +1159,15 @@ export class D1ConversationRepository {
       this.db
         .prepare(
           `INSERT INTO conversation_delivery_briefs
-           (id,conversation_id,turn_id,revision,state,title,outcome,acceptance_criteria_json,constraints_json,evidence_json,uncertainties_json,source_commit,approved_by_github_user_id,approved_by_github_login,approved_at,created_at,updated_at)
-           SELECT ?1,conversation_id,id,?2,'draft',?3,?4,?5,?6,?7,?8,source_commit,NULL,NULL,NULL,?9,?9
-           FROM conversation_turns WHERE id=?10 AND state='running' AND kind='brief'`,
+           (id,conversation_id,turn_id,revision,state,title,body,outcome,acceptance_criteria_json,constraints_json,evidence_json,uncertainties_json,source_commit,approved_by_github_user_id,approved_by_github_login,approved_at,created_at,updated_at)
+           SELECT ?1,conversation_id,id,?2,'draft',?3,?4,?5,?6,?7,?8,?9,source_commit,NULL,NULL,NULL,?10,?10
+           FROM conversation_turns WHERE id=?11 AND state='running' AND kind='brief'`,
         )
         .bind(
           briefId,
           revision,
           brief.title,
+          initialBriefBody(brief),
           brief.outcome,
           JSON.stringify(brief.acceptanceCriteria),
           JSON.stringify(brief.constraints),
@@ -1298,11 +1376,7 @@ export class D1ConversationRepository {
     readonly creatorGithubLogin: string;
     readonly briefId: string;
     readonly title: string;
-    readonly outcome: string;
-    readonly acceptanceCriteria: readonly string[];
-    readonly constraints: readonly string[];
-    readonly evidence: readonly string[];
-    readonly uncertainties: readonly string[];
+    readonly body: string;
     readonly promotionId: string;
     readonly uiSessionHash: string;
   }): Promise<boolean> {
@@ -1311,25 +1385,20 @@ export class D1ConversationRepository {
       this.db
         .prepare(
           `UPDATE conversation_delivery_briefs
-           SET state='approved',title=?1,outcome=?2,acceptance_criteria_json=?3,
-               constraints_json=?4,evidence_json=?5,uncertainties_json=?6,
-               approved_by_github_user_id=?7,approved_by_github_login=?8,
-               approved_at=?9,updated_at=?9
-           WHERE id=?10 AND conversation_id=?11 AND state='draft'
+           SET state='approved',title=?1,body=?2,
+               approved_by_github_user_id=?3,approved_by_github_login=?4,
+               approved_at=?5,updated_at=?5
+           WHERE id=?6 AND conversation_id=?7 AND state='draft'
              AND EXISTS (
                SELECT 1 FROM conversations c
-               WHERE c.id=?11 AND c.creator_github_user_id=?7
-                 AND c.current_brief_id=?10 AND c.status='open'
+               WHERE c.id=?7 AND c.creator_github_user_id=?3
+                 AND c.current_brief_id=?6 AND c.status='open'
                  AND c.active_turn_id IS NULL
              )`,
         )
         .bind(
           input.title,
-          input.outcome,
-          JSON.stringify(input.acceptanceCriteria),
-          JSON.stringify(input.constraints),
-          JSON.stringify(input.evidence),
-          JSON.stringify(input.uncertainties),
+          input.body,
           input.creatorGithubUserId,
           input.creatorGithubLogin,
           time,

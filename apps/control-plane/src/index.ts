@@ -768,48 +768,49 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
         return uiRedirect(`/conversations/${conversationId}`);
       }
       if (action === "brief") {
+        const form = await request.formData();
+        const body = form.get("message");
+        const externalMessageId = form.get("message_id");
+        if (
+          typeof body !== "string" ||
+          typeof externalMessageId !== "string" ||
+          !/^[0-9a-f-]{36}$/.test(externalMessageId) ||
+          body.length > 12_000
+        )
+          return uiJson({ error: "invalid_request" }, 400);
+        const message = body.trim()
+          ? webInboundMessage({
+              actor: {
+                id: String(uiSession!.githubUserId),
+                login: uiSession!.githubLogin,
+              },
+              conversationId,
+              messageId: externalMessageId,
+              body: body.trim(),
+            })
+          : undefined;
         const prepared = await service.prepareBrief({
           conversationId,
           creatorGithubUserId: uiSession!.githubUserId,
-          turnId: crypto.randomUUID(),
+          turnId: externalMessageId,
+          ...(message ? { messageId: externalMessageId, message } : {}),
         });
-        if (!prepared) return uiJson({ error: "conversation_not_ready" }, 409);
+        if (prepared === "unavailable")
+          return uiJson({ error: "conversation_not_ready" }, 409);
         return uiRedirect(`/conversations/${conversationId}`);
       }
       const form = await request.formData();
       const briefId = form.get("brief_id");
       const title = form.get("title");
-      const outcome = form.get("outcome");
-      const list = (name: string): string[] | undefined => {
-        const value = form.get(name);
-        if (typeof value !== "string" || value.length > 20_000)
-          return undefined;
-        const items = value
-          .split(/\r?\n/)
-          .map((item) => item.trim())
-          .filter(Boolean);
-        return items.length <= 100 &&
-          items.every((item) => item.length <= 1_000)
-          ? items
-          : undefined;
-      };
-      const acceptanceCriteria = list("acceptance_criteria");
-      const constraints = list("constraints");
-      const evidence = list("evidence");
-      const uncertainties = list("uncertainties");
+      const body = form.get("body");
       if (
         typeof briefId !== "string" ||
         !/^[0-9a-f-]{36}$/.test(briefId) ||
         typeof title !== "string" ||
         !title.trim() ||
         title.length > 100 ||
-        typeof outcome !== "string" ||
-        !outcome.trim() ||
-        outcome.length > 20_000 ||
-        !acceptanceCriteria ||
-        !constraints ||
-        !evidence ||
-        !uncertainties
+        typeof body !== "string" ||
+        body.length > 100_000
       )
         return uiJson({ error: "invalid_delivery_brief" }, 400);
       const requested = await service.approveBrief({
@@ -818,11 +819,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
         creatorGithubLogin: uiSession!.githubLogin,
         briefId,
         title: title.trim(),
-        outcome: outcome.trim(),
-        acceptanceCriteria,
-        constraints,
-        evidence,
-        uncertainties,
+        body,
         promotionId: crypto.randomUUID(),
         uiSessionHash: await uiSessionHash(uiSession!),
       });
