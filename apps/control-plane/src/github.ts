@@ -811,6 +811,12 @@ export async function acceptGitHubComment(
   if (!fresh) return "duplicate";
   if (existing) return "duplicate";
   if (!run.profile) return "accepted";
+  await api.post(`/repos/${repositoryName}/issues/${issueNumber}/comments`, {
+    body: [
+      `<!-- roundhouse:v2:acknowledgement:${id} -->`,
+      "Roundhouse has started working on this. If this repository is being set up for the first time, the workspace may take about a minute to get ready.",
+    ].join("\n"),
+  });
   await enqueue({ runId: id, expectedRevision: run.revision });
   return "accepted";
 }

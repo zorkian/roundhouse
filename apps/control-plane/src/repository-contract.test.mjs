@@ -3,7 +3,7 @@
 
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { createRun, MemoryRunRepository } from "@roundhouse/core";
+import { createRun, MemoryRunRepository, parseProfile } from "@roundhouse/core";
 import { describe, expect, it } from "vitest";
 import { D1RunRepository } from "./d1-store.js";
 
@@ -233,6 +233,53 @@ function repositoryContract(label, createRepository) {
 
 repositoryContract("memory", () => new MemoryRunRepository());
 repositoryContract("D1", () => new D1RunRepository(new LocalD1(), () => 100));
+
+it("preserves versioned profile snapshots through D1 persistence", async () => {
+  const commit = "a".repeat(40);
+  const v1 = await parseProfile(
+    'version: 1\npaths:\n  allowed: ["**"]\n  protected: [".github/workflows/**"]\n',
+    commit,
+  );
+  const v2 = await parseProfile(
+    'version: 2\npaths:\n  - "**"\n  - "!.github/workflows/**"\n',
+    commit,
+  );
+  const repository = new D1RunRepository(new LocalD1(), () => 100);
+  const first = createRun({
+    ...input,
+    id: "run_profile_v1",
+    profileVersion: v1.hash,
+    profile: v1,
+  });
+  const second = createRun({
+    ...input,
+    id: "run_profile_v2",
+    issueNumber: 43,
+    profileVersion: v2.hash,
+    profile: v2,
+  });
+  await repository.create(first);
+  await repository.create(second);
+
+  await expect(repository.get(first.id)).resolves.toEqual(first);
+  await expect(repository.get(second.id)).resolves.toEqual(second);
+  const reloadedV1 = await repository.get(first.id);
+  expect(reloadedV1.profile).toMatchObject({
+    version: 1,
+    sourcePath: ".roundhouse/profile.yaml",
+    sourceCommit: commit,
+    hash: v1.hash,
+    paths: { allowed: ["**"], protected: [".github/workflows/**"] },
+  });
+  const reloadedV2 = await repository.get(second.id);
+  expect(reloadedV2.profile).toMatchObject({
+    version: 2,
+    sourcePath: ".roundhouse/profile.yaml",
+    sourceCommit: commit,
+    hash: v2.hash,
+    paths: ["!.github/workflows/**", "**"],
+  });
+});
 
 it("renews a D1 attempt lease from recorded activity", async () => {
   const repository = new D1RunRepository(new LocalD1(), () => 100);

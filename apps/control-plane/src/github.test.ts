@@ -473,6 +473,94 @@ describe("GitHub intake", () => {
     );
   });
 
+  it("acknowledges a new run after persisting it and before queueing work", async () => {
+    const repository = new IntakeRepository();
+    const order: string[] = [];
+    const create = repository.create.bind(repository);
+    repository.create = async (run) => {
+      order.push("create");
+      await create(run);
+    };
+    const record = repository.recordGitHubDelivery.bind(repository);
+    repository.recordGitHubDelivery = async (runId, deliveryId, payload) => {
+      order.push("delivery");
+      return record(runId, deliveryId, payload);
+    };
+    const api: GitHubApi = {
+      get: github().get,
+      post: vi.fn(async (_path: string, _body: unknown) => {
+        order.push("comment");
+        return {};
+      }) as GitHubApi["post"],
+    };
+    const wakeups: Wakeup[] = [];
+    const enqueue = async (wakeup: Wakeup) => {
+      order.push("enqueue");
+      wakeups.push(wakeup);
+    };
+
+    await expect(
+      acceptGitHubComment(
+        await delivery("delivery-ack"),
+        env,
+        repository,
+        enqueue,
+        api,
+      ),
+    ).resolves.toBe("accepted");
+
+    expect(order).toEqual(["create", "delivery", "comment", "enqueue"]);
+    expect(api.post).toHaveBeenCalledTimes(1);
+    expect(api.post).toHaveBeenCalledWith(
+      "/repos/zorkian/roundhouse/issues/42/comments",
+      {
+        body: expect.stringContaining("Roundhouse has started"),
+      },
+    );
+    const comment = (
+      (api.post as ReturnType<typeof vi.fn>).mock.calls[0] as [
+        string,
+        { body: string },
+      ]
+    )[1].body;
+    expect(comment).toContain("about a minute");
+    expect(comment).not.toContain(env.GITHUB_START_COMMAND);
+    expect(comment).not.toContain("enqueue");
+    expect(wakeups).toEqual([
+      { runId: "run_123_issue_42", expectedRevision: 1 },
+    ]);
+  });
+
+  it("does not acknowledge a run whose repository profile is missing", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const repository = new IntakeRepository();
+    const enqueue = vi.fn();
+    const api: GitHubApi = {
+      get: vi.fn(async (path: string) => {
+        if (path.includes("/collaborators/")) return { permission: "write" };
+        if (path.endsWith("/commits/main")) return { sha: "a".repeat(40) };
+        if (path.includes("/contents/")) throw new Error("github_get_404");
+        return { default_branch: "main" };
+      }) as GitHubApi["get"],
+      post: vi.fn(async () => ({})) as GitHubApi["post"],
+    };
+    await expect(
+      acceptGitHubComment(
+        await delivery("delivery-no-profile"),
+        env,
+        repository,
+        enqueue,
+        api,
+      ),
+    ).resolves.toBe("accepted");
+    await expect(repository.get("run_123_issue_42")).resolves.toMatchObject({
+      status: "waiting",
+      waitingReason: "profile_error",
+    });
+    expect(api.post).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
   it("deduplicates delivery replay and repeated start commands", async () => {
     const repository = new IntakeRepository();
     const wakeups: Wakeup[] = [];
@@ -506,6 +594,7 @@ describe("GitHub intake", () => {
       ),
     ).resolves.toBe("duplicate");
     expect(wakeups).toHaveLength(1);
+    expect(api.post).toHaveBeenCalledTimes(1);
   });
 
   it("rejects near-match commands and actors without write permission", async () => {

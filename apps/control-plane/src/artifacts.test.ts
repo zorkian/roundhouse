@@ -1,6 +1,7 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
+import { parseProfile } from "@roundhouse/core";
 import { describe, expect, it } from "vitest";
 import {
   artifactIdentity,
@@ -11,6 +12,66 @@ import {
   type ArtifactRepository,
   type ArtifactsNamespace,
 } from "./artifacts.js";
+
+describe("trusted checkpoint path validation", () => {
+  const checkpoint = (changedPaths: string[]) => ({
+    repositoryId: "artifact-repo-id",
+    repository: "v2-run-1",
+    baseCommit: "a".repeat(40),
+    inputHead: "a".repeat(40),
+    outputHead: "b".repeat(40),
+    ref: "refs/heads/roundhouse/run-1",
+    changedPaths,
+  });
+  const identity = {
+    repositoryId: "artifact-repo-id",
+    repository: "v2-run-1",
+    baseCommit: "a".repeat(40),
+    inputHead: "a".repeat(40),
+    ref: "refs/heads/roundhouse/run-1",
+  };
+
+  it.each([
+    [
+      "version 1",
+      'version: 1\npaths:\n  allowed: ["**"]\n  protected: [".github/workflows/**"]\n',
+    ],
+    ["version 2", 'version: 2\npaths: ["**", "!.github/workflows/**"]\n'],
+  ])("applies %s profile snapshots", async (_label, yaml) => {
+    const profile = await parseProfile(yaml, "a".repeat(40));
+    expect(() =>
+      validateCheckpointIdentity(checkpoint(["src/fix.ts"]), {
+        ...identity,
+        profile,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      validateCheckpointIdentity(checkpoint([".github/workflows/ci.yml"]), {
+        ...identity,
+        profile,
+      }),
+    ).toThrow("protected_path_changed");
+    expect(() =>
+      validateCheckpointIdentity(checkpoint([".roundhouse/profile.yaml"]), {
+        ...identity,
+        profile,
+      }),
+    ).toThrow("protected_path_changed");
+  });
+
+  it("requires a version 2 positive rule to match", async () => {
+    const profile = await parseProfile(
+      'version: 2\npaths: ["src/**"]\n',
+      "a".repeat(40),
+    );
+    expect(() =>
+      validateCheckpointIdentity(checkpoint(["docs/readme.md"]), {
+        ...identity,
+        profile,
+      }),
+    ).toThrow("path_outside_allowlist");
+  });
+});
 
 it("accepts only unchanged checkpoints from read-only attempts", () => {
   const checkpoint = {
