@@ -557,18 +557,30 @@ describe("V2 agent runner", () => {
       ref: assignment.artifact.ref,
       changedPaths: [],
     });
+    const validationAssignment = {
+      ...assignment,
+      checkpoint: first,
+      artifact: { ...assignment.artifact, access: "read" },
+      publish: {
+        remote: githubRemote,
+        hostname: "github.invalid",
+        token: "github-installation-token",
+        ref: "refs/heads/roundhouse/issue-42",
+      },
+    };
     await expect(
       validateCheckpoint({
-        ...assignment,
-        id: "run_git_rev_1_validation",
-        checkpoint: first,
-        artifact: { ...assignment.artifact, access: "read" },
-        publish: {
-          remote: githubRemote,
-          hostname: "github.invalid",
-          token: "github-installation-token",
-          ref: "refs/heads/roundhouse/issue-42",
+        ...validationAssignment,
+        id: "run_git_rev_1_literal_validation",
+        profile: {
+          paths: { allowed: ["**"], protected: ["README.md"] },
         },
+      }),
+    ).rejects.toThrow("protected_path_changed");
+    await expect(
+      validateCheckpoint({
+        ...validationAssignment,
+        id: "run_git_rev_1_validation",
       }),
     ).resolves.toBeUndefined();
     expect(

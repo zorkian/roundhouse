@@ -29,6 +29,8 @@ describe("repository profile parsing", () => {
     `version: 1\npaths:\n  allowed: ["**"]\n  allowed: ["src/**"]\n  protected: ["docs/**"]\n`,
     `version: 1\npaths:\n  allowed: ["**"\n  protected: ["docs/**"]\n`,
     `version: 1\nallowed: ["**"]\npaths:\n  allowed: ["**"]\n  protected: ["docs/**"]\n`,
+    `version: 1\npaths:\n  allowed: ["./src/**"]\n  protected: ["docs/**"]\n`,
+    `version: 1\npaths:\n  allowed: ["src//**"]\n  protected: ["docs/**"]\n`,
   ])("rejects malformed or unsupported YAML", async (yaml) => {
     await expect(parseProfile(yaml, commit)).rejects.toThrow();
   });

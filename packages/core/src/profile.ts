@@ -42,7 +42,9 @@ function validatePattern(pattern: string): void {
     !pattern ||
     pattern.startsWith("/") ||
     pattern.includes("\\") ||
-    pattern.split("/").includes("..")
+    pattern
+      .split("/")
+      .some((segment) => !segment || segment === "." || segment === "..")
   )
     throw new Error("profile_path_pattern_invalid");
 }

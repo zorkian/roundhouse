@@ -1073,13 +1073,13 @@ export async function validateCheckpoint(assignment) {
     if (
       path === ".roundhouse" ||
       path.startsWith(".roundhouse/") ||
-      (
-        assignment.profile?.paths.protected ??
-        assignment.protectedPaths ??
-        []
-      ).some((pattern) =>
-        matches(pattern.includes("*") ? pattern : `${pattern}/**`, path),
-      )
+      (assignment.profile
+        ? assignment.profile.paths.protected.some((pattern) =>
+            matches(pattern, path),
+          )
+        : (assignment.protectedPaths ?? []).some((pattern) =>
+            matches(pattern.includes("*") ? pattern : `${pattern}/**`, path),
+          ))
     )
       throw new Error("protected_path_changed");
     if (
