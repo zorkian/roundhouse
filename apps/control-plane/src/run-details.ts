@@ -285,11 +285,27 @@ ${workflowEvidence(details, attempt)}<h4>Model routing</h4>${value(attempt.routi
       `<dl><dt>Waiting on</dt><dd>${escapeHtml(run.waitingReason.replaceAll("_", " "))}</dd></dl>`,
     );
   if (latestAttempt) {
+    const heading = (attempt: DetailsAttempt, label: string): string =>
+      `<h3>${label} · ${escapeHtml(stageLabel(attempt.stage))} · ${escapeHtml(attempt.state)}</h3>`;
+    const execution = executionDisplay(details, latestAttempt);
     const outcome = attemptOutcome(latestAttempt);
     if (outcome)
       outcomeParts.push(
-        `<h3>Latest attempt · ${escapeHtml(stageLabel(latestAttempt.stage))} · ${escapeHtml(latestAttempt.state)}</h3>${outcome}`,
+        `${heading(latestAttempt, "Latest attempt")}${execution}${outcome}`,
       );
+    else {
+      if (execution)
+        outcomeParts.push(
+          `${heading(latestAttempt, "Latest attempt")}${execution}`,
+        );
+      const lastCompleted = [...chronological]
+        .reverse()
+        .find((attempt) => attemptOutcome(attempt));
+      if (lastCompleted)
+        outcomeParts.push(
+          `${heading(lastCompleted, "Last completed stage")}${attemptOutcome(lastCompleted)}`,
+        );
+    }
   }
   const outcomeSection = outcomeParts.length
     ? `<section><h2>Outcome</h2>${outcomeParts.join("")}</section>`

@@ -287,7 +287,8 @@ describe("run details", () => {
       }),
     );
 
-    expect(html.match(/class="execution"/g)).toHaveLength(2);
+    // Rendered in the outcome section and inside the attempt record.
+    expect(html.match(/class="execution"/g)).toHaveLength(4);
     expect(html).toContain("Interrupted");
     expect(html).toContain("Restarted · Completed");
     expect(html).toContain("150 tokens");
@@ -434,6 +435,60 @@ describe("run details", () => {
     );
     expect(withPr).toContain("<dt>Pull request</dt>");
     expect(withPr).toContain("Pull request #5");
+  });
+
+  it("shows the last completed stage result when the latest attempt has none", () => {
+    const html = renderRunDetails(
+      detailsFixture({
+        run: { status: "active", stage: "review" },
+        attempts: [
+          attemptFixture({
+            id: "completed",
+            stage: "implement",
+            createdAt: 1,
+            updatedAt: 2,
+            result: { implementation: { summary: "stage finished" } },
+          }),
+          attemptFixture({
+            id: "dispatched",
+            stage: "review",
+            state: "dispatched",
+            createdAt: 3,
+            updatedAt: 3,
+          }),
+        ],
+      }),
+    );
+
+    expect(html).toContain("<h2>Outcome</h2>");
+    expect(html).toContain("Last completed stage");
+    expect(html.indexOf("stage finished")).toBeLessThan(
+      html.indexOf("<h2>Attempt history</h2>"),
+    );
+  });
+
+  it("includes the latest execution summary in the outcome section", () => {
+    const html = renderRunDetails(
+      detailsFixture({
+        run: { status: "failed" },
+        attempts: [attemptFixture({ id: "attempt", state: "failed" })],
+        events: [
+          {
+            attemptId: "attempt",
+            kind: "attempt_progress",
+            payload: { phase: "workspace_started" },
+            createdAt: 2,
+          },
+        ],
+      }),
+    );
+
+    const outcome = html.indexOf("<h2>Outcome</h2>");
+    const history = html.indexOf("<h2>Attempt history</h2>");
+    expect(outcome).toBeGreaterThan(-1);
+    const executions = html.indexOf("<h4>Executions</h4>");
+    expect(executions).toBeGreaterThan(outcome);
+    expect(executions).toBeLessThan(history);
   });
 
   it("surfaces the waiting reason in the outcome section", () => {
