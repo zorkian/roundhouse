@@ -23,6 +23,7 @@ import {
   checkpointWorkspace,
   devContainerConfigIdentity,
   fetchJudgementCandidateChanges,
+  judgementPromptCandidates,
   implementationPrompt,
   implementationResultSchema,
   implementationSchema,
@@ -1161,6 +1162,31 @@ describe("V2 agent runner", () => {
       ),
     ).rejects.toThrow("judgement_candidate_head_changed:alpha");
     expect(actualHead).not.toBe("f".repeat(40));
+  });
+
+  it("omits candidate repository credentials from the judge prompt evidence", () => {
+    const token = "secret-candidate-read-token";
+    const sanitized = judgementPromptCandidates([
+      {
+        candidateId: "alpha",
+        result: { summary: "implemented alpha" },
+        change: {
+          ref: "refs/heads/main",
+          baseHead: "a".repeat(40),
+          head: "b".repeat(40),
+          changedPaths: ["README.md"],
+          access: { remote: "https://example/repo.git", tokenId: "t1", token },
+        },
+      },
+      { candidateId: "beta", result: { summary: "implemented beta" } },
+    ]);
+    const serialized = JSON.stringify(sanitized);
+    expect(serialized).not.toContain(token);
+    expect(serialized).not.toContain("tokenId");
+    expect(serialized).not.toContain("access");
+    expect(serialized).toContain("refs/heads/main");
+    expect(serialized).toContain("implemented beta");
+    expect(sanitized[0].change.head).toBe("b".repeat(40));
   });
 
   it("returns an attempt-bound completion without persisting a capability", () => {
