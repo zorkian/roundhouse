@@ -36,12 +36,12 @@ function renderRun(summary: RunSummary): string {
   const detail = run.waitingReason
     ? `${run.stage} · ${run.waitingReason.replaceAll("_", " ")}`
     : run.stage;
-  const label =
-    summary.githubIssueState === "closed"
-      ? "Closed on GitHub"
-      : labels[run.status];
-  const statusClass =
-    summary.githubIssueState === "closed" ? "cancelled" : run.status;
+  const closedBeforeCompletion =
+    summary.githubIssueState === "closed" && run.status !== "succeeded";
+  const label = closedBeforeCompletion
+    ? "Closed on GitHub"
+    : labels[run.status];
+  const statusClass = closedBeforeCompletion ? "cancelled" : run.status;
   return `<article class="run">
   <div class="run-main"><div class="eyebrow">${escapeHtml(run.repository)} · #${run.issueNumber}</div><h3><a href="${detailsPath(run)}">${escapeHtml(title)}</a></h3><p>${escapeHtml(detail)}</p></div>
   <div class="run-meta"><span class="status ${statusClass}">${label}</span><span>${escapeHtml(formatUsage(summary.usage ?? []))}</span><time datetime="${new Date(summary.updatedAt).toISOString()}">Updated ${escapeHtml(new Date(summary.updatedAt).toLocaleString("en-US", { timeZone: "UTC", dateStyle: "medium", timeStyle: "short" }))} UTC</time>${github}</div>
