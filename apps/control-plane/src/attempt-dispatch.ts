@@ -667,6 +667,7 @@ class SandboxAttemptPreparer {
         requestedReasoning: requested?.reasoning ?? null,
         resolvedProvider: route.provider,
         resolvedModel: route.model,
+        resolvedTransport: route.transport ?? "cloudflare-unified",
         resolvedReasoning: route.thinkingLevel,
         routingRule: route.rule,
         profileHash: run.profile?.hash ?? null,

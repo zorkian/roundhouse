@@ -9,12 +9,13 @@ describe("model route contract", () => {
   it("accepts a complete native route", () => {
     expect(
       isModelRoute({
-        provider: "moonshotai",
-        model: "moonshotai/kimi-k3",
-        protocol: "openai-completions",
+        provider: "openai",
+        model: "openai/gpt-5.6-sol",
+        protocol: "openai-responses",
+        transport: "cloudflare-provider-native",
         thinkingLevel: "max",
-        runtime: runtimeCapabilitiesForModel("moonshotai/kimi-k3"),
-        rule: "review-data-v1",
+        runtime: runtimeCapabilitiesForModel("openai/gpt-5.6-sol"),
+        rule: "planning-default-v1",
       }),
     ).toBe(true);
   });
@@ -66,6 +67,19 @@ describe("model route contract", () => {
         thinkingLevel: "xhigh",
         runtime: runtimeCapabilitiesForModel("moonshotai/kimi-k3"),
         rule: "profile-review-security-v2",
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects an effort omitted from a model's native capability map", () => {
+    expect(
+      isModelRoute({
+        provider: "anthropic",
+        model: "anthropic/claude-opus-5",
+        protocol: "anthropic-messages",
+        thinkingLevel: "off",
+        runtime: runtimeCapabilitiesForModel("anthropic/claude-opus-5"),
+        rule: "profile-review-holistic-v2",
       }),
     ).toBe(false);
   });

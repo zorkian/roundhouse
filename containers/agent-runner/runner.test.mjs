@@ -400,6 +400,38 @@ describe("V2 agent runner", () => {
     });
   });
 
+  it("passes opt-in max reasoning through Pi model metadata", () => {
+    const configuration = piModelConfiguration(
+      {
+        id: "attempt_max",
+        routing: {
+          provider: "openai",
+          model: "openai/gpt-5.6-sol",
+          protocol: "openai-responses",
+          transport: "cloudflare-provider-native",
+          thinkingLevel: "max",
+          runtime: openAiRuntime,
+          rule: "planning-default-v1",
+        },
+      },
+      "attempt-capability",
+    );
+    expect(
+      validModelRoute({
+        provider: "openai",
+        model: "openai/gpt-5.6-sol",
+        protocol: "openai-responses",
+        transport: "cloudflare-provider-native",
+        thinkingLevel: "max",
+        runtime: openAiRuntime,
+        rule: "planning-default-v1",
+      }),
+    ).toBe(true);
+    expect(configuration.providers.openai.models[0]).toMatchObject({
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    });
+  });
+
   it("uses the base path expected by each native provider SDK", () => {
     const configurationFor = (protocol) =>
       piModelConfiguration(

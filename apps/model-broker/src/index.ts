@@ -6,9 +6,11 @@ import {
   modelSupportsThinkingLevel,
   modelThinkingLevels,
   modelProtocols,
+  modelTransports,
   runtimeCapabilitiesForModel,
   type ModelProtocol,
   type ModelRoute,
+  type ModelTransport,
 } from "@roundhouse/core";
 import { observeResponse } from "@roundhouse/response-observer";
 
@@ -16,14 +18,19 @@ const routeHeaders = {
   provider: "x-roundhouse-routing-provider",
   model: "x-roundhouse-routing-model",
   protocol: "x-roundhouse-routing-protocol",
+  transport: "x-roundhouse-routing-transport",
   thinkingLevel: "x-roundhouse-routing-thinking-level",
   rule: "x-roundhouse-routing-rule",
 } as const;
 export type BrokerEnv = Omit<Cloudflare.Env, "ROUTING_ROUTES"> & {
   readonly ROUTING_ROUTES?: string;
+  readonly AI_GATEWAY_TOKEN?: string;
 };
 
 interface RawAiBinding {
+  gateway?(gatewayId: string): {
+    getUrl(provider?: string): Promise<string>;
+  };
   run(
     model: string,
     inputs: Record<string, unknown>,
@@ -51,7 +58,10 @@ interface RoutingEnvelope {
 const defaultRoutes: Readonly<
   Record<
     string,
-    Pick<ModelRoute, "provider" | "model" | "protocol" | "thinkingLevel">
+    Pick<
+      ModelRoute,
+      "provider" | "model" | "protocol" | "transport" | "thinkingLevel"
+    >
   >
 > = {
   qualify: {
@@ -97,6 +107,23 @@ const defaultRoutes: Readonly<
     thinkingLevel: "max",
   },
 };
+
+function defaultTransport(provider: string): ModelTransport {
+  return ["openai", "anthropic", "google"].includes(provider)
+    ? "cloudflare-provider-native"
+    : "cloudflare-unified";
+}
+
+function validProviderNativeProtocol(
+  provider: string,
+  protocol: ModelProtocol,
+): boolean {
+  if (provider === "openai")
+    return ["openai-responses", "openai-completions"].includes(protocol);
+  if (provider === "anthropic") return protocol === "anthropic-messages";
+  if (provider === "google") return protocol === "google-generative-ai";
+  return false;
+}
 
 function configuredRoutes(env: BrokerEnv) {
   if (!env.ROUTING_ROUTES) return defaultRoutes;
@@ -162,6 +189,9 @@ export function resolveRoute(
   const protocol = envelope.requestedModel
     ? defaultProtocol(provider)
     : (configured?.protocol ?? defaultProtocol(provider));
+  const transport =
+    (envelope.requestedModel ? undefined : configured?.transport) ??
+    defaultTransport(provider);
   const thinkingLevel =
     envelope.requestedReasoning ??
     configured?.thinkingLevel ??
@@ -171,6 +201,9 @@ export function resolveRoute(
     !provider ||
     !model ||
     !modelProtocols.includes(protocol) ||
+    !modelTransports.includes(transport) ||
+    (transport === "cloudflare-provider-native" &&
+      !validProviderNativeProtocol(provider, protocol)) ||
     !modelThinkingLevels.includes(
       thinkingLevel as ModelRoute["thinkingLevel"],
     ) ||
@@ -185,6 +218,7 @@ export function resolveRoute(
     provider,
     model,
     protocol,
+    transport,
     thinkingLevel: thinkingLevel as ModelRoute["thinkingLevel"],
     runtime,
     rule: envelope.requestedModel
@@ -200,10 +234,29 @@ function routeFromHeaders(request: Request): ModelRoute {
       request.headers.get(header),
     ]),
   ) as Record<keyof typeof routeHeaders, string | null>;
-  if (Object.values(values).some((value) => !value))
+  if (
+    [
+      values.provider,
+      values.model,
+      values.protocol,
+      values.thinkingLevel,
+      values.rule,
+    ].some((value) => !value)
+  )
     throw new Error("missing_route");
   if (!modelProtocols.includes(values.protocol as ModelProtocol))
     throw new Error("invalid_route_protocol");
+  const transport = values.transport ?? defaultTransport(values.provider!);
+  if (!modelTransports.includes(transport as ModelTransport))
+    throw new Error("invalid_route_transport");
+  if (
+    transport === "cloudflare-provider-native" &&
+    !validProviderNativeProtocol(
+      values.provider!,
+      values.protocol as ModelProtocol,
+    )
+  )
+    throw new Error("invalid_route_transport_protocol");
   if (
     !modelThinkingLevels.includes(
       values.thinkingLevel as ModelRoute["thinkingLevel"],
@@ -223,6 +276,7 @@ function routeFromHeaders(request: Request): ModelRoute {
     provider: values.provider!,
     model: values.model!,
     protocol: values.protocol as ModelProtocol,
+    transport: transport as ModelTransport,
     thinkingLevel: values.thinkingLevel as ModelRoute["thinkingLevel"],
     runtime,
     rule: values.rule!,
@@ -234,6 +288,108 @@ function responseHeaders(response: Response, route: ModelRoute): Headers {
   for (const [key, header] of Object.entries(routeHeaders))
     headers.set(header, String(route[key as keyof ModelRoute]));
   return headers;
+}
+
+function nativeProvider(route: ModelRoute): string {
+  if (route.provider === "openai") return "openai";
+  if (route.provider === "anthropic") return "anthropic";
+  if (route.provider === "google") return "google-ai-studio";
+  throw new Error("unsupported_provider_native_route");
+}
+
+function nativeModel(route: ModelRoute): string {
+  const prefix = `${route.provider}/`;
+  if (!route.model.startsWith(prefix) || route.model.length === prefix.length)
+    throw new Error("invalid_provider_native_model");
+  return route.model.slice(prefix.length);
+}
+
+function nativePath(request: Request, route: ModelRoute): string {
+  const source = new URL(request.url);
+  if (route.protocol === "openai-responses")
+    return `/responses${source.search}`;
+  if (route.protocol === "openai-completions")
+    return `/chat/completions${source.search}`;
+  if (route.protocol === "anthropic-messages")
+    return `/v1/messages${source.search}`;
+  const match = source.pathname.match(
+    /^\/(v1(?:beta)?)\/models\/.+(:[A-Za-z][A-Za-z0-9]*)$/,
+  );
+  if (route.protocol !== "google-generative-ai" || !match)
+    throw new Error("invalid_provider_native_endpoint");
+  return `/${match[1]}/models/${nativeModel(route)}${match[2]}${source.search}`;
+}
+
+function nativeHeaders(
+  request: Request,
+  env: BrokerEnv,
+  route: ModelRoute,
+): Headers {
+  if (!env.AI_GATEWAY_TOKEN) throw new Error("ai_gateway_token_missing");
+  const headers = new Headers({
+    "content-type": request.headers.get("content-type") ?? "application/json",
+    "cf-aig-authorization": `Bearer ${env.AI_GATEWAY_TOKEN}`,
+    "cf-aig-collect-log": "false",
+    "cf-aig-skip-cache": "true",
+    "cf-aig-zdr": "true",
+  });
+  for (const name of [
+    "accept",
+    "anthropic-version",
+    "anthropic-beta",
+    "openai-beta",
+  ]) {
+    const value = request.headers.get(name);
+    if (value) headers.set(name, value);
+  }
+  if (route.provider === "anthropic" && !headers.has("anthropic-version"))
+    headers.set("anthropic-version", "2023-06-01");
+  return headers;
+}
+
+async function runProviderNative(
+  request: Request,
+  env: BrokerEnv,
+  route: ModelRoute,
+  body: Record<string, unknown>,
+  ai: RawAiBinding,
+  outboundFetch: typeof fetch,
+): Promise<Response> {
+  if (!ai.gateway) throw new Error("ai_gateway_binding_missing");
+  const model = nativeModel(route);
+  if (route.protocol === "google-generative-ai") delete body.model;
+  else body.model = model;
+  const baseUrl = await ai
+    .gateway(env.AI_GATEWAY_ID)
+    .getUrl(nativeProvider(route));
+  return outboundFetch(
+    `${baseUrl.replace(/\/$/, "")}${nativePath(request, route)}`,
+    {
+      method: "POST",
+      headers: nativeHeaders(request, env, route),
+      body: JSON.stringify(body),
+      redirect: "manual",
+      signal: request.signal,
+    },
+  );
+}
+
+function runUnified(
+  env: BrokerEnv,
+  route: ModelRoute,
+  body: Record<string, unknown>,
+  ai: RawAiBinding,
+): Promise<Response> {
+  body.model = route.model;
+  return ai.run(route.model, body, {
+    gateway: {
+      id: env.AI_GATEWAY_ID,
+      collectLog: false,
+      skipCache: true,
+    },
+    extraHeaders: { "cf-aig-zdr": "true" },
+    returnRawResponse: true,
+  });
 }
 
 async function cloudflareStopReason(
@@ -364,6 +520,7 @@ async function resolveRouteRequest(
         provider: route.provider,
         model: route.model,
         protocol: route.protocol,
+        transport: route.transport,
         thinkingLevel: route.thinkingLevel,
         rule: route.rule,
       }),
@@ -390,6 +547,7 @@ export async function brokerRequest(
   request: Request,
   env: BrokerEnv,
   ai: RawAiBinding = env.AI as unknown as RawAiBinding,
+  outboundFetch: typeof fetch = fetch,
 ): Promise<Response> {
   const url = new URL(request.url);
   if (request.method === "POST" && url.pathname === "/route")
@@ -424,7 +582,6 @@ export async function brokerRequest(
   } catch {
     return Response.json({ error: "invalid_json" }, { status: 400 });
   }
-  body.model = route.model;
   normalizeAnthropicSystem(body, route.protocol);
   applyHostedResearch(
     body,
@@ -434,21 +591,19 @@ export async function brokerRequest(
 
   let response: Response;
   try {
-    response = await ai.run(route.model, body, {
-      gateway: {
-        id: env.AI_GATEWAY_ID,
-        collectLog: false,
-        skipCache: true,
-      },
-      extraHeaders: { "cf-aig-zdr": "true" },
-      returnRawResponse: true,
-    });
+    response =
+      route.transport === "cloudflare-provider-native"
+        ? await runProviderNative(request, env, route, body, ai, outboundFetch)
+        : await runUnified(env, route, body, ai);
   } catch (error) {
     const attemptId = request.headers.get("x-roundhouse-attempt-id");
     console.error(
       JSON.stringify({
         message: "api_request_failed",
-        api: "workers_ai",
+        api:
+          route.transport === "cloudflare-provider-native"
+            ? "ai_gateway_provider_native"
+            : "workers_ai",
         operation: "run_model",
         ...(attemptId ? { attemptId } : {}),
         model: route.model,
@@ -460,7 +615,10 @@ export async function brokerRequest(
   const attemptId = request.headers.get("x-roundhouse-attempt-id");
   const stopReason = await cloudflareStopReason(response);
   const captured = await observeResponse(response, {
-    api: "workers_ai",
+    api:
+      route.transport === "cloudflare-provider-native"
+        ? "ai_gateway_provider_native"
+        : "workers_ai",
     operation: "run_model",
     ...(attemptId ? { attemptId } : {}),
     model: route.model,
