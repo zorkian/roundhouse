@@ -105,6 +105,19 @@ describe("run details", () => {
       },
       createdAt: 1,
       updatedAt: 2,
+      usage: [
+        {
+          callId: "call-1",
+          attemptId: "implementation",
+          model: "test-model",
+          inputTokens: 100,
+          cachedInputTokens: 40,
+          reasoningTokens: 10,
+          outputTokens: 20,
+          totalTokens: 120,
+          costUsd: 0.01,
+        },
+      ],
       attempts: [
         {
           id: "implementation",
@@ -188,6 +201,8 @@ describe("run details", () => {
     expect(html).toContain("candidate-sha");
     expect(html).toContain("merged-sha");
     expect(html).toContain("test-model");
+    expect(html).toContain("120 tokens");
+    expect(html).toContain("$0.010000");
     expect(html).toContain("npm test");
     expect(html).toContain("&lt;b&gt;bad&lt;/b&gt;");
     expect(html).not.toContain("<img");

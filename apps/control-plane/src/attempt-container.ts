@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Container } from "@cloudflare/containers";
-import type { Attempt } from "@roundhouse/core";
+import type { Attempt, ModelUsage } from "@roundhouse/core";
 import { verifyCallback } from "./callback.js";
 import { attemptInactivityMilliseconds } from "./coordinator.js";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
@@ -124,7 +124,109 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
   };
   if (routing.model && routing.reasoningEffort && routing.rule)
     await repository.recordModelRouting(attemptId, routing);
-  return response;
+  if (!response.body || !response.ok) return response;
+  const decoder = new TextDecoder();
+  let responseText = "";
+  const stream = response.body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        responseText += decoder.decode(chunk, { stream: true });
+        controller.enqueue(chunk);
+      },
+      async flush() {
+        responseText += decoder.decode();
+        const usage = extractModelUsage(
+          responseText,
+          attemptId,
+          routing.model ?? "unknown",
+        );
+        if (usage) await repository.recordModelUsage(usage);
+      },
+    }),
+  );
+  return new Response(stream, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
+const prices: Record<string, readonly [number, number, number]> = {
+  "openai/gpt-5": [1.25, 0.125, 10],
+  "openai/gpt-5.2": [1.75, 0.175, 14],
+};
+export function extractModelUsage(
+  text: string,
+  attemptId: string,
+  routedModel: string,
+): ModelUsage | undefined {
+  const candidates = text.trim().startsWith("{")
+    ? [text]
+    : text
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trim())
+        .filter((line) => line !== "[DONE]");
+  let response: Record<string, unknown> | undefined;
+  for (const candidate of candidates) {
+    try {
+      const event = JSON.parse(candidate) as Record<string, unknown>;
+      const value =
+        event.type === "response.completed" ? event.response : event;
+      if (
+        value &&
+        typeof value === "object" &&
+        (value as Record<string, unknown>).usage
+      )
+        response = value as Record<string, unknown>;
+    } catch {
+      /* ignore non-JSON stream fields */
+    }
+  }
+  if (!response) return undefined;
+  const usage = response.usage as Record<string, unknown>;
+  const inputDetails = (usage.input_tokens_details ?? {}) as Record<
+    string,
+    unknown
+  >;
+  const outputDetails = (usage.output_tokens_details ?? {}) as Record<
+    string,
+    unknown
+  >;
+  const number = (value: unknown) =>
+    typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  const inputTokens = number(usage.input_tokens),
+    cachedInputTokens = number(inputDetails.cached_tokens),
+    outputTokens = number(usage.output_tokens),
+    reasoningTokens = number(outputDetails.reasoning_tokens),
+    totalTokens = number(usage.total_tokens);
+  const model =
+    typeof response.model === "string" ? response.model : routedModel;
+  const directCost = number(
+    usage.cost_usd ?? usage.cost ?? response.cost_usd ?? response.cost,
+  );
+  const rate = prices[model] ?? prices[routedModel];
+  const costUsd =
+    directCost ??
+    (rate && inputTokens !== undefined && outputTokens !== undefined
+      ? ((inputTokens - (cachedInputTokens ?? 0)) * rate[0] +
+          (cachedInputTokens ?? 0) * rate[1] +
+          outputTokens * rate[2]) /
+        1_000_000
+      : undefined);
+  const callId = typeof response.id === "string" ? response.id : undefined;
+  if (!callId) return undefined;
+  return {
+    callId,
+    attemptId,
+    model,
+    ...(inputTokens === undefined ? {} : { inputTokens }),
+    ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+    ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
+    ...(outputTokens === undefined ? {} : { outputTokens }),
+    ...(totalTokens === undefined ? {} : { totalTokens }),
+    ...(costUsd === undefined ? {} : { costUsd }),
+  };
 }
 
 export class RoundhouseAttemptContainer extends Container<Cloudflare.Env> {
