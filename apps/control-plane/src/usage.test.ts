@@ -62,6 +62,32 @@ describe("model usage", () => {
     expect(usage?.costUsd).toBeCloseTo(expected);
   });
 
+  it("prices Anthropic input and cache categories as separate token counts", () => {
+    const usage = extractModelUsage(
+      JSON.stringify({
+        id: "msg_cached",
+        model: "anthropic/claude-opus-4.8",
+        usage: {
+          input_tokens: 10,
+          input_tokens_details: {
+            cached_tokens: 100,
+            cache_creation_tokens: 20,
+          },
+          output_tokens: 5,
+          total_tokens: 135,
+        },
+      }),
+      "attempt_cached",
+      "anthropic/claude-opus-4.8",
+      { provider: "anthropic" },
+    );
+    expect(usage).toMatchObject({
+      cachedInputTokens: 100,
+      cacheCreationInputTokens: 20,
+      costUsd: 0.00105,
+    });
+  });
+
   it("aggregates retries once per stored call and preserves unavailable fields", () => {
     const calls = [
       {

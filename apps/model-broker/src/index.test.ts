@@ -230,6 +230,7 @@ describe("model broker", () => {
         usage: {
           input_tokens: 10,
           cache_read_input_tokens: 4,
+          cache_creation_input_tokens: 2,
           output_tokens: 5,
         },
       }),
@@ -256,11 +257,56 @@ describe("model broker", () => {
       ],
       usage: {
         input_tokens: 10,
-        input_tokens_details: { cached_tokens: 4 },
+        input_tokens_details: {
+          cached_tokens: 4,
+          cache_creation_tokens: 2,
+        },
         output_tokens: 5,
-        total_tokens: 15,
+        total_tokens: 21,
       },
     });
+  });
+
+  it("normalizes an Anthropic error event instead of completing partial output", async () => {
+    const planning = request();
+    planning.headers.set("x-roundhouse-role", "plan");
+    const upstream = new Response(
+      [
+        'data: {"type":"message_start","message":{"id":"msg_partial","model":"claude-opus-4.8","usage":{"input_tokens":3}}}',
+        'data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      ].join("\n\n"),
+      { headers: { "content-type": "text/event-stream" } },
+    );
+    const response = await normalizeResponse(
+      upstream,
+      selectRoute(planning, env),
+      false,
+    );
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toMatchObject({
+      error: {
+        type: "model_upstream_error",
+        provider: "anthropic",
+        upstream: { type: "overloaded_error" },
+      },
+    });
+  });
+
+  it("forwards an Anthropic streamed error without a completed event", async () => {
+    const planning = request();
+    planning.headers.set("x-roundhouse-role", "plan");
+    const upstream = new Response(
+      'data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}\n\n',
+      { headers: { "content-type": "text/event-stream" } },
+    );
+    const response = await normalizeResponse(
+      upstream,
+      selectRoute(planning, env),
+      true,
+    );
+    const body = await response.text();
+    expect(body).toContain('"type":"error"');
+    expect(body).not.toContain("response.completed");
   });
 
   it("normalizes streamed Moonshot chat output to a Responses event", async () => {

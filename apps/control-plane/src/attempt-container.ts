@@ -221,9 +221,9 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
   });
 }
 
-const prices: Record<string, readonly [number, number, number]> = {
-  "anthropic/claude-opus-4.8": [15, 1.5, 75],
-  "anthropic/claude-fable-5": [3, 0.3, 15],
+const prices: Record<string, readonly [number, number, number, number?]> = {
+  "anthropic/claude-opus-4.8": [15, 1.5, 75, 18.75],
+  "anthropic/claude-fable-5": [3, 0.3, 15, 3.75],
   "moonshotai/kimi-k3": [0.6, 0.15, 2.5],
   "openai/gpt-5": [1.25, 0.125, 10],
   "openai/gpt-5.2": [1.75, 0.175, 14],
@@ -272,6 +272,7 @@ export function extractModelUsage(
     typeof value === "number" && Number.isFinite(value) ? value : undefined;
   const inputTokens = number(usage.input_tokens),
     cachedInputTokens = number(inputDetails.cached_tokens),
+    cacheCreationInputTokens = number(inputDetails.cache_creation_tokens),
     outputTokens = number(usage.output_tokens),
     reasoningTokens = number(outputDetails.reasoning_tokens),
     totalTokens = number(usage.total_tokens);
@@ -284,8 +285,11 @@ export function extractModelUsage(
   const costUsd =
     directCost ??
     (rate && inputTokens !== undefined && outputTokens !== undefined
-      ? ((inputTokens - (cachedInputTokens ?? 0)) * rate[0] +
+      ? ((routing.provider === "anthropic"
+          ? inputTokens * rate[0]
+          : (inputTokens - (cachedInputTokens ?? 0)) * rate[0]) +
           (cachedInputTokens ?? 0) * rate[1] +
+          (cacheCreationInputTokens ?? 0) * (rate[3] ?? rate[0]) +
           outputTokens * rate[2]) /
         1_000_000
       : undefined);
@@ -299,6 +303,9 @@ export function extractModelUsage(
     ...routing,
     ...(inputTokens === undefined ? {} : { inputTokens }),
     ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+    ...(cacheCreationInputTokens === undefined
+      ? {}
+      : { cacheCreationInputTokens }),
     ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
     ...(outputTokens === undefined ? {} : { outputTokens }),
     ...(totalTokens === undefined ? {} : { totalTokens }),

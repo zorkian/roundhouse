@@ -83,6 +83,7 @@ type UsageRow = {
   routing_rule: string | null;
   input_tokens: number | null;
   cached_input_tokens: number | null;
+  cache_creation_input_tokens: number | null;
   reasoning_tokens: number | null;
   output_tokens: number | null;
   total_tokens: number | null;
@@ -101,6 +102,9 @@ const usageFromRow = (row: UsageRow): ModelUsage => ({
   ...(row.cached_input_tokens === null
     ? {}
     : { cachedInputTokens: row.cached_input_tokens }),
+  ...(row.cache_creation_input_tokens === null
+    ? {}
+    : { cacheCreationInputTokens: row.cache_creation_input_tokens }),
   ...(row.reasoning_tokens === null
     ? {}
     : { reasoningTokens: row.reasoning_tokens }),
@@ -249,7 +253,7 @@ export class D1RunRepository implements RunRepository {
   private async usageForRun(runId: string): Promise<readonly ModelUsage[]> {
     const result = await this.db
       .prepare(
-        "SELECT u.call_id,u.attempt_id,u.model,u.provider,u.configured_model,u.routing_rule,u.input_tokens,u.cached_input_tokens,u.reasoning_tokens,u.output_tokens,u.total_tokens,u.cost_usd FROM model_usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.run_id=?1 ORDER BY u.created_at,u.call_id",
+        "SELECT u.call_id,u.attempt_id,u.model,u.provider,u.configured_model,u.routing_rule,u.input_tokens,u.cached_input_tokens,u.cache_creation_input_tokens,u.reasoning_tokens,u.output_tokens,u.total_tokens,u.cost_usd FROM model_usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.run_id=?1 ORDER BY u.created_at,u.call_id",
       )
       .bind(runId)
       .all<UsageRow>();
@@ -259,7 +263,7 @@ export class D1RunRepository implements RunRepository {
   async recordModelUsage(usage: ModelUsage): Promise<"created" | "exists"> {
     const result = await this.db
       .prepare(
-        "INSERT OR IGNORE INTO model_usage (call_id,attempt_id,model,provider,configured_model,routing_rule,input_tokens,cached_input_tokens,reasoning_tokens,output_tokens,total_tokens,cost_usd,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+        "INSERT OR IGNORE INTO model_usage (call_id,attempt_id,model,provider,configured_model,routing_rule,input_tokens,cached_input_tokens,cache_creation_input_tokens,reasoning_tokens,output_tokens,total_tokens,cost_usd,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
       )
       .bind(
         usage.callId,
@@ -270,6 +274,7 @@ export class D1RunRepository implements RunRepository {
         usage.routingRule ?? null,
         usage.inputTokens ?? null,
         usage.cachedInputTokens ?? null,
+        usage.cacheCreationInputTokens ?? null,
         usage.reasoningTokens ?? null,
         usage.outputTokens ?? null,
         usage.totalTokens ?? null,

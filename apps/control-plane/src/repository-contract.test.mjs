@@ -81,6 +81,12 @@ class LocalD1 {
         "utf8",
       ),
     );
+    this.database.exec(
+      readFileSync(
+        new URL("../migrations/0009_cache_creation_usage.sql", import.meta.url),
+        "utf8",
+      ),
+    );
   }
 
   prepare(sql) {

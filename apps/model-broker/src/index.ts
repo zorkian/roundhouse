@@ -389,6 +389,10 @@ function normalizeNative(value: Record<string, unknown>, route: BrokerRoute) {
     string,
     unknown
   >;
+  const cacheReadTokens = number(
+    usage.cache_read_input_tokens ?? cacheDetails.cached_tokens,
+  );
+  const cacheCreationTokens = number(usage.cache_creation_input_tokens);
   return {
     id: value.id,
     object: "response",
@@ -399,12 +403,13 @@ function normalizeNative(value: Record<string, unknown>, route: BrokerRoute) {
     usage: {
       input_tokens: inputTokens,
       input_tokens_details: {
-        cached_tokens: number(
-          usage.cache_read_input_tokens ?? cacheDetails.cached_tokens,
-        ),
+        cached_tokens: cacheReadTokens,
+        cache_creation_tokens: cacheCreationTokens,
       },
       output_tokens: outputTokens,
-      total_tokens: number(usage.total_tokens) || inputTokens + outputTokens,
+      total_tokens:
+        number(usage.total_tokens) ||
+        inputTokens + cacheReadTokens + cacheCreationTokens + outputTokens,
       ...(usage.cost_usd === undefined ? {} : { cost_usd: usage.cost_usd }),
     },
   };
@@ -469,6 +474,7 @@ function normalizeStream(response: Response, route: BrokerRoute): Response {
   const encoder = new TextEncoder();
   let text = "";
   let pending = "";
+  let failed = false;
   return new Response(
     new ReadableStream({
       async pull(controller) {
@@ -486,6 +492,17 @@ function normalizeStream(response: Response, route: BrokerRoute): Response {
                 string,
                 unknown
               >;
+              if (route.provider === "anthropic" && event.type === "error") {
+                failed = true;
+                controller.enqueue(
+                  encoder.encode(
+                    `data: ${JSON.stringify({ type: "error", error: event.error ?? event })}\n\n`,
+                  ),
+                );
+                await reader.cancel();
+                controller.close();
+                return;
+              }
               const normalized = streamDelta(event, route);
               if (normalized)
                 controller.enqueue(
@@ -497,6 +514,7 @@ function normalizeStream(response: Response, route: BrokerRoute): Response {
           }
           return;
         }
+        if (failed) return;
         const final = await normalizeResponse(
           new Response(text, {
             headers: { "content-type": "text/event-stream" },
@@ -551,6 +569,7 @@ export async function normalizeResponse(
   const anthropicContent: Record<string, unknown>[] = [];
   const chatToolCalls = new Map<number, Record<string, unknown>>();
   let chatText = "";
+  let streamedError: unknown;
   if (!eventStream) {
     try {
       native = JSON.parse(text) as Record<string, unknown>;
@@ -565,7 +584,9 @@ export async function normalizeResponse(
   for (const candidate of candidates) {
     try {
       const event = JSON.parse(candidate) as Record<string, unknown>;
-      if (route.provider === "anthropic" && event.type === "message_start")
+      if (route.provider === "anthropic" && event.type === "error")
+        streamedError = event.error ?? event;
+      else if (route.provider === "anthropic" && event.type === "message_start")
         native = (event.message ?? {}) as Record<string, unknown>;
       else if (
         route.provider === "anthropic" &&
@@ -628,6 +649,17 @@ export async function normalizeResponse(
       // Ignore native keepalive and non-JSON event fields.
     }
   }
+  if (streamedError)
+    return Response.json(
+      {
+        error: {
+          type: "model_upstream_error",
+          provider: route.provider,
+          upstream: streamedError,
+        },
+      },
+      { status: 502 },
+    );
   if (!native)
     return Response.json({ error: "invalid_model_response" }, { status: 502 });
   if (route.provider === "anthropic" && anthropicContent.length) {

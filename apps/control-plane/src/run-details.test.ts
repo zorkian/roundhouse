@@ -211,7 +211,7 @@ describe("run details", () => {
     expect(html).toContain("<dt>Elapsed</dt><dd>1 ms</dd>");
     expect(html).toContain('tabindex="0"');
     expect(html).toContain(
-      "100 input, 40 cached input, 10 reasoning, 20 output",
+      "100 input, 40 cached input, unavailable cache creation input, 10 reasoning, 20 output",
     );
     expect(html).toContain("npm test");
     expect(html).toContain("&lt;b&gt;bad&lt;/b&gt;");

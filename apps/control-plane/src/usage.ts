@@ -6,6 +6,7 @@ import type { ModelUsage } from "@roundhouse/core";
 export interface UsageTotal {
   inputTokens?: number;
   cachedInputTokens?: number;
+  cacheCreationInputTokens?: number;
   reasoningTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
@@ -23,6 +24,7 @@ export function totalUsage(items: readonly ModelUsage[]): UsageTotal {
   return {
     inputTokens: sum("inputTokens"),
     cachedInputTokens: sum("cachedInputTokens"),
+    cacheCreationInputTokens: sum("cacheCreationInputTokens"),
     reasoningTokens: sum("reasoningTokens"),
     outputTokens: sum("outputTokens"),
     totalTokens: sum("totalTokens"),
@@ -46,5 +48,5 @@ export function formatUsageBreakdown(items: readonly ModelUsage[]): string {
   if (!items.length) return "Usage unavailable";
   const token = (value: number | undefined) =>
     value === undefined ? "unavailable" : value.toLocaleString("en-US");
-  return `${token(usage.inputTokens)} input, ${token(usage.cachedInputTokens)} cached input, ${token(usage.reasoningTokens)} reasoning, ${token(usage.outputTokens)} output`;
+  return `${token(usage.inputTokens)} input, ${token(usage.cachedInputTokens)} cached input, ${token(usage.cacheCreationInputTokens)} cache creation input, ${token(usage.reasoningTokens)} reasoning, ${token(usage.outputTokens)} output`;
 }

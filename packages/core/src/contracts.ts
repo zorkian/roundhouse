@@ -56,6 +56,7 @@ export interface ModelUsage {
   readonly routingRule?: string;
   readonly inputTokens?: number;
   readonly cachedInputTokens?: number;
+  readonly cacheCreationInputTokens?: number;
   readonly reasoningTokens?: number;
   readonly outputTokens?: number;
   readonly totalTokens?: number;
