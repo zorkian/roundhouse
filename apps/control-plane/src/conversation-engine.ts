@@ -847,7 +847,13 @@ export interface ConversationExecutionResult {
   readonly firstReply?: ConversationFirstReply;
   readonly brief?: Omit<
     DeliveryBrief,
-    "id" | "revision" | "state" | "sourceCommit" | "createdAt" | "updatedAt"
+    | "id"
+    | "revision"
+    | "state"
+    | "body"
+    | "sourceCommit"
+    | "createdAt"
+    | "updatedAt"
   >;
   readonly usage: readonly ConversationCallUsage[];
 }
@@ -1102,33 +1108,13 @@ export function parsePromotionMarker(
 }
 
 export function renderDeliveryBrief(
-  brief: Pick<
-    DeliveryBrief,
-    | "id"
-    | "title"
-    | "outcome"
-    | "acceptanceCriteria"
-    | "constraints"
-    | "evidence"
-    | "uncertainties"
-  >,
+  brief: Pick<DeliveryBrief, "id" | "body">,
   conversationId: string,
   conversationUrl?: string,
 ): string {
-  const section = (heading: string, items: readonly string[]) =>
-    items.length
-      ? [`## ${heading}`, "", ...items.map((item) => `- ${item}`), ""]
-      : [];
   return [
     promotionIssueMarker(conversationId, brief.id),
-    "## Outcome",
-    "",
-    brief.outcome,
-    "",
-    ...section("Acceptance criteria", brief.acceptanceCriteria),
-    ...section("Constraints", brief.constraints),
-    ...section("Evidence and decisions", brief.evidence),
-    ...section("Remaining uncertainties", brief.uncertainties),
+    brief.body,
     conversationUrl
       ? `_Promoted from a [private Roundhouse conversation](${conversationUrl})._`
       : "_Promoted from a private Roundhouse conversation._",
