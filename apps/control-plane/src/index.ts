@@ -713,7 +713,14 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
             context,
           );
       } else
-        outcome = await acceptGitHubComment(request, env, repository, enqueue);
+        outcome = await acceptGitHubComment(
+          request,
+          env,
+          repository,
+          enqueue,
+          undefined,
+          env.PUBLIC_ORIGIN,
+        );
       return json(
         { outcome },
         outcome === "unauthorized" ? 401 : outcome === "ignored" ? 202 : 202,

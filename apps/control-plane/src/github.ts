@@ -462,6 +462,20 @@ function pullRequestBody(
   return `${summary}\n\nFixes #${run.issueNumber}${detailsUrl ? `\n\n[View Roundhouse run details](${detailsUrl})` : ""}`;
 }
 
+function runDetailsUrl(
+  run: RunSnapshot,
+  controlPlaneOrigin?: string,
+): string | undefined {
+  if (!controlPlaneOrigin) return undefined;
+  return new URL(
+    `/repositories/${run.repository
+      .split("/")
+      .map(encodeURIComponent)
+      .join("/")}/issues/${run.issueNumber}`,
+    controlPlaneOrigin,
+  ).toString();
+}
+
 export class GitHubStageReporter implements AttemptReporter {
   constructor(
     private readonly github: GitHubApi,
@@ -469,20 +483,61 @@ export class GitHubStageReporter implements AttemptReporter {
   ) {}
 
   private detailsUrl(run: RunSnapshot): string | undefined {
-    if (!this.controlPlaneOrigin) return undefined;
-    return new URL(
-      `/repositories/${run.repository
-        .split("/")
-        .map(encodeURIComponent)
-        .join("/")}/issues/${run.issueNumber}`,
-      this.controlPlaneOrigin,
-    ).toString();
+    return runDetailsUrl(run, this.controlPlaneOrigin);
   }
 
   private withDetails(run: RunSnapshot, body: string): string {
     const url = this.detailsUrl(run);
     const suffix = url ? `\n\n[View Roundhouse run details](${url})` : "";
     return `${body.slice(0, 65_000 - suffix.length)}${suffix}`;
+  }
+
+  async reportStarted(run: RunSnapshot, attempt: Attempt): Promise<void> {
+    if (attempt.stage === "implement") {
+      const marker = `<!-- roundhouse:v2:implementation-started:${attempt.id} -->`;
+      const comments = await this.github.get<readonly { body?: string }[]>(
+        `/repos/${run.repository}/issues/${run.issueNumber}/comments?per_page=100`,
+      );
+      if (comments.some((comment) => comment.body?.includes(marker))) return;
+      await this.github.post(
+        `/repos/${run.repository}/issues/${run.issueNumber}/comments`,
+        {
+          body: this.withDetails(
+            run,
+            [
+              marker,
+              "## Implementation started",
+              "",
+              "I’m working on the proposed change now.",
+            ].join("\n"),
+          ),
+        },
+      );
+      return;
+    }
+    if (attempt.stage !== "review" || attempt.role !== "review-holistic")
+      return;
+    const pullRequest = await findOpenPullRequest(this.github, run);
+    if (!pullRequest) throw new Error("review_pull_request_missing");
+    const marker = `<!-- roundhouse:v2:review-started:${attempt.id} -->`;
+    const comments = await this.github.get<readonly { body?: string }[]>(
+      `/repos/${run.repository}/issues/${pullRequest.number}/comments?per_page=100`,
+    );
+    if (comments.some((comment) => comment.body?.includes(marker))) return;
+    await this.github.post(
+      `/repos/${run.repository}/issues/${pullRequest.number}/comments`,
+      {
+        body: this.withDetails(
+          run,
+          [
+            marker,
+            "## Review started",
+            "",
+            "I’m reviewing the proposed change now.",
+          ].join("\n"),
+        ),
+      },
+    );
   }
 
   async report(run: RunSnapshot, attempt: Attempt): Promise<void> {
@@ -661,12 +716,38 @@ export async function verifyGitHubWebhook(
   return verifyCallback(secret, body, signature.slice(7));
 }
 
+async function postIntakeComment(
+  github: GitHubApi,
+  run: RunSnapshot,
+  marker: string,
+  body: string,
+  controlPlaneOrigin?: string,
+): Promise<void> {
+  const tag = `<!-- roundhouse:v2:${marker} -->`;
+  try {
+    const comments = await github.get<readonly { body?: string }[]>(
+      `/repos/${run.repository}/issues/${run.issueNumber}/comments?per_page=100`,
+    );
+    if (comments.some((comment) => comment.body?.includes(tag))) return;
+    const details = runDetailsUrl(run, controlPlaneOrigin);
+    await github.post(
+      `/repos/${run.repository}/issues/${run.issueNumber}/comments`,
+      {
+        body: `${tag}\n${body}${details ? `\n\n[View Roundhouse run details](${details})` : ""}`,
+      },
+    );
+  } catch (error) {
+    console.error("github_intake_comment_failed", error);
+  }
+}
+
 export async function acceptGitHubComment(
   request: Request,
   env: GitHubEnv,
   repository: GitHubIntakeRepository,
   enqueue: (wakeup: Wakeup) => Promise<void>,
   github?: GitHubApi,
+  controlPlaneOrigin?: string,
 ): Promise<"accepted" | "duplicate" | "ignored" | "unauthorized"> {
   const deliveryId = request.headers.get("x-github-delivery");
   const event = request.headers.get("x-github-event");
@@ -738,6 +819,13 @@ export async function acceptGitHubComment(
     });
     if (!run) return "ignored";
     await enqueue({ runId: id, expectedRevision: run.revision });
+    await postIntakeComment(
+      api,
+      run,
+      `clarification:${id}:${run.revision}`,
+      "Thanks — I’ve added this information and I’m taking another look.",
+      controlPlaneOrigin,
+    );
     return "accepted";
   }
   const permission = await api.get<{ permission?: string }>(
@@ -810,7 +898,20 @@ export async function acceptGitHubComment(
   });
   if (!fresh) return "duplicate";
   if (existing) return "duplicate";
-  if (!run.profile) return "accepted";
+  if (!run.profile) {
+    await postIntakeComment(
+      api,
+      run,
+      `profile-error:${id}:${run.revision}`,
+      [
+        "## I can’t start on this yet",
+        "",
+        "Roundhouse cannot start because `.roundhouse/profile.yaml` is missing or invalid. Add or fix that file in the repository so Roundhouse can begin.",
+      ].join("\n"),
+      controlPlaneOrigin,
+    );
+    return "accepted";
+  }
   try {
     await api.post(`/repos/${repositoryName}/issues/${issueNumber}/comments`, {
       body: [

@@ -18,6 +18,7 @@ export interface AttemptDispatcher {
 
 export interface AttemptReporter {
   report(run: RunSnapshot, attempt: Attempt): Promise<void>;
+  reportStarted?(run: RunSnapshot, attempt: Attempt): Promise<void>;
 }
 
 export const attemptInactivityMilliseconds = 10 * 60_000;
@@ -245,6 +246,7 @@ export async function coordinate(
         holisticRole,
         now,
         leaseMilliseconds,
+        reporter,
       );
     }
     const allowed = new Set(
@@ -273,6 +275,7 @@ export async function coordinate(
           role,
           now,
           leaseMilliseconds,
+          reporter,
         );
     }
     const aggregate = aggregateReviewAttempts(current);
@@ -336,6 +339,8 @@ export async function coordinate(
     throw error;
   }
   await repository.markDispatched(attemptId);
+  if (reporter?.reportStarted && attempt.stage === "implement")
+    await reporter.reportStarted(run, attempt);
   return "dispatched";
 }
 
@@ -346,6 +351,7 @@ async function dispatchReview(
   role: "review-holistic" | "review-security" | "review-data",
   now: number,
   leaseMilliseconds: number,
+  reporter?: AttemptReporter,
 ): Promise<"dispatched" | "duplicate"> {
   const attemptId = reviewerAttemptId(run.id, run.revision, role);
   const claimed = await repository.claimLease(
@@ -379,5 +385,7 @@ async function dispatchReview(
     throw error;
   }
   await repository.markDispatched(attempt.id);
+  if (reporter?.reportStarted && role === "review-holistic")
+    await reporter.reportStarted(run, attempt);
   return "dispatched";
 }
