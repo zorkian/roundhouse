@@ -123,7 +123,7 @@ describe("V2 control plane", () => {
     );
     expect(html.status).toBe(200);
     expect(html.headers.get("content-type")).toBe("text/html; charset=utf-8");
-    await expect(html.text()).resolves.toContain("Run details for issue #281");
+    await expect(html.text()).resolves.toContain("Roundhouse run details");
 
     const missing = await fetch(
       new Request(
