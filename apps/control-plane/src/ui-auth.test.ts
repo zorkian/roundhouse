@@ -39,6 +39,9 @@ function authDb(options?: {
     ]),
   );
   const db: D1Like = {
+    async batch(statements) {
+      return Promise.all(statements.map((statement) => statement.run()));
+    },
     prepare(sql: string) {
       let values: unknown[] = [];
       const statement = {
@@ -364,6 +367,9 @@ describe("repository-authorized queries", () => {
     const { D1RunRepository } = await import("./d1-store.js");
     const calls: { sql: string; values: unknown[] }[] = [];
     const db: D1Like = {
+      async batch(statements) {
+        return Promise.all(statements.map((statement) => statement.run()));
+      },
       prepare(sql: string) {
         const call = { sql, values: [] as unknown[] };
         calls.push(call);

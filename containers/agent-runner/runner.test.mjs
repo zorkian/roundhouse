@@ -14,10 +14,12 @@ import {
   artifactWriteTokenRequest,
   bootstrapWorkspace,
   commandProgress,
+  completionRequest,
   completionResult,
   configureAgentToolExecution,
   createAssignmentExecutor,
   createRunnerServer,
+  deliverCompletion,
   checkpointWorkspace,
   devContainerConfigIdentity,
   implementationPrompt,
@@ -911,6 +913,7 @@ describe("V2 agent runner", () => {
     const bootstrap = {
       id: "attempt_bootstrap",
       deadlineAt: Date.now() + 60_000,
+      baseCommit: "a".repeat(40),
       artifact: {
         remote: "https://artifacts.invalid/run.git",
         hostname: "artifacts.invalid",
@@ -965,6 +968,7 @@ describe("V2 agent runner", () => {
     git(artifact, ["config", "receive.shallowUpdate", "true"]);
     await bootstrapWorkspace({
       id: "attempt_bootstrap_git",
+      baseCommit: pinnedHead,
       artifact: { remote: artifact, token: "artifact-token" },
       source: {
         remote: pathToFileURL(source).toString(),
@@ -978,6 +982,64 @@ describe("V2 agent runner", () => {
         encoding: "utf8",
       }).trim(),
     ).toBe("1");
+  });
+
+  it("preserves source ancestry when an external branch update replaces a shallow artifact", async () => {
+    process.env.ROUNDHOUSE_WORKSPACE_ROOT = resolve(
+      testRoot,
+      "bootstrap-ancestry",
+    );
+    const source = resolve(testRoot, "bootstrap-ancestry-source");
+    const artifact = resolve(testRoot, "bootstrap-ancestry-artifact.git");
+    const checkout = resolve(testRoot, "bootstrap-ancestry-checkout");
+    await mkdir(source, { recursive: true });
+    git(source, ["init", "--initial-branch=main"]);
+    await writeFile(resolve(source, "README.md"), "baseline\n");
+    git(source, ["add", "README.md"]);
+    commit(source, "baseline");
+    const baseCommit = head(source);
+    git(process.cwd(), ["init", "--bare", "--initial-branch=main", artifact]);
+    git(artifact, ["config", "receive.shallowUpdate", "true"]);
+
+    await bootstrapWorkspace({
+      id: "attempt_bootstrap_ancestry_initial",
+      baseCommit,
+      artifact: { remote: artifact, token: "artifact-token" },
+      source: {
+        remote: pathToFileURL(source).toString(),
+        branch: "main",
+        head: baseCommit,
+      },
+    });
+
+    await writeFile(resolve(source, "README.md"), "baseline\ncandidate\n");
+    git(source, ["add", "README.md"]);
+    commit(source, "candidate");
+    await writeFile(
+      resolve(source, "README.md"),
+      "baseline\ncandidate\noperator update\n",
+    );
+    git(source, ["add", "README.md"]);
+    commit(source, "operator update");
+    const updatedHead = head(source);
+
+    await bootstrapWorkspace({
+      id: "attempt_bootstrap_ancestry_updated",
+      baseCommit,
+      artifact: { remote: artifact, token: "artifact-token" },
+      source: {
+        remote: pathToFileURL(source).toString(),
+        branch: "main",
+        head: updatedHead,
+        force: true,
+      },
+    });
+
+    git(process.cwd(), ["clone", artifact, checkout]);
+    expect(head(checkout)).toBe(updatedHead);
+    expect(() =>
+      git(checkout, ["merge-base", "--is-ancestor", baseCommit, updatedHead]),
+    ).not.toThrow();
   });
 
   it("returns an attempt-bound completion without persisting a capability", () => {
@@ -1027,6 +1089,75 @@ describe("V2 agent runner", () => {
     await expect(request.json()).resolves.toEqual({
       artifactTokenId: "initial-token",
     });
+  });
+
+  it("delivers completion directly to the durable control-plane boundary", async () => {
+    const assignment = { id: "attempt_completion" };
+    const completion = {
+      attemptId: assignment.id,
+      expectedRevision: 3,
+      checkpoint: {
+        repositoryId: "repo-id",
+        repository: "run_1",
+        baseCommit: "a".repeat(40),
+        inputHead: "a".repeat(40),
+        outputHead: "b".repeat(40),
+        ref: "refs/heads/roundhouse/run_1",
+        changedPaths: ["src/fix.ts"],
+      },
+      artifactTokenId: "token-id",
+      result: { outcome: "ok" },
+    };
+    const request = completionRequest(
+      assignment,
+      "https://v2.invalid",
+      "attempt-secret",
+      completion,
+    );
+
+    expect(request.method).toBe("POST");
+    expect(new URL(request.url).pathname).toBe("/attempts/completion");
+    expect(request.headers.get("x-roundhouse-attempt-id")).toBe(assignment.id);
+    expect(request.headers.get("x-roundhouse-attempt-capability")).toBe(
+      "attempt-secret",
+    );
+    await expect(request.json()).resolves.toEqual(completion);
+  });
+
+  it("retries ambiguous completion delivery with the same completion", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const assignment = { id: "attempt_completion_retry" };
+    const completion = {
+      attemptId: assignment.id,
+      expectedRevision: 4,
+      checkpoint: { outputHead: "b".repeat(40) },
+    };
+    const send = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("connection_reset"))
+      .mockResolvedValueOnce(
+        Response.json({ outcome: "duplicate" }, { status: 200 }),
+      );
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      deliverCompletion(
+        assignment,
+        "https://v2.invalid",
+        "attempt-secret",
+        completion,
+        send,
+        wait,
+      ),
+    ).resolves.toBe("duplicate");
+
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(wait).toHaveBeenCalledOnce();
+    const deliveries = await Promise.all(
+      send.mock.calls.map(([request]) => request.json()),
+    );
+    expect(deliveries).toEqual([completion, completion]);
   });
 
   it("reports activity and can complete after the inactivity lease expires", async () => {

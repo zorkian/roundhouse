@@ -82,6 +82,47 @@ export class MemoryRunRepository implements RunRepository {
     return true;
   }
 
+  async acquireAttempt(
+    runId: string,
+    expectedRevision: number,
+    lease: Lease,
+    attempt: Attempt,
+    now: number,
+  ): Promise<"created" | "exists" | "busy"> {
+    if (
+      lease.attemptId !== attempt.id ||
+      lease.runRevision !== expectedRevision ||
+      attempt.runId !== runId ||
+      attempt.runRevision !== expectedRevision
+    )
+      throw new Error("attempt_acquisition_identity_mismatch");
+    const run = this.runs.get(runId);
+    const current = this.leases.get(runId);
+    if (
+      !run ||
+      run.revision !== expectedRevision ||
+      run.status !== "active" ||
+      (current && current.expiresAt > now)
+    )
+      return "busy";
+    const existing = this.attempts.get(attempt.id);
+    this.leases.set(runId, lease);
+    if (existing) {
+      if (!["executed", "completed"].includes(existing.state))
+        this.attempts.set(attempt.id, {
+          ...existing,
+          state: "created",
+          deadlineAt: attempt.deadlineAt,
+          capabilities: attempt.capabilities,
+          result: undefined,
+          outcome: undefined,
+        });
+      return "exists";
+    }
+    this.attempts.set(attempt.id, attempt);
+    return "created";
+  }
+
   async releaseLease(
     runId: string,
     expectedRevision: number,

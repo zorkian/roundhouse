@@ -33,6 +33,7 @@ import {
   successorWakeup,
   validAttemptProgress,
 } from "./index.js";
+import { signCallback, type AttemptCompletion } from "./callback.js";
 import { ciDiagnosticsNotice } from "./github-ci.js";
 import worker from "./index.js";
 import type { D1Like } from "./d1-store.js";
@@ -110,6 +111,9 @@ function detailsDb(found = true): D1Like {
   const enrolledRepository = "zorkian/roundhouse";
   const enrolledIssueNumber = 281;
   return {
+    async batch(statements) {
+      return Promise.all(statements.map((statement) => statement.run()));
+    },
     prepare(sql: string) {
       let values: unknown[] = [];
       const statement = {
@@ -158,6 +162,9 @@ function detailsDb(found = true): D1Like {
 
 function dashboardDb(): D1Like {
   return {
+    async batch(statements) {
+      return Promise.all(statements.map((statement) => statement.run()));
+    },
     prepare() {
       const statement = {
         bind: (..._values: unknown[]) => statement,
@@ -167,6 +174,75 @@ function dashboardDb(): D1Like {
       };
       return statement as unknown as ReturnType<D1Like["prepare"]>;
     },
+  };
+}
+
+function completionDb() {
+  let state = "dispatched";
+  let completion: string | null = null;
+  const events: Array<{ kind: string; payload: string }> = [];
+  const DB: D1Like = {
+    async batch(statements) {
+      return Promise.all(statements.map((statement) => statement.run()));
+    },
+    prepare(sql: string) {
+      let values: unknown[] = [];
+      const statement = {
+        bind: (...bound: unknown[]) => {
+          values = bound;
+          return statement;
+        },
+        first: async () => {
+          if (sql.startsWith("SELECT id,run_id,run_revision"))
+            return {
+              id: "attempt_completion",
+              run_id: "run_1",
+              run_revision: 3,
+              kind: "agent",
+              node_id: "implement",
+              executor: "agent.write",
+              stage: "implement",
+              role: "implement",
+              state,
+              deadline_at: Date.now() + 60_000,
+              base_commit: "a".repeat(40),
+              expected_head: "a".repeat(40),
+              accepted_head: null,
+              result_json: null,
+              routing_json: null,
+              capabilities_json: '["artifact.write"]',
+              outcome_json: null,
+            };
+          if (sql === "SELECT completion_json FROM attempts WHERE id=?1")
+            return { completion_json: completion };
+          return null;
+        },
+        run: async () => {
+          if (sql.startsWith("UPDATE attempts SET state='executed'")) {
+            if (state !== "dispatched") return { meta: { changes: 0 } };
+            completion = String(values[0]);
+            state = "executed";
+            return { meta: { changes: 1 } };
+          }
+          if (sql.startsWith("INSERT INTO events")) {
+            events.push({
+              kind: String(values[0]),
+              payload: String(values[1]),
+            });
+            return { meta: { changes: 1 } };
+          }
+          return { meta: { changes: 0 } };
+        },
+        all: async () => ({ meta: {}, results: [] }),
+      };
+      return statement as unknown as ReturnType<D1Like["prepare"]>;
+    },
+  };
+  return {
+    DB,
+    events,
+    completion: () => completion,
+    state: () => state,
   };
 }
 
@@ -183,6 +259,7 @@ const authedUiCookie = "roundhouse_ui_session=test-session";
 // Extends a UI database stub with one valid, unexpired browser session.
 function withUiSession(DB: D1Like, repositoryIds = '["1297678423"]'): D1Like {
   return {
+    batch: DB.batch.bind(DB),
     prepare(sql: string) {
       if (sql.includes("FROM ui_sessions")) {
         const statement = {
@@ -204,6 +281,62 @@ function withUiSession(DB: D1Like, repositoryIds = '["1297678423"]'): D1Like {
 }
 
 describe("V2 control plane", () => {
+  it("records runner completion in D1 before the Sandbox RPC can return", async () => {
+    const durable = completionDb();
+    const secret = "control-plane-secret";
+    const completion: AttemptCompletion = {
+      attemptId: "attempt_completion",
+      expectedRevision: 3,
+      checkpoint: {
+        repositoryId: "repository-id",
+        repository: "run_1",
+        baseCommit: "a".repeat(40),
+        inputHead: "a".repeat(40),
+        outputHead: "b".repeat(40),
+        ref: "refs/heads/roundhouse/run_1",
+        changedPaths: ["src/fix.ts"],
+      },
+      artifactTokenId: "token-id",
+      result: { outcome: "ok" },
+    };
+    const capability = await signCallback(secret, completion.attemptId);
+    const fetch = worker.fetch as unknown as (
+      request: Request,
+      env: unknown,
+      context: unknown,
+    ) => Promise<Response>;
+    const request = () =>
+      new Request("https://direct-worker.invalid/attempts/completion", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-roundhouse-attempt-id": completion.attemptId,
+          "x-roundhouse-attempt-capability": capability,
+        },
+        body: JSON.stringify(completion),
+      });
+    const env = {
+      DB: durable.DB,
+      CALLBACK_SIGNING_SECRET: secret,
+      PUBLIC_ORIGIN: "https://v2.invalid",
+      CONTROL_PLANE_ORIGIN: "https://direct-worker.invalid",
+    };
+
+    const recorded = await fetch(request(), env, {});
+    expect(recorded.status).toBe(200);
+    await expect(recorded.json()).resolves.toEqual({ outcome: "recorded" });
+    expect(durable.state()).toBe("executed");
+    expect(JSON.parse(durable.completion()!)).toEqual(completion);
+
+    const duplicate = await fetch(request(), env, {});
+    expect(duplicate.status).toBe(200);
+    await expect(duplicate.json()).resolves.toEqual({ outcome: "duplicate" });
+    expect(durable.events.map(({ kind }) => kind)).toEqual([
+      "attempt_execution_recorded",
+      "attempt_execution_recorded",
+    ]);
+  });
+
   it("prepares a private assignment before its workflow restores the workspace", async () => {
     let finishRestore!: () => void;
     const restoring = new Promise<void>((resolve) => {
@@ -238,7 +371,15 @@ describe("V2 control plane", () => {
         responseBody: JSON.stringify({
           attemptId: "attempt_1",
           expectedRevision: 1,
-          checkpoint: {},
+          checkpoint: {
+            repositoryId: "repository-id",
+            repository: "run_1",
+            baseCommit: "a".repeat(40),
+            inputHead: "a".repeat(40),
+            outputHead: "b".repeat(40),
+            ref: "refs/heads/roundhouse/run_1",
+            changedPaths: ["src/fix.ts"],
+          },
           artifactTokenId: "token-id",
           result: { outcome: "ok" },
         }),
@@ -250,6 +391,8 @@ describe("V2 control plane", () => {
       runRevision: 1,
       stage: "implement",
       deadlineAt: Date.now() + 60_000,
+      baseCommit: "a".repeat(40),
+      expectedHead: "a".repeat(40),
       artifact: {
         remote: "https://artifact.invalid/repository.git",
         hostname: "artifact.invalid",
@@ -339,6 +482,7 @@ describe("V2 control plane", () => {
     );
     const body = await response.text();
     expect(body).toContain("Development runs across enrolled repositories");
+    expect(body).toContain('<a href="/usage">Model usage</a>');
     expect(body).toContain("Sign out");
 
     for (const path of [
@@ -353,6 +497,56 @@ describe("V2 control plane", () => {
       );
       expect(directOrigin.status).toBe(404);
     }
+  });
+
+  it("serves the model usage page only to signed-in users", async () => {
+    const fetch = worker.fetch as unknown as (
+      request: Request,
+      env: unknown,
+      context: unknown,
+    ) => Promise<Response>;
+    const signedOut = await fetch(
+      new Request("https://v2.invalid/usage"),
+      uiEnv(dashboardDb()) as never,
+      {} as never,
+    );
+    expect(signedOut.status).toBe(200);
+    await expect(signedOut.text()).resolves.toContain("Sign in with GitHub");
+
+    const post = await fetch(
+      new Request("https://v2.invalid/usage", {
+        method: "POST",
+        headers: { cookie: authedUiCookie },
+      }),
+      uiEnv(withUiSession(dashboardDb())) as never,
+      {} as never,
+    );
+    expect(post.status).toBe(405);
+
+    const response = await fetch(
+      new Request("https://v2.invalid/usage", {
+        headers: { cookie: authedUiCookie },
+      }),
+      uiEnv(withUiSession(dashboardDb())) as never,
+      {} as never,
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe(
+      "text/html; charset=utf-8",
+    );
+    const body = await response.text();
+    expect(body).toContain("Model usage");
+    expect(body).toContain("Rolling 30-day window");
+    expect(body).toContain("No model usage was recorded in this 30-day window");
+
+    const directOrigin = await fetch(
+      new Request("https://direct-worker.invalid/usage", {
+        headers: { cookie: authedUiCookie },
+      }),
+      uiEnv(withUiSession(dashboardDb())) as never,
+      {} as never,
+    );
+    expect(directOrigin.status).toBe(404);
   });
 
   it("serves the workflow graph asset from the public UI origin", async () => {

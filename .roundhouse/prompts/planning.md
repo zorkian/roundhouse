@@ -13,6 +13,7 @@ timing logs needed to observe it during a live run.
 Do not add speculative limits, retries, recovery machinery, compatibility
 layers, or abstractions. Do not broaden the issue into adjacent cleanup.
 
-For visual work, include how the implementation will be exercised in the real
-development environment and how matching before-and-after screenshots will be
-captured at the acceptance viewport.
+For visual work, include how the candidate UI will be rendered from the
+isolated development workspace and how matching before-and-after screenshots
+will be captured at the acceptance viewport. Do not require access to a shared
+development or production deployment.

@@ -6,13 +6,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const {
   acceptRecordedAttemptCompletion,
   backupRecordedAttemptWorkspace,
+  getAttempt,
   loadRecordedAttemptCompletion,
   markDispatched,
   prepareAttemptExecution,
+  publishWakeup,
   publishRecordedAttemptCompletion,
-  recordAttemptCompletion,
   recordAttemptEvent,
+  requestWakeup,
   sandbox,
+  settleAttemptOutcome,
   validateRecordedAttemptCompletion,
 } = vi.hoisted(() => ({
   sandbox: {
@@ -21,12 +24,15 @@ const {
   },
   acceptRecordedAttemptCompletion: vi.fn(),
   backupRecordedAttemptWorkspace: vi.fn(),
+  getAttempt: vi.fn(),
   loadRecordedAttemptCompletion: vi.fn(),
   markDispatched: vi.fn(),
   prepareAttemptExecution: vi.fn(),
+  publishWakeup: vi.fn(),
   publishRecordedAttemptCompletion: vi.fn(),
-  recordAttemptCompletion: vi.fn(),
   recordAttemptEvent: vi.fn(),
+  requestWakeup: vi.fn(),
+  settleAttemptOutcome: vi.fn(),
   validateRecordedAttemptCompletion: vi.fn(),
 }));
 
@@ -41,7 +47,6 @@ vi.mock("./attempt-settlement.js", () => ({
   backupRecordedAttemptWorkspace,
   loadRecordedAttemptCompletion,
   publishRecordedAttemptCompletion,
-  recordAttemptCompletion,
   validateRecordedAttemptCompletion,
 }));
 vi.mock("./attempt-dispatch.js", () => ({
@@ -49,9 +54,15 @@ vi.mock("./attempt-dispatch.js", () => ({
 }));
 vi.mock("./d1-store.js", () => ({
   D1RunRepository: class {
+    getAttempt = getAttempt;
     markDispatched = markDispatched;
     recordAttemptEvent = recordAttemptEvent;
+    requestWakeup = requestWakeup;
+    settleAttemptOutcome = settleAttemptOutcome;
   },
+}));
+vi.mock("./liveness.js", () => ({
+  publishWakeup,
 }));
 
 import type { AttemptCompletion } from "./callback.js";
@@ -85,6 +96,7 @@ function workflow() {
         idFromName: (name: string) => name,
         get: () => ({ destroy }),
       },
+      RUN_WAKEUPS: { send: vi.fn() },
     },
   });
   return { destroy, instance };
@@ -131,9 +143,15 @@ function steps() {
 describe("attempt execution Workflow", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getAttempt.mockResolvedValue({
+      id: completion.attemptId,
+      runId: "run_1",
+      runRevision: completion.expectedRevision,
+      state: "created",
+    });
     markDispatched.mockResolvedValue(undefined);
     prepareAttemptExecution.mockResolvedValue(undefined);
-    recordAttemptCompletion.mockResolvedValue("recorded");
+    loadRecordedAttemptCompletion.mockResolvedValue(completion);
     validateRecordedAttemptCompletion.mockResolvedValue({
       outcome: "validated",
       attemptId: completion.attemptId,
@@ -154,6 +172,9 @@ describe("attempt execution Workflow", () => {
       attemptId: completion.attemptId,
       sandboxName: "sandbox_1",
     });
+    recordAttemptEvent.mockResolvedValue(undefined);
+    settleAttemptOutcome.mockResolvedValue("failed");
+    publishWakeup.mockResolvedValue(undefined);
   });
 
   it("attaches restore, execution, settlement, and cleanup in durable steps", async () => {
@@ -171,7 +192,7 @@ describe("attempt execution Workflow", () => {
       "prepare attempt",
       "restore prepared workspace",
       "execute prepared attempt",
-      "record completed execution",
+      "load recorded execution",
       "validate completed attempt",
       "backup completed workspace",
       "publish completed attempt",
@@ -187,9 +208,9 @@ describe("attempt execution Workflow", () => {
       expect.objectContaining({ ATTEMPT_SANDBOXES: expect.anything() }),
       completion.attemptId,
     );
-    expect(recordAttemptCompletion).toHaveBeenCalledWith(
+    expect(loadRecordedAttemptCompletion).toHaveBeenCalledWith(
       expect.objectContaining({ ATTEMPT_SANDBOXES: expect.anything() }),
-      completion,
+      completion.attemptId,
     );
     expect(validateRecordedAttemptCompletion).toHaveBeenCalledWith(
       expect.anything(),
@@ -206,7 +227,7 @@ describe("attempt execution Workflow", () => {
     expect(destroy).toHaveBeenCalledOnce();
   });
 
-  it("does not settle or clean up a failed execution", async () => {
+  it("records a failed execution without validating or cleaning it up", async () => {
     sandbox.restorePreparedAttempt.mockResolvedValue(undefined);
     sandbox.executePreparedAttempt.mockRejectedValue(
       new Error("runner_connection_lost"),
@@ -224,9 +245,59 @@ describe("attempt execution Workflow", () => {
       "restore prepared workspace",
       "execute prepared attempt",
     ]);
-    expect(recordAttemptCompletion).not.toHaveBeenCalled();
+    expect(loadRecordedAttemptCompletion).not.toHaveBeenCalled();
     expect(validateRecordedAttemptCompletion).not.toHaveBeenCalled();
     expect(destroy).not.toHaveBeenCalled();
+    expect(settleAttemptOutcome).toHaveBeenCalledWith(
+      completion.attemptId,
+      completion.expectedRevision,
+      "failed",
+      {
+        kind: "execution_interrupted",
+        source: "attempt_workflow",
+      },
+    );
+    expect(publishWakeup).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      {
+        runId: "run_1",
+        expectedRevision: completion.expectedRevision,
+      },
+    );
+  });
+
+  it("preserves a runner-recorded completion when the Sandbox RPC is lost", async () => {
+    getAttempt.mockResolvedValue({
+      id: completion.attemptId,
+      runId: "run_1",
+      runRevision: completion.expectedRevision,
+      state: "executed",
+    });
+    sandbox.restorePreparedAttempt.mockResolvedValue(undefined);
+    sandbox.executePreparedAttempt.mockRejectedValue(
+      new Error("durable_object_reset"),
+    );
+    const { instance } = workflow();
+    const { step } = steps();
+
+    await expect(instance.run(event(), step as never)).rejects.toThrow(
+      "durable_object_reset",
+    );
+
+    expect(settleAttemptOutcome).not.toHaveBeenCalled();
+    expect(requestWakeup).toHaveBeenCalledWith({
+      runId: "run_1",
+      expectedRevision: completion.expectedRevision,
+    });
+    expect(publishWakeup).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      {
+        runId: "run_1",
+        expectedRevision: completion.expectedRevision,
+      },
+    );
   });
 
   it("resumes settlement from D1 without restoring or executing the agent", async () => {
@@ -258,7 +329,6 @@ describe("attempt execution Workflow", () => {
     ]);
     expect(sandbox.restorePreparedAttempt).not.toHaveBeenCalled();
     expect(sandbox.executePreparedAttempt).not.toHaveBeenCalled();
-    expect(recordAttemptCompletion).not.toHaveBeenCalled();
     expect(destroy).toHaveBeenCalledOnce();
   });
 

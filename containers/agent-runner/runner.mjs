@@ -105,6 +105,24 @@ export function artifactWriteTokenRequest(
   });
 }
 
+export function completionRequest(
+  assignment,
+  controlPlaneUrl,
+  attemptSecret,
+  completion,
+) {
+  return new Request(new URL("/attempts/completion", controlPlaneUrl), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-roundhouse-attempt-capability": attemptSecret,
+      "x-roundhouse-attempt-id": assignment.id,
+    },
+    body: JSON.stringify(completion),
+    signal: AbortSignal.timeout(30_000),
+  });
+}
+
 function screenshotRequest(assignment, controlPlaneUrl, attemptSecret, input) {
   return new Request(new URL("/attempts/screenshots", controlPlaneUrl), {
     method: "POST",
@@ -116,6 +134,82 @@ function screenshotRequest(assignment, controlPlaneUrl, attemptSecret, input) {
     body: JSON.stringify(input),
     signal: AbortSignal.timeout(120_000),
   });
+}
+
+const completionDeliveryDelay = () =>
+  new Promise((resolveDelay) => setTimeout(resolveDelay, 1_000));
+
+export async function deliverCompletion(
+  assignment,
+  controlPlaneUrl,
+  attemptSecret,
+  completion,
+  send = fetch,
+  wait = completionDeliveryDelay,
+) {
+  const startedAt = Date.now();
+  for (let delivery = 1; ; delivery += 1) {
+    runnerLog("info", "runner_completion_delivery_started", {
+      attemptId: assignment.id,
+      delivery,
+      outputHead: completion.checkpoint.outputHead,
+      durationMs: Date.now() - startedAt,
+    });
+    try {
+      const response = await observeResponse(
+        await send(
+          completionRequest(
+            assignment,
+            controlPlaneUrl,
+            attemptSecret,
+            completion,
+          ),
+        ),
+        { api: "control_plane", operation: "record_completion" },
+        { write: writeApiResponseLog },
+      );
+      const body = await response.json().catch(() => undefined);
+      const outcome = body?.outcome;
+      runnerLog(
+        response.ok ? "info" : "error",
+        "runner_completion_delivery_response",
+        {
+          attemptId: assignment.id,
+          delivery,
+          status: response.status,
+          outcome: typeof outcome === "string" ? outcome : null,
+          durationMs: Date.now() - startedAt,
+        },
+      );
+      if (response.ok && (outcome === "recorded" || outcome === "duplicate"))
+        return outcome;
+      if (
+        response.status !== 408 &&
+        response.status !== 429 &&
+        response.status < 500
+      )
+        throw new Error(`completion_delivery_http_${response.status}`);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.startsWith("completion_delivery_http_")
+      )
+        throw error;
+      runnerLog("error", "runner_completion_delivery_failed", {
+        attemptId: assignment.id,
+        delivery,
+        errorType: error?.name ?? typeof error,
+        error: error?.message ?? String(error),
+        durationMs: Date.now() - startedAt,
+      });
+    }
+    runnerLog("info", "runner_completion_delivery_waiting", {
+      attemptId: assignment.id,
+      delivery,
+      durationMs: Date.now() - startedAt,
+    });
+    await wait();
+  }
 }
 
 async function refreshArtifactWriteToken(
@@ -1933,6 +2027,55 @@ export async function bootstrapWorkspace(assignment) {
     cwd: directory,
   });
   if (head !== assignment.source.head) throw new Error("source_head_changed");
+  if (assignment.baseCommit !== head) {
+    const ancestryStartedAt = Date.now();
+    runnerLog("info", "bootstrap_source_ancestry_check_started", {
+      sourceHead: head,
+      baseCommit: assignment.baseCommit,
+    });
+    const isAncestor = () =>
+      command(
+        "git",
+        ["merge-base", "--is-ancestor", assignment.baseCommit, head],
+        { cwd: directory },
+      ).then(
+        () => true,
+        () => false,
+      );
+    let outcome = "present";
+    if (!(await isAncestor())) {
+      outcome = "fetched";
+      runnerLog("info", "bootstrap_source_ancestry_fetch_started", {
+        sourceHead: head,
+        baseCommit: assignment.baseCommit,
+      });
+      await command(
+        "git",
+        ["fetch", "--unshallow", "--no-tags", "origin", head],
+        { cwd: directory, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
+      );
+      if (!(await isAncestor())) {
+        runnerLog("error", "bootstrap_source_ancestry_check_failed", {
+          sourceHead: head,
+          baseCommit: assignment.baseCommit,
+          durationMs: Date.now() - ancestryStartedAt,
+          reason: "source_head_not_descendant",
+        });
+        throw new Error("source_head_not_descendant");
+      }
+      runnerLog("info", "bootstrap_source_ancestry_fetch_completed", {
+        sourceHead: head,
+        baseCommit: assignment.baseCommit,
+        durationMs: Date.now() - ancestryStartedAt,
+      });
+    }
+    runnerLog("info", "bootstrap_source_ancestry_check_completed", {
+      sourceHead: head,
+      baseCommit: assignment.baseCommit,
+      outcome,
+      durationMs: Date.now() - ancestryStartedAt,
+    });
+  }
   await command(
     "git",
     [
@@ -2728,7 +2871,13 @@ async function completeAssignment(assignment, headers) {
     : undefined;
   await progress("completion_started");
   const completion = completionResult(assignment, checkpoint, result);
-  await progress("completion_completed");
+  await progress("completion_ready");
+  await deliverCompletion(
+    assignment,
+    controlPlaneUrl,
+    attemptSecret,
+    completion,
+  );
   return completion;
 }
 
@@ -2767,6 +2916,7 @@ function validBootstrap(body) {
   if (
     !body?.id ||
     !Number.isInteger(body?.deadlineAt) ||
+    !/^[a-f0-9]{40}$/.test(body?.baseCommit ?? "") ||
     body?.artifact?.access !== "write" ||
     !body?.artifact?.remote?.startsWith("https://") ||
     !body?.artifact?.hostname ||
