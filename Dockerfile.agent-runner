@@ -31,12 +31,14 @@ RUN apk add --no-cache \
     bash \
     ca-certificates \
     curl \
+    fd \
     fuse3 \
     fuse-overlayfs \
     git \
+    ripgrep \
     squashfs-tools \
     squashfuse
-RUN for tool in bash curl fusermount3 squashfuse fuse-overlayfs; do \
+RUN for tool in bash curl fd fusermount3 rg squashfuse fuse-overlayfs; do \
       command -v "$tool"; \
     done \
     && /bin/bash -lc 'true'

@@ -20,6 +20,18 @@ function successful(command: string, stdout = ""): ExecResult {
   };
 }
 
+function successfulRuntimeCommand(command: string): ExecResult {
+  if (command.startsWith("sha256sum "))
+    return successful(command, "matching-ca  /etc/cloudflare/ca.crt\n");
+  if (command.includes(" sha256sum /etc/buildkit/certs/"))
+    return successful(command, "matching-ca  /etc/buildkit/ca.crt\n");
+  if (command.includes(" cat /etc/buildkit/buildkitd.toml"))
+    return successful(command, "[registry.'ghcr.io']\n");
+  if (command.includes("docker info"))
+    return successful(command, "fuse-overlayfs\n");
+  return successful(command);
+}
+
 function runningProcess(): Process {
   return {
     id: "roundhouse-docker",
@@ -173,16 +185,50 @@ describe("attempt Sandbox components", () => {
           phases.push(phase);
         },
         getProcess: async () => process,
-        exec: async (command) =>
-          successful(
-            command,
-            command.includes("docker info") ? "fuse-overlayfs\n" : "",
-          ),
+        exec: async (command) => successfulRuntimeCommand(command),
       }),
     );
 
     await expect(runtime.ensure("attempt_1")).resolves.toBe(process);
     expect(phases).toContain("docker_daemon_ready");
+    expect(phases.at(-1)).toBe("docker_builder_ready");
+  });
+
+  it("reconciles a restored builder that no longer satisfies its registry CA contract", async () => {
+    const phases: string[] = [];
+    const commands: string[] = [];
+    const process = runningProcess();
+    let recreated = false;
+    const runtime = new NestedContainerRuntime(
+      componentHost({
+        trace: async (_attemptId, phase) => {
+          phases.push(phase);
+        },
+        getProcess: async () => process,
+        exec: async (command) => {
+          commands.push(command);
+          if (command.startsWith("docker buildx create")) recreated = true;
+          if (command.includes(" sha256sum /etc/buildkit/certs/") && !recreated)
+            return {
+              ...successful(command),
+              success: false,
+              exitCode: 127,
+              stderr: "sha256sum: not found",
+            };
+          return successfulRuntimeCommand(command);
+        },
+      }),
+    );
+
+    await expect(runtime.ensure("attempt_1")).resolves.toBe(process);
+    expect(commands).toContain(
+      "docker buildx rm --force --keep-state roundhouse-host-v1",
+    );
+    expect(
+      commands.some((command) => command.startsWith("docker buildx create")),
+    ).toBe(true);
+    expect(phases).toContain("docker_builder_reconciliation_started");
+    expect(phases).toContain("docker_builder_reconciliation_completed");
     expect(phases.at(-1)).toBe("docker_builder_ready");
   });
 });
