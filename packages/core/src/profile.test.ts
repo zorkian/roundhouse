@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from "vitest";
-import { parseProfile } from "./profile.js";
+import { assertPathAllowed, parseProfile } from "./profile.js";
 
 const commit = "a".repeat(40);
 const valid = `version: 1
@@ -21,6 +21,25 @@ describe("repository profile parsing", () => {
       version: 1,
       paths: { allowed: ["**"], protected: [".github/workflows/**"] },
     });
+  });
+
+  it("matches globstars across zero or more path segments", async () => {
+    const profile = await parseProfile(
+      `version: 1
+paths:
+  allowed: ["**/*.ts"]
+  protected: ["docs/**/generated.ts"]
+`,
+      commit,
+    );
+    expect(() => assertPathAllowed(profile, "index.ts")).not.toThrow();
+    expect(() => assertPathAllowed(profile, "src/index.ts")).not.toThrow();
+    expect(() => assertPathAllowed(profile, "docs/generated.ts")).toThrow(
+      "protected_path_changed",
+    );
+    expect(() =>
+      assertPathAllowed(profile, "docs/nested/generated.ts"),
+    ).toThrow("protected_path_changed");
   });
 
   it.each([

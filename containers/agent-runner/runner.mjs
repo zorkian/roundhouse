@@ -1054,8 +1054,13 @@ export async function validateCheckpoint(assignment) {
     for (let index = 0; index < pattern.length; index++) {
       const character = pattern[index];
       if (character === "*" && pattern[index + 1] === "*") {
-        expression += ".*";
-        index++;
+        if (pattern[index + 2] === "/") {
+          expression += "(?:[^/]+/)*";
+          index += 2;
+        } else {
+          expression += ".*";
+          index++;
+        }
       } else if (character === "*") expression += "[^/]*";
       else if (character === "?") expression += "[^/]";
       else expression += character.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");

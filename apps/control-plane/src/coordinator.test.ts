@@ -32,6 +32,13 @@ const input = {
   issueNumber: 1,
   baseCommit: "a".repeat(40),
   profileVersion: "v2",
+  profile: {
+    sourcePath: ".roundhouse/profile.yaml" as const,
+    sourceCommit: "a".repeat(40),
+    version: 1 as const,
+    hash: "b".repeat(64),
+    paths: { allowed: ["**"], protected: [".github/workflows/**"] },
+  },
 };
 const validator = { validate: async () => undefined };
 

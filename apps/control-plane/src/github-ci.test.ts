@@ -56,6 +56,13 @@ async function setupCi(
       issueNumber: 42,
       baseCommit: "a".repeat(40),
       profileVersion: "v2",
+      profile: {
+        sourcePath: ".roundhouse/profile.yaml",
+        sourceCommit: "a".repeat(40),
+        version: 1,
+        hash: "b".repeat(64),
+        paths: { allowed: ["**"], protected: [".github/workflows/**"] },
+      },
     }),
   );
   for (const stage of ["reproduce", "plan", "implement", "review"] as const) {

@@ -103,8 +103,13 @@ function matches(pattern: string, path: string): boolean {
   for (let i = 0; i < pattern.length; i++) {
     const character = pattern[i]!;
     if (character === "*" && pattern[i + 1] === "*") {
-      expression += ".*";
-      i++;
+      if (pattern[i + 2] === "/") {
+        expression += "(?:[^/]+/)*";
+        i += 2;
+      } else {
+        expression += ".*";
+        i++;
+      }
     } else if (character === "*") expression += "[^/]*";
     else if (character === "?") expression += "[^/]";
     else expression += character.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
