@@ -4,6 +4,7 @@
 import { compileWorkflow, defaultIssueWorkflowSource } from "@roundhouse/core";
 import { describe, expect, it } from "vitest";
 import type { RunDetails } from "./d1-store.js";
+import { renderCompletedRunDetailsFixture } from "./run-details.fixture.js";
 import { renderRunDetails } from "./run-details.js";
 
 type DetailsRun = RunDetails["run"];
@@ -71,6 +72,12 @@ function detailsFixture(
 }
 
 describe("run details", () => {
+  it("renders the deterministic completed visual fixture", () => {
+    const html = renderCompletedRunDetailsFixture();
+    expect(html).toContain("Pull request merged successfully.");
+    expect(html).toContain("Pull request #486");
+  });
+
   it("renders escaped summary, usage, links, and workflow evidence", () => {
     const html = renderRunDetails(
       detailsFixture({
@@ -242,9 +249,8 @@ describe("run details", () => {
 
       expect(html).toContain("<dt>Current stage</dt><dd>investigate</dd>");
       expect(html).toContain('<span class="phase">investigate</span>');
-      expect(html).toContain(
-        "<h3>Latest attempt · investigate · completed</h3>",
-      );
+      expect(html).toContain("<h3>investigate</h3>");
+      expect(html).toContain("The run is in progress at investigate.");
       expect(html).not.toContain("Current behavior");
       expect(html).not.toContain("Reproduction");
       expect(html).toContain("<dt>Allowed paths</dt>");
@@ -330,8 +336,9 @@ describe("run details", () => {
       }),
     );
 
-    // Rendered in the outcome section and inside the attempt record.
-    expect(html.match(/class="execution"/g)).toHaveLength(4);
+    // Execution episodes are shown with the expanded attempt, not duplicated
+    // in the concise outcome summary.
+    expect(html.match(/class="execution"/g)).toHaveLength(2);
     expect(html).toContain("Interrupted");
     expect(html).toContain("Restarted · Completed");
     expect(html).toContain("150 tokens");
@@ -446,8 +453,11 @@ describe("run details", () => {
     expect(outcome).toBeGreaterThan(-1);
     expect(outcome).toBeLessThan(history);
     expect(history).toBeLessThan(diagnostics);
-    expect(html.indexOf("push rejected")).toBeLessThan(history);
+    expect(html).toContain("The run failed during implement.");
+    // Raw executor evidence is available only inside the attempt diagnostics.
+    expect(html.indexOf("push rejected")).toBeGreaterThan(history);
     expect(html).toContain("Executor outcome");
+    expect(html.slice(outcome, history)).not.toContain("checkpoint_rejected");
     // Review fan-out evidence stays available but below the outcome.
     expect(html.indexOf("Review workflow evidence")).toBeGreaterThan(history);
     // Run-level commit bookkeeping moved out of the top summary.
@@ -458,7 +468,8 @@ describe("run details", () => {
   it("omits the pull request row when no valid pull request URL exists", () => {
     const without = renderRunDetails(detailsFixture({}));
     expect(without).not.toContain("<dt>Pull request</dt>");
-    expect(without).not.toContain("<h2>Outcome</h2>");
+    expect(without).toContain("<h2>Outcome</h2>");
+    expect(without).toContain("The run is in progress at implement.");
 
     const withPr = renderRunDetails(
       detailsFixture({
@@ -529,13 +540,15 @@ describe("run details", () => {
     );
 
     expect(html).toContain("<h2>Outcome</h2>");
-    expect(html).toContain("Last completed stage");
+    expect(html).toContain(
+      "Most recently completed: <strong>implement</strong>",
+    );
     expect(html.indexOf("stage finished")).toBeLessThan(
       html.indexOf("<h2>Attempt history</h2>"),
     );
   });
 
-  it("includes the latest execution summary in the outcome section", () => {
+  it("keeps execution details with the expanded attempt", () => {
     const html = renderRunDetails(
       detailsFixture({
         run: { status: "failed" },
@@ -551,12 +564,91 @@ describe("run details", () => {
       }),
     );
 
+    const history = html.indexOf("<h2>Attempt history</h2>");
+    const executions = html.indexOf("<h4>Executions</h4>");
+    expect(executions).toBeGreaterThan(history);
+  });
+
+  it("renders concise summaries and keeps raw records in attempt diagnostics", () => {
+    const html = renderRunDetails(
+      detailsFixture({
+        run: { status: "succeeded", stage: "merge" },
+        attempts: [
+          attemptFixture({
+            stage: "merge",
+            result: {
+              merge: {
+                summary: "Pull request merged successfully.",
+                internalDetail: "diagnostic only",
+                pullRequest: {
+                  number: 99,
+                  html_url: "https://github.com/zorkian/roundhouse/pull/99",
+                },
+              },
+            },
+            outcome: {
+              kind: "checkpoint_rejected",
+              source: "checkpoint_validator",
+              status: 422,
+              detail: "diagnostic outcome",
+            },
+          }),
+        ],
+      }),
+    );
+
     const outcome = html.indexOf("<h2>Outcome</h2>");
     const history = html.indexOf("<h2>Attempt history</h2>");
-    expect(outcome).toBeGreaterThan(-1);
-    const executions = html.indexOf("<h4>Executions</h4>");
-    expect(executions).toBeGreaterThan(outcome);
-    expect(executions).toBeLessThan(history);
+    const topOutcome = html.slice(outcome, history);
+    expect(topOutcome).toContain("The run succeeded after merge.");
+    expect(topOutcome).toContain("Pull request merged successfully.");
+    expect(topOutcome).toContain("Pull request #99");
+    expect(topOutcome).not.toContain("internalDetail");
+    expect(topOutcome).not.toContain("checkpoint_rejected");
+    expect(html.indexOf("internalDetail")).toBeGreaterThan(history);
+    expect(html.indexOf("checkpoint_rejected")).toBeGreaterThan(history);
+    expect(html).toContain(
+      '<summary class="diagnostics-summary">Diagnostics</summary>',
+    );
+  });
+
+  it("summarizes active, waiting, failed, and cancelled runs", () => {
+    const cases = [
+      {
+        status: "active" as const,
+        stage: "review" as const,
+        expected: "The run is in progress at review.",
+      },
+      {
+        status: "waiting" as const,
+        stage: "plan" as const,
+        expected: "The run is waiting at plan.",
+      },
+      {
+        status: "failed" as const,
+        stage: "ci" as const,
+        expected: "The run failed during ci.",
+      },
+      {
+        status: "cancelled" as const,
+        stage: "merge" as const,
+        expected: "The run was cancelled during merge.",
+      },
+    ];
+    for (const item of cases) {
+      const html = renderRunDetails(
+        detailsFixture({
+          run: {
+            status: item.status,
+            stage: item.stage,
+            ...(item.status === "waiting"
+              ? { waitingReason: "plan_approval" }
+              : {}),
+          },
+        }),
+      );
+      expect(html).toContain(item.expected);
+    }
   });
 
   it("surfaces the waiting reason in the outcome section", () => {
