@@ -16,7 +16,7 @@ nodes:
         schema: roundhouse.qualification.v1
       model:
         id: openai/gpt-5.6-luna
-        reasoning: high
+        reasoning: medium
       prompt: prompts/qualification.md
     capabilities:
       - repository.read
@@ -90,7 +90,7 @@ nodes:
         schema: roundhouse.plan.v1
       model:
         id: openai/gpt-5.6-sol
-        reasoning: max
+        reasoning: high
       prompt: prompts/planning.md
     capabilities:
       - repository.read
@@ -128,7 +128,7 @@ nodes:
         schema: roundhouse.implementation.v1
       model:
         id: openai/gpt-5.6-terra
-        reasoning: max
+        reasoning: high
       prompt: prompts/implementation.md
     capabilities:
       - repository.read
@@ -198,8 +198,8 @@ nodes:
             - high
             - medium
           model:
-            id: anthropic/claude-opus-5
-            reasoning: max
+            id: anthropic/claude-sonnet-5
+            reasoning: high
           prompt: prompts/review-holistic.md
         - id: review-security
           label: Security review
@@ -209,10 +209,9 @@ nodes:
           blocking_severities:
             - critical
             - high
-            - medium
           model:
-            id: moonshotai/kimi-k3
-            reasoning: max
+            id: anthropic/claude-opus-5
+            reasoning: high
           prompt: prompts/review-security.md
         - id: review-data
           label: Data consistency review
@@ -222,10 +221,9 @@ nodes:
           blocking_severities:
             - critical
             - high
-            - medium
           model:
-            id: openai/gpt-5.6-sol
-            reasoning: max
+            id: anthropic/claude-sonnet-5
+            reasoning: high
           prompt: prompts/review-data.md
     capabilities:
       - repository.read

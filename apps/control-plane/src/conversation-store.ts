@@ -66,6 +66,7 @@ export interface ConversationTurn {
   readonly conversationId: string;
   readonly triggeringMessageId?: string;
   readonly kind: "message" | "brief";
+  readonly ordinal: number;
   readonly state: "pending" | "running" | "succeeded" | "failed";
   readonly sourceCommit: string;
   readonly configuredModel: string;
@@ -110,6 +111,7 @@ export interface Conversation {
   readonly creatorGithubUserId: number;
   readonly creatorGithubLogin: string;
   readonly status: "open" | "handoff_pending" | "promoted";
+  readonly title?: string;
   readonly sourceCommit: string;
   readonly profileHash: string;
   readonly context: ConversationContext;
@@ -125,6 +127,7 @@ export interface Conversation {
 
 export interface ConversationSummary {
   readonly id: string;
+  readonly title?: string;
   readonly repository: string;
   readonly status: Conversation["status"];
   readonly promotionState?: ConversationPromotion["state"];
@@ -178,6 +181,7 @@ type ConversationRow = RepositoryRow & {
   creator_github_user_id: number;
   creator_github_login: string;
   status: Conversation["status"];
+  title: string | null;
   source_commit: string;
   profile_hash: string;
   context_json: string;
@@ -199,6 +203,7 @@ type TurnRow = {
   model_route_json: string | null;
   result_message_id: string | null;
   result_brief_id: string | null;
+  ordinal: number;
   attempts: number;
   lease_expires_at: number | null;
   error_code: string | null;
@@ -267,6 +272,7 @@ function turnFromRow(row: TurnRow): ConversationTurn {
       ? { triggeringMessageId: row.triggering_message_id }
       : {}),
     kind: row.kind,
+    ordinal: row.ordinal,
     state: row.state,
     sourceCommit: row.source_commit,
     configuredModel: row.configured_model,
@@ -381,18 +387,20 @@ export class D1ConversationRepository {
     if (!authorizedGithubIds.length) return [];
     const rows = await this.db
       .prepare(
-        `SELECT c.id,c.status,c.updated_at,r.profile_json,p.state AS promotion_state,
-                p.issue_number,p.issue_url
+        `SELECT c.id,c.title,c.status,
+                CASE WHEN p.updated_at>c.updated_at THEN p.updated_at ELSE c.updated_at END AS updated_at,
+                r.profile_json,p.state AS promotion_state,p.issue_number,p.issue_url
          FROM conversations c
          JOIN repositories r ON r.id=c.repository_id
          LEFT JOIN conversation_promotions p ON p.conversation_id=c.id
          WHERE c.creator_github_user_id=?1
            AND r.github_id IN (${placeholders(authorizedGithubIds, 2)})
-         ORDER BY c.updated_at DESC LIMIT 50`,
+         ORDER BY CASE WHEN p.updated_at>c.updated_at THEN p.updated_at ELSE c.updated_at END DESC LIMIT 50`,
       )
       .bind(creatorGithubUserId, ...authorizedGithubIds)
       .all<{
         id: string;
+        title: string | null;
         status: Conversation["status"];
         updated_at: number;
         profile_json: string;
@@ -402,6 +410,7 @@ export class D1ConversationRepository {
       }>();
     return (rows.results ?? []).map((row) => ({
       id: row.id,
+      ...(typeof row.title === "string" ? { title: row.title } : {}),
       repository: repositoryFromRow({
         id: "",
         github_id: "",
@@ -742,7 +751,7 @@ export class D1ConversationRepository {
     const row = await this.db
       .prepare(
         `SELECT c.id AS conversation_id,c.creator_github_user_id,c.creator_github_login,
-                c.status,c.source_commit,c.profile_hash,c.context_json,c.active_turn_id,
+                c.status,c.title,c.source_commit,c.profile_hash,c.context_json,c.active_turn_id,
                 c.current_brief_id,c.created_at,c.updated_at,
                 r.id,r.github_id,r.profile_json
          FROM conversations c JOIN repositories r ON r.id=c.repository_id
@@ -816,6 +825,7 @@ export class D1ConversationRepository {
       creatorGithubUserId: row.creator_github_user_id,
       creatorGithubLogin: row.creator_github_login,
       status: row.status,
+      ...(typeof row.title === "string" ? { title: row.title } : {}),
       sourceCommit: row.source_commit,
       profileHash: row.profile_hash,
       context: JSON.parse(row.context_json) as ConversationContext,
@@ -927,6 +937,7 @@ export class D1ConversationRepository {
     turnId: string,
     messageId: string,
     body: string,
+    title?: string,
   ): Promise<boolean> {
     const time = this.now();
     const results = await this.db.batch([
@@ -943,19 +954,47 @@ export class D1ConversationRepository {
            WHERE t.id=?4 AND t.kind='message' AND t.state='running'`,
         )
         .bind(messageId, body, time, turnId),
+      ...(title === undefined
+        ? []
+        : [
+            this.db
+              .prepare(
+                `UPDATE conversations
+                 SET title=?1
+                 WHERE id=(SELECT conversation_id FROM conversation_turns WHERE id=?2)
+                   AND title IS NULL
+                   AND EXISTS (
+                     SELECT 1 FROM conversation_turns t
+                     WHERE t.id=?2 AND t.kind='message' AND t.state='running'
+                       AND t.ordinal=1
+                   )
+                   AND EXISTS (
+                     SELECT 1 FROM conversation_messages m
+                     WHERE m.id=?3 AND m.turn_id=?2 AND m.role='assistant'
+                   )`,
+              )
+              .bind(title, turnId, messageId),
+          ]),
       this.db
         .prepare(
           `UPDATE conversation_turns
            SET state='succeeded',result_message_id=?1,lease_expires_at=NULL,
                updated_at=?2,completed_at=?2
-           WHERE id=?3 AND state='running'`,
+           WHERE id=?3 AND state='running'
+             AND EXISTS (
+               SELECT 1 FROM conversation_messages
+               WHERE id=?1 AND turn_id=?3 AND role='assistant'
+             )`,
         )
         .bind(messageId, time, turnId),
       this.db
         .prepare(
           `UPDATE conversations SET active_turn_id=NULL,updated_at=?1
            WHERE active_turn_id=?2
-             AND EXISTS (SELECT 1 FROM conversation_messages WHERE id=?3)`,
+             AND EXISTS (
+               SELECT 1 FROM conversation_messages
+               WHERE id=?3 AND turn_id=?2 AND role='assistant'
+             )`,
         )
         .bind(time, turnId, messageId),
       this.db
@@ -964,7 +1003,7 @@ export class D1ConversationRepository {
            (id,conversation_id,kind,payload_json,state,attempts,available_at,created_at,completed_at)
            SELECT ?1,t.conversation_id,'adapter_reply',?2,'pending',0,?3,?3,NULL
            FROM conversation_turns t JOIN conversation_messages m ON m.id=?4
-           WHERE t.id=?5 AND t.state='succeeded'`,
+           WHERE t.id=?5 AND t.state='succeeded' AND m.turn_id=t.id`,
         )
         .bind(
           `conversation:reply:${messageId}`,

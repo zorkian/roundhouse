@@ -82,13 +82,18 @@ interface ModelRequest {
   readonly body: Record<string, unknown>;
 }
 
+interface StructuredOutput {
+  readonly name: string;
+  readonly schema: Readonly<Record<string, unknown>>;
+}
+
 interface ProtocolAdapter {
   readonly initial: (input: {
     readonly route: ModelRoute;
     readonly instructions: string;
     readonly messages: readonly ConversationMessage[];
     readonly tools: readonly ToolDefinition[];
-    readonly outputSchema?: Readonly<Record<string, unknown>>;
+    readonly structuredOutput?: StructuredOutput;
     readonly maxOutputTokens: number;
   }) => ModelRequest;
   readonly parse: (value: Record<string, unknown>) => ParsedModelResponse;
@@ -197,14 +202,14 @@ const openAiResponsesAdapter: ProtocolAdapter = {
         ...(input.route.thinkingLevel === "off"
           ? {}
           : { reasoning: { effort: input.route.thinkingLevel } }),
-        ...(input.outputSchema
+        ...(input.structuredOutput
           ? {
               text: {
                 format: {
                   type: "json_schema",
-                  name: "delivery_brief",
+                  name: input.structuredOutput.name,
                   strict: true,
-                  schema: input.outputSchema,
+                  schema: input.structuredOutput.schema,
                 },
               },
             }
@@ -299,14 +304,14 @@ const openAiCompletionsAdapter: ProtocolAdapter = {
             }
           : {}),
         max_tokens: input.maxOutputTokens,
-        ...(input.outputSchema
+        ...(input.structuredOutput
           ? {
               response_format: {
                 type: "json_schema",
                 json_schema: {
-                  name: "delivery_brief",
+                  name: input.structuredOutput.name,
                   strict: true,
-                  schema: input.outputSchema,
+                  schema: input.structuredOutput.schema,
                 },
               },
             }
@@ -365,8 +370,8 @@ const openAiCompletionsAdapter: ProtocolAdapter = {
 
 const anthropicMessagesAdapter: ProtocolAdapter = {
   initial(input) {
-    const schemaInstruction = input.outputSchema
-      ? `\n\nReturn only JSON matching this schema:\n${JSON.stringify(input.outputSchema)}`
+    const schemaInstruction = input.structuredOutput
+      ? `\n\nReturn only JSON matching the ${input.structuredOutput.name} schema:\n${JSON.stringify(input.structuredOutput.schema)}`
       : "";
     return {
       endpoint: "/v1/messages",
@@ -472,10 +477,10 @@ const googleGenerativeAiAdapter: ProtocolAdapter = {
           : {}),
         generationConfig: {
           maxOutputTokens: input.maxOutputTokens,
-          ...(input.outputSchema
+          ...(input.structuredOutput
             ? {
                 responseMimeType: "application/json",
-                responseSchema: input.outputSchema,
+                responseSchema: input.structuredOutput.schema,
               }
             : {}),
         },
@@ -831,15 +836,31 @@ async function callModel(input: {
   return { value, usage };
 }
 
+export interface ConversationFirstReply {
+  readonly title: string;
+  readonly reply: string;
+}
+
 export interface ConversationExecutionResult {
   readonly route: ModelRoute;
   readonly text?: string;
+  readonly firstReply?: ConversationFirstReply;
   readonly brief?: Omit<
     DeliveryBrief,
     "id" | "revision" | "state" | "sourceCommit" | "createdAt" | "updatedAt"
   >;
   readonly usage: readonly ConversationCallUsage[];
 }
+
+const firstReplySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["title", "reply"],
+  properties: {
+    title: { type: "string" },
+    reply: { type: "string" },
+  },
+} as const;
 
 const briefSchema = {
   type: "object",
@@ -901,6 +922,37 @@ function parseBrief(text: string): ConversationExecutionResult["brief"] {
   };
 }
 
+function titleWordCount(title: string): number {
+  return title.split(/\s+/u).filter(Boolean).length;
+}
+
+function parseFirstReply(text: string): ConversationFirstReply {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    throw new Error("conversation_first_reply_invalid");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("conversation_first_reply_invalid");
+  const parsed = value as Record<string, unknown>;
+  const title = typeof parsed.title === "string" ? parsed.title.trim() : "";
+  const reply = typeof parsed.reply === "string" ? parsed.reply.trim() : "";
+  const firstLetter = title.match(/\p{L}/u)?.[0];
+  if (
+    !title ||
+    !reply ||
+    title.length > 80 ||
+    titleWordCount(title) < 4 ||
+    titleWordCount(title) > 10 ||
+    !firstLetter ||
+    firstLetter === firstLetter.toLocaleLowerCase() ||
+    /\p{P}$/u.test(title)
+  )
+    throw new Error("conversation_first_reply_invalid");
+  return { title, reply };
+}
+
 export async function executeConversationTurn(
   broker: Broker,
   github: GitHubApi,
@@ -911,6 +963,13 @@ export async function executeConversationTurn(
   const route = await resolveConversationRoute(broker, conversation);
   const adapter = adapterFor(route);
   const callKind = turn.kind === "brief" ? "delivery_brief" : "conversation";
+  const firstMessageTurn = turn.kind === "message" && turn.ordinal === 1;
+  const structuredOutput =
+    turn.kind === "brief"
+      ? { name: "delivery_brief", schema: briefSchema }
+      : firstMessageTurn
+        ? { name: "conversation_first_reply", schema: firstReplySchema }
+        : undefined;
   let request = adapter.initial({
     route,
     instructions:
@@ -922,10 +981,22 @@ export async function executeConversationTurn(
             "The title must be an imperative GitHub issue title no longer than 100 characters.",
             "Evidence should identify the decisions or repository facts supporting the brief.",
           ].join("\n")
-        : conversationInstructions(conversation),
+        : [
+            conversationInstructions(conversation),
+            ...(firstMessageTurn
+              ? [
+                  [
+                    "Return a JSON object with title and reply for this first response.",
+                    "The title must summarize the user's central question or desired outcome, not truncate or copy their opening words.",
+                    "Use sentence case with 4–10 words, no more than 80 characters, and no terminal punctuation.",
+                    "Put your normal helpful response in reply.",
+                  ].join("\n"),
+                ]
+              : []),
+          ].join("\n\n"),
     messages: conversation.messages,
     tools: turn.kind === "message" ? repositoryTools : [],
-    ...(turn.kind === "brief" ? { outputSchema: briefSchema } : {}),
+    ...(structuredOutput ? { structuredOutput } : {}),
     maxOutputTokens: turn.kind === "brief" ? 4_000 : 8_000,
   });
   const usage: ConversationCallUsage[] = [];
@@ -945,9 +1016,42 @@ export async function executeConversationTurn(
       const parsed = adapter.parse(called.value);
       if (!parsed.calls.length) {
         if (!parsed.text) throw new Error("conversation_model_output_missing");
-        return turn.kind === "brief"
-          ? { route, brief: parseBrief(parsed.text), usage }
-          : { route, text: parsed.text, usage };
+        if (turn.kind === "brief")
+          return { route, brief: parseBrief(parsed.text), usage };
+        if (firstMessageTurn) {
+          const validationStartedAt = Date.now();
+          try {
+            const firstReply = parseFirstReply(parsed.text);
+            console.log(
+              JSON.stringify({
+                message: "conversation_first_reply_validation",
+                conversationId: conversation.id,
+                turnId: turn.id,
+                outcome: "succeeded",
+                titleLength: firstReply.title.length,
+                titleWordCount: titleWordCount(firstReply.title),
+                durationMs: Date.now() - validationStartedAt,
+              }),
+            );
+            return { route, firstReply, usage };
+          } catch (error) {
+            console.error(
+              JSON.stringify({
+                message: "conversation_first_reply_validation",
+                conversationId: conversation.id,
+                turnId: turn.id,
+                outcome: "failed",
+                errorCode:
+                  error instanceof Error
+                    ? error.message
+                    : "conversation_first_reply_invalid",
+                durationMs: Date.now() - validationStartedAt,
+              }),
+            );
+            throw error;
+          }
+        }
+        return { route, text: parsed.text, usage };
       }
       if (turn.kind !== "message" || round === maxToolRounds)
         throw new Error("conversation_tool_round_limit");

@@ -1,9 +1,15 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, expect, it } from "vitest";
-import { renderConversation } from "./conversation-ui.js";
-import type { Conversation } from "./conversation-store.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  renderConversation,
+  renderConversationIndex,
+} from "./conversation-ui.js";
+import type {
+  Conversation,
+  ConversationSummary,
+} from "./conversation-store.js";
 
 const base: Conversation = {
   id: "b1f486ff-7744-49f9-ab78-f74e8409fc2b",
@@ -44,6 +50,73 @@ const base: Conversation = {
 };
 
 describe("conversation UI", () => {
+  it("renders semantic titles with escaped metadata and an untitled fallback", () => {
+    const now = Date.parse("2026-08-02T12:00:00Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      const conversations: ConversationSummary[] = [
+        {
+          id: base.id,
+          title: "Clarify <conversation> list titles",
+          repository: "octo/<project>",
+          status: "open",
+          updatedAt: now - 6 * 60_000,
+        },
+        {
+          id: "d7026e8f-3e94-4bfc-8a5d-e6e5ef67f4cd",
+          repository: "acme/docs",
+          status: "handoff_pending",
+          promotionState: "awaiting_intake",
+          issueNumber: 482,
+          issueUrl: "https://github.test/issues/482?label=<unsafe>&state=open",
+          updatedAt: now - 3 * 60 * 60_000,
+        },
+        {
+          id: "55f5f1d1-cf1c-4e96-8b3d-1bdf01f574b0",
+          title: "Start the delivery workflow",
+          repository: "acme/docs",
+          status: "promoted",
+          promotionState: "accepted",
+          updatedAt: now - 2 * 24 * 60 * 60_000,
+        },
+      ];
+      const html = renderConversationIndex(
+        [base.repository],
+        conversations,
+        "octocat",
+        undefined,
+        "00000000-0000-4000-8000-000000000001",
+      );
+      expect(html).toContain(
+        "<strong>Clarify &lt;conversation&gt; list titles</strong>",
+      );
+      expect(html).toContain("<strong>New conversation</strong>");
+      expect(html).toContain("octo/&lt;project&gt;");
+      expect(html).toContain('<span class="status open">Open</span>');
+      expect(html).toContain(
+        '<span class="status waiting">Waiting to start delivery</span>',
+      );
+      expect(html).toContain(
+        '<span class="status succeeded">Delivery started</span>',
+      );
+      expect(html).toContain("Updated 6 minutes ago");
+      expect(html).toContain("Updated 3 hours ago");
+      expect(html).toContain("Updated 2 days ago");
+      expect(html).toContain(
+        ".status.waiting{background:#fff4d6;color:#8a5b00}",
+      );
+      expect(html).toContain(
+        'href="https://github.test/issues/482?label=&lt;unsafe&gt;&amp;state=open">Issue #482</a>',
+      );
+      expect(html).not.toContain("<conversation>");
+      expect(html).not.toContain("awaiting_intake");
+      expect(html).not.toContain("UTC");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("renders a private, read-only thread without trusting message HTML", () => {
     const html = renderConversation(base, "octocat");
     expect(html).toContain("Prepare delivery brief");
@@ -243,6 +316,7 @@ describe("conversation UI", () => {
           id: "failed-turn",
           conversationId: base.id,
           kind: "message",
+          ordinal: 2,
           state: "failed",
           sourceCommit: base.sourceCommit,
           configuredModel: "unapproved/model",
