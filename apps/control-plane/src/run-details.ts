@@ -86,7 +86,11 @@ function attemptLinks(attempt: Attempt): string {
   const pullRequest = Object.values(result ?? {}).find(
     (entry) => entry?.pullRequest,
   )?.pullRequest;
-  if (!pullRequest) return "";
+  if (
+    typeof pullRequest?.html_url !== "string" ||
+    !/^https:\/\//.test(pullRequest.html_url)
+  )
+    return "";
   return `<h4>Related links</h4><p>${link(pullRequest.html_url, pullRequest.number ? `Pull request #${pullRequest.number}` : "Pull request")}</p>`;
 }
 

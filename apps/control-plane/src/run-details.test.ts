@@ -437,6 +437,31 @@ describe("run details", () => {
     expect(withPr).toContain("Pull request #5");
   });
 
+  it("omits related links when the pull request object has no valid URL", () => {
+    const html = renderRunDetails(
+      detailsFixture({
+        run: { status: "failed", stage: "implement" },
+        attempts: [
+          attemptFixture({
+            id: "invalid-pr-attempt",
+            state: "failed",
+            outcome: {
+              kind: "checkpoint_rejected",
+              source: "checkpoint_validator",
+              status: 422,
+              detail: "push rejected",
+            },
+            result: {
+              implementation: { pullRequest: { number: 7 } },
+            },
+          }),
+        ],
+      }),
+    );
+    expect(html).not.toContain("Related links");
+    expect(html).toContain("Executor outcome");
+  });
+
   it("shows the last completed stage result when the latest attempt has none", () => {
     const html = renderRunDetails(
       detailsFixture({
