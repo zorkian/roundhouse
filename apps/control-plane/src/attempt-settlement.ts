@@ -23,10 +23,10 @@ import {
   attemptWorkspaceRef,
   SandboxCheckpointPublisher,
   SandboxCheckpointValidator,
+  artifactRepositoryName,
   sandboxName,
   saveWorkspaceBackup,
   workspaceBackup,
-  workspaceName,
   type SandboxNamespace,
 } from "./attempt-runtime.js";
 import type { CompetitionPromoter } from "./coordinator.js";
@@ -491,7 +491,7 @@ export function competitionPromoter(
           expectedRevision: run.revision,
           checkpoint: {
             repositoryId: "",
-            repository: workspaceName(run.id),
+            repository: artifactRepositoryName(winner),
             baseCommit: winner.baseCommit,
             ref: attemptWorkspaceRef(winner),
             inputHead: winner.expectedHead,

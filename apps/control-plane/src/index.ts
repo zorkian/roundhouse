@@ -49,10 +49,9 @@ import {
   destroyAttemptSandbox,
   destroyAttemptSandboxWithTrace,
   githubBranch,
+  artifactRepositoryName,
   sandboxName,
   workspaceBackup,
-  workspaceName,
-  workspaceRef,
   type AttemptNamespace,
   type SandboxDestructionTrace,
   type SandboxNamespace,
@@ -695,7 +694,9 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
         return json({ error: "stale_attempt" }, 409);
       const run = await repository.get(attempt.runId);
       if (!run) return json({ error: "stale_attempt" }, 409);
-      const artifact = await artifactsNamespace(env).get(workspaceName(run.id));
+      const artifact = await artifactsNamespace(env).get(
+        artifactRepositoryName(attempt),
+      );
       if (!artifact) return json({ error: "artifact_not_found" }, 404);
       try {
         await artifact.revokeToken(artifactTokenId);

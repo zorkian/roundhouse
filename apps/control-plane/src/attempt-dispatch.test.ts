@@ -3,7 +3,10 @@
 
 import type { Attempt, RunSnapshot } from "@roundhouse/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DurableAttemptDispatcher } from "./attempt-dispatch.js";
+import {
+  DurableAttemptDispatcher,
+  judgementCandidateAttempts,
+} from "./attempt-dispatch.js";
 
 const attempt = {
   id: "run_1_rev_2",
@@ -64,6 +67,49 @@ describe("durable attempt dispatch", () => {
         status: "queued",
       }),
     );
+  });
+
+  it("scopes judge evidence to the judge's own competition", () => {
+    const candidate = (
+      role: string,
+      candidateId: string,
+      state: Attempt["state"] = "completed",
+    ): Attempt => ({
+      ...attempt,
+      id: `run_1_rev_2_${role}`,
+      role,
+      state,
+      competition: { purpose: "candidate", candidateId },
+    });
+    const judge: Attempt = {
+      ...attempt,
+      id: "run_1_rev_2_review-data-judge",
+      stage: "review",
+      role: "review-data-judge",
+      competition: { purpose: "judge" },
+    };
+    const attempts = [
+      candidate("review-data-candidate-alpha", "alpha"),
+      candidate("review-data-candidate-beta", "beta"),
+      candidate("review-holistic-candidate-alpha", "alpha"),
+      candidate("review-holistic-candidate-gamma", "gamma"),
+      candidate("review-data-candidate-gamma", "gamma"),
+      candidate("review-data-candidate-beta", "beta", "dispatched"),
+    ];
+    const scoped = judgementCandidateAttempts(attempts, judge, {
+      candidates: [
+        { id: "alpha", model: { id: "openai/gpt-alpha", reasoning: "low" } },
+        {
+          id: "beta",
+          model: { id: "anthropic/claude-beta", reasoning: "medium" },
+        },
+      ],
+      judge: { model: { id: "openai/gpt-judge", reasoning: "high" } },
+    });
+    expect(scoped.map((entry) => entry.role)).toEqual([
+      "review-data-candidate-alpha",
+      "review-data-candidate-beta",
+    ]);
   });
 
   it("resumes when that Workflow instance already exists", async () => {

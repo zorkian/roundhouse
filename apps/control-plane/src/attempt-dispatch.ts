@@ -30,10 +30,10 @@ import {
   attemptWorkspaceBackupKey,
   attemptWorkspaceRef,
   conflictedIntegrationOutcome,
+  artifactRepositoryName,
   destroyAttemptSandbox,
   sandboxName,
   workspaceBackup,
-  workspaceName,
   type SandboxNamespace,
 } from "./attempt-runtime.js";
 
@@ -412,6 +412,33 @@ function requestedModelForAttempt(
   );
 }
 
+// Selects the candidate evidence a judge attempt receives: exactly the
+// completed candidates belonging to this judge's own competition, scoped by
+// node and reviewer role so a review node with several competing reviewers
+// never mixes candidates across groups.
+export function judgementCandidateAttempts(
+  attempts: readonly Attempt[],
+  judge: Attempt,
+  competition: WorkflowCompetition | undefined,
+): readonly Attempt[] {
+  if (judge.competition?.purpose !== "judge") return [];
+  const baseRole = judge.role.endsWith("-judge")
+    ? judge.role.slice(0, -"-judge".length)
+    : judge.role;
+  return attempts.filter(
+    (candidate) =>
+      candidate.competition?.purpose === "candidate" &&
+      candidate.state === "completed" &&
+      candidate.role.startsWith(`${baseRole}-candidate-`) &&
+      (competition?.candidates.some(
+        (configured) =>
+          candidate.competition?.purpose === "candidate" &&
+          configured.id === candidate.competition.candidateId,
+      ) ??
+        true),
+  );
+}
+
 class SandboxAttemptPreparer {
   constructor(
     private readonly env: AttemptPreparationEnv,
@@ -555,7 +582,7 @@ class SandboxAttemptPreparer {
         ? undefined
         : await this.resolveModelRoute(attempt, taskType, run);
     const artifactRepository = await artifactsNamespace(this.env).ensure(
-      workspaceName(attempt.runId),
+      artifactRepositoryName(attempt),
     );
     // Recovery invalidates every token from an interrupted container before a
     // replacement receives a fresh, short-lived credential.
@@ -782,26 +809,24 @@ class SandboxAttemptPreparer {
       throw new Error("implementation_plan_missing");
     if (attempt.stage === "review" && !implementation)
       throw new Error("review_implementation_missing");
-    // The judge receives every completed candidate's structured result and
-    // commit evidence as untrusted data, alongside the node's resolved inputs.
+    // The judge receives exactly the candidates configured for its own
+    // competition as untrusted data, alongside the node's resolved inputs.
     const judgementCandidates =
       attempt.competition?.purpose === "judge"
-        ? (await this.runs.attemptsForRevision(run.id, run.revision))
-            .filter(
-              (candidate) =>
-                candidate.competition?.purpose === "candidate" &&
-                candidate.state === "completed",
-            )
-            .map((candidate) => ({
-              candidateId:
-                candidate.competition?.purpose === "candidate"
-                  ? candidate.competition.candidateId
-                  : "",
-              result: candidate.result ?? {},
-              model: candidate.routing?.model ?? null,
-              expectedHead: candidate.expectedHead,
-              acceptedHead: candidate.acceptedHead ?? candidate.expectedHead,
-            }))
+        ? judgementCandidateAttempts(
+            await this.runs.attemptsForRevision(run.id, run.revision),
+            attempt,
+            competitionForAttempt(workflowNode, attempt),
+          ).map((candidate) => ({
+            candidateId:
+              candidate.competition?.purpose === "candidate"
+                ? candidate.competition.candidateId
+                : "",
+            result: candidate.result ?? {},
+            model: candidate.routing?.model ?? null,
+            expectedHead: candidate.expectedHead,
+            acceptedHead: candidate.acceptedHead ?? candidate.expectedHead,
+          }))
         : undefined;
     const assignment = {
       ...attempt,

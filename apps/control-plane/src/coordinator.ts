@@ -869,6 +869,7 @@ async function dispatchCompetitionAttempt(
   now: number,
   leaseMilliseconds: number,
   reporter?: AttemptReporter,
+  allowConcurrent = false,
 ): Promise<void> {
   const attemptId = competitionAttemptId(run.id, run.revision, role);
   const claimed = await repository.claimLease(
@@ -893,7 +894,11 @@ async function dispatchCompetitionAttempt(
     )
       return;
     await revisitStarted(repository, reporter, run, attemptId);
-    return;
+    // Competition attempts fan out concurrently: when a sibling attempt
+    // already holds the run lease, dispatch without it. The attempt's own
+    // deadline still bounds inactivity, and the competition-aware expired
+    // attempt query recovers it independently of the run lease.
+    if (!allowConcurrent) return;
   }
   const capabilities = effectiveAttemptCapabilities(node, role).filter(
     (capability) =>
@@ -926,7 +931,8 @@ async function dispatchCompetitionAttempt(
   try {
     await dispatcher.submit(attempt, run);
   } catch (error) {
-    await repository.releaseLease(run.id, run.revision, attempt.id);
+    if (claimed)
+      await repository.releaseLease(run.id, run.revision, attempt.id);
     throw error;
   }
   await repository.markDispatched(attempt.id);
@@ -959,6 +965,69 @@ async function dispatchCompetitionAttempt(
   await reportStarted(reporter, run, attempt);
 }
 
+// Finishes a durably recorded selection: publishes the winner's state (when a
+// promoter is wired) and marks the canonical attempt completed. Running this
+// after the selection attempt exists makes an interrupted promotion resume
+// idempotently on the next wakeup instead of repeating external effects
+// blindly or losing them entirely.
+async function finalizePromotion(
+  repository: RunRepository,
+  promoter: CompetitionPromoter | undefined,
+  run: RunSnapshot,
+  revisionAttempts: readonly Attempt[],
+  baseRole: string,
+  selected: Attempt,
+  startedAt: number,
+): Promise<CompetitionStep> {
+  if (selected.state === "completed")
+    return { kind: "promoted", attempt: selected };
+  const judgement =
+    selected.competition?.purpose === "selected"
+      ? selected.competition.judgement
+      : undefined;
+  const winner = judgement
+    ? revisionAttempts.find(
+        (attempt) =>
+          attempt.role ===
+          competitionCandidateRole(baseRole, judgement.selected),
+      )
+    : undefined;
+  if (promoter && winner && judgement)
+    await promoter.promote(run, winner, judgement);
+  await repository.completeAttempt(
+    selected.id,
+    run.revision,
+    selected.acceptedHead ?? selected.expectedHead,
+    selected.result ?? {},
+  );
+  const completed = (await repository.getAttempt(selected.id)) ?? selected;
+  const payload = {
+    workflowHash: run.workflowHash,
+    nodeId: run.currentNodeId ?? null,
+    role: baseRole,
+    selected: judgement?.selected ?? null,
+    winnerAttemptId: winner?.id ?? null,
+    canonicalAttemptId: selected.id,
+    acceptedHead: completed.acceptedHead ?? null,
+    durationMs: Date.now() - startedAt,
+  };
+  console.log(
+    JSON.stringify({
+      message: "competition_winner_promoted",
+      runId: run.id,
+      revision: run.revision,
+      ...payload,
+    }),
+  );
+  await repository.recordEvent?.(
+    run.id,
+    selected.id,
+    "competition_winner_promoted",
+    payload,
+  );
+  return { kind: "promoted", attempt: completed };
+}
+
 // Drives one competition group (candidates, then judge, then promotion) for
 // an agent node or a single reviewer. Every step is idempotent: a wakeup
 // revisits the group and only advances when the required durable state is
@@ -983,11 +1052,18 @@ async function coordinateCompetition(
   );
   const canonical = revisionAttempts.find(
     (attempt) =>
-      attempt.role === baseRole &&
-      attempt.competition?.purpose === "selected" &&
-      attempt.state === "completed",
+      attempt.role === baseRole && attempt.competition?.purpose === "selected",
   );
-  if (canonical) return { kind: "promoted", attempt: canonical };
+  if (canonical)
+    return finalizePromotion(
+      repository,
+      promoter,
+      run,
+      revisionAttempts,
+      baseRole,
+      canonical,
+      startedAt,
+    );
   console.log(
     JSON.stringify({
       message: "competition_fanout_started",
@@ -1006,6 +1082,15 @@ async function coordinateCompetition(
     }),
   );
   const candidateAttempts = new Map<string, Attempt>();
+  // Dispatch every missing candidate in one pass so the independent
+  // attempts fan out concurrently instead of running one wakeup apart.
+  let inFlight = revisionAttempts.some(
+    (attempt) =>
+      attempt.competition &&
+      ["created", "dispatched", "executed"].includes(attempt.state),
+  );
+  let pending = false;
+  let dispatchedAny = false;
   for (const candidate of competition.candidates) {
     const role = competitionCandidateRole(baseRole, candidate.id);
     const attempt = revisionAttempts.find(
@@ -1028,10 +1113,17 @@ async function coordinateCompetition(
         now,
         leaseMilliseconds,
         reporter,
+        inFlight,
       );
-      return { kind: "dispatched" };
+      inFlight = true;
+      pending = true;
+      dispatchedAny = true;
+      continue;
     }
-    if (attempt.state !== "completed") return { kind: "waiting" };
+    if (attempt.state !== "completed") {
+      pending = true;
+      continue;
+    }
     if (attempt.expectedHead !== run.currentHead)
       return {
         kind: "failed",
@@ -1053,6 +1145,7 @@ async function coordinateCompetition(
       }),
     );
   }
+  if (pending) return { kind: dispatchedAny ? "dispatched" : "waiting" };
   const judgeRole = competitionJudgeRole(baseRole);
   const judge = revisionAttempts.find((attempt) => attempt.role === judgeRole);
   if (judge?.state === "failed")
@@ -1122,7 +1215,8 @@ async function coordinateCompetition(
       durationMs: Date.now() - startedAt,
     }),
   );
-  if (promoter) await promoter.promote(run, winner, judgement);
+  // Persist the selection before any external publication so a failure
+  // between the two is recovered from durable state rather than repeated.
   const promoted: Attempt = {
     id: canonicalAttemptId,
     runId: run.id,
@@ -1135,7 +1229,7 @@ async function coordinateCompetition(
     stage: run.stage,
     role: baseRole,
     capabilities: winner.capabilities,
-    state: "completed",
+    state: "dispatched",
     deadlineAt: now,
     baseCommit: winner.baseCommit,
     expectedHead: winner.expectedHead,
@@ -1149,31 +1243,15 @@ async function coordinateCompetition(
     },
   };
   await repository.createAttempt(promoted);
-  const payload = {
-    workflowHash: run.workflowHash,
-    nodeId: run.currentNodeId ?? null,
-    role: baseRole,
-    selected: judgement.selected,
-    winnerAttemptId: winner.id,
-    canonicalAttemptId,
-    acceptedHead: promoted.acceptedHead ?? null,
-    durationMs: Date.now() - startedAt,
-  };
-  console.log(
-    JSON.stringify({
-      message: "competition_winner_promoted",
-      runId: run.id,
-      revision: run.revision,
-      ...payload,
-    }),
+  return finalizePromotion(
+    repository,
+    promoter,
+    run,
+    [...revisionAttempts, promoted],
+    baseRole,
+    promoted,
+    startedAt,
   );
-  await repository.recordEvent?.(
-    run.id,
-    promoted.id,
-    "competition_winner_promoted",
-    payload,
-  );
-  return { kind: "promoted", attempt: promoted };
 }
 
 export async function coordinate(

@@ -1966,9 +1966,8 @@ nodes:
       );
 
     await expect(step(100)).resolves.toBe("dispatched");
-    // While a candidate is running, revisits wait without redispatching.
-    await expect(step(101)).resolves.toBe("duplicate");
-    expect(submitted).toHaveLength(1);
+    // All candidates fan out concurrently in one coordination pass.
+    expect(submitted).toHaveLength(2);
     const alpha = submitted[0]!;
     expect(alpha.role).toBe("qualify-candidate-alpha");
     expect(alpha.competition).toEqual({
@@ -1977,6 +1976,12 @@ nodes:
     });
     expect(alpha.expectedHead).toBe(competition.baseCommit);
     expect(alpha.nodeId).toBe("qualify");
+    const beta = submitted[1]!;
+    expect(beta.role).toBe("qualify-candidate-beta");
+    expect(beta.expectedHead).toBe(alpha.expectedHead);
+    // While candidates are running, revisits wait without redispatching.
+    await expect(step(101)).resolves.toBe("duplicate");
+    expect(submitted).toHaveLength(2);
 
     // The judge is never dispatched while any candidate is incomplete.
     await store.completeAttempt(
@@ -1985,12 +1990,8 @@ nodes:
       alpha.expectedHead,
       qualificationResult("alpha"),
     );
-    await expect(step(102)).resolves.toBe("dispatched");
+    await expect(step(102)).resolves.toBe("duplicate");
     expect(submitted).toHaveLength(2);
-    const beta = submitted[1]!;
-    expect(beta.role).toBe("qualify-candidate-beta");
-    expect(beta.expectedHead).toBe(alpha.expectedHead);
-    await expect(step(103)).resolves.toBe("duplicate");
 
     await store.completeAttempt(
       beta.id,
@@ -2097,6 +2098,66 @@ nodes:
     await expect(store.get(competition.id)).resolves.toMatchObject({
       status: "failed",
     });
-    expect(submitted).toHaveLength(1);
+    expect(submitted).toHaveLength(2);
+  });
+
+  it("records the selection durably before publication and resumes an interrupted promotion", async () => {
+    const competition = await competitionInput();
+    const store = new MemoryRunRepository();
+    await store.create(createRun(competition));
+    const submitted: Attempt[] = [];
+    const dispatcher = {
+      submit: async (attempt: Attempt) => {
+        submitted.push(attempt);
+      },
+    };
+    const promoted: string[] = [];
+    let failPromotion = true;
+    const promoter = {
+      promote: async (_run: RunSnapshot, winner: Attempt) => {
+        if (failPromotion) throw new Error("publication_interrupted");
+        promoted.push(winner.id);
+      },
+    };
+    const wakeup = { runId: competition.id, expectedRevision: 1 };
+    const step = (now: number) =>
+      coordinate(
+        store,
+        dispatcher,
+        wakeup,
+        now,
+        undefined,
+        undefined,
+        promoter,
+      );
+    await step(100);
+    for (const candidate of [...submitted])
+      await store.completeAttempt(
+        candidate.id,
+        1,
+        candidate.expectedHead,
+        qualificationResult(candidate.role),
+      );
+    await step(101);
+    const judge = submitted.find(
+      (attempt) => attempt.role === "qualify-judge",
+    )!;
+    await store.completeAttempt(judge.id, 1, judge.expectedHead, judgement());
+    // The promoter fails after the selection is durably recorded.
+    await expect(step(102)).rejects.toThrow("publication_interrupted");
+    const recorded = await store.getAttempt("run_competition_rev_1");
+    expect(recorded?.competition?.purpose).toBe("selected");
+    expect(recorded?.state).toBe("dispatched");
+    // The next wakeup resumes the recorded selection instead of restarting
+    // the competition, and completes the promotion exactly once.
+    failPromotion = false;
+    await expect(step(103)).resolves.toBe("dispatched");
+    expect(promoted).toHaveLength(1);
+    expect(promoted[0]).toBe(submitted[0]!.id);
+    const canonical = await store.getAttempt("run_competition_rev_1");
+    expect(canonical?.state).toBe("completed");
+    await expect(store.get(competition.id)).resolves.toMatchObject({
+      status: "succeeded",
+    });
   });
 });

@@ -207,6 +207,18 @@ export function attemptWorkspaceRef(
 
 // Candidate workspace backups are keyed by attempt so they never overwrite
 // the run's canonical workspace backup before judgement.
+// Each write candidate receives its own artifact repository so the
+// repository-wide write credential one candidate holds can never enumerate,
+// fetch, or modify a competitor's state. Token revocation is likewise scoped
+// to the issuing attempt's repository.
+export function artifactRepositoryName(
+  attempt: Pick<Attempt, "runId" | "competition">,
+): string {
+  return attempt.competition?.purpose === "candidate"
+    ? `${workspaceName(attempt.runId)}-candidate-${attempt.competition.candidateId}`
+    : workspaceName(attempt.runId);
+}
+
 export function attemptWorkspaceBackupKey(
   attempt: Pick<Attempt, "id" | "runId" | "competition">,
 ): string {
@@ -330,7 +342,7 @@ export class SandboxCheckpointValidator implements CheckpointValidator {
     );
     validateCheckpointIdentity(input.checkpoint, {
       repositoryId: artifact.id,
-      repository: workspaceName(run.id),
+      repository: artifactRepositoryName(attempt),
       baseCommit: run.baseCommit,
       inputHead: attempt.expectedHead,
       ref: attemptWorkspaceRef(attempt),
