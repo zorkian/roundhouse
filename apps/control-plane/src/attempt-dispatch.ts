@@ -379,16 +379,17 @@ export async function resolveWorkflowAgentInputs(
 
 // Finds the competition definition governing a candidate or judge attempt,
 // whether it is configured on an agent node or on an individual reviewer.
-function competitionForAttempt(
+export function competitionForAttempt(
   node: WorkflowNode | undefined,
   attempt: Attempt,
 ): WorkflowCompetition | undefined {
   if (node?.agent?.competition) return node.agent.competition;
-  return node?.review?.reviewers.find(
-    (reviewer) =>
-      attempt.role === reviewer.id ||
-      attempt.role.startsWith(`${reviewer.id}-`),
-  )?.competition;
+  // Resolve the base reviewer role from the attempt's competition metadata
+  // and look it up exactly; prefix matching would confuse reviewer IDs that
+  // share a prefix (for example `review` and `review-api`).
+  const baseRole = competitionAttemptBaseRole(attempt);
+  return node?.review?.reviewers.find((reviewer) => reviewer.id === baseRole)
+    ?.competition;
 }
 
 function requestedModelForAttempt(

@@ -4,6 +4,7 @@
 import type { Attempt, RunSnapshot, WorkflowNode } from "@roundhouse/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  competitionForAttempt,
   DurableAttemptDispatcher,
   judgementCandidateAttempts,
   reviewerForAttempt,
@@ -176,6 +177,68 @@ describe("durable attempt dispatch", () => {
     expect(reviewerForAttempt(node, plain).reviewer).toMatchObject({
       role: "review-security",
     });
+  });
+
+  it("resolves the exact reviewer for prefix-sharing reviewer IDs", () => {
+    const competition = (suffix: string) => ({
+      candidates: [
+        {
+          id: "alpha",
+          model: { id: `openai/gpt-${suffix}-alpha`, reasoning: "low" },
+        },
+      ],
+      judge: { model: { id: `openai/gpt-${suffix}-judge`, reasoning: "high" } },
+    });
+    const node = {
+      executor: "review",
+      role: "review",
+      capabilities: ["repository.read", "context.read"],
+      review: {
+        reviewers: [
+          {
+            id: "review",
+            model: { id: "openai/gpt-review", reasoning: "low" },
+            competition: competition("review"),
+          },
+          {
+            id: "review-api",
+            model: { id: "openai/gpt-review-api", reasoning: "low" },
+            competition: competition("review-api"),
+          },
+        ],
+      },
+    } as unknown as WorkflowNode;
+    // A candidate or judge derived from `review-api` must resolve the
+    // `review-api` competition even though its role also starts with
+    // `review-`.
+    const candidate: Attempt = {
+      ...attempt,
+      id: "run_1_rev_2_review-api-candidate-alpha",
+      stage: "review",
+      role: "review-api-candidate-alpha",
+      competition: { purpose: "candidate", candidateId: "alpha" },
+    };
+    expect(
+      competitionForAttempt(node, candidate)?.candidates[0]?.model.id,
+    ).toBe("openai/gpt-review-api-alpha");
+    const judge: Attempt = {
+      ...candidate,
+      id: "run_1_rev_2_review-api-judge",
+      role: "review-api-judge",
+      competition: { purpose: "judge" },
+    };
+    expect(competitionForAttempt(node, judge)?.judge.model.id).toBe(
+      "openai/gpt-review-api-judge",
+    );
+    // The base reviewer itself is unaffected.
+    const base: Attempt = {
+      ...attempt,
+      stage: "review",
+      role: "review-api",
+    };
+    expect(competitionForAttempt(node, base)?.candidates[0]?.model.id).toBe(
+      "openai/gpt-review-api-alpha",
+    );
   });
 
   it("resumes when that Workflow instance already exists", async () => {
