@@ -8,6 +8,7 @@ import {
   handleGitHubCallback,
   signOut,
   uiSessionCookie,
+  uiSessionLifetimeMs,
   uiStateCookie,
   validateUiSession,
 } from "./ui-auth.js";
@@ -91,6 +92,10 @@ function authDb(options?: {
             });
           if (sql.includes("DELETE FROM ui_sessions WHERE session_hash"))
             sessions.delete(String(values[0]));
+          if (sql.includes("UPDATE ui_sessions SET expires_at")) {
+            const session = sessions.get(String(values[1]));
+            if (session) session.expires_at = Number(values[0]);
+          }
           if (sql.includes("DELETE FROM ui_sessions WHERE expires_at"))
             for (const [hash, session] of sessions)
               if (session.expires_at <= Number(values[0]))
@@ -204,7 +209,14 @@ describe("GitHub UI sign-in", () => {
     const session = [...sessions.values()][0]!;
     expect(session.github_login).toBe("octocat");
     expect(JSON.parse(session.repository_ids_json)).toEqual(["1297678423"]);
-    expect(session.expires_at).toBeGreaterThan(Date.now());
+    // The session and its cookie share a lifetime of at least 30 days.
+    expect(session.expires_at - Date.now()).toBeGreaterThanOrEqual(
+      30 * 24 * 60 * 60 * 1000 - 60_000,
+    );
+    const maxAge = Number(cookie.match(/Max-Age=(\d+)/)![1]);
+    expect(maxAge).toBe(Math.floor(uiSessionLifetimeMs / 1000));
+    expect(maxAge).toBeGreaterThanOrEqual(30 * 24 * 60 * 60);
+    expect(session.expires_at).toBeLessThanOrEqual(Date.now() + maxAge * 1000);
     expect(JSON.stringify([...sessions.values()])).not.toContain("user-token");
     // The access token never appears in the redirect target.
     expect(response.headers.get("location")).not.toContain("token");
@@ -339,7 +351,7 @@ describe("GitHub UI sign-in", () => {
         env(db),
       ),
     ).resolves.toBeUndefined();
-    // Expired sessions are removed on validation.
+    // Expired sessions are removed on validation without renewal.
     expect(sessions.has(await sha256Hex(expiredToken))).toBe(false);
 
     const out = await signOut(
@@ -359,6 +371,54 @@ describe("GitHub UI sign-in", () => {
         env(db),
       ),
     ).resolves.toBeUndefined();
+  });
+
+  it("renews a valid session's stored and cookie expiration on validation", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      const token = "renewable-session";
+      const hash = await sha256Hex(token);
+      const initialExpiresAt = Date.now() + 60_000;
+      const { db, sessions } = authDb({
+        sessions: [{ hash, expiresAt: initialExpiresAt }],
+      });
+      const logs: Record<string, unknown>[] = [];
+      const logSpy = vi
+        .spyOn(console, "log")
+        .mockImplementation((line: unknown) => {
+          logs.push(JSON.parse(String(line)) as Record<string, unknown>);
+        });
+      const session = await validateUiSession(
+        new Request("https://v2.invalid/", {
+          headers: { cookie: `${uiSessionCookie}=${token}` },
+        }),
+        env(db),
+      );
+      expect(session).toBeDefined();
+      const expectedExpiresAt = Date.now() + uiSessionLifetimeMs;
+      expect(session?.expiresAt).toBe(expectedExpiresAt);
+      expect(sessions.get(hash)?.expires_at).toBe(expectedExpiresAt);
+      expect(session?.sessionCookie).toContain(`${uiSessionCookie}=${token}`);
+      expect(session?.sessionCookie).toContain("HttpOnly");
+      expect(session?.sessionCookie).toContain("Secure");
+      expect(session?.sessionCookie).toContain(
+        `Max-Age=${Math.floor(uiSessionLifetimeMs / 1000)}`,
+      );
+      const renewed = logs.find(
+        (entry) => entry.message === "ui_session_renewed",
+      );
+      expect(renewed).toMatchObject({
+        outcome: "renewed",
+        githubUserId: 7,
+        previousExpiresAt: initialExpiresAt,
+        expiresAt: expectedExpiresAt,
+      });
+      expect(typeof renewed?.durationMs).toBe("number");
+      logSpy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

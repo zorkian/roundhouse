@@ -18,9 +18,13 @@ export interface UiSession {
   readonly expiresAt: number;
 }
 
+export interface ValidatedUiSession extends UiSession {
+  readonly sessionCookie: string;
+}
+
 export const uiSessionCookie = "roundhouse_ui_session";
 export const uiStateCookie = "roundhouse_ui_state";
-export const uiSessionLifetimeMs = 8 * 60 * 60 * 1000;
+export const uiSessionLifetimeMs = 30 * 24 * 60 * 60 * 1000;
 const uiStateLifetimeMs = 10 * 60 * 1000;
 
 const escapeHtml = (value: unknown) =>
@@ -88,6 +92,10 @@ function readCookie(request: Request, name: string): string | undefined {
 
 function stateCookieHeader(token: string, maxAgeSeconds: number): string {
   return `${uiStateCookie}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/auth/github/callback; Max-Age=${maxAgeSeconds}`;
+}
+
+function sessionCookieHeader(token: string, maxAgeSeconds: number): string {
+  return `${uiSessionCookie}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAgeSeconds}`;
 }
 
 // The state cookie binds the OAuth state to the browser that began sign-in,
@@ -327,7 +335,10 @@ export async function handleGitHubCallback(
       durationMs: Date.now() - startedAt,
     });
     const success = redirect("/", {
-      "set-cookie": `${uiSessionCookie}=${sessionToken}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${Math.floor(uiSessionLifetimeMs / 1000)}`,
+      "set-cookie": sessionCookieHeader(
+        sessionToken,
+        Math.floor(uiSessionLifetimeMs / 1000),
+      ),
     });
     return clearStateCookie(success);
   } catch (error) {
@@ -347,7 +358,7 @@ export async function handleGitHubCallback(
 export async function validateUiSession(
   request: Request,
   env: UiAuthEnv,
-): Promise<UiSession | undefined> {
+): Promise<ValidatedUiSession | undefined> {
   const startedAt = Date.now();
   const cookie = request.headers.get("cookie") ?? "";
   const token = cookie
@@ -379,9 +390,9 @@ export async function validateUiSession(
     });
     return undefined;
   }
-  if (row.expires_at <= Date.now()) {
+  if (row.expires_at <= startedAt) {
     await env.DB.prepare("DELETE FROM ui_sessions WHERE expires_at <= ?1")
-      .bind(Date.now())
+      .bind(startedAt)
       .run();
     log("ui_session_validated", {
       outcome: "expired",
@@ -395,11 +406,33 @@ export async function validateUiSession(
     githubUserId: row.github_user_id,
     durationMs: Date.now() - startedAt,
   });
+  // Sliding expiration: every validated visit extends the server-side session
+  // and returns a matching renewed browser cookie, so active users stay
+  // signed in. The session token itself is unchanged.
+  const renewalStartedAt = Date.now();
+  const previousExpiresAt = row.expires_at;
+  const renewedExpiresAt = startedAt + uiSessionLifetimeMs;
+  await env.DB.prepare(
+    "UPDATE ui_sessions SET expires_at = ?1 WHERE session_hash = ?2",
+  )
+    .bind(renewedExpiresAt, await sha256Hex(token))
+    .run();
+  log("ui_session_renewed", {
+    outcome: "renewed",
+    githubUserId: row.github_user_id,
+    previousExpiresAt,
+    expiresAt: renewedExpiresAt,
+    durationMs: Date.now() - renewalStartedAt,
+  });
   return {
     githubUserId: row.github_user_id,
     githubLogin: row.github_login,
     repositoryIds: JSON.parse(row.repository_ids_json) as string[],
-    expiresAt: row.expires_at,
+    expiresAt: renewedExpiresAt,
+    sessionCookie: sessionCookieHeader(
+      token,
+      Math.floor(uiSessionLifetimeMs / 1000),
+    ),
   };
 }
 
@@ -423,6 +456,6 @@ export async function signOut(
     durationMs: Date.now() - startedAt,
   });
   return redirect("/", {
-    "set-cookie": `${uiSessionCookie}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`,
+    "set-cookie": sessionCookieHeader("", 0),
   });
 }

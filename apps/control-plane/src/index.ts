@@ -29,7 +29,7 @@ import {
   renderSignInPage,
   signOut,
   validateUiSession,
-  type UiSession,
+  type ValidatedUiSession,
 } from "./ui-auth.js";
 import {
   acceptGitHubCheckSuite,
@@ -480,7 +480,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       /^\/repositories\/[^/]+\/[^/]+\/(workflow|issues\/\d+)$/.test(
         url.pathname,
       );
-    let uiSession: UiSession | undefined;
+    let uiSession: ValidatedUiSession | undefined;
     if (isUiRoute && isPublicUiRequest()) {
       const boundaryStartedAt = Date.now();
       uiSession = await validateUiSession(request, env);
@@ -505,6 +505,24 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
         }),
       );
     }
+    // Successful UI authorization renews the session; attach the renewed
+    // cookie to every response produced for that authorized request.
+    const withUiSession = (response: Response): Response => {
+      if (!uiSession) return response;
+      const headers = new Headers(response.headers);
+      headers.append("set-cookie", uiSession.sessionCookie);
+      return new Response(response.body, {
+        status: response.status,
+        headers,
+      });
+    };
+    const uiHtml = (value: string, status = 200): Response =>
+      withUiSession(html(value, status));
+    const uiJson = (
+      value: unknown,
+      status = 200,
+      headers?: HeadersInit,
+    ): Response => withUiSession(json(value, status, headers));
     if (
       (url.pathname === "/" || url.pathname === "/runs") &&
       isPublicUiRequest()
@@ -524,7 +542,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
           durationMs: Date.now() - queryStartedAt,
         }),
       );
-      return html(
+      return uiHtml(
         renderDashboard(runs, { githubLogin: uiSession!.githubLogin }),
       );
     }
@@ -552,7 +570,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
           durationMs: Date.now() - queryStartedAt,
         }),
       );
-      return html(
+      return uiHtml(
         renderModelUsage(summary, { githubLogin: uiSession!.githubLogin }),
       );
     }
@@ -571,7 +589,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
         repositoryName,
         uiSession!.repositoryIds,
       );
-      if (!run?.profile?.workflow) return html(renderNotFoundPage(), 404);
+      if (!run?.profile?.workflow) return uiHtml(renderNotFoundPage(), 404);
       if (request.method === "GET") {
         console.log(
           JSON.stringify({
@@ -584,23 +602,23 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
             nodes: Object.keys(run.profile.workflow.nodes).length,
           }),
         );
-        return html(renderWorkflowView(run));
+        return uiHtml(renderWorkflowView(run));
       }
       if (request.method !== "POST")
-        return json({ error: "method_not_allowed" }, 405, {
+        return uiJson({ error: "method_not_allowed" }, 405, {
           allow: "GET, POST",
         });
       let input: { source?: unknown; sourceCommit?: unknown };
       try {
         input = (await request.json()) as typeof input;
       } catch {
-        return json({ error: "invalid_request" }, 400);
+        return uiJson({ error: "invalid_request" }, 400);
       }
       if (
         typeof input.source !== "string" ||
         input.sourceCommit !== run.profile.workflow.sourceCommit
       )
-        return json({ error: "invalid_request" }, 400);
+        return uiJson({ error: "invalid_request" }, 400);
       const promptContents = new Map<string, string>();
       for (const node of Object.values(run.profile.workflow.nodes)) {
         for (const prompt of [
@@ -630,7 +648,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
             nodes: Object.keys(compiled.nodes).length,
           }),
         );
-        return json({
+        return uiJson({
           valid: true,
           hash: compiled.hash,
           nodes: Object.keys(compiled.nodes).length,
@@ -646,7 +664,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
             error: message,
           }),
         );
-        return json({ error: message }, 400);
+        return uiJson({ error: message }, 400);
       }
     }
     const detailsMatch = url.pathname.match(
@@ -671,8 +689,8 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
         Number(issueNumber),
         uiSession!.repositoryIds,
       );
-      if (!details) return html(renderNotFoundPage(), 404);
-      return html(renderRunDetails(details));
+      if (!details) return uiHtml(renderNotFoundPage(), 404);
+      return uiHtml(renderRunDetails(details));
     }
     if (url.pathname === "/attempts/completion") {
       const startedAt = Date.now();
