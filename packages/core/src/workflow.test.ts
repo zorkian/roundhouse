@@ -196,43 +196,31 @@ nodes:
     ).toMatchObject({ status: "active", currentNodeId: "implement" });
   });
 
-  it("routes only changed screenshot candidates through operator visual feedback", async () => {
+  it("routes visual approval from the current implementation assessment", async () => {
     const workflow = await compileWorkflow(defaultIssueWorkflowSource, commit);
     expect(workflow.nodes.approval?.human).toMatchObject({
       reason: "visual_feedback",
       audience: "operator",
     });
+    for (const visualImpact of ["yes", "uncertain", "missing"] as const)
+      expect(
+        advanceWorkflow(workflow, "implement", {
+          attempt: {
+            visualImpact,
+            // Historical screenshots do not affect this route.
+            hasScreenshots: true,
+            acceptedHead: "b".repeat(40),
+          },
+        }),
+      ).toMatchObject({ status: "active", currentNodeId: "approval" });
     expect(
       advanceWorkflow(workflow, "implement", {
         attempt: {
-          changed: true,
+          visualImpact: "no",
+          // A nonvisual later pass still skips approval even with screenshots.
           hasScreenshots: true,
           acceptedHead: "b".repeat(40),
         },
-        run: { hasCandidate: false },
-      }),
-    ).toMatchObject({
-      status: "active",
-      currentNodeId: "approval",
-    });
-    expect(
-      advanceWorkflow(workflow, "implement", {
-        attempt: {
-          changed: true,
-          hasScreenshots: false,
-          acceptedHead: "b".repeat(40),
-        },
-        run: { hasCandidate: false },
-      }),
-    ).toMatchObject({ status: "active", currentNodeId: "review" });
-    expect(
-      advanceWorkflow(workflow, "implement", {
-        attempt: {
-          changed: false,
-          hasScreenshots: true,
-          acceptedHead: "b".repeat(40),
-        },
-        run: { hasCandidate: true },
       }),
     ).toMatchObject({ status: "active", currentNodeId: "review" });
   });

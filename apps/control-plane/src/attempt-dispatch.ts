@@ -234,37 +234,6 @@ function canonicalAttempts(attempts: readonly Attempt[]): Attempt[] {
   );
 }
 
-function aggregateImplementationAttempts(
-  attempts: readonly Attempt[],
-): Attempt | undefined {
-  const latest = attempts.at(-1);
-  if (!latest) return undefined;
-  const screenshots = new Map<string, unknown>();
-  for (const attempt of attempts) {
-    const implementation = attempt.result?.implementation as
-      Record<string, unknown> | undefined;
-    if (!Array.isArray(implementation?.screenshots)) continue;
-    for (const screenshot of implementation.screenshots) {
-      if (!screenshot || typeof screenshot !== "object") continue;
-      const url = (screenshot as Record<string, unknown>).url;
-      if (typeof url === "string" && url) screenshots.set(url, screenshot);
-    }
-  }
-  if (!screenshots.size) return latest;
-  const latestImplementation = latest.result?.implementation as
-    Record<string, unknown> | undefined;
-  return {
-    ...latest,
-    result: {
-      ...latest.result,
-      implementation: {
-        ...latestImplementation,
-        screenshots: [...screenshots.values()],
-      },
-    },
-  };
-}
-
 export async function resolveWorkflowAgentInputs(
   repository: Pick<
     RunRepository,
@@ -308,12 +277,7 @@ export async function resolveWorkflowAgentInputs(
         (reviewer) => reviewer.competition !== undefined,
       ) === true;
     let sourceAttempts: readonly Attempt[] = source ? [source] : [];
-    if (
-      source &&
-      competitionNode &&
-      sourceNode?.executor !== "review" &&
-      sourceNode?.agent?.task !== "implementation"
-    ) {
+    if (source && competitionNode && sourceNode?.executor !== "review") {
       // `latestCompletedNodeAttempt` ties on revision, so for a competition
       // node resolve explicitly to the promoted canonical attempt.
       const canonical = canonicalAttempts(
@@ -332,10 +296,10 @@ export async function resolveWorkflowAgentInputs(
         ),
       );
     else if (source && sourceNode?.agent?.task === "implementation") {
-      const aggregationStartedAt = Date.now();
+      const startedAt = Date.now();
       console.log(
         JSON.stringify({
-          message: "workflow_implementation_evidence_load_started",
+          message: "workflow_implementation_context_load_started",
           runId: run.id,
           revision: run.revision,
           attemptId: attempt.id,
@@ -348,17 +312,16 @@ export async function resolveWorkflowAgentInputs(
         run.revision,
       );
       sourceAttempts = canonicalAttempts(loadedAttempts);
-      if (sourceAttempts.length !== loadedAttempts.length)
-        source = sourceAttempts.at(-1) ?? source;
+      source = sourceAttempts.at(-1) ?? source;
       console.log(
         JSON.stringify({
-          message: "workflow_implementation_evidence_load_completed",
+          message: "workflow_implementation_context_load_completed",
           runId: run.id,
           revision: run.revision,
           attemptId: attempt.id,
           sourceNodeId: match[1],
-          sourceAttemptIds: sourceAttempts.map(({ id }) => id),
-          durationMs: Date.now() - aggregationStartedAt,
+          sourceAttemptId: source?.id ?? null,
+          durationMs: Date.now() - startedAt,
         }),
       );
     }
@@ -369,9 +332,7 @@ export async function resolveWorkflowAgentInputs(
             run.profile,
             sourceNode.review,
           )
-        : sourceNode?.agent?.task === "implementation"
-          ? aggregateImplementationAttempts(sourceAttempts)
-          : source;
+        : source;
     const resolved = resolvedSource
       ? nestedValue(resolvedSource.result, match[2]!.split("."))
       : undefined;

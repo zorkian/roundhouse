@@ -180,6 +180,9 @@ async function callbackFor(
                 checkpoint: head,
                 implementation: {
                   summary: "Implemented the change",
+                  visualImpact: "no",
+                  visualImpactRationale:
+                    "This pass changes only backend behavior.",
                   pullRequestTitle: "Fix the behavior",
                   pullRequestBody: "Implements the requested behavior.",
                   validation: [],
@@ -1329,7 +1332,13 @@ describe("single coordinator", () => {
       stage: "implement",
       role: "implement",
       acceptedHead: head,
-      result: { implementation: { summary: "Done" } },
+      result: {
+        implementation: {
+          summary: "Done",
+          visualImpact: "no",
+          visualImpactRationale: "No rendered behavior changed.",
+        },
+      },
     });
     expect(implementationTransition(attempt)).toEqual({
       status: "active",
@@ -1351,14 +1360,18 @@ describe("single coordinator", () => {
       result: {
         implementation: {
           summary: "Visual verification complete",
+          visualImpact: "yes",
+          visualImpactRationale: "This pass updates the rendered view.",
           screenshots: [{ url: "https://example.test/screenshot" }],
         },
       },
     });
     expect(implementationTransition(attempt)).toEqual({
-      status: "succeeded",
+      status: "waiting",
       stage: "implement",
+      waitingReason: "visual_feedback",
       acceptedHead: head,
+      heads: { candidateHead: head },
     });
   });
 
@@ -1382,6 +1395,8 @@ describe("single coordinator", () => {
       result: {
         implementation: {
           summary: "Adjusted the mobile layout",
+          visualImpact: "yes",
+          visualImpactRationale: "The mobile layout changed.",
           screenshots: [
             { url: "https://example.test/before", description: "Before" },
             { url: "https://example.test/after", description: "After" },
@@ -1418,6 +1433,8 @@ describe("single coordinator", () => {
       result: {
         implementation: {
           summary: "Added the requested visual evidence",
+          visualImpact: "no",
+          visualImpactRationale: "This pass adds no visual changes.",
           screenshots: [{ url: "https://example.test/screenshot" }],
         },
       },
@@ -1428,6 +1445,7 @@ describe("single coordinator", () => {
       stage: "review",
       currentNodeId: "review",
       acceptedHead: head,
+      heads: { candidateHead: head },
     });
   });
 

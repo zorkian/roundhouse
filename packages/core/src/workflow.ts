@@ -115,31 +115,19 @@ nodes:
       model: { id: openai/gpt-5.6-terra, reasoning: max }
     capabilities:
       [repository.read, artifact.write, commands.execute, environment.project, network.project, preview.capture]
-    outputs: [implementation.screenshots]
+    outputs: [implementation.screenshots, implementation.visualImpact]
     transitions:
       - when:
-          all:
-            - path: attempt.changed
-              equals: false
-            - path: attempt.hasScreenshots
-              equals: true
-            - path: run.hasCandidate
-              equals: false
-        terminal: succeeded
-      - when:
-          all:
-            - path: attempt.changed
-              equals: false
-            - path: run.hasCandidate
-              equals: true
+          path: attempt.visualImpact
+          equals: no
         to: review
       - when:
-          path: attempt.hasScreenshots
-          equals: true
+          path: attempt.visualImpact
+          in: [yes, uncertain]
         to: approval
       - when:
           exists: attempt.acceptedHead
-        to: review
+        to: approval
       - terminal: failed
 
   approval:

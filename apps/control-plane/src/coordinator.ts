@@ -355,20 +355,39 @@ export function planTransition(attempt: Attempt) {
   return { status: "failed", stage: "plan" } as const;
 }
 
+export type ImplementationVisualImpact = "yes" | "no" | "uncertain" | "missing";
+
+export function implementationVisualImpact(
+  attempt: Attempt,
+): ImplementationVisualImpact {
+  const visualImpact = (
+    attempt.result?.implementation as Record<string, unknown> | undefined
+  )?.visualImpact;
+  return visualImpact === "yes" ||
+    visualImpact === "no" ||
+    visualImpact === "uncertain"
+    ? visualImpact
+    : "missing";
+}
+
+function implementationVisualImpactRationale(attempt: Attempt): string | null {
+  const rationale = (
+    attempt.result?.implementation as Record<string, unknown> | undefined
+  )?.visualImpactRationale;
+  return typeof rationale === "string" ? rationale : null;
+}
+
 export function implementationTransition(attempt: Attempt) {
   const outcome = attempt.result?.implementation;
   if (!outcome || typeof outcome !== "object" || !attempt.acceptedHead)
     return { status: "failed", stage: "implement" } as const;
-  const screenshots = (outcome as Record<string, unknown>).screenshots;
-  if (
-    attempt.acceptedHead === attempt.expectedHead &&
-    Array.isArray(screenshots) &&
-    screenshots.length > 0
-  )
+  if (implementationVisualImpact(attempt) !== "no")
     return {
-      status: "succeeded",
+      status: "waiting",
       stage: "implement",
+      waitingReason: "visual_feedback",
       acceptedHead: attempt.acceptedHead,
+      heads: { candidateHead: attempt.acceptedHead },
     } as const;
   return {
     status: "active",
@@ -636,9 +655,7 @@ function workflowAdvanceForAttempt(run: RunSnapshot, attempt: Attempt) {
       changed:
         Boolean(attempt.acceptedHead) &&
         attempt.acceptedHead !== attempt.expectedHead,
-      hasScreenshots:
-        Array.isArray(implementation?.screenshots) &&
-        implementation.screenshots.length > 0,
+      visualImpact: implementationVisualImpact(attempt),
     },
     run: {
       revision: run.revision,
@@ -666,11 +683,33 @@ export function graphCompletedTransition(run: RunSnapshot, attempt: Attempt) {
       workflowHash: workflow.hash,
       fromNodeId: nodeId,
       toNodeId: advance.currentNodeId,
+      selectedRoute: advance.currentNodeId,
       status: advance.status,
       waitingReason: advance.waitingReason ?? null,
       condition: advance.selected.when ?? null,
       executor: node.executor,
       hadCandidate: Boolean(run.candidateHead),
+      visualImpact:
+        node.agent?.task === "implementation"
+          ? implementationVisualImpact(attempt)
+          : null,
+      visualImpactRationale:
+        node.agent?.task === "implementation"
+          ? implementationVisualImpactRationale(attempt)
+          : null,
+      screenshotCount:
+        node.agent?.task === "implementation" &&
+        Array.isArray(
+          (
+            attempt.result?.implementation as
+              Record<string, unknown> | undefined
+          )?.screenshots,
+        )
+          ? (
+              (attempt.result?.implementation as Record<string, unknown>)
+                .screenshots as unknown[]
+            ).length
+          : null,
     }),
   );
   return {
@@ -697,6 +736,7 @@ async function recordWorkflowTransition(
     workflowHash: workflow.hash,
     fromNodeId: nodeId,
     toNodeId: advance.currentNodeId,
+    selectedRoute: advance.currentNodeId,
     executor: node.executor,
     capabilities: node.capabilities,
     condition: advance.selected.when ?? null,
@@ -705,6 +745,25 @@ async function recordWorkflowTransition(
     inputHead: attempt.expectedHead,
     outputHead: attempt.acceptedHead ?? attempt.expectedHead,
     hadCandidate: Boolean(run.candidateHead),
+    visualImpact:
+      node.agent?.task === "implementation"
+        ? implementationVisualImpact(attempt)
+        : null,
+    visualImpactRationale:
+      node.agent?.task === "implementation"
+        ? implementationVisualImpactRationale(attempt)
+        : null,
+    screenshotCount:
+      node.agent?.task === "implementation" &&
+      Array.isArray(
+        (attempt.result?.implementation as Record<string, unknown> | undefined)
+          ?.screenshots,
+      )
+        ? (
+            (attempt.result?.implementation as Record<string, unknown>)
+              .screenshots as unknown[]
+          ).length
+        : null,
     runRevision: next.revision,
   });
 }

@@ -42,7 +42,6 @@ import {
   repositoryChangedPaths,
   runnerResponse,
   sourceSnapshot,
-  visualEvidenceRequested,
   validateCheckpoint,
   validModelRoute,
 } from "./runner.mjs";
@@ -553,6 +552,8 @@ describe("V2 agent runner", () => {
       "pullRequestTitle",
       "pullRequestBody",
       "validation",
+      "visualImpact",
+      "visualImpactRationale",
       "screenshots",
     ]);
     expect(implementationSchema.properties.validation).not.toHaveProperty(
@@ -574,7 +575,7 @@ describe("V2 agent runner", () => {
       },
     });
     expect(prompt).toContain("install repository-declared dependencies");
-    expect(prompt).toContain("server bound to 0.0.0.0");
+    expect(prompt).toContain("fresh matching before-and-after screenshots");
     expect(prompt).toContain('"conclusion":"failure"');
   });
 
@@ -617,30 +618,22 @@ describe("V2 agent runner", () => {
     expect(prompt).toContain('"run":["pnpm","test"]');
   });
 
-  it("requires requested screenshot evidence before implementation can submit", () => {
-    const assignment = {
-      issue: {
-        title: "Allow a blank heading",
-        body: "",
-        clarifications: [
-          {
-            body: "Please start the application and capture a screenshot on an iPhone viewport.",
-          },
-        ],
-      },
-    };
-    expect(visualEvidenceRequested(assignment)).toBe(true);
-    expect(
-      implementationResultSchema(assignment).properties.screenshots,
-    ).toMatchObject({ minItems: 1 });
-    expect(implementationPrompt(assignment)).toContain(
-      "screenshot is a completion requirement",
+  it("requires a current-pass visual-impact assessment and fresh evidence for visual work", () => {
+    expect(implementationResultSchema()).toBe(implementationSchema);
+    expect(implementationSchema.properties.visualImpact.enum).toEqual([
+      "yes",
+      "no",
+      "uncertain",
+    ]);
+    expect(implementationSchema.allOf).toMatchObject([
+      { then: { properties: { screenshots: { minItems: 2 } } } },
+    ]);
+    const prompt = implementationPrompt({});
+    expect(prompt).toContain("visualImpactRationale");
+    expect(prompt).toContain("desktop path and viewport by default");
+    expect(prompt).toContain(
+      "Do not reuse screenshots from a prior implementation pass",
     );
-    expect(
-      implementationResultSchema({
-        issue: { title: "Fix the parser", body: "" },
-      }),
-    ).toBe(implementationSchema);
   });
 
   it("treats operator visual feedback as the current implementation instruction", () => {
@@ -668,14 +661,9 @@ describe("V2 agent runner", () => {
     expect(prompt).toContain(
       "Later review findings or CI diagnostics remain mandatory",
     );
-    expect(
-      implementationResultSchema({
-        issue: { title: "Adjust the mobile layout", body: "" },
-        context: {
-          visualFeedback: { status: "answered", body: "Looks good." },
-        },
-      }).properties.screenshots,
-    ).toMatchObject({ minItems: 1 });
+    expect(prompt).toContain(
+      "make a new visual-impact assessment for this pass",
+    );
   });
 
   it("labels retrieved CI failure diagnostics as untrusted evidence", () => {

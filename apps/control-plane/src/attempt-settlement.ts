@@ -178,6 +178,85 @@ export function observedBranchHead(detail: string): string | undefined {
   }
 }
 
+function screenshotIdsForImplementation(
+  result: Readonly<Record<string, unknown>>,
+): readonly string[] | undefined {
+  const implementation = result.implementation as
+    Record<string, unknown> | undefined;
+  if (implementation?.visualImpact !== "yes") return undefined;
+  const screenshots = implementation.screenshots;
+  if (!Array.isArray(screenshots) || screenshots.length < 2) return [];
+  const ids = screenshots.map((screenshot) => {
+    if (!screenshot || typeof screenshot !== "object") return undefined;
+    const url = (screenshot as Record<string, unknown>).url;
+    if (typeof url !== "string") return undefined;
+    try {
+      return new URL(url).pathname.match(/^\/screenshots\/([^/]+)$/)?.[1];
+    } catch {
+      return undefined;
+    }
+  });
+  return ids.every((id): id is string => Boolean(id)) ? ids : [];
+}
+
+async function validateImplementationScreenshotOwnership(
+  repository: D1RunRepository,
+  attempt: Attempt,
+  result: Readonly<Record<string, unknown>>,
+): Promise<void> {
+  const screenshotIds = screenshotIdsForImplementation(result);
+  if (!screenshotIds) return;
+  const startedAt = Date.now();
+  const payload = {
+    phase: "implementation_screenshot_ownership_validation",
+    screenshotCount: screenshotIds.length,
+  };
+  console.log(
+    JSON.stringify({
+      message: "implementation_screenshot_ownership_validation_started",
+      attemptId: attempt.id,
+      ...payload,
+    }),
+  );
+  await repository.recordAttemptEvent(attempt.id, "attempt_settlement", {
+    ...payload,
+    status: "started",
+  });
+  const owned = await Promise.all(
+    screenshotIds.map(async (screenshotId) =>
+      repository.database
+        .prepare(
+          "SELECT id FROM implementation_screenshots WHERE id = ? AND attempt_id = ?",
+        )
+        .bind(screenshotId, attempt.id)
+        .first<{ id: string }>(),
+    ),
+  );
+  const valid = screenshotIds.length >= 2 && owned.every(Boolean);
+  const completed = {
+    ...payload,
+    status: valid ? "accepted" : "rejected",
+    durationMs: Date.now() - startedAt,
+  };
+  console.log(
+    JSON.stringify({
+      message: "implementation_screenshot_ownership_validation_completed",
+      attemptId: attempt.id,
+      ...completed,
+    }),
+  );
+  await repository.recordAttemptEvent(
+    attempt.id,
+    "attempt_settlement",
+    completed,
+  );
+  if (!valid)
+    throw new CheckpointRejectedError(
+      422,
+      "implementation_visual_screenshots_not_owned_by_attempt",
+    );
+}
+
 async function recordRejectedAttemptOutcome(
   env: AttemptSettlementEnv,
   input: AttemptCallback,
@@ -260,6 +339,12 @@ export async function validateRecordedAttemptCompletion(
     ) as Promise<AttemptValidationResult>;
   }
   try {
+    if (attempt)
+      await validateImplementationScreenshotOwnership(
+        repository,
+        attempt,
+        input.result,
+      );
     await new SandboxCheckpointValidator(
       env.ATTEMPT_SANDBOXES,
       artifactsNamespace(env),
