@@ -558,15 +558,24 @@ describe("V2 control plane", () => {
     expect(signedOut.status).toBe(200);
     await expect(signedOut.text()).resolves.toContain("Sign in with GitHub");
 
+    const renewals: number[] = [];
     const post = await fetch(
       new Request("https://v2.invalid/usage", {
         method: "POST",
         headers: { cookie: authedUiCookie },
       }),
-      uiEnv(withUiSession(dashboardDb())) as never,
+      uiEnv(withUiSession(dashboardDb(), '["1297678423"]', renewals)) as never,
       {} as never,
     );
     expect(post.status).toBe(405);
+    // The session was renewed during authorization, so even this error
+    // response carries a matching renewed cookie.
+    expect(renewals).toHaveLength(1);
+    const errorCookie = post.headers.get("set-cookie")!;
+    expect(errorCookie).toContain("roundhouse_ui_session=test-session");
+    const errorMaxAge = Number(errorCookie.match(/Max-Age=(\d+)/)![1]);
+    expect(errorMaxAge).toBeGreaterThanOrEqual(30 * 24 * 60 * 60);
+    expect(renewals[0]!).toBeLessThanOrEqual(Date.now() + errorMaxAge * 1000);
 
     const response = await fetch(
       new Request("https://v2.invalid/usage", {

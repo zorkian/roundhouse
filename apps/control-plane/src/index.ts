@@ -528,7 +528,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       isPublicUiRequest()
     ) {
       if (request.method !== "GET")
-        return json({ error: "method_not_allowed" }, 405, { allow: "GET" });
+        return uiJson({ error: "method_not_allowed" }, 405, { allow: "GET" });
       const queryStartedAt = Date.now();
       const runs = await new D1RunRepository(env.DB).listRunsForRepositories(
         uiSession!.repositoryIds,
@@ -548,7 +548,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
     }
     if (url.pathname === "/usage" && isPublicUiRequest()) {
       if (request.method !== "GET")
-        return json({ error: "method_not_allowed" }, 405, { allow: "GET" });
+        return uiJson({ error: "method_not_allowed" }, 405, { allow: "GET" });
       const queryStartedAt = Date.now();
       const endAt = Date.now();
       const startAt = endAt - 30 * 24 * 60 * 60_000;
@@ -582,7 +582,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       try {
         repositoryName = `${decodeURIComponent(workflowMatch[1]!)}\/${decodeURIComponent(workflowMatch[2]!)}`;
       } catch {
-        return json({ error: "not_found" }, 404);
+        return uiJson({ error: "not_found" }, 404);
       }
       const repository = new D1RunRepository(env.DB);
       const run = await repository.latestWorkflowRunForRepository(
@@ -672,17 +672,17 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
     );
     if (detailsMatch && isPublicUiRequest()) {
       if (request.method !== "GET")
-        return json({ error: "method_not_allowed" }, 405, { allow: "GET" });
+        return uiJson({ error: "method_not_allowed" }, 405, { allow: "GET" });
       let repository: string;
       const owner = detailsMatch[1];
       const name = detailsMatch[2];
       const issueNumber = detailsMatch[3];
       if (!owner || !name || !issueNumber)
-        return json({ error: "not_found" }, 404);
+        return uiJson({ error: "not_found" }, 404);
       try {
         repository = `${decodeURIComponent(owner)}/${decodeURIComponent(name)}`;
       } catch {
-        return json({ error: "not_found" }, 404);
+        return uiJson({ error: "not_found" }, 404);
       }
       const details = await new D1RunRepository(env.DB).detailsByIssue(
         repository,
