@@ -79,8 +79,14 @@ describe("workflow graph view", () => {
       expect(node.data["authority"]).toBe(
         compiled.capabilities.join(", ") || "no external authority",
       );
-      expect(node.data["label"]).toContain(node.data["id"]!);
-      expect(node.data["label"]).toContain(compiled.executor);
+      // The compact primary label shows only the stage name and summary.
+      expect(node.data["name"]).toBeTruthy();
+      expect(node.data["summary"]).toBeTruthy();
+      expect(node.data["label"]).toBe(
+        `${node.data["name"]}\n${node.data["summary"]}`,
+      );
+      expect(node.data["label"]).not.toContain(node.data["authority"]!);
+      expect(node.data["outputs"]).toBeTruthy();
     }
     expect(nodes.some((node) => node.data["executor"] === "agent.write")).toBe(
       true,
@@ -88,12 +94,41 @@ describe("workflow graph view", () => {
     expect(
       nodes.some((node) => node.data["authority"]!.includes("artifact.write")),
     ).toBe(true);
+    // Detail metadata travels with the node data for the details panel.
+    const implement = nodes.find((node) => node.data["id"] === "implement")!;
+    expect(implement.data["task"]).toBe("implementation");
+    expect(implement.data["role"]).toBeTruthy();
+    const review = nodes.find((node) => node.data["id"] === "review")!;
+    expect(review.data["reviewers"]).toBeTruthy();
+    expect(review.data["summary"]).toContain("reviewer");
     // A capability-free node falls back to explicit no-authority text.
     const synthetic = workflowGraphElements({
       ...workflow,
-      nodes: { lone: { ...workflow.nodes["plan"]!, capabilities: [] } },
+      nodes: {
+        lone: {
+          ...workflow.nodes["plan"]!,
+          capabilities: [],
+          outputs: [],
+        },
+      },
     });
     expect(synthetic[0]!.data["authority"]).toBe("no external authority");
+    expect(synthetic[0]!.data["outputs"]).toBe("none");
+
+    // Long names and summaries stay in the label as-is; the client wraps
+    // them inside the fixed node box.
+    const longName = "a-very-long-stage-".repeat(4);
+    const longLabeled = workflowGraphElements({
+      ...workflow,
+      nodes: {
+        lone: {
+          ...workflow.nodes["plan"]!,
+          role: `${longName} stage`,
+        },
+      },
+    });
+    expect(longLabeled[0]!.data["name"]).toContain(longName);
+    expect(longLabeled[0]!.data["label"]).toContain(longName);
 
     // One directed edge per transition with a destination, with unique IDs.
     const routed = Object.values(workflow.nodes).flatMap((node) =>
@@ -133,6 +168,28 @@ describe("workflow graph view", () => {
     expect(elements).toEqual(workflowGraphElements(run.profile!.workflow!));
   });
 
+  it("renders an accessible stage selector and details panel", async () => {
+    const run = await runFixture();
+    const workflow = run.profile!.workflow!;
+    const html = renderWorkflowView(run);
+    expect(html).toContain('id="workflow-stages"');
+    expect(html).toContain('aria-label="Workflow stages"');
+    expect(html).toContain('id="stage-details"');
+    expect(html).toContain('aria-live="polite"');
+    expect(html).toContain("Stage details");
+    expect(html).toContain(
+      "Select a stage in the graph or the stage list to see its details.",
+    );
+    for (const id of Object.keys(workflow.nodes)) {
+      expect(html).toContain(`data-stage="${id}"`);
+    }
+    expect(html).toContain('aria-pressed="false"');
+    // Layout keeps the graph and details readable at both breakpoints.
+    expect(html).toContain("#workflow-layout{display:flex");
+    expect(html).toContain("#stage-details");
+    expect(html).toContain("@media(max-width:700px)");
+  });
+
   it("ships client behavior for selection highlighting and the editor actions", () => {
     // Cycle-capable force-directed layout with directed arrows.
     expect(workflowGraphClientScript).toContain('"cose"');
@@ -151,6 +208,19 @@ describe("workflow graph view", () => {
       "workflow_graph_layout_completed",
     );
     expect(workflowGraphClientScript).toContain("elapsedMs");
+    // Overflow-safe node labels and the selection/details synchronization.
+    expect(workflowGraphClientScript).toContain('"text-overflow-wrap"');
+    expect(workflowGraphClientScript).toContain('"text-max-width"');
+    expect(workflowGraphClientScript).toContain("selectStage");
+    expect(workflowGraphClientScript).toContain("renderDetails");
+    expect(workflowGraphClientScript).toContain("syncStageButtons");
+    expect(workflowGraphClientScript).toContain('"aria-pressed"');
+    expect(workflowGraphClientScript).toContain("workflow_stage_selected");
+    expect(workflowGraphClientScript).toContain(
+      "workflow_stage_details_rendered",
+    );
+    expect(workflowGraphClientScript).toContain(".stage-button[data-stage]");
+    expect(workflowGraphClientScript).toContain("stage-details-status");
     // Validate and copy handlers moved here from the inline script.
     expect(workflowGraphClientScript).toContain('getElementById("validate")');
     expect(workflowGraphClientScript).toContain('getElementById("copy")');

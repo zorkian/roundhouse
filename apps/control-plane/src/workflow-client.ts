@@ -31,6 +31,7 @@ export const workflowGraphClientScript = `(function () {
             label: "data(label)",
             "text-wrap": "wrap",
             "text-max-width": "210px",
+            "text-overflow-wrap": "anywhere",
             "text-valign": "center",
             "text-halign": "center",
             "font-size": 13,
@@ -104,15 +105,89 @@ export const workflowGraphClientScript = `(function () {
     function clearEmphasis() {
       cy.elements().removeClass("selected-node connected-edge muted");
     }
-    cy.on("select", "node", function (event) {
+    var stageButtons = Array.prototype.slice.call(
+      document.querySelectorAll(".stage-button[data-stage]")
+    );
+    var detailsStatus = document.getElementById("stage-details-status");
+    var detailsList = document.getElementById("stage-details-list");
+    var detailFields = [
+      ["executor", "Executor"],
+      ["role", "Role"],
+      ["task", "Agent task"],
+      ["authority", "Permissions"],
+      ["outputs", "Outputs"],
+      ["reviewers", "Reviewers"],
+      ["human", "Human handoff"],
+      ["external", "External wait"]
+    ];
+    function renderDetails(node) {
+      if (!detailsStatus || !detailsList) return;
+      var started = Date.now();
+      while (detailsList.firstChild) {
+        detailsList.removeChild(detailsList.firstChild);
+      }
+      var data = node.data();
+      detailsStatus.textContent =
+        "Selected stage: " + (data.name || data.id) + " \u2014 " + data.summary;
+      detailFields.forEach(function (field) {
+        var value = data[field[0]];
+        if (!value) return;
+        var term = document.createElement("dt");
+        term.textContent = field[1];
+        var description = document.createElement("dd");
+        description.textContent = value;
+        detailsList.appendChild(term);
+        detailsList.appendChild(description);
+      });
+      log("workflow_stage_details_rendered", {
+        stage: data.id,
+        renderMs: Date.now() - started
+      });
+    }
+    function clearDetails() {
+      if (!detailsStatus || !detailsList) return;
+      detailsStatus.textContent =
+        "Select a stage in the graph or the stage list to see its details.";
+      while (detailsList.firstChild) {
+        detailsList.removeChild(detailsList.firstChild);
+      }
+    }
+    function syncStageButtons(selectedId) {
+      stageButtons.forEach(function (button) {
+        button.setAttribute(
+          "aria-pressed",
+          button.getAttribute("data-stage") === selectedId ? "true" : "false"
+        );
+      });
+    }
+    function selectStage(node) {
       clearEmphasis();
-      var node = event.target;
       node.addClass("selected-node");
       node.connectedEdges().addClass("connected-edge");
       cy.elements().difference(node.closedNeighborhood()).addClass("muted");
+      renderDetails(node);
+      syncStageButtons(node.id());
+      log("workflow_stage_selected", { stage: node.id() });
+    }
+    function clearSelection() {
+      clearEmphasis();
+      clearDetails();
+      syncStageButtons(null);
+      cy.elements().unselect();
+    }
+    cy.on("select", "node", function (event) {
+      selectStage(event.target);
+    });
+    stageButtons.forEach(function (button) {
+      button.addEventListener("click", function () {
+        var candidate = cy.getElementById(
+          button.getAttribute("data-stage")
+        );
+        if (candidate.nonempty()) candidate.select();
+      });
     });
     cy.on("tap", function (event) {
-      if (event.target === cy) clearEmphasis();
+      if (event.target === cy) clearSelection();
     });
     var preselected = container.getAttribute("data-select");
     if (preselected) {
