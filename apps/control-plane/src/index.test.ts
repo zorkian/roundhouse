@@ -191,6 +191,101 @@ function dashboardDb(): D1Like {
   };
 }
 
+function conversationStateDb(): D1Like {
+  const conversationId = "b1f486ff-7744-49f9-ab78-f74e8409fc2b";
+  const turn = {
+    id: "turn_1",
+    conversation_id: conversationId,
+    triggering_message_id: "message_1",
+    kind: "message",
+    state: "running",
+    source_commit: "a".repeat(40),
+    configured_model: "openai/gpt-5.6-sol",
+    configured_reasoning: "high",
+    model_route_json: null,
+    result_message_id: null,
+    result_brief_id: null,
+    ordinal: 1,
+    attempts: 1,
+    lease_expires_at: null,
+    error_code: null,
+    created_at: 1,
+    updated_at: 2,
+    completed_at: null,
+  };
+  return {
+    async batch(statements) {
+      return Promise.all(statements.map((statement) => statement.run()));
+    },
+    prepare(sql: string) {
+      let values: unknown[] = [];
+      const statement = {
+        bind: (...bound: unknown[]) => {
+          values = bound;
+          return statement;
+        },
+        first: async () => {
+          if (sql.startsWith("SELECT c.id AS conversation_id"))
+            return values[0] === conversationId && values.includes("1297678423")
+              ? {
+                  conversation_id: conversationId,
+                  creator_github_user_id: 7,
+                  creator_github_login: "octocat",
+                  status: "open",
+                  title: null,
+                  source_commit: "a".repeat(40),
+                  profile_hash: "profile",
+                  context_json: JSON.stringify({
+                    model: { id: "openai/gpt-5.6-sol", reasoning: "high" },
+                    defaultBranch: "main",
+                  }),
+                  active_turn_id: turn.id,
+                  current_brief_id: null,
+                  created_at: 1,
+                  updated_at: 2,
+                  id: "repo_1",
+                  github_id: "1297678423",
+                  profile_json: JSON.stringify({
+                    repository: "zorkian/roundhouse",
+                    installationId: 1,
+                  }),
+                }
+              : null;
+          if (sql.startsWith("SELECT * FROM conversation_turns")) return turn;
+          if (sql.startsWith("SELECT * FROM conversation_promotions"))
+            return null;
+          return null;
+        },
+        run: async () => ({ meta: {} }),
+        all: async () => {
+          if (sql.includes("FROM conversation_messages"))
+            return {
+              meta: {},
+              results: [
+                {
+                  id: "message_1",
+                  turn_id: turn.id,
+                  direction: "inbound",
+                  role: "user",
+                  actor_id: "7",
+                  actor_login: "octocat",
+                  adapter: "web",
+                  adapter_installation: "roundhouse-ui",
+                  external_conversation_id: conversationId,
+                  external_message_id: "external-message",
+                  body: "Is this active?",
+                  created_at: 1,
+                },
+              ],
+            };
+          return { meta: {}, results: [] };
+        },
+      };
+      return statement as unknown as ReturnType<D1Like["prepare"]>;
+    },
+  };
+}
+
 function workflowPageDb(): D1Like {
   const run = createRun({
     id: "run_stale_workflow",
@@ -784,6 +879,70 @@ describe("V2 control plane", () => {
       "form-action 'none'",
     );
     expect(dashboard.headers.get("referrer-policy")).toBe("same-origin");
+  });
+
+  it("serves authenticated conversation polling state only to authorized readers", async () => {
+    const fetch = worker.fetch as unknown as (
+      request: Request,
+      env: unknown,
+      context: unknown,
+    ) => Promise<Response>;
+    const path = "/conversations/b1f486ff-7744-49f9-ab78-f74e8409fc2b/state";
+
+    const signedOut = await fetch(
+      new Request(`https://v2.invalid${path}`),
+      uiEnv(conversationStateDb()) as never,
+      {} as never,
+    );
+    await expect(signedOut.text()).resolves.toContain("Sign in with GitHub");
+
+    const unauthorized = await fetch(
+      new Request(`https://v2.invalid${path}`, {
+        headers: { cookie: authedUiCookie },
+      }),
+      uiEnv(withUiSession(conversationStateDb(), '["9999999999"]')) as never,
+      {} as never,
+    );
+    expect(unauthorized.status).toBe(404);
+
+    const post = await fetch(
+      new Request(`https://v2.invalid${path}`, {
+        method: "POST",
+        headers: { cookie: authedUiCookie },
+      }),
+      uiEnv(withUiSession(conversationStateDb())) as never,
+      {} as never,
+    );
+    expect(post.status).toBe(405);
+    expect(post.headers.get("allow")).toBe("GET");
+
+    const page = await fetch(
+      new Request(
+        "https://v2.invalid/conversations/b1f486ff-7744-49f9-ab78-f74e8409fc2b",
+        { headers: { cookie: authedUiCookie } },
+      ),
+      uiEnv(withUiSession(conversationStateDb())) as never,
+      {} as never,
+    );
+    expect(page.headers.get("content-security-policy")).toContain(
+      "connect-src 'self'",
+    );
+
+    const state = await fetch(
+      new Request(`https://v2.invalid${path}`, {
+        headers: { cookie: authedUiCookie },
+      }),
+      uiEnv(withUiSession(conversationStateDb())) as never,
+      {} as never,
+    );
+    expect(state.status).toBe(200);
+    expect(state.headers.get("cache-control")).toBe("no-store");
+    expect(state.headers.get("content-type")).toContain("application/json");
+    await expect(state.json()).resolves.toMatchObject({
+      polling: true,
+      messages: [{ id: "message_1" }],
+      status: { key: "turn:running" },
+    });
   });
 
   it("serves the conversation polling asset from the public UI origin", async () => {

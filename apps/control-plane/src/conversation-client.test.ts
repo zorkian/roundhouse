@@ -82,4 +82,44 @@ describe("conversation polling client", () => {
     expect(scrollTo).toHaveBeenCalledWith(40, 80);
     expect(scheduled).toHaveLength(1);
   });
+
+  it("continues polling after a failed request", async () => {
+    const messages = region("messages");
+    const status = region("active-status", "turn:running");
+    const controls = region("active-controls");
+    const scheduled: (() => void)[] = [];
+    const document = {
+      currentScript: { getAttribute: () => "/conversations/id/state" },
+      getElementById: (id: string) => {
+        const elements: Record<string, Region> = {
+          "conversation-messages": messages,
+          "conversation-status": status,
+          "conversation-controls": controls,
+        };
+        return elements[id] ?? null;
+      },
+      createElement: () => ({ content: { firstElementChild: null } }),
+    };
+    const window = {
+      scrollX: 0,
+      scrollY: 0,
+      scrollTo: vi.fn(),
+      setTimeout: (callback: () => void) => scheduled.push(callback),
+    };
+    const fetch = async () => {
+      throw new Error("temporary failure");
+    };
+
+    new Function(
+      "document",
+      "window",
+      "fetch",
+      "console",
+      conversationPollClientScript,
+    )(document, window, fetch, { log: () => undefined });
+    scheduled[0]!();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(scheduled).toHaveLength(2);
+  });
 });

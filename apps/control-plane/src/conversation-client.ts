@@ -80,6 +80,7 @@ export const conversationPollClientScript = `(function () {
       })
       .catch(function (error) {
         log("conversation_poll_failed", { error: String(error) });
+        window.setTimeout(poll, delay);
       });
   }
   if (!stateUrl || !messages || !status || !controls) return;

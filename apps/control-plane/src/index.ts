@@ -105,12 +105,17 @@ function json(value: unknown, status = 200, headers?: HeadersInit): Response {
   });
 }
 
-function html(value: string, status = 200, forms = false): Response {
+function html(
+  value: string,
+  status = 200,
+  forms = false,
+  connect = false,
+): Response {
   return new Response(value, {
     status,
     headers: {
       "cache-control": "no-store",
-      "content-security-policy": `default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action ${forms ? "'self'" : "'none'"}; frame-ancestors 'none'`,
+      "content-security-policy": `default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src ${connect ? "'self'" : "'none'"}; base-uri 'none'; form-action ${forms ? "'self'" : "'none'"}; frame-ancestors 'none'`,
       "content-type": "text/html; charset=utf-8",
       // same-origin keeps referrers on our own navigations while omitting them
       // cross-origin. no-referrer can cause browsers to send Origin: null on
@@ -594,7 +599,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
     const uiHtml = (value: string, status = 200): Response =>
       withUiSession(html(value, status));
     const uiConversationHtml = (value: string, status = 200): Response =>
-      withUiSession(html(value, status, true));
+      withUiSession(html(value, status, true, true));
     const uiJson = (
       value: unknown,
       status = 200,
