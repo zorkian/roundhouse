@@ -40,6 +40,24 @@ describe("model usage", () => {
     expect(usage?.costUsd).toBe(0.0062);
   });
 
+  it("normalizes bare delivery response models before pricing and persistence", () => {
+    const usage = extractModelUsage(
+      JSON.stringify({
+        id: "resp_bare_sol",
+        model: "gpt-5.6-sol",
+        usage: { input_tokens: 1_000, output_tokens: 100 },
+      }),
+      "attempt_bare_sol",
+      "openai/gpt-5.6-sol",
+      { provider: "openai" },
+    );
+    expect(usage).toMatchObject({
+      model: "openai/gpt-5.6-sol",
+      configuredModel: "openai/gpt-5.6-sol",
+      costUsd: 0.008,
+    });
+  });
+
   it.each([
     ["anthropic/claude-opus-4.8", 0.0075],
     ["anthropic/claude-fable-5", 0.015],
@@ -110,7 +128,7 @@ describe("model usage", () => {
       { provider: "anthropic" },
     );
     expect(usage).toMatchObject({
-      model: "claude-sonnet-5",
+      model: "anthropic/claude-sonnet-5",
       configuredModel: "anthropic/claude-sonnet-5",
       cachedInputTokens: 100,
       cacheCreationInputTokens: 20,
