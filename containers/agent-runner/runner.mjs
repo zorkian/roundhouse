@@ -279,7 +279,7 @@ function command(commandName, args, options = {}) {
     });
     child.once("close", async (code) => {
       await activity;
-      if (code === 0) {
+      if (code === 0 || options.allowFailure) {
         runnerLog("info", "runner_command_completed", {
           operation,
           durationMs: Date.now() - startedAt,
@@ -1426,8 +1426,9 @@ export async function validateCheckpoint(assignment) {
   ) {
     // Conflict resolution may only resolve the reported conflicts: every
     // file the resolved integration changes relative to the selected base
-    // must be a file the reviewed candidate changed, and files the base did
-    // not touch must keep the candidate's exact content.
+    // must be a file the reviewed candidate changed, and every file outside
+    // the reported conflict set must keep the exact content a mechanical
+    // merge of the candidate and base would produce.
     // The produced integration commit must actually contain the recorded
     // base as a parent so the stored candidate/base/integration identity
     // cannot claim a base the commit does not include.
@@ -1454,6 +1455,23 @@ export async function validateCheckpoint(assignment) {
         .map((conflict) => conflict?.path)
         .filter((path) => typeof path === "string"),
     );
+    // Compute the tree a purely mechanical merge of the reviewed candidate
+    // and the selected base would produce. Non-conflict files must match
+    // this tree exactly, so the resolver can only alter reported conflict
+    // files — even files both branches changed but Git merged cleanly.
+    const mergeTreeOutput = await command(
+      "git",
+      [
+        "merge-tree",
+        "--write-tree",
+        checkpoint.inputHead,
+        integration.baseHead,
+      ],
+      { cwd: directory, allowFailure: true, preserveOutput: true },
+    );
+    const mechanicalTree = mergeTreeOutput.split("\n", 1)[0].trim();
+    if (!/^[a-f0-9]{40}$/.test(mechanicalTree))
+      throw new Error("integration_mechanical_merge_failed");
     const mergeBase = await command(
       "git",
       ["merge-base", checkpoint.inputHead, integration.baseHead],
@@ -1484,13 +1502,8 @@ export async function validateCheckpoint(assignment) {
     for (const path of candidatePaths) {
       if (conflictFiles.has(path)) continue;
       if (
-        (await blob(integration.baseHead, path)) !==
-        (await blob(mergeBase, path))
-      )
-        continue;
-      if (
         (await blob(checkpoint.outputHead, path)) !==
-        (await blob(checkpoint.inputHead, path))
+        (await blob(mechanicalTree, path))
       )
         throw new Error("unrelated_conflict_resolution_edit");
     }

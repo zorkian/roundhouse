@@ -1315,4 +1315,140 @@ describe("V2 agent runner", () => {
       }),
     ).resolves.toBeUndefined();
   });
+
+  it("rejects conflict-resolution edits to files both branches merged cleanly", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    process.env.ROUNDHOUSE_WORKSPACE_ROOT = resolve(testRoot, "runner");
+    const source = resolve(testRoot, "both-source");
+    const artifact = resolve(testRoot, "both-artifact.git");
+    await mkdir(source, { recursive: true });
+    execFileSync("git", ["init", "--initial-branch=main"], { cwd: source });
+    const commit = (message) =>
+      execFileSync(
+        "git",
+        [
+          "-c",
+          "user.name=Fixture",
+          "-c",
+          "user.email=fixture@invalid",
+          "commit",
+          "-m",
+          message,
+        ],
+        { cwd: source },
+      );
+    const head = () =>
+      execFileSync("git", ["rev-parse", "HEAD"], {
+        cwd: source,
+        encoding: "utf8",
+      }).trim();
+    await writeFile(
+      resolve(source, "app.ts"),
+      "export const a = 1;\nexport const b = 2;\nexport const c = 3;\n",
+    );
+    await writeFile(resolve(source, "route.ts"), "route = 'base';\n");
+    execFileSync("git", ["add", "--all"], { cwd: source });
+    commit("base");
+    const baseCommit = head();
+    execFileSync("git", ["clone", "--bare", source, artifact]);
+    // Main changes the first line of app.ts (merges cleanly with the
+    // candidate's last-line change) and conflicts on route.ts.
+    await writeFile(
+      resolve(source, "app.ts"),
+      "export const a = 'main';\nexport const b = 2;\nexport const c = 3;\n",
+    );
+    await writeFile(resolve(source, "route.ts"), "route = 'main';\n");
+    execFileSync("git", ["add", "--all"], { cwd: source });
+    commit("main change");
+    const mainHead = head();
+    execFileSync("git", ["checkout", "--detach", baseCommit], { cwd: source });
+    await writeFile(
+      resolve(source, "app.ts"),
+      "export const a = 1;\nexport const b = 2;\nexport const c = 'feature';\n",
+    );
+    await writeFile(resolve(source, "route.ts"), "route = 'feature';\n");
+    execFileSync("git", ["add", "--all"], { cwd: source });
+    commit("feature change");
+    const featureHead = head();
+    execFileSync("git", ["push", artifact, "HEAD:refs/heads/feature"], {
+      cwd: source,
+    });
+    const assignment = {
+      id: "run_both_rev_1",
+      runId: "run_both",
+      runRevision: 1,
+      issueNumber: 42,
+      deadlineAt: Date.now() + 60_000,
+      baseCommit,
+      expectedHead: featureHead,
+      role: "conflict-resolution",
+      upstream: { remote: source, hostname: "github.test", branch: "main" },
+      artifact: {
+        repositoryId: "artifact-repo-id",
+        repository: "v2-run-both",
+        remote: artifact,
+        tokenId: "write-token-id",
+        token: "ephemeral-write-token",
+        access: "write",
+        ref: "refs/heads/feature",
+      },
+      integration: {
+        candidateHead: featureHead,
+        baseHead: mainHead,
+        conflicts: [{ path: "route.ts", hunks: "@@" }],
+      },
+    };
+    const profile = {
+      sourcePath: ".roundhouse/profile.yaml",
+      sourceCommit: baseCommit,
+      version: 1,
+      hash: "b".repeat(64),
+      paths: { allowed: ["**"], protected: [] },
+    };
+    // Resolving the conflict but also rewriting the cleanly merged app.ts
+    // is an unrelated edit and must be rejected.
+    const directory = await prepareWorkspace(assignment);
+    await writeFile(resolve(directory, "route.ts"), "route = 'resolved';\n");
+    await writeFile(
+      resolve(directory, "app.ts"),
+      "export const a = 'tampered';\nexport const b = 2;\nexport const c = 'feature';\n",
+    );
+    const checkpoint = await checkpointWorkspace(assignment, directory);
+    await expect(
+      validateCheckpoint({
+        ...assignment,
+        id: "run_both_rev_1-validation",
+        profile,
+        checkpoint,
+        artifact: { ...assignment.artifact, access: "read" },
+      }),
+    ).rejects.toThrow("unrelated_conflict_resolution_edit");
+    // Keeping the mechanically merged app.ts content passes validation.
+    const cleanDirectory = await prepareWorkspace({
+      ...assignment,
+      id: "run_both_rev_2",
+    });
+    await writeFile(
+      resolve(cleanDirectory, "route.ts"),
+      "route = 'resolved';\n",
+    );
+    const cleanCheckpoint = await checkpointWorkspace(
+      { ...assignment, id: "run_both_rev_2" },
+      cleanDirectory,
+    );
+    await expect(
+      validateCheckpoint({
+        ...assignment,
+        id: "run_both_rev_2-validation",
+        profile,
+        checkpoint: cleanCheckpoint,
+        artifact: { ...assignment.artifact, access: "read" },
+      }),
+    ).resolves.toBeUndefined();
+    const merged = await readFile(resolve(cleanDirectory, "app.ts"), "utf8");
+    expect(merged).toBe(
+      "export const a = 'main';\nexport const b = 2;\nexport const c = 'feature';\n",
+    );
+  });
 });
