@@ -1049,15 +1049,47 @@ export async function validateCheckpoint(assignment) {
   const changedPaths = changed ? changed.split("\n") : [];
   if (JSON.stringify(changedPaths) !== JSON.stringify(checkpoint.changedPaths))
     throw new Error("changed_paths_mismatch");
-  if (
-    changedPaths.some((path) =>
-      assignment.protectedPaths.some(
-        (protectedPath) =>
-          path === protectedPath || path.startsWith(`${protectedPath}/`),
-      ),
+  const matches = (pattern, path) => {
+    let expression = "";
+    for (let index = 0; index < pattern.length; index++) {
+      const character = pattern[index];
+      if (character === "*" && pattern[index + 1] === "*") {
+        expression += ".*";
+        index++;
+      } else if (character === "*") expression += "[^/]*";
+      else if (character === "?") expression += "[^/]";
+      else expression += character.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
+    }
+    return new RegExp(`^${expression}$`).test(path);
+  };
+  for (const path of changedPaths) {
+    if (
+      !path ||
+      path.startsWith("/") ||
+      path.includes("\\") ||
+      path.split("/").some((part) => !part || part === "." || part === "..")
     )
-  )
-    throw new Error("protected_path_changed");
+      throw new Error("invalid_repository_path");
+    if (
+      path === ".roundhouse" ||
+      path.startsWith(".roundhouse/") ||
+      (
+        assignment.profile?.paths.protected ??
+        assignment.protectedPaths ??
+        []
+      ).some((pattern) =>
+        matches(pattern.includes("*") ? pattern : `${pattern}/**`, path),
+      )
+    )
+      throw new Error("protected_path_changed");
+    if (
+      assignment.profile &&
+      !assignment.profile.paths.allowed.some((pattern) =>
+        matches(pattern, path),
+      )
+    )
+      throw new Error("path_outside_allowlist");
+  }
   if (assignment.publish) {
     const authorization = Buffer.from(
       `x-access-token:${assignment.publish.token}`,

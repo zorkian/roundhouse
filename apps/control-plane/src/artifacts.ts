@@ -1,6 +1,8 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
+import { assertPathAllowed, type AppliedProfile } from "@roundhouse/core";
+
 export type ArtifactAccess = "read" | "write";
 
 export interface ArtifactToken {
@@ -186,7 +188,8 @@ export function validateCheckpointIdentity(
     baseCommit: string;
     inputHead: string;
     ref: string;
-    protectedPaths: readonly string[];
+    profile?: AppliedProfile;
+    protectedPaths?: readonly string[];
   },
 ): void {
   if (
@@ -201,15 +204,19 @@ export function validateCheckpointIdentity(
   if (checkpoint.ref !== expected.ref) throw new Error("unexpected_ref");
   if (!/^[a-f0-9]{40}$/.test(checkpoint.outputHead))
     throw new Error("invalid_output_head");
-  if (
+  if (expected.profile) {
+    for (const path of checkpoint.changedPaths)
+      assertPathAllowed(expected.profile, path);
+  } else if (
     checkpoint.changedPaths.some((path) =>
-      expected.protectedPaths.some(
+      (expected.protectedPaths ?? []).some(
         (protectedPath) =>
           path === protectedPath || path.startsWith(`${protectedPath}/`),
       ),
     )
-  )
+  ) {
     throw new Error("protected_path_changed");
+  }
 }
 
 export function validateReadOnlyCheckpoint(checkpoint: Checkpoint): void {

@@ -1,6 +1,8 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
+import type { AppliedProfile } from "./profile.js";
+
 export const runSchemaVersion = 2 as const;
 
 export const runStatuses = [
@@ -31,6 +33,7 @@ export const waitingReasons = [
   "budget",
   "external_check",
   "retry_exhausted",
+  "profile_error",
 ] as const;
 
 export type RunStatus = (typeof runStatuses)[number];
@@ -45,6 +48,8 @@ export interface RunSnapshot {
   readonly baseCommit: string;
   readonly currentHead: string;
   readonly profileVersion: string;
+  readonly profile?: AppliedProfile;
+  readonly profileError?: string;
   readonly status: RunStatus;
   readonly stage: RunStage;
   readonly revision: number;
@@ -72,6 +77,8 @@ export interface CreateRunInput {
   readonly issueNumber: number;
   readonly baseCommit: string;
   readonly profileVersion: string;
+  readonly profile?: AppliedProfile;
+  readonly profileError?: string;
   readonly issue?: IssueSnapshot;
 }
 
