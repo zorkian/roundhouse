@@ -8,7 +8,7 @@ import {
   type RunSnapshot,
   type RunStage,
 } from "@roundhouse/core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   acceptCallback,
   callbackPayload,
@@ -572,7 +572,7 @@ describe("single coordinator", () => {
     expect(started).toBe(0);
   });
 
-  it("does not report another start for a duplicate wakeup", async () => {
+  it("revisits the start report on a duplicate wakeup without redispatching", async () => {
     const store = new MemoryRunRepository();
     const run = {
       ...createRun(input),
@@ -581,6 +581,12 @@ describe("single coordinator", () => {
     };
     await store.create(run);
     let started = 0;
+    let submitted = 0;
+    const dispatcher = {
+      submit: async () => {
+        submitted += 1;
+      },
+    };
     const reporter = {
       report: async () => undefined,
       reportStarted: async () => {
@@ -590,7 +596,7 @@ describe("single coordinator", () => {
     await expect(
       coordinate(
         store,
-        { submit: async () => undefined },
+        dispatcher,
         { runId: input.id, expectedRevision: 4 },
         100,
         50,
@@ -600,14 +606,158 @@ describe("single coordinator", () => {
     await expect(
       coordinate(
         store,
-        { submit: async () => undefined },
+        dispatcher,
         { runId: input.id, expectedRevision: 4 },
         101,
         50,
         reporter,
       ),
     ).resolves.toBe("duplicate");
-    expect(started).toBe(1);
+    // The reporter is invoked again so a previously lost comment can go out;
+    // its immutable marker keeps the retry from duplicating the comment.
+    expect(started).toBe(2);
+    expect(submitted).toBe(1);
+  });
+
+  it("keeps a durable dispatch successful when the start report fails", async () => {
+    const store = new MemoryRunRepository();
+    const run = {
+      ...createRun(input),
+      revision: 4,
+      stage: "implement" as const,
+    };
+    await store.create(run);
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await expect(
+        coordinate(
+          store,
+          { submit: async () => undefined },
+          { runId: input.id, expectedRevision: 4 },
+          100,
+          50,
+          {
+            report: async () => undefined,
+            reportStarted: async () => {
+              throw new Error("github_unavailable");
+            },
+          },
+        ),
+      ).resolves.toBe("dispatched");
+      expect(log).toHaveBeenCalledWith(
+        "report_started_failed",
+        expect.any(Error),
+      );
+    } finally {
+      log.mockRestore();
+    }
+    await expect(store.getAttempt("run_slice_rev_4")).resolves.toMatchObject({
+      state: "dispatched",
+    });
+  });
+
+  it("retries a lost start report on the next wakeup without redispatching", async () => {
+    const store = new MemoryRunRepository();
+    const run = {
+      ...createRun(input),
+      revision: 4,
+      stage: "implement" as const,
+    };
+    await store.create(run);
+    let submitted = 0;
+    const dispatcher = {
+      submit: async () => {
+        submitted += 1;
+      },
+    };
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await expect(
+        coordinate(
+          store,
+          dispatcher,
+          { runId: input.id, expectedRevision: 4 },
+          100,
+          50,
+          {
+            report: async () => undefined,
+            reportStarted: async () => {
+              throw new Error("github_unavailable");
+            },
+          },
+        ),
+      ).resolves.toBe("dispatched");
+    } finally {
+      log.mockRestore();
+    }
+    const started: Attempt[] = [];
+    await expect(
+      coordinate(
+        store,
+        dispatcher,
+        { runId: input.id, expectedRevision: 4 },
+        101,
+        50,
+        {
+          report: async () => undefined,
+          reportStarted: async (_run: RunSnapshot, attempt: Attempt) => {
+            started.push(attempt);
+          },
+        },
+      ),
+    ).resolves.toBe("duplicate");
+    expect(started).toHaveLength(1);
+    expect(started[0]).toMatchObject({
+      id: "run_slice_rev_4",
+      stage: "implement",
+      state: "dispatched",
+    });
+    expect(submitted).toBe(1);
+  });
+
+  it("does not revisit a start report while the dispatch is still in flight", async () => {
+    const store = new MemoryRunRepository();
+    const run = {
+      ...createRun(input),
+      revision: 4,
+      stage: "implement" as const,
+    };
+    await store.create(run);
+    await store.createAttempt({
+      id: "run_slice_rev_4",
+      runId: input.id,
+      runRevision: 4,
+      kind: "agent",
+      stage: "implement",
+      role: "implement",
+      state: "created",
+      deadlineAt: 150,
+      baseCommit: run.baseCommit,
+      expectedHead: run.currentHead,
+    });
+    await store.claimLease(
+      input.id,
+      4,
+      { attemptId: "run_slice_rev_4", runRevision: 4, expiresAt: 150 },
+      100,
+    );
+    let started = 0;
+    await expect(
+      coordinate(
+        store,
+        { submit: async () => undefined },
+        { runId: input.id, expectedRevision: 4 },
+        101,
+        50,
+        {
+          report: async () => undefined,
+          reportStarted: async () => {
+            started += 1;
+          },
+        },
+      ),
+    ).resolves.toBe("duplicate");
+    expect(started).toBe(0);
   });
 
   it("reports a holistic review start after dispatch but stays silent for specialists", async () => {
@@ -691,6 +841,144 @@ describe("single coordinator", () => {
     await expect(
       store.getAttempt("run_slice_rev_5_review-security"),
     ).resolves.toMatchObject({ state: "dispatched" });
+  });
+
+  it("keeps a durable holistic review dispatch successful when the start report fails", async () => {
+    const store = new MemoryRunRepository();
+    const run = {
+      ...createRun(input),
+      revision: 5,
+      stage: "review" as const,
+      currentHead: "b".repeat(40),
+    };
+    await store.create(run);
+    let submitted = 0;
+    const dispatcher = {
+      submit: async () => {
+        submitted += 1;
+      },
+    };
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await expect(
+        coordinate(
+          store,
+          dispatcher,
+          { runId: input.id, expectedRevision: 5 },
+          100,
+          50,
+          {
+            report: async () => undefined,
+            reportStarted: async () => {
+              throw new Error("review_pull_request_missing");
+            },
+          },
+        ),
+      ).resolves.toBe("dispatched");
+      expect(log).toHaveBeenCalledWith(
+        "report_started_failed",
+        expect.any(Error),
+      );
+    } finally {
+      log.mockRestore();
+    }
+    await expect(
+      store.getAttempt("run_slice_rev_5_review-holistic"),
+    ).resolves.toMatchObject({ state: "dispatched" });
+    // A duplicate wakeup while the review is running revisits the lost start
+    // report without redispatching the review attempt.
+    const started: Attempt[] = [];
+    await expect(
+      coordinate(
+        store,
+        dispatcher,
+        { runId: input.id, expectedRevision: 5 },
+        101,
+        50,
+        {
+          report: async () => undefined,
+          reportStarted: async (_run: RunSnapshot, attempt: Attempt) => {
+            started.push(attempt);
+          },
+        },
+      ),
+    ).resolves.toBe("duplicate");
+    expect(started.map((attempt) => attempt.role)).toEqual(["review-holistic"]);
+    expect(submitted).toBe(1);
+  });
+
+  it("does not revisit a start report for a dispatched specialist review", async () => {
+    const store = new MemoryRunRepository();
+    const run = {
+      ...createRun(input),
+      revision: 5,
+      stage: "review" as const,
+      currentHead: "b".repeat(40),
+    };
+    await store.create(run);
+    store.attempts.set("run_slice_rev_5_review-holistic", {
+      id: "run_slice_rev_5_review-holistic",
+      runId: input.id,
+      runRevision: 5,
+      kind: "agent",
+      stage: "review",
+      role: "review-holistic",
+      state: "completed",
+      deadlineAt: 1_000,
+      baseCommit: input.baseCommit,
+      expectedHead: run.currentHead,
+      acceptedHead: run.currentHead,
+      result: {
+        review: {
+          status: "clean",
+          findings: [],
+          selections: [
+            {
+              role: "review-security",
+              applicable: true,
+              rationale: "Authorization changed",
+            },
+            {
+              role: "review-data",
+              applicable: false,
+              rationale: "No data changes",
+            },
+          ],
+        },
+      },
+    });
+    let started = 0;
+    const reporter = {
+      report: async () => undefined,
+      reportStarted: async () => {
+        started += 1;
+      },
+    };
+    const dispatcher = { submit: async () => undefined };
+    await expect(
+      coordinate(
+        store,
+        dispatcher,
+        { runId: input.id, expectedRevision: 5 },
+        100,
+        50,
+        reporter,
+      ),
+    ).resolves.toBe("dispatched");
+    await expect(
+      store.getAttempt("run_slice_rev_5_review-security"),
+    ).resolves.toMatchObject({ state: "dispatched" });
+    await expect(
+      coordinate(
+        store,
+        dispatcher,
+        { runId: input.id, expectedRevision: 5 },
+        101,
+        50,
+        reporter,
+      ),
+    ).resolves.toBe("duplicate");
+    expect(started).toBe(0);
   });
 
   it("advances a recorded qualification only through the coordinator", async () => {

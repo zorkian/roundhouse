@@ -23,6 +23,47 @@ export interface AttemptReporter {
 
 export const attemptInactivityMilliseconds = 10 * 60_000;
 
+function startNotificationApplies(attempt: Attempt): boolean {
+  return (
+    attempt.stage === "implement" ||
+    (attempt.stage === "review" && attempt.role === "review-holistic")
+  );
+}
+
+// A start notification describes work that is already durably dispatched, so
+// delivering it must never change the coordination outcome: failures are
+// logged, and the reporter's immutable comment markers make revisiting the
+// notification safe.
+async function reportStarted(
+  reporter: AttemptReporter | undefined,
+  run: RunSnapshot,
+  attempt: Attempt,
+): Promise<void> {
+  if (!reporter?.reportStarted || !startNotificationApplies(attempt)) return;
+  try {
+    await reporter.reportStarted(run, attempt);
+  } catch (error) {
+    console.error("report_started_failed", error);
+  }
+}
+
+// A duplicate wakeup for a durably dispatched attempt revisits the start
+// notification without redispatching the work, so a comment that failed to
+// post earlier still goes out while the attempt is running. An attempt that
+// is only leased but not yet marked dispatched must stay silent: its
+// submission can still fail.
+async function revisitStarted(
+  repository: RunRepository,
+  reporter: AttemptReporter | undefined,
+  run: RunSnapshot,
+  attemptId: string,
+): Promise<void> {
+  if (!reporter?.reportStarted) return;
+  const attempt = await repository.getAttempt(attemptId);
+  if (attempt?.state === "dispatched")
+    await reportStarted(reporter, run, attempt);
+}
+
 export function qualificationTransition(attempt: Attempt) {
   const outcome = attempt.result?.qualification;
   if (!outcome || typeof outcome !== "object")
@@ -315,7 +356,10 @@ export async function coordinate(
     },
     now,
   );
-  if (!claimed) return "duplicate";
+  if (!claimed) {
+    await revisitStarted(repository, reporter, run, attemptId);
+    return "duplicate";
+  }
   const attempt: Attempt = {
     id: attemptId,
     runId: run.id,
@@ -339,8 +383,7 @@ export async function coordinate(
     throw error;
   }
   await repository.markDispatched(attemptId);
-  if (reporter?.reportStarted && attempt.stage === "implement")
-    await reporter.reportStarted(run, attempt);
+  await reportStarted(reporter, run, attempt);
   return "dispatched";
 }
 
@@ -364,7 +407,10 @@ async function dispatchReview(
     },
     now,
   );
-  if (!claimed) return "duplicate";
+  if (!claimed) {
+    await revisitStarted(repository, reporter, run, attemptId);
+    return "duplicate";
+  }
   const attempt: Attempt = {
     id: attemptId,
     runId: run.id,
@@ -385,7 +431,6 @@ async function dispatchReview(
     throw error;
   }
   await repository.markDispatched(attempt.id);
-  if (reporter?.reportStarted && role === "review-holistic")
-    await reporter.reportStarted(run, attempt);
+  await reportStarted(reporter, run, attempt);
   return "dispatched";
 }
