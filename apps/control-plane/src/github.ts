@@ -403,7 +403,8 @@ export class GitHubStageReporter implements AttemptReporter {
 
   private withDetails(run: RunSnapshot, body: string): string {
     const url = this.detailsUrl(run);
-    return url ? `${body}\n\n[View Roundhouse run details](${url})` : body;
+    const suffix = url ? `\n\n[View Roundhouse run details](${url})` : "";
+    return `${body.slice(0, 65_000 - suffix.length)}${suffix}`;
   }
 
   async report(run: RunSnapshot, attempt: Attempt): Promise<void> {
@@ -452,7 +453,7 @@ export class GitHubStageReporter implements AttemptReporter {
       await this.github.post(
         `/repos/${run.repository}/issues/${pullRequest.number}/comments`,
         {
-          body: this.withDetails(run, reviewComment(attempt)).slice(0, 65_000),
+          body: this.withDetails(run, reviewComment(attempt)),
         },
       );
       return;
@@ -506,7 +507,7 @@ export class GitHubStageReporter implements AttemptReporter {
           body: this.withDetails(
             run,
             implementationComment(attempt, pullRequest, created),
-          ).slice(0, 65_000),
+          ),
         },
       );
       return;
@@ -515,10 +516,7 @@ export class GitHubStageReporter implements AttemptReporter {
       await this.github.post(
         `/repos/${run.repository}/issues/${run.issueNumber}/comments`,
         {
-          body: this.withDetails(run, reproductionComment(run, attempt)).slice(
-            0,
-            65_000,
-          ),
+          body: this.withDetails(run, reproductionComment(run, attempt)),
         },
       );
       return;
@@ -527,10 +525,7 @@ export class GitHubStageReporter implements AttemptReporter {
       await this.github.post(
         `/repos/${run.repository}/issues/${run.issueNumber}/comments`,
         {
-          body: this.withDetails(run, planComment(run, attempt)).slice(
-            0,
-            65_000,
-          ),
+          body: this.withDetails(run, planComment(run, attempt)),
         },
       );
       return;
@@ -558,7 +553,7 @@ export class GitHubStageReporter implements AttemptReporter {
               ? ["", "I’ll check what the project does today."]
               : []),
           ].join("\n"),
-        ).slice(0, 65_000),
+        ),
       },
     );
   }

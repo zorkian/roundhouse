@@ -145,6 +145,38 @@ describe("GitHub intake", () => {
     );
   });
 
+  it("preserves the run-details link when comment content is truncated", async () => {
+    const run = createRun({
+      id: "run_long_comment",
+      repository: "zorkian/roundhouse",
+      issueNumber: 42,
+      baseCommit: "a".repeat(40),
+      profileVersion: "v2",
+    });
+    const body = await reportedBodyWithDetails(run, {
+      id: "qualification",
+      runId: run.id,
+      runRevision: 1,
+      kind: "agent",
+      stage: "qualify",
+      role: "qualify",
+      state: "completed",
+      deadlineAt: 1,
+      baseCommit: run.baseCommit,
+      expectedHead: run.currentHead,
+      result: {
+        qualification: {
+          classification: "feature",
+          summary: "x".repeat(70_000),
+        },
+      },
+    });
+    expect(body).toHaveLength(65_000);
+    expect(body).toMatch(
+      /\n\n\[View Roundhouse run details\]\(https:\/\/roundhouse\.example\/repositories\/zorkian\/roundhouse\/issues\/42\)$/,
+    );
+  });
+
   it("links pull requests to run details and GitHub's Files changed view", async () => {
     const patched: unknown[] = [];
     const reporter = new GitHubStageReporter(

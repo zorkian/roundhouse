@@ -217,4 +217,40 @@ describe("run details", () => {
     expect(html).toContain("No attempts recorded");
     expect(html).toContain("Unavailable");
   });
+
+  it("does not label an unaccepted merge head as merged", () => {
+    const html = renderRunDetails({
+      run: {
+        schemaVersion: 2,
+        id: "run_failed_merge",
+        repository: "zorkian/roundhouse",
+        issueNumber: 2,
+        baseCommit: "base",
+        currentHead: "candidate",
+        profileVersion: "test",
+        status: "failed",
+        stage: "merge",
+        revision: 1,
+      },
+      createdAt: 1,
+      updatedAt: 2,
+      attempts: [
+        {
+          id: "merge",
+          runId: "run_failed_merge",
+          runRevision: 1,
+          kind: "external",
+          stage: "merge",
+          role: "github-merge",
+          state: "failed",
+          deadlineAt: 2,
+          baseCommit: "base",
+          expectedHead: "candidate",
+          createdAt: 1,
+          updatedAt: 2,
+        },
+      ],
+    });
+    expect(html).toContain("<dt>Merged</dt><dd><code>Unavailable</code></dd>");
+  });
 });
