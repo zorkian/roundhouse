@@ -154,6 +154,7 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
 const prices: Record<string, readonly [number, number, number]> = {
   "openai/gpt-5": [1.25, 0.125, 10],
   "openai/gpt-5.2": [1.75, 0.175, 14],
+  "openai/gpt-5.6-sol": [1.75, 0.175, 14],
 };
 export function extractModelUsage(
   text: string,

@@ -22,6 +22,24 @@ describe("model usage", () => {
     });
   });
 
+  it("calculates cost for the configured routing model", () => {
+    const usage = extractModelUsage(
+      JSON.stringify({
+        id: "resp_sol",
+        model: "openai/gpt-5.6-sol",
+        usage: {
+          input_tokens: 1000,
+          input_tokens_details: { cached_tokens: 400 },
+          output_tokens: 100,
+          total_tokens: 1100,
+        },
+      }),
+      "attempt_sol",
+      "openai/gpt-5.6-sol",
+    );
+    expect(usage?.costUsd).toBe(0.00252);
+  });
+
   it("aggregates retries once per stored call and preserves unavailable fields", () => {
     const calls = [
       {
