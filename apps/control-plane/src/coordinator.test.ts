@@ -1756,6 +1756,7 @@ describe("single coordinator", () => {
 
   it("rejects integration results with mismatched candidate or base identities", () => {
     const candidate = "b".repeat(40);
+    const published = "c".repeat(40);
     const base = "d".repeat(40);
     const resolved = "e".repeat(40);
     const attempt = attemptFixture({
@@ -1781,15 +1782,34 @@ describe("single coordinator", () => {
       acceptedHead: resolved,
       heads: { targetBaseHead: base, integrationHead: resolved },
     });
-    // A completion that reports a different candidate than the reviewed head
-    // the attempt was bound to is stale.
+    // Reintegration may check out a prior published/resolution tip while still
+    // advertising the reviewed candidate identity for role selection.
+    expect(
+      integrateTransition({
+        ...attempt,
+        expectedHead: published,
+        result: {
+          integration: {
+            status: "clean",
+            candidateHead: candidate,
+            baseHead: base,
+            head: resolved,
+          },
+        },
+      }),
+    ).toEqual({
+      status: "active",
+      stage: "integrate",
+      acceptedHead: resolved,
+      heads: { targetBaseHead: base, integrationHead: resolved },
+    });
+    // A conflict resolution without a concrete candidate identity is stale.
     expect(
       integrateTransition({
         ...attempt,
         result: {
           integration: {
             status: "clean",
-            candidateHead: "c".repeat(40),
             baseHead: base,
             head: resolved,
           },
@@ -1845,6 +1865,80 @@ describe("single coordinator", () => {
       acceptedHead: resolved,
       heads: { integrationHead: resolved },
     });
+  });
+
+  it("advances a reintegration conflict resolution to delta review using the reviewed candidate identity", async () => {
+    const store = new MemoryRunRepository();
+    const candidate = "b".repeat(40);
+    const published = "c".repeat(40);
+    const base = "d".repeat(40);
+    const resolved = "e".repeat(40);
+    // Simulate the post-transition state after conflict resolution checked out
+    // a prior published tip but recorded the reviewed candidate identity.
+    await store.create(
+      runFixture({
+        revision: 12,
+        stage: "integrate",
+        currentNodeId: "integrate",
+        currentHead: resolved,
+        candidateHead: candidate,
+        reviewedHead: candidate,
+        targetBaseHead: base,
+        integrationHead: resolved,
+      }),
+    );
+    await store.createAttempt({
+      id: "run_slice_rev_11",
+      runId: input.id,
+      runRevision: 11,
+      kind: "agent",
+      stage: "integrate",
+      role: "conflict-resolution",
+      state: "completed",
+      deadlineAt: 1_000,
+      baseCommit: base,
+      expectedHead: published,
+      acceptedHead: resolved,
+      result: {
+        integration: {
+          status: "clean",
+          candidateHead: candidate,
+          baseHead: base,
+          head: resolved,
+          resolution: {
+            summary: "Resolved",
+            resolvedFiles: ["src/route.ts"],
+            validation: [],
+          },
+        },
+      },
+    });
+    const submitted: Attempt[] = [];
+    await expect(
+      coordinate(
+        store,
+        {
+          submit: async (attempt: Attempt) => {
+            submitted.push(attempt);
+          },
+        },
+        { runId: input.id, expectedRevision: 12 },
+        101,
+      ),
+    ).resolves.toBe("dispatched");
+    expect(submitted).toHaveLength(1);
+    expect(submitted[0]).toMatchObject({
+      role: "review-integration",
+      stage: "integrate",
+      expectedHead: resolved,
+    });
+    expect(
+      store.events.some(
+        (event) =>
+          event.kind === "integration_role_selected" &&
+          event.payload.reason === "current_conflict_resolution_completed",
+      ),
+    ).toBe(true);
   });
 
   it("retries mechanical integration against a moved base without repeating earlier stages", async () => {
@@ -1904,7 +1998,7 @@ describe("single coordinator", () => {
     });
   });
 
-  it("resolves a reintegration conflict from the published branch head", async () => {
+  it("resolves a reintegration conflict from the reviewed candidate head", async () => {
     const store = new MemoryRunRepository();
     const reviewed = "b".repeat(40);
     const published = "e".repeat(40);
@@ -1914,6 +2008,9 @@ describe("single coordinator", () => {
         revision: 10,
         stage: "integrate",
         currentNodeId: "integrate",
+        // A prior published/resolution tip must not become the conflict-
+        // resolution checkout: mechanical integrate conflicted from the
+        // reviewed candidate, so resolution must start there too.
         currentHead: published,
         candidateHead: reviewed,
         reviewedHead: reviewed,
@@ -1958,8 +2055,80 @@ describe("single coordinator", () => {
       role: "conflict-resolution",
       stage: "integrate",
       baseCommit: movedBase,
-      expectedHead: published,
+      expectedHead: reviewed,
     });
+    expect(
+      store.events.some(
+        (event) =>
+          event.kind === "integration_role_selected" &&
+          event.payload.reason === "current_integration_conflicted",
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps editing the resolution tip after integration delta review requests changes", async () => {
+    const store = new MemoryRunRepository();
+    const reviewed = "b".repeat(40);
+    const resolved = "e".repeat(40);
+    const base = "f".repeat(40);
+    await store.create(
+      runFixture({
+        revision: 10,
+        stage: "integrate",
+        currentNodeId: "integrate",
+        currentHead: resolved,
+        candidateHead: reviewed,
+        reviewedHead: reviewed,
+        targetBaseHead: base,
+        integrationHead: undefined,
+      }),
+    );
+    await store.createAttempt({
+      id: "run_slice_rev_9",
+      runId: input.id,
+      runRevision: 9,
+      kind: "agent",
+      stage: "integrate",
+      role: "review-integration",
+      state: "completed",
+      deadlineAt: 1_000,
+      baseCommit: base,
+      expectedHead: resolved,
+      acceptedHead: resolved,
+      result: {
+        review: {
+          status: "changes_requested",
+          findings: [{ title: "Adjust resolution" }],
+        },
+      },
+    });
+    const submitted: Attempt[] = [];
+    await expect(
+      coordinate(
+        store,
+        {
+          submit: async (attempt: Attempt) => {
+            submitted.push(attempt);
+          },
+        },
+        { runId: input.id, expectedRevision: 10 },
+        100,
+      ),
+    ).resolves.toBe("dispatched");
+    expect(submitted[0]).toMatchObject({
+      role: "conflict-resolution",
+      stage: "integrate",
+      baseCommit: base,
+      expectedHead: resolved,
+    });
+    expect(
+      store.events.some(
+        (event) =>
+          event.kind === "integration_role_selected" &&
+          event.payload.reason ===
+            "current_integration_review_requested_changes",
+      ),
+    ).toBe(true);
   });
 
   it("requires exact successful CI before merge", () => {

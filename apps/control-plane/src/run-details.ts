@@ -18,8 +18,12 @@ const escapeHtml = (value: unknown) =>
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
 
+function validPullRequest(url: unknown): url is string {
+  return typeof url === "string" && /^https:\/\//.test(url);
+}
+
 function link(url: unknown, label: string): string {
-  return typeof url === "string" && /^https:\/\//.test(url)
+  return validPullRequest(url)
     ? `<a href="${escapeHtml(url)}">${escapeHtml(label)}</a>`
     : "Unavailable";
 }
@@ -97,6 +101,45 @@ function attemptLinks(attempt: Attempt): string {
   )
     return "";
   return `<h4>Related links</h4><p>${link(pullRequest.html_url, pullRequest.number ? `Pull request #${pullRequest.number}` : "Pull request")}</p>`;
+}
+
+function resultSummary(attempt: Attempt): string | undefined {
+  const result = attempt.result;
+  if (!result) return undefined;
+  const entries = [result, ...Object.values(result)];
+  for (const entry of entries) {
+    if (
+      entry &&
+      typeof entry === "object" &&
+      typeof (entry as { summary?: unknown }).summary === "string"
+    )
+      return (entry as { summary: string }).summary;
+  }
+  return undefined;
+}
+
+function stageResultSummary(attempt: Attempt): string {
+  const summary = resultSummary(attempt);
+  if (summary) return summary;
+  const stage = stageLabel(attempt.stage);
+  if (attempt.state === "completed") return `${stage} completed.`;
+  if (attempt.state === "failed") return `${stage} failed.`;
+  return `${stage} is in progress.`;
+}
+
+function runStatusSummary(status: RunStatus, stage: string): string {
+  switch (status) {
+    case "active":
+      return `The run is in progress at ${stage}.`;
+    case "waiting":
+      return `The run is waiting at ${stage}.`;
+    case "succeeded":
+      return `The run succeeded after ${stage}.`;
+    case "failed":
+      return `The run failed during ${stage}.`;
+    case "cancelled":
+      return `The run was cancelled during ${stage}.`;
+  }
 }
 
 function usageTable(items: NonNullable<RunDetails["usage"]>): string {
@@ -361,52 +404,47 @@ export function renderRunDetails(
     (left, right) =>
       left.createdAt - right.createdAt || left.id.localeCompare(right.id),
   );
-  const attemptOutcome = (attempt: DetailsAttempt): string =>
-    `${attempt.outcome ? `<h4>Executor outcome</h4>${value(attempt.outcome)}` : ""}${attempt.result === undefined ? "" : `<h4>Result</h4>${attemptResult(attempt)}`}${attemptLinks(attempt)}`;
   const rows = chronological
-    .map(
-      (
-        attempt,
-      ) => `<details class="attempt"><summary class="attempt-summary"><span><span class="label">Revision</span>${escapeHtml(attempt.runRevision ?? "Unavailable")}</span><span class="phase">${escapeHtml(stageLabel(attempt.stage))}</span><span><span class="label">Started</span>${escapeHtml(timestamp(attempt.createdAt))}</span><span><span class="label">Elapsed</span>${escapeHtml(elapsed(attempt.createdAt, attempt.updatedAt))}</span><span><span class="label">Status</span>${escapeHtml(attempt.state)}</span></summary><div class="attempt-details">
-${executionDisplay(details, attempt)}${attemptOutcome(attempt)}<details class="diagnostics"><summary class="diagnostics-summary">Diagnostics</summary><dl><dt>Role</dt><dd>${escapeHtml(attempt.role ?? "Unavailable")}</dd><dt>Revision</dt><dd>${escapeHtml(attempt.runRevision ?? "Unavailable")}</dd><dt>Updated</dt><dd>${escapeHtml(timestamp(attempt.updatedAt))}</dd><dt>Base commit</dt><dd><code>${escapeHtml(attempt.baseCommit ?? "Unavailable")}</code></dd><dt>Expected head</dt><dd><code>${escapeHtml(attempt.expectedHead ?? "Unavailable")}</code></dd><dt>Accepted head</dt><dd><code>${escapeHtml(attempt.acceptedHead ?? "Unavailable")}</code></dd><dt>Effective capabilities</dt><dd>${value(attempt.capabilities ?? [])}</dd></dl>
-${workflowEvidence(details, attempt)}<h4>Model routing</h4>${value(attempt.routing)}<h4>Model usage total</h4><p>${usageDisplay(usage.filter((item) => item.attemptId === attempt.id))}</p>${usageTable(usage.filter((item) => item.attemptId === attempt.id))}</details></div></details>`,
-    )
+    .map((attempt) => {
+      const attemptUsage = usage.filter(
+        (item) => item.attemptId === attempt.id,
+      );
+      return `<details class="attempt"><summary class="attempt-summary"><span><span class="label">Revision</span>${escapeHtml(attempt.runRevision ?? "Unavailable")}</span><span class="phase">${escapeHtml(stageLabel(attempt.stage))}</span><span><span class="label">Started</span>${escapeHtml(timestamp(attempt.createdAt))}</span><span><span class="label">Elapsed</span>${escapeHtml(elapsed(attempt.createdAt, attempt.updatedAt))}</span><span><span class="label">Status</span>${escapeHtml(attempt.state)}</span></summary><div class="attempt-details"><h3>${escapeHtml(stageLabel(attempt.stage))}</h3><p class="stage-result">${escapeHtml(stageResultSummary(attempt))}</p><dl><dt>Status</dt><dd>${escapeHtml(attempt.state)}</dd><dt>Started</dt><dd>${escapeHtml(timestamp(attempt.createdAt))}</dd><dt>Updated</dt><dd>${escapeHtml(timestamp(attempt.updatedAt))}</dd><dt>Elapsed</dt><dd>${escapeHtml(elapsed(attempt.createdAt, attempt.updatedAt))}</dd></dl>
+${executionDisplay(details, attempt)}${attemptLinks(attempt)}<details class="diagnostics"><summary class="diagnostics-summary">Diagnostics</summary>${attempt.outcome ? `<h4>Executor outcome</h4>${value(attempt.outcome)}` : ""}${attempt.result === undefined ? "" : `<h4>Result</h4>${attemptResult(attempt)}`}<dl><dt>Role</dt><dd>${escapeHtml(attempt.role ?? "Unavailable")}</dd><dt>Revision</dt><dd>${escapeHtml(attempt.runRevision ?? "Unavailable")}</dd><dt>Base commit</dt><dd><code>${escapeHtml(attempt.baseCommit ?? "Unavailable")}</code></dd><dt>Expected head</dt><dd><code>${escapeHtml(attempt.expectedHead ?? "Unavailable")}</code></dd><dt>Accepted head</dt><dd><code>${escapeHtml(attempt.acceptedHead ?? "Unavailable")}</code></dd><dt>Effective capabilities</dt><dd>${value(attempt.capabilities ?? [])}</dd></dl>
+${workflowEvidence(details, attempt)}<h4>Model routing</h4>${value(attempt.routing)}<h4>Model usage total</h4><p>${usageDisplay(attemptUsage)}</p>${usageTable(attemptUsage)}</details></div></details>`;
+    })
     .join("");
   const latestAttempt = chronological[chronological.length - 1];
-  const outcomeParts: string[] = [];
+  const lastCompleted = [...chronological]
+    .reverse()
+    .find((attempt) => attempt.state === "completed");
+  const outcomeParts = [
+    `<p>${escapeHtml(runStatusSummary(run.status, currentStage))}</p>`,
+  ];
   if (run.status === "waiting" && run.waitingReason)
     outcomeParts.push(
       `<dl><dt>Waiting on</dt><dd>${escapeHtml(run.waitingReason.replaceAll("_", " "))}</dd></dl>`,
     );
-  if (latestAttempt) {
-    const heading = (attempt: DetailsAttempt, label: string): string =>
-      `<h3>${label} · ${escapeHtml(stageLabel(attempt.stage))} · ${escapeHtml(attempt.state)}</h3>`;
-    const execution = executionDisplay(details, latestAttempt);
-    const outcome = attemptOutcome(latestAttempt);
-    if (outcome)
-      outcomeParts.push(
-        `${heading(latestAttempt, "Latest attempt")}${execution}${outcome}`,
-      );
-    else {
-      if (execution)
-        outcomeParts.push(
-          `${heading(latestAttempt, "Latest attempt")}${execution}`,
-        );
-      const lastCompleted = [...chronological]
-        .reverse()
-        .find((attempt) => attemptOutcome(attempt));
-      if (lastCompleted)
-        outcomeParts.push(
-          `${heading(lastCompleted, "Last completed stage")}${attemptOutcome(lastCompleted)}`,
-        );
-    }
-  }
-  const outcomeSection = outcomeParts.length
-    ? `<section><h2>Outcome</h2>${outcomeParts.join("")}</section>`
-    : "";
+  if (latestAttempt && resultSummary(latestAttempt))
+    outcomeParts.push(
+      `<p><strong>${escapeHtml(stageLabel(latestAttempt.stage))}:</strong> ${escapeHtml(stageResultSummary(latestAttempt))}</p>`,
+    );
+  if (
+    latestAttempt &&
+    !resultSummary(latestAttempt) &&
+    lastCompleted &&
+    lastCompleted.id !== latestAttempt.id
+  )
+    outcomeParts.push(
+      `<p>Most recently completed: <strong>${escapeHtml(stageLabel(lastCompleted.stage))}</strong> — ${escapeHtml(stageResultSummary(lastCompleted))}</p>`,
+    );
+  if (validPullRequest(prUrl))
+    outcomeParts.push(
+      `<p>${link(prUrl, pr?.number ? `Pull request #${pr.number}` : "Pull request")}</p>`,
+    );
+  const outcomeSection = `<section><h2>Outcome</h2>${outcomeParts.join("")}</section>`;
   const runDiagnostics = `<details class="diagnostics"><summary class="diagnostics-summary">Run diagnostics</summary><dl><dt>Authored candidate head</dt><dd><code>${escapeHtml(run.candidateHead ?? "Unavailable")}</code></dd><dt>Reviewed candidate head</dt><dd><code>${escapeHtml(run.reviewedHead ?? "Unavailable")}</code></dd><dt>Target base head</dt><dd><code>${escapeHtml(run.targetBaseHead ?? "Unavailable")}</code></dd><dt>Validated integration head</dt><dd><code>${escapeHtml(run.integrationHead ?? "Unavailable")}</code></dd></dl></details>`;
-  const validPrUrl =
-    typeof prUrl === "string" && /^https:\/\//.test(prUrl) ? prUrl : undefined;
+  const validPrUrl = validPullRequest(prUrl) ? prUrl : undefined;
   const prRow = validPrUrl
     ? `<dt>Pull request</dt><dd>${link(validPrUrl, pr?.number ? `Pull request #${pr.number}` : "Pull request")} · ${link(`${validPrUrl}/files`, "Files changed")}</dd>`
     : "";
