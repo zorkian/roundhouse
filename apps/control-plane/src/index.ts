@@ -38,6 +38,15 @@ import { renderDashboard } from "./dashboard.js";
 import { renderRunDetails } from "./run-details.js";
 import { renderWorkflowView } from "./workflow-view.js";
 import {
+  beginGitHubSignIn,
+  handleGitHubCallback,
+  renderNotFoundPage,
+  renderSignInPage,
+  signOut,
+  validateUiSession,
+  type UiSession,
+} from "./ui-auth.js";
+import {
   acceptGitHubCheckSuite,
   acceptGitHubPullRequest,
   GitHubCiAutomation,
@@ -67,8 +76,9 @@ function json(value: unknown, status = 200, headers?: HeadersInit): Response {
   });
 }
 
-function html(value: string): Response {
+function html(value: string, status = 200): Response {
   return new Response(value, {
+    status,
     headers: {
       "cache-control": "no-store",
       "content-security-policy":
@@ -444,6 +454,8 @@ type RuntimeEnv = Cloudflare.Env & {
   BACKUP_BUCKET: R2Bucket;
   CALLBACK_SIGNING_SECRET: string;
   GITHUB_APP_ID: string;
+  GITHUB_CLIENT_ID: string;
+  ROUNDHOUSE_GITHUB_CLIENT_SECRET: string;
   ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY: string;
   ROUNDHOUSE_GITHUB_WEBHOOK_SECRET: string;
 };
@@ -1251,14 +1263,76 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
         },
       });
     }
+    // Browser authentication lives only on the public UI hostname; every
+    // other hostname and capability boundary is unchanged.
+    if (url.pathname === "/auth/github" && isPublicUiRequest()) {
+      if (request.method !== "GET")
+        return json({ error: "method_not_allowed" }, 405, { allow: "GET" });
+      return beginGitHubSignIn(env);
+    }
+    if (url.pathname === "/auth/github/callback" && isPublicUiRequest()) {
+      if (request.method !== "GET")
+        return json({ error: "method_not_allowed" }, 405, { allow: "GET" });
+      return handleGitHubCallback(url, env, html);
+    }
+    if (url.pathname === "/auth/sign-out" && isPublicUiRequest()) {
+      if (request.method !== "GET")
+        return json({ error: "method_not_allowed" }, 405, { allow: "GET" });
+      return signOut(request, env);
+    }
+    const isUiRoute =
+      url.pathname === "/" ||
+      url.pathname === "/runs" ||
+      /^\/repositories\/[^/]+\/[^/]+\/(workflow|issues\/\d+)$/.test(
+        url.pathname,
+      );
+    let uiSession: UiSession | undefined;
+    if (isUiRoute && isPublicUiRequest()) {
+      const boundaryStartedAt = Date.now();
+      uiSession = await validateUiSession(request, env);
+      if (!uiSession) {
+        console.log(
+          JSON.stringify({
+            message: "ui_route_authorization",
+            outcome: "signed_out",
+            path: url.pathname,
+            durationMs: Date.now() - boundaryStartedAt,
+          }),
+        );
+        return html(renderSignInPage());
+      }
+      console.log(
+        JSON.stringify({
+          message: "ui_route_authorization",
+          outcome: "authorized",
+          path: url.pathname,
+          githubUserId: uiSession.githubUserId,
+          durationMs: Date.now() - boundaryStartedAt,
+        }),
+      );
+    }
     if (
       (url.pathname === "/" || url.pathname === "/runs") &&
       isPublicUiRequest()
     ) {
       if (request.method !== "GET")
         return json({ error: "method_not_allowed" }, 405, { allow: "GET" });
-      const runs = await new D1RunRepository(env.DB).listRuns();
-      return html(renderDashboard(runs));
+      const queryStartedAt = Date.now();
+      const runs = await new D1RunRepository(env.DB).listRunsForRepositories(
+        uiSession!.repositoryIds,
+      );
+      console.log(
+        JSON.stringify({
+          message: "ui_authorized_query",
+          operation: "dashboard_runs",
+          outcome: "completed",
+          runs: runs.length,
+          durationMs: Date.now() - queryStartedAt,
+        }),
+      );
+      return html(
+        renderDashboard(runs, { githubLogin: uiSession!.githubLogin }),
+      );
     }
     const workflowMatch = url.pathname.match(
       /^\/repositories\/([^/]+)\/([^/]+)\/workflow$/,
@@ -1271,11 +1345,11 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
         return json({ error: "not_found" }, 404);
       }
       const repository = new D1RunRepository(env.DB);
-      const summary = (await repository.listRuns()).find(
-        (candidate) => candidate.run.repository === repositoryName,
+      const run = await repository.latestWorkflowRunForRepository(
+        repositoryName,
+        uiSession!.repositoryIds,
       );
-      const run = summary ? await repository.get(summary.run.id) : undefined;
-      if (!run?.profile?.workflow) return json({ error: "not_found" }, 404);
+      if (!run?.profile?.workflow) return html(renderNotFoundPage(), 404);
       if (request.method === "GET") {
         console.log(
           JSON.stringify({
@@ -1373,8 +1447,9 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       const details = await new D1RunRepository(env.DB).detailsByIssue(
         repository,
         Number(issueNumber),
+        uiSession!.repositoryIds,
       );
-      if (!details) return json({ error: "not_found" }, 404);
+      if (!details) return html(renderNotFoundPage(), 404);
       return html(renderRunDetails(details));
     }
     if (url.pathname === "/attempts/activity") {

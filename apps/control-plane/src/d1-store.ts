@@ -242,15 +242,74 @@ export class D1RunRepository implements RunRepository {
     );
   }
 
+  // Dashboard reads are authorized by stable GitHub repository ID in SQL
+  // before ordering and the 50-run recency limit are applied.
+  async listRunsForRepositories(
+    githubRepositoryIds: readonly string[],
+    limit = 50,
+  ): Promise<readonly RunSummary[]> {
+    if (!githubRepositoryIds.length) return [];
+    const placeholders = githubRepositoryIds
+      .map((_, index) => `?${index + 1}`)
+      .join(",");
+    const result = await this.db
+      .prepare(
+        `SELECT r.document_json,r.created_at,r.updated_at,w.github_issue_state FROM repositories p JOIN work_items w ON w.repository_id=p.id JOIN runs r ON r.work_item_id=w.id WHERE p.github_id IN (${placeholders}) ORDER BY r.updated_at DESC LIMIT ?${githubRepositoryIds.length + 1}`,
+      )
+      .bind(...githubRepositoryIds, limit)
+      .all<{
+        document_json: string;
+        created_at: number;
+        updated_at: number;
+        github_issue_state: "open" | "closed";
+      }>();
+    return Promise.all(
+      (result.results ?? []).map(async (row) => {
+        const run = JSON.parse(row.document_json) as RunSnapshot;
+        return {
+          run,
+          githubIssueState: row.github_issue_state,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+          usage: await this.usageForRun(run.id),
+        };
+      }),
+    );
+  }
+
+  // Latest workflow-bearing run for one repository, authorized by stable
+  // GitHub repository ID, without loading the global recent-run list.
+  async latestWorkflowRunForRepository(
+    repository: string,
+    githubRepositoryIds: readonly string[],
+  ): Promise<RunSnapshot | undefined> {
+    if (!githubRepositoryIds.length) return undefined;
+    const placeholders = githubRepositoryIds
+      .map((_, index) => `?${index + 2}`)
+      .join(",");
+    const row = await this.db
+      .prepare(
+        `SELECT r.id FROM repositories p JOIN work_items w ON w.repository_id=p.id JOIN runs r ON r.work_item_id=w.id WHERE json_extract(p.profile_json,'$.repository')=?1 AND p.github_id IN (${placeholders}) ORDER BY r.updated_at DESC LIMIT 1`,
+      )
+      .bind(repository, ...githubRepositoryIds)
+      .first<{ id: string }>();
+    return row ? this.get(row.id) : undefined;
+  }
+
   async detailsByIssue(
     repository: string,
     issueNumber: number,
+    githubRepositoryIds?: readonly string[],
   ): Promise<RunDetails | undefined> {
+    if (githubRepositoryIds && !githubRepositoryIds.length) return undefined;
+    const authorization = githubRepositoryIds
+      ? ` AND p.github_id IN (${githubRepositoryIds.map((_, index) => `?${index + 3}`).join(",")})`
+      : "";
     const row = await this.db
       .prepare(
-        "SELECT r.document_json,r.created_at,r.updated_at FROM repositories p JOIN work_items w ON w.repository_id=p.id JOIN runs r ON r.id=w.current_run_id WHERE json_extract(p.profile_json,'$.repository')=?1 AND w.issue_number=?2",
+        `SELECT r.document_json,r.created_at,r.updated_at FROM repositories p JOIN work_items w ON w.repository_id=p.id JOIN runs r ON r.id=w.current_run_id WHERE json_extract(p.profile_json,'$.repository')=?1 AND w.issue_number=?2${authorization}`,
       )
-      .bind(repository, issueNumber)
+      .bind(repository, issueNumber, ...(githubRepositoryIds ?? []))
       .first<{
         document_json: string;
         created_at: number;
