@@ -27,6 +27,8 @@ function authDb(options?: {
     hash: string;
     expiresAt: number;
     createdAt?: number;
+    accessToken?: string | null;
+    authorizedAt?: number | null;
   }[];
   // Hook invoked after the session SELECT but before the renewal UPDATE
   // commits, to simulate a concurrent write landing in between.
@@ -46,6 +48,14 @@ function authDb(options?: {
         repository_ids_json: '["1297678423"]',
         expires_at: session.expiresAt,
         created_at: session.createdAt ?? Date.now(),
+        github_access_token:
+          session.accessToken === undefined
+            ? "user-token"
+            : session.accessToken,
+        authorized_at:
+          session.authorizedAt === undefined
+            ? (session.createdAt ?? Date.now())
+            : session.authorizedAt,
       },
     ]),
   );
@@ -74,7 +84,7 @@ function authDb(options?: {
             // Mirrors UPDATE ... MAX() ... RETURNING: apply any concurrent
             // write that landed after our SELECT, keep the later deadline,
             // and return the actual persisted expiration.
-            const hash = String(values[1]);
+            const hash = String(values[3]);
             options?.beforeRenewalCommit?.(hash);
             const session = sessions.get(hash);
             if (!session) return null;
@@ -82,6 +92,8 @@ function authDb(options?: {
               session.expires_at,
               Number(values[0]),
             );
+            session.repository_ids_json = String(values[1]);
+            session.authorized_at = Number(values[2]);
             return { expires_at: session.expires_at };
           }
           if (sql.includes("FROM ui_sessions")) {
@@ -114,6 +126,8 @@ function authDb(options?: {
               repository_ids_json: String(values[3]),
               expires_at: Number(values[4]),
               created_at: Number(values[5]),
+              github_access_token: String(values[6]),
+              authorized_at: Number(values[7]),
             });
           if (sql.includes("DELETE FROM ui_sessions WHERE session_hash")) {
             if (sql.includes("expires_at <= ?2"))
@@ -231,10 +245,13 @@ describe("GitHub UI sign-in", () => {
     expect(cookie).toContain("SameSite=Lax");
     // State is one-time: consumed by the callback.
     expect(states.size).toBe(0);
-    // Only the enrolled repository ID was stored; GitHub tokens were not.
+    // Only the enrolled repository ID was stored, alongside the GitHub
+    // access token used to re-resolve authorization when it goes stale.
     const session = [...sessions.values()][0]!;
     expect(session.github_login).toBe("octocat");
     expect(JSON.parse(session.repository_ids_json)).toEqual(["1297678423"]);
+    expect(session.github_access_token).toBe("user-token");
+    expect(session.authorized_at).toBeGreaterThan(0);
     // The session and its cookie share a lifetime of at least 30 days.
     expect(session.expires_at - Date.now()).toBeGreaterThanOrEqual(
       30 * 24 * 60 * 60 * 1000 - 60_000,
@@ -251,9 +268,9 @@ describe("GitHub UI sign-in", () => {
     expect(cookie).toContain(
       `Expires=${new Date(session.expires_at).toUTCString()}`,
     );
-    expect(JSON.stringify([...sessions.values()])).not.toContain("user-token");
-    // The access token never appears in the redirect target.
+    // The access token never appears in the redirect target or the cookie.
     expect(response.headers.get("location")).not.toContain("token");
+    expect(cookie).not.toContain("user-token");
   });
 
   it("includes enrolled public repositories not listed for the user", async () => {
@@ -471,7 +488,16 @@ describe("GitHub UI sign-in", () => {
       // valid visit renews for a full lifetime from that activity.
       const createdAt = Date.now() - 31 * 24 * 60 * 60 * 1000;
       const { db, sessions } = authDb({
-        sessions: [{ hash, expiresAt: Date.now() + 60_000, createdAt }],
+        sessions: [
+          {
+            hash,
+            expiresAt: Date.now() + 60_000,
+            createdAt,
+            // Repository authorization was re-resolved recently, so no
+            // GitHub recheck is needed for this renewal.
+            authorizedAt: Date.now() - 60_000,
+          },
+        ],
       });
       const session = await validateUiSession(
         new Request("https://v2.invalid/", {
@@ -485,6 +511,138 @@ describe("GitHub UI sign-in", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("re-resolves repository authorization against GitHub once the snapshot is stale", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      const token = "stale-authorization-session";
+      const hash = await sha256Hex(token);
+      const authorizedAt = Date.now() - 9 * 60 * 60 * 1000;
+      const { db, sessions } = authDb({
+        sessions: [{ hash, expiresAt: Date.now() + 60_000, authorizedAt }],
+      });
+      stubGitHubOAuth([{ id: 1297678423 }, { id: 42 }]);
+      const logs: Record<string, unknown>[] = [];
+      const logSpy = vi
+        .spyOn(console, "log")
+        .mockImplementation((line: unknown) => {
+          logs.push(JSON.parse(String(line)) as Record<string, unknown>);
+        });
+      const session = await validateUiSession(
+        new Request("https://v2.invalid/", {
+          headers: { cookie: `${uiSessionCookie}=${token}` },
+        }),
+        env(db),
+      );
+      expect(session).toBeDefined();
+      expect(session?.repositoryIds).toEqual(["1297678423"]);
+      const stored = sessions.get(hash)!;
+      expect(JSON.parse(stored.repository_ids_json)).toEqual(["1297678423"]);
+      expect(stored.authorized_at).toBe(Date.now());
+      expect(stored.expires_at).toBe(Date.now() + uiSessionLifetimeMs);
+      const reauthorized = logs.find(
+        (entry) => entry.message === "ui_session_reauthorized",
+      );
+      expect(reauthorized).toMatchObject({
+        outcome: "refreshed",
+        githubUserId: 7,
+        previousAuthorizedAt: authorizedAt,
+        authorizedAt: Date.now(),
+        authorizedRepositories: 1,
+      });
+      expect(typeof reauthorized?.durationMs).toBe("number");
+      logSpy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops revoked access when reauthorization re-resolves permissions", async () => {
+    const token = "revoked-repository-session";
+    const hash = await sha256Hex(token);
+    const { db, sessions } = authDb({
+      sessions: [
+        {
+          hash,
+          expiresAt: Date.now() + 60_000,
+          authorizedAt: Date.now() - 9 * 60 * 60 * 1000,
+        },
+      ],
+    });
+    // The user can no longer read the enrolled repository.
+    stubGitHubOAuth([{ id: 42 }]);
+    const session = await validateUiSession(
+      new Request("https://v2.invalid/", {
+        headers: { cookie: `${uiSessionCookie}=${token}` },
+      }),
+      env(db),
+    );
+    expect(session?.repositoryIds).toEqual([]);
+    expect(JSON.parse(sessions.get(hash)!.repository_ids_json)).toEqual([]);
+    expect(sessions.get(hash)!.expires_at).toBeGreaterThan(Date.now());
+  });
+
+  it("ends the session when reauthorization fails against GitHub", async () => {
+    const token = "revoked-token-session";
+    const hash = await sha256Hex(token);
+    const { db, sessions } = authDb({
+      sessions: [
+        {
+          hash,
+          expiresAt: Date.now() + 60_000,
+          authorizedAt: Date.now() - 9 * 60 * 60 * 1000,
+        },
+      ],
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("bad credentials", { status: 401 })),
+    );
+    const logs: Record<string, unknown>[] = [];
+    const logSpy = vi
+      .spyOn(console, "log")
+      .mockImplementation((line: unknown) => {
+        logs.push(JSON.parse(String(line)) as Record<string, unknown>);
+      });
+    const session = await validateUiSession(
+      new Request("https://v2.invalid/", {
+        headers: { cookie: `${uiSessionCookie}=${token}` },
+      }),
+      env(db),
+    );
+    // The session is rejected and deleted rather than renewed on stale,
+    // unverifiable authorization.
+    expect(session).toBeUndefined();
+    expect(sessions.has(hash)).toBe(false);
+    expect(
+      logs.find((entry) => entry.message === "ui_session_reauthorized"),
+    ).toMatchObject({ outcome: "failed", githubUserId: 7 });
+    logSpy.mockRestore();
+  });
+
+  it("requires reauthentication when a stale session has no stored GitHub token", async () => {
+    const token = "legacy-session";
+    const hash = await sha256Hex(token);
+    const { db, sessions } = authDb({
+      sessions: [
+        {
+          hash,
+          expiresAt: Date.now() + 60_000,
+          accessToken: null,
+          authorizedAt: Date.now() - 9 * 60 * 60 * 1000,
+        },
+      ],
+    });
+    const session = await validateUiSession(
+      new Request("https://v2.invalid/", {
+        headers: { cookie: `${uiSessionCookie}=${token}` },
+      }),
+      env(db),
+    );
+    expect(session).toBeUndefined();
+    expect(sessions.has(hash)).toBe(false);
   });
 
   it("keeps the later expiration when renewals overlap", async () => {

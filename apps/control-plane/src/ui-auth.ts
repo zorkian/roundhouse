@@ -25,6 +25,11 @@ export interface ValidatedUiSession extends UiSession {
 export const uiSessionCookie = "roundhouse_ui_session";
 export const uiStateCookie = "roundhouse_ui_state";
 export const uiSessionLifetimeMs = 30 * 24 * 60 * 60 * 1000;
+// The browser session slides for 30 days, but the repository authorization
+// snapshot resolved at sign-in does not: once it is this old, the next
+// validated visit re-resolves repository access against GitHub before the
+// session is renewed, so revoked access cannot be extended indefinitely.
+export const uiAuthorizationLifetimeMs = 8 * 60 * 60 * 1000;
 const uiStateLifetimeMs = 10 * 60 * 1000;
 
 const escapeHtml = (value: unknown) =>
@@ -207,6 +212,27 @@ async function enrolledRepositoryIds(db: D1Like): Promise<ReadonlySet<string>> {
   return new Set((result.results ?? []).map((row) => String(row.github_id)));
 }
 
+// Resolves the enrolled repositories the GitHub user behind `accessToken`
+// can currently read. Used at sign-in and again when a sliding session's
+// cached authorization snapshot reaches its bound.
+async function authorizedRepositoryIds(
+  accessToken: string,
+  db: D1Like,
+): Promise<string[]> {
+  const readable = await githubUserRepositories(accessToken);
+  const enrolled = await enrolledRepositoryIds(db);
+  const readableSet = new Set(readable);
+  const repositoryIds = readable.filter((id) => enrolled.has(id));
+  // /user/repos only lists repositories affiliated with the user; enrolled
+  // public repositories must be visible to any signed-in GitHub user, so
+  // check the remaining enrolled repositories directly.
+  for (const id of enrolled) {
+    if (readableSet.has(id)) continue;
+    if (await githubRepositoryReadable(accessToken, id)) repositoryIds.push(id);
+  }
+  return repositoryIds;
+}
+
 export async function handleGitHubCallback(
   url: URL,
   request: Request,
@@ -312,24 +338,13 @@ export async function handleGitHubCallback(
     if (!userResponse.ok)
       throw new Error(`github_user_http_${userResponse.status}`);
     const user = (await userResponse.json()) as { id: number; login: string };
-    const readable = await githubUserRepositories(accessToken);
-    const enrolled = await enrolledRepositoryIds(env.DB);
-    const readableSet = new Set(readable);
-    const repositoryIds = readable.filter((id) => enrolled.has(id));
-    // /user/repos only lists repositories affiliated with the user; enrolled
-    // public repositories must be visible to any signed-in GitHub user, so
-    // check the remaining enrolled repositories directly.
-    for (const id of enrolled) {
-      if (readableSet.has(id)) continue;
-      if (await githubRepositoryReadable(accessToken, id))
-        repositoryIds.push(id);
-    }
+    const repositoryIds = await authorizedRepositoryIds(accessToken, env.DB);
     const sessionToken = randomToken();
     // One expiration timestamp feeds both the persisted session and the
     // cookie so the browser and server deadlines stay aligned.
     const expiresAt = Date.now() + uiSessionLifetimeMs;
     await env.DB.prepare(
-      "INSERT INTO ui_sessions (session_hash, github_user_id, github_login, repository_ids_json, expires_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+      "INSERT INTO ui_sessions (session_hash, github_user_id, github_login, repository_ids_json, expires_at, created_at, github_access_token, authorized_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
     )
       .bind(
         await sha256Hex(sessionToken),
@@ -338,10 +353,13 @@ export async function handleGitHubCallback(
         JSON.stringify(repositoryIds),
         expiresAt,
         Date.now(),
+        accessToken,
+        Date.now(),
       )
       .run();
-    // The GitHub access and refresh tokens are discarded here; only the
-    // resolved identity and authorized repository IDs persist.
+    // The GitHub access token persists with the session so a stale
+    // authorization snapshot can be re-resolved against GitHub during
+    // sliding renewal; it is never exposed to the browser.
     log("ui_auth_callback", {
       outcome: "signed_in",
       githubUserId: user.id,
@@ -385,7 +403,7 @@ export async function validateUiSession(
     return undefined;
   }
   const row = await env.DB.prepare(
-    "SELECT github_user_id, github_login, repository_ids_json, expires_at, created_at FROM ui_sessions WHERE session_hash = ?1",
+    "SELECT github_user_id, github_login, repository_ids_json, expires_at, created_at, github_access_token, authorized_at FROM ui_sessions WHERE session_hash = ?1",
   )
     .bind(await sha256Hex(token))
     .first<{
@@ -394,6 +412,8 @@ export async function validateUiSession(
       repository_ids_json: string;
       expires_at: number;
       created_at: number;
+      github_access_token: string | null;
+      authorized_at: number | null;
     }>();
   if (!row) {
     log("ui_session_validated", {
@@ -423,6 +443,54 @@ export async function validateUiSession(
   // Sliding expiration: every validated visit extends the server-side session
   // and returns a matching renewed browser cookie, so active users stay
   // signed in. The session token itself is unchanged.
+  // Bound the cached repository authorization: once the snapshot resolved
+  // at sign-in is old enough, re-resolve repository access against GitHub
+  // before renewing. Sliding renewal must not extend revoked privileges
+  // indefinitely; failure to reauthorize ends the session instead.
+  let repositoryIds = JSON.parse(row.repository_ids_json) as string[];
+  let authorizedAt = row.authorized_at ?? row.created_at;
+  if (startedAt - authorizedAt >= uiAuthorizationLifetimeMs) {
+    const reauthorizationStartedAt = Date.now();
+    if (!row.github_access_token) {
+      await env.DB.prepare("DELETE FROM ui_sessions WHERE session_hash = ?1")
+        .bind(await sha256Hex(token))
+        .run();
+      log("ui_session_reauthorized", {
+        outcome: "reauthentication_required",
+        githubUserId: row.github_user_id,
+        previousAuthorizedAt: authorizedAt,
+        durationMs: Date.now() - reauthorizationStartedAt,
+      });
+      return undefined;
+    }
+    try {
+      repositoryIds = await authorizedRepositoryIds(
+        row.github_access_token,
+        env.DB,
+      );
+      authorizedAt = Date.now();
+      log("ui_session_reauthorized", {
+        outcome: "refreshed",
+        githubUserId: row.github_user_id,
+        previousAuthorizedAt: row.authorized_at ?? row.created_at,
+        authorizedAt,
+        authorizedRepositories: repositoryIds.length,
+        durationMs: Date.now() - reauthorizationStartedAt,
+      });
+    } catch (error) {
+      await env.DB.prepare("DELETE FROM ui_sessions WHERE session_hash = ?1")
+        .bind(await sha256Hex(token))
+        .run();
+      log("ui_session_reauthorized", {
+        outcome: "failed",
+        githubUserId: row.github_user_id,
+        previousAuthorizedAt: row.authorized_at ?? row.created_at,
+        error: error instanceof Error ? error.message : String(error),
+        durationMs: Date.now() - reauthorizationStartedAt,
+      });
+      return undefined;
+    }
+  }
   const renewalStartedAt = Date.now();
   const previousExpiresAt = row.expires_at;
   // Renewal is monotonic and atomic: MAX() keeps any newer expiration a
@@ -430,9 +498,14 @@ export async function validateUiSession(
   // persisted deadline so the issued cookie can never be out of sync with
   // the database, even if a write lands between our SELECT and UPDATE.
   const updated = await env.DB.prepare(
-    "UPDATE ui_sessions SET expires_at = MAX(expires_at, ?1) WHERE session_hash = ?2 RETURNING expires_at",
+    "UPDATE ui_sessions SET expires_at = MAX(expires_at, ?1), repository_ids_json = ?2, authorized_at = ?3 WHERE session_hash = ?4 RETURNING expires_at",
   )
-    .bind(startedAt + uiSessionLifetimeMs, await sha256Hex(token))
+    .bind(
+      startedAt + uiSessionLifetimeMs,
+      JSON.stringify(repositoryIds),
+      authorizedAt,
+      await sha256Hex(token),
+    )
     .first<{ expires_at: number }>();
   if (!updated) {
     // The row vanished between the SELECT and the UPDATE — typically a
@@ -457,7 +530,7 @@ export async function validateUiSession(
   return {
     githubUserId: row.github_user_id,
     githubLogin: row.github_login,
-    repositoryIds: JSON.parse(row.repository_ids_json) as string[],
+    repositoryIds,
     expiresAt: renewedExpiresAt,
     sessionToken: token,
   };
