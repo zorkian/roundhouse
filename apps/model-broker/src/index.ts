@@ -129,6 +129,394 @@ function applyToolPolicy(body: Record<string, unknown>, role: string): void {
   }
 }
 
+type NativeFormat = "responses" | "messages" | "chat";
+
+function routeFormat(provider: BrokerRoute["provider"]): NativeFormat {
+  return provider === "anthropic"
+    ? "messages"
+    : provider === "moonshotai"
+      ? "chat"
+      : "responses";
+}
+
+function messageContent(value: unknown) {
+  if (!Array.isArray(value)) return value ?? "";
+  return value.map((item) => {
+    if (!item || typeof item !== "object") return item;
+    const part = item as Record<string, unknown>;
+    return part.type === "input_text" || part.type === "output_text"
+      ? { type: "text", text: part.text ?? "" }
+      : part;
+  });
+}
+
+function toolInput(value: unknown) {
+  try {
+    return JSON.parse(String(value ?? "{}")) as unknown;
+  } catch {
+    return {};
+  }
+}
+
+function responseMessages(body: Record<string, unknown>, format: NativeFormat) {
+  const messages: Record<string, unknown>[] = [];
+  const input = body.input;
+  if (typeof input === "string")
+    messages.push({ role: "user", content: input });
+  else if (Array.isArray(input)) {
+    for (const item of input) {
+      if (!item || typeof item !== "object") continue;
+      const value = item as Record<string, unknown>;
+      if (typeof value.role === "string")
+        messages.push({
+          role: value.role,
+          content: messageContent(value.content),
+        });
+      else if (value.type === "function_call")
+        messages.push(
+          format === "messages"
+            ? {
+                role: "assistant",
+                content: [
+                  {
+                    type: "tool_use",
+                    id: value.call_id,
+                    name: value.name,
+                    input: toolInput(value.arguments),
+                  },
+                ],
+              }
+            : {
+                role: "assistant",
+                content: null,
+                tool_calls: [
+                  {
+                    id: value.call_id,
+                    type: "function",
+                    function: {
+                      name: value.name,
+                      arguments: value.arguments ?? "{}",
+                    },
+                  },
+                ],
+              },
+        );
+      else if (value.type === "function_call_output")
+        messages.push(
+          format === "messages"
+            ? {
+                role: "user",
+                content: [
+                  {
+                    type: "tool_result",
+                    tool_use_id: value.call_id,
+                    content: String(value.output ?? ""),
+                  },
+                ],
+              }
+            : {
+                role: "tool",
+                content: String(value.output ?? ""),
+                tool_call_id: value.call_id,
+              },
+        );
+    }
+  }
+  return messages;
+}
+
+function nativeTools(body: Record<string, unknown>, format: NativeFormat) {
+  if (!Array.isArray(body.tools)) return undefined;
+  const result: Record<string, unknown>[] = [];
+  for (const item of body.tools) {
+    if (!item || typeof item !== "object") continue;
+    const tool = item as Record<string, unknown>;
+    if (format === "messages" && tool.type === "web_search") {
+      result.push({ type: "web_search_20250305", name: "web_search" });
+      continue;
+    }
+    if (tool.type !== "function") continue;
+    if (format === "messages") {
+      result.push({
+        name: tool.name,
+        description: tool.description,
+        input_schema: tool.parameters ?? { type: "object", properties: {} },
+      });
+    } else {
+      result.push({
+        type: "function",
+        function: {
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.parameters ?? { type: "object", properties: {} },
+        },
+      });
+    }
+  }
+  return result;
+}
+
+export function adaptRequest(
+  body: Record<string, unknown>,
+  route: BrokerRoute,
+): Record<string, unknown> {
+  const format = routeFormat(route.provider);
+  if (format === "responses") return body;
+  const messages = responseMessages(body, format);
+  const tools = nativeTools(body, format);
+  const common = {
+    model: route.model,
+    messages,
+    ...(typeof body.max_output_tokens === "number"
+      ? { max_tokens: body.max_output_tokens }
+      : {}),
+    ...(tools?.length ? { tools } : {}),
+    stream: body.stream === true,
+  };
+  if (format === "messages")
+    return {
+      ...common,
+      ...(typeof body.instructions === "string"
+        ? { system: body.instructions }
+        : {}),
+    };
+  return {
+    ...common,
+    messages:
+      typeof body.instructions === "string"
+        ? [{ role: "system", content: body.instructions }, ...messages]
+        : messages,
+  };
+}
+
+function number(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function normalizeNative(value: Record<string, unknown>, route: BrokerRoute) {
+  if (route.provider === "openai" || Array.isArray(value.output)) return value;
+  const usage = (value.usage ?? {}) as Record<string, unknown>;
+  const output: Record<string, unknown>[] = [];
+  let completionReason: unknown;
+  if (route.provider === "anthropic") {
+    for (const part of Array.isArray(value.content) ? value.content : []) {
+      if (!part || typeof part !== "object") continue;
+      const content = part as Record<string, unknown>;
+      if (content.type === "text")
+        output.push({
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: content.text ?? "" }],
+        });
+      if (content.type === "tool_use")
+        output.push({
+          type: "function_call",
+          call_id: content.id,
+          name: content.name,
+          arguments: JSON.stringify(content.input ?? {}),
+        });
+    }
+    completionReason = value.stop_reason;
+  } else {
+    const choice = Array.isArray(value.choices)
+      ? (value.choices[0] as Record<string, unknown> | undefined)
+      : undefined;
+    const message = (choice?.message ?? {}) as Record<string, unknown>;
+    if (typeof message.content === "string" && message.content)
+      output.push({
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: message.content }],
+      });
+    for (const item of Array.isArray(message.tool_calls)
+      ? message.tool_calls
+      : []) {
+      const call = item as Record<string, unknown>;
+      const fn = (call.function ?? {}) as Record<string, unknown>;
+      output.push({
+        type: "function_call",
+        call_id: call.id,
+        name: fn.name,
+        arguments: fn.arguments ?? "{}",
+      });
+    }
+    completionReason = choice?.finish_reason;
+  }
+  const inputTokens = number(usage.input_tokens ?? usage.prompt_tokens);
+  const outputTokens = number(usage.output_tokens ?? usage.completion_tokens);
+  const cacheDetails = (usage.prompt_tokens_details ?? {}) as Record<
+    string,
+    unknown
+  >;
+  return {
+    id: value.id,
+    object: "response",
+    status: completionReason === "refusal" ? "refused" : "completed",
+    model: value.model ?? route.model,
+    output,
+    completion_reason: completionReason,
+    usage: {
+      input_tokens: inputTokens,
+      input_tokens_details: {
+        cached_tokens: number(
+          usage.cache_read_input_tokens ?? cacheDetails.cached_tokens,
+        ),
+      },
+      output_tokens: outputTokens,
+      total_tokens: number(usage.total_tokens) || inputTokens + outputTokens,
+      ...(usage.cost_usd === undefined ? {} : { cost_usd: usage.cost_usd }),
+    },
+  };
+}
+
+function eventPayloads(text: string) {
+  return text
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trim())
+    .filter((line) => line && line !== "[DONE]");
+}
+
+export async function normalizeResponse(
+  response: Response,
+  route: BrokerRoute,
+  streamed: boolean,
+): Promise<Response> {
+  if (route.provider === "openai") return response;
+  const text = await response.text();
+  if (!response.ok) {
+    let upstream: unknown;
+    try {
+      upstream = JSON.parse(text);
+    } catch {
+      upstream = { message: text };
+    }
+    return Response.json(
+      {
+        error: {
+          type: "model_upstream_error",
+          provider: route.provider,
+          upstream,
+        },
+      },
+      { status: response.status },
+    );
+  }
+  let native: Record<string, unknown> | undefined;
+  const anthropicContent: Record<string, unknown>[] = [];
+  const chatToolCalls = new Map<number, Record<string, unknown>>();
+  let chatText = "";
+  const eventStream = response.headers
+    .get("content-type")
+    ?.includes("text/event-stream");
+  if (!eventStream) {
+    try {
+      native = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      return Response.json(
+        { error: "invalid_model_response" },
+        { status: 502 },
+      );
+    }
+  }
+  const candidates = eventStream ? eventPayloads(text) : [];
+  for (const candidate of candidates) {
+    try {
+      const event = JSON.parse(candidate) as Record<string, unknown>;
+      if (route.provider === "anthropic" && event.type === "message_start")
+        native = (event.message ?? {}) as Record<string, unknown>;
+      else if (
+        route.provider === "anthropic" &&
+        event.type === "content_block_start"
+      ) {
+        const index = number(event.index);
+        anthropicContent[index] = {
+          ...((event.content_block ?? {}) as Record<string, unknown>),
+        };
+      } else if (
+        route.provider === "anthropic" &&
+        event.type === "content_block_delta"
+      ) {
+        const index = number(event.index);
+        const delta = (event.delta ?? {}) as Record<string, unknown>;
+        const content = anthropicContent[index] ?? {};
+        if (typeof delta.text === "string")
+          content.text = String(content.text ?? "") + delta.text;
+        if (typeof delta.partial_json === "string")
+          content.partial_json =
+            String(content.partial_json ?? "") + delta.partial_json;
+        anthropicContent[index] = content;
+      } else if (event.type === "message_delta" && native) {
+        native.stop_reason = (event.delta as Record<string, unknown>)
+          ?.stop_reason;
+        native.usage = {
+          ...(native.usage as object),
+          ...(event.usage as object),
+        };
+      } else if (route.provider === "moonshotai" && event.choices) {
+        native ??= { id: event.id, model: event.model, usage: {} };
+        if (event.usage) native.usage = event.usage;
+        const choice = (event.choices as Record<string, unknown>[])[0];
+        if (choice) {
+          if (choice.finish_reason) native.finish_reason = choice.finish_reason;
+          const delta = (choice.delta ?? {}) as Record<string, unknown>;
+          if (typeof delta.content === "string") chatText += delta.content;
+          for (const rawCall of Array.isArray(delta.tool_calls)
+            ? delta.tool_calls
+            : []) {
+            const call = rawCall as Record<string, unknown>;
+            const index = number(call.index);
+            const current = chatToolCalls.get(index) ?? {};
+            const fn = (call.function ?? {}) as Record<string, unknown>;
+            const oldFn = (current.function ?? {}) as Record<string, unknown>;
+            chatToolCalls.set(index, {
+              ...current,
+              ...call,
+              function: {
+                ...oldFn,
+                ...fn,
+                arguments:
+                  String(oldFn.arguments ?? "") + String(fn.arguments ?? ""),
+              },
+            });
+          }
+        }
+      } else if (!event.type) native = event;
+    } catch {
+      // Ignore native keepalive and non-JSON event fields.
+    }
+  }
+  if (!native)
+    return Response.json({ error: "invalid_model_response" }, { status: 502 });
+  if (route.provider === "anthropic" && anthropicContent.length) {
+    for (const content of anthropicContent)
+      if (content.partial_json) {
+        try {
+          content.input = JSON.parse(String(content.partial_json));
+        } catch {
+          content.input = {};
+        }
+      }
+    native.content = anthropicContent;
+  }
+  if (route.provider === "moonshotai" && !native.choices)
+    native.choices = [
+      {
+        finish_reason: native.finish_reason,
+        message: {
+          content: chatText,
+          tool_calls: [...chatToolCalls.values()],
+        },
+      },
+    ];
+  const normalized = normalizeNative(native, route);
+  if (!streamed) return Response.json(normalized);
+  return new Response(
+    `data: ${JSON.stringify({ type: "response.completed", response: normalized })}\n\ndata: [DONE]\n\n`,
+    { headers: { "content-type": "text/event-stream" } },
+  );
+}
+
 export async function brokerRequest(
   request: Request,
   env: BrokerEnv,
@@ -176,7 +564,7 @@ export async function brokerRequest(
 
   let response: Response;
   try {
-    response = await ai.run(route.model, body, {
+    response = await ai.run(route.model, adaptRequest(body, route), {
       gateway: {
         id: env.AI_GATEWAY_ID,
         collectLog: false,
@@ -200,6 +588,7 @@ export async function brokerRequest(
     return Response.json({ error: "model_upstream_failed" }, { status: 502 });
   }
   const attemptId = request.headers.get("x-roundhouse-attempt-id");
+  response = await normalizeResponse(response, route, body.stream === true);
   const captured = await observeResponse(response, {
     api: "workers_ai",
     operation: "run_model",

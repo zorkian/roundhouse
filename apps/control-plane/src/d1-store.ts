@@ -265,7 +265,7 @@ export class D1RunRepository implements RunRepository {
         usage.callId,
         usage.attemptId,
         usage.model,
-        usage.provider ?? null,
+        usage.provider ?? "",
         usage.configuredModel ?? null,
         usage.routingRule ?? null,
         usage.inputTokens ?? null,

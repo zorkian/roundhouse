@@ -3,7 +3,9 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  adaptRequest,
   brokerRequest,
+  normalizeResponse,
   selectRoute,
   type BrokerEnv,
   type BrokerRoute,
@@ -152,6 +154,101 @@ describe("model broker", () => {
     expect(response.headers.get("x-roundhouse-routing-rule")).toBe(
       "qualification-default-v1",
     );
+  });
+
+  it("adapts Responses input to Anthropic Messages", () => {
+    expect(
+      adaptRequest(
+        {
+          instructions: "Be precise.",
+          input: [{ role: "user", content: "Plan this." }],
+          max_output_tokens: 500,
+          tools: [
+            {
+              type: "function",
+              name: "lookup",
+              parameters: { type: "object" },
+            },
+            { type: "web_search" },
+          ],
+        },
+        selectRoute(
+          (() => {
+            const planning = request();
+            planning.headers.set("x-roundhouse-role", "plan");
+            return planning;
+          })(),
+          env,
+        ),
+      ),
+    ).toMatchObject({
+      model: "anthropic/claude-opus-4.8",
+      system: "Be precise.",
+      messages: [{ role: "user", content: "Plan this." }],
+      max_tokens: 500,
+      tools: [
+        { name: "lookup", input_schema: { type: "object" } },
+        { type: "web_search_20250305", name: "web_search" },
+      ],
+    });
+  });
+
+  it("normalizes Anthropic messages and usage to a Responses result", async () => {
+    const planning = request();
+    planning.headers.set("x-roundhouse-role", "plan");
+    const response = await normalizeResponse(
+      Response.json({
+        id: "msg_1",
+        model: "claude-opus-4.8",
+        content: [
+          { type: "text", text: "A plan" },
+          { type: "tool_use", id: "tool_1", name: "lookup", input: { q: 1 } },
+        ],
+        stop_reason: "tool_use",
+        usage: {
+          input_tokens: 10,
+          cache_read_input_tokens: 4,
+          output_tokens: 5,
+        },
+      }),
+      selectRoute(planning, env),
+      false,
+    );
+    await expect(response.json()).resolves.toMatchObject({
+      id: "msg_1",
+      status: "completed",
+      completion_reason: "tool_use",
+      output: [
+        { content: [{ type: "output_text", text: "A plan" }] },
+        { type: "function_call", call_id: "tool_1", name: "lookup" },
+      ],
+      usage: {
+        input_tokens: 10,
+        input_tokens_details: { cached_tokens: 4 },
+        output_tokens: 5,
+        total_tokens: 15,
+      },
+    });
+  });
+
+  it("normalizes streamed Moonshot chat output to a Responses event", async () => {
+    const review = request();
+    review.headers.set("x-roundhouse-role", "review-security");
+    const upstream = new Response(
+      [
+        'data: {"id":"chat_1","model":"kimi-k3","choices":[{"delta":{"content":"No "},"finish_reason":null}]}',
+        'data: {"id":"chat_1","model":"kimi-k3","choices":[{"delta":{"content":"issues"},"finish_reason":"stop"}],"usage":{"prompt_tokens":8,"completion_tokens":2,"total_tokens":10}}',
+        "data: [DONE]",
+      ].join("\n\n"),
+      { headers: { "content-type": "text/event-stream" } },
+    );
+    const response = await normalizeResponse(
+      upstream,
+      selectRoute(review, env),
+      true,
+    );
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    expect(await response.text()).toContain('"text":"No issues"');
   });
 
   it("adds hosted web search for a trusted read-stage role", async () => {

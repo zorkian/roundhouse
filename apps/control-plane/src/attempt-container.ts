@@ -222,6 +222,9 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
 }
 
 const prices: Record<string, readonly [number, number, number]> = {
+  "anthropic/claude-opus-4.8": [15, 1.5, 75],
+  "anthropic/claude-fable-5": [3, 0.3, 15],
+  "moonshotai/kimi-k3": [0.6, 0.15, 2.5],
   "openai/gpt-5": [1.25, 0.125, 10],
   "openai/gpt-5.2": [1.75, 0.175, 14],
   "openai/gpt-5.6-sol": [1.75, 0.175, 14],
