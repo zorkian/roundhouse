@@ -15,6 +15,7 @@ import {
   type AttemptCallback,
 } from "./callback.js";
 import {
+  aggregateReviewAttempts,
   attemptInactivityMilliseconds,
   ciTransition,
   coordinate,
@@ -144,6 +145,7 @@ describe("single coordinator", () => {
       deadlineAt: 1_000,
       baseCommit: input.baseCommit,
       expectedHead: run.currentHead,
+      acceptedHead: run.currentHead,
       result: {
         review: {
           status: "clean",
@@ -198,6 +200,7 @@ describe("single coordinator", () => {
       deadlineAt: 1_000,
       baseCommit: input.baseCommit,
       expectedHead: run.currentHead,
+      acceptedHead: run.currentHead,
       result: { review },
     });
     store.attempts.set(
@@ -250,6 +253,51 @@ describe("single coordinator", () => {
       status: "active",
       stage: "implement",
     });
+  });
+
+  it("does not aggregate when any required review is for another head", () => {
+    const currentHead = "b".repeat(40);
+    const staleHead = "c".repeat(40);
+    const reviewAttempt = (
+      role: "review-holistic" | "review-security",
+      expectedHead: string,
+      review: Record<string, unknown>,
+    ): Attempt => ({
+      id: role,
+      runId: input.id,
+      runRevision: 5,
+      kind: "agent",
+      stage: "review",
+      role,
+      state: "completed",
+      deadlineAt: 1_000,
+      baseCommit: input.baseCommit,
+      expectedHead,
+      acceptedHead: expectedHead,
+      result: { review },
+    });
+    const holistic = reviewAttempt("review-holistic", staleHead, {
+      status: "clean",
+      findings: [],
+      selections: [
+        {
+          role: "review-security",
+          applicable: true,
+          rationale: "Authorization changed",
+        },
+        {
+          role: "review-data",
+          applicable: false,
+          rationale: "No data changes",
+        },
+      ],
+    });
+    const security = reviewAttempt("review-security", currentHead, {
+      status: "clean",
+      findings: [],
+    });
+
+    expect(aggregateReviewAttempts([holistic, security])).toBeUndefined();
   });
 
   it("claims exactly one revision-bound attempt for duplicate wakeups", async () => {

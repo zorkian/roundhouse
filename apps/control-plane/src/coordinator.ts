@@ -224,7 +224,18 @@ export function aggregateReviewAttempts(
     ),
   );
   if (specialists.some((attempt) => !attempt)) return undefined;
-  return aggregateReviews([holistic, ...(specialists as Attempt[])]);
+  const required = [holistic, ...(specialists as Attempt[])];
+  const candidateHead = required[required.length - 1]!.expectedHead;
+  if (
+    !candidateHead ||
+    required.some(
+      (attempt) =>
+        attempt.expectedHead !== candidateHead ||
+        attempt.acceptedHead !== candidateHead,
+    )
+  )
+    return undefined;
+  return aggregateReviews(required);
 }
 
 export async function coordinate(
