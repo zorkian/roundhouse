@@ -711,9 +711,10 @@ The trusted publication broker:
 5. confirms GitHub's head is exactly the candidate; and
 6. records publication idempotently.
 
-A new head invalidates old CI, reviews, and final approval. Roundhouse waits for
-required GitHub checks on the exact head. In-scope failures return to diagnosis
-and repair.
+A new head invalidates old CI, reviews, and final approval. For required GitHub
+checks on the exact head, completed successful and skipped checks allow the run
+to continue, an incomplete check remains pending, and an actual failed check
+stops progress and returns the run for correction.
 
 The final pull-request package shows:
 
@@ -1090,9 +1091,9 @@ Exit gate:
 - the merge commit is durable run evidence;
 - final GitHub status is concise and truthful.
 
-Pending or failed CI remains at `ci` during this prototype slice. Repair policy,
-risk scoring, and additional approval policy wait until production behavior
-provides evidence that they are needed.
+On the exact head, completed successful and skipped checks allow the run to
+continue. An incomplete check remains pending, while an actual failed check
+stops progress and returns the run for correction.
 
 ### Phase 6 — Evidence-driven hardening, external pilot, and cutover
 
