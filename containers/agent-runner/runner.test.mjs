@@ -571,6 +571,12 @@ describe("V2 agent runner", () => {
     await expect(
       validateCheckpoint({
         ...validationAssignment,
+        id: "run_git_rev_1_missing_profile_validation",
+      }),
+    ).rejects.toThrow("invalid_profile_snapshot");
+    await expect(
+      validateCheckpoint({
+        ...validationAssignment,
         id: "run_git_rev_1_literal_validation",
         profile: {
           paths: { allowed: ["**"], protected: ["README.md"] },
@@ -581,6 +587,12 @@ describe("V2 agent runner", () => {
       validateCheckpoint({
         ...validationAssignment,
         id: "run_git_rev_1_validation",
+        profile: {
+          paths: {
+            allowed: ["**"],
+            protected: [".github/workflows/**"],
+          },
+        },
       }),
     ).resolves.toBeUndefined();
     expect(

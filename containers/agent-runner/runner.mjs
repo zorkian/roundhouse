@@ -1021,6 +1021,21 @@ export async function createCheckpoint(assignment) {
 }
 
 export async function validateCheckpoint(assignment) {
+  if (
+    !assignment.profile ||
+    !assignment.profile.paths ||
+    !Array.isArray(assignment.profile.paths.allowed) ||
+    !assignment.profile.paths.allowed.length ||
+    assignment.profile.paths.allowed.some(
+      (pattern) => typeof pattern !== "string",
+    ) ||
+    !Array.isArray(assignment.profile.paths.protected) ||
+    !assignment.profile.paths.protected.length ||
+    assignment.profile.paths.protected.some(
+      (pattern) => typeof pattern !== "string",
+    )
+  )
+    throw new Error("invalid_profile_snapshot");
   const directory = resolve(workspaceRoot(), `${assignment.id}-validation`);
   await clone(assignment.artifact, directory);
   const checkpoint = assignment.checkpoint;
@@ -1078,17 +1093,12 @@ export async function validateCheckpoint(assignment) {
     if (
       path === ".roundhouse" ||
       path.startsWith(".roundhouse/") ||
-      (assignment.profile
-        ? assignment.profile.paths.protected.some((pattern) =>
-            matches(pattern, path),
-          )
-        : (assignment.protectedPaths ?? []).some((pattern) =>
-            matches(pattern.includes("*") ? pattern : `${pattern}/**`, path),
-          ))
+      assignment.profile.paths.protected.some((pattern) =>
+        matches(pattern, path),
+      )
     )
       throw new Error("protected_path_changed");
     if (
-      assignment.profile &&
       !assignment.profile.paths.allowed.some((pattern) =>
         matches(pattern, path),
       )
