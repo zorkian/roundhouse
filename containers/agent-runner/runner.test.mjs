@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { execFileSync } from "node:child_process";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -1017,6 +1017,25 @@ describe("V2 agent runner", () => {
       cwd: source,
     });
 
+    // The target branch moves again after the conflict was detected; the
+    // attempt must still integrate with the recorded base commit.
+    execFileSync("git", ["checkout", "main"], { cwd: source });
+    await writeFile(resolve(source, "other.ts"), "export const other = 1;\n");
+    execFileSync("git", ["add", "other.ts"], { cwd: source });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@invalid",
+        "commit",
+        "-m",
+        "later main change",
+      ],
+      { cwd: source },
+    );
+
     const assignment = {
       id: "run_conflict_rev_1",
       runId: "run_conflict",
@@ -1062,6 +1081,9 @@ describe("V2 agent runner", () => {
       .trim()
       .split(" ");
     expect(parents).toEqual([featureHead, mainHead]);
+    await expect(
+      readFile(resolve(directory, "other.ts"), "utf8"),
+    ).rejects.toThrow();
   });
 
   async function integrationFixture({ conflicting }) {

@@ -1083,21 +1083,22 @@ export async function prepareWorkspace(assignment) {
     assignment.role === "conflict-resolution" &&
     assignment.upstream
   ) {
+    const baseHead = assignment.integration?.baseHead;
+    if (typeof baseHead !== "string" || !/^[a-f0-9]{40}$/.test(baseHead))
+      throw new Error("integration_base_missing");
     const upstreamEnvironment = roundhouseGitEnvironment({
       GIT_TERMINAL_PROMPT: "0",
     });
+    // Conflict resolution must integrate with the exact target commit that
+    // was selected when the conflicts were detected, not a moving branch
+    // tip; later branch movement starts a new integration generation.
     await command(
       "git",
-      [
-        "fetch",
-        "--no-tags",
-        assignment.upstream.remote,
-        assignment.upstream.branch,
-      ],
+      ["fetch", "--no-tags", assignment.upstream.remote, baseHead],
       { cwd: directory, env: upstreamEnvironment },
     );
     try {
-      await command("git", ["merge", "--no-commit", "FETCH_HEAD"], {
+      await command("git", ["merge", "--no-commit", baseHead], {
         cwd: directory,
         env: upstreamEnvironment,
       });
@@ -1423,6 +1424,21 @@ export async function validateCheckpoint(assignment) {
     // file the resolved integration changes relative to the selected base
     // must be a file the reviewed candidate changed, and files the base did
     // not touch must keep the candidate's exact content.
+    // The produced integration commit must actually contain the recorded
+    // base as a parent so the stored candidate/base/integration identity
+    // cannot claim a base the commit does not include.
+    await command(
+      "git",
+      [
+        "merge-base",
+        "--is-ancestor",
+        integration.baseHead,
+        checkpoint.outputHead,
+      ],
+      { cwd: directory },
+    ).catch(() => {
+      throw new Error("integration_base_not_parent");
+    });
     const conflictFiles = new Set(
       integration.conflicts
         .map((conflict) => conflict?.path)
