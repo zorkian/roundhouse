@@ -112,6 +112,10 @@ const statusLabels: Record<RunStatus, string> = {
   cancelled: "Cancelled",
 };
 
+export function stageLabel(stage: Attempt["stage"]): string {
+  return stage === "reproduce" ? "investigate" : stage;
+}
+
 function usageDisplay(items: RunDetails["usage"]): string {
   const usage = items ?? [];
   if (!usage.length) return escapeHtml(formatUsage(usage));
@@ -331,8 +335,6 @@ function competitionPanels(details: RunDetails): string {
 export function renderRunDetails(details: RunDetails): string {
   const { run, attempts } = details;
   const issueTitle = run.issue?.title?.trim() || `Issue #${run.issueNumber}`;
-  const stageLabel = (stage: Attempt["stage"]) =>
-    stage === "reproduce" ? "investigate" : stage;
   const currentStage = stageLabel(run.stage);
   const usage = details.usage ?? [];
   const pullRequest = resultFor(attempts, "merge") as

@@ -3,6 +3,7 @@
 
 import type { RunStatus } from "@roundhouse/core";
 import type { RunSummary } from "./d1-store.js";
+import { stageLabel } from "./run-details.js";
 import { formatUsage } from "./usage.js";
 
 const escapeHtml = (value: unknown) =>
@@ -33,9 +34,10 @@ function renderRun(summary: RunSummary): string {
     run.issue?.url && /^https:\/\//.test(run.issue.url)
       ? `<a class="secondary" href="${escapeHtml(run.issue.url)}">View on GitHub</a>`
       : "";
+  const stage = stageLabel(run.stage);
   const detail = run.waitingReason
-    ? `${run.stage} · ${run.waitingReason.replaceAll("_", " ")}`
-    : run.stage;
+    ? `${stage} · ${run.waitingReason.replaceAll("_", " ")}`
+    : stage;
   const closedBeforeCompletion =
     summary.githubIssueState === "closed" && run.status !== "succeeded";
   const label = closedBeforeCompletion
