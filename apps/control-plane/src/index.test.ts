@@ -1019,6 +1019,355 @@ describe("V2 control plane", () => {
     });
   });
 
+  describe("competition source resolution", () => {
+    const competitionModels = `candidates:
+          - id: alpha
+            model: { id: openai/gpt-alpha, reasoning: low }
+          - id: beta
+            model: { id: anthropic/claude-beta, reasoning: medium }
+        judge:
+          model: { id: openai/gpt-judge, reasoning: high }`;
+    const planCompetitionWorkflow = defaultIssueWorkflowSource.replace(
+      "        key: plan\n        schema: roundhouse.plan.v1\n      model: { id: openai/gpt-5.6-sol, reasoning: low }",
+      `        key: plan\n        schema: roundhouse.plan.v1\n      competition:\n        ${competitionModels}`,
+    );
+    const reviewCompetitionWorkflow = defaultIssueWorkflowSource.replace(
+      "        - id: review-security\n          label: Security review\n          activation: selected\n          selected_by: review-holistic\n          mode: blocking\n          blocking_severities: [critical, high, medium]\n          model: { id: openai/gpt-5.6-sol, reasoning: low }",
+      `        - id: review-security\n          label: Security review\n          activation: selected\n          selected_by: review-holistic\n          mode: blocking\n          blocking_severities: [critical, high, medium]\n          competition:\n            candidates:\n              - id: alpha\n                model: { id: openai/gpt-alpha, reasoning: low }\n              - id: beta\n                model: { id: anthropic/claude-beta, reasoning: medium }\n            judge:\n              model: { id: openai/gpt-judge, reasoning: high }`,
+    );
+
+    const competitionProfile = async (source: string) => {
+      const compiled = await compileWorkflow(source, workflowCommit);
+      return {
+        sourcePath: ".roundhouse/profile.yaml" as const,
+        sourceCommit: workflowCommit,
+        version: 1 as const,
+        hash: "profile-competition",
+        workflow: compiled,
+        paths: { allowed: ["**"], protected: [] },
+      };
+    };
+
+    const competitionAttempt = (
+      run: RunSnapshot,
+      overrides: Partial<Attempt> & { id: string },
+    ): Attempt => ({
+      runId: run.id,
+      runRevision: 3,
+      kind: "agent",
+      executor: "agent.read",
+      stage: "plan",
+      role: "plan",
+      state: "completed",
+      deadlineAt: 1,
+      baseCommit: run.baseCommit,
+      expectedHead: run.currentHead,
+      acceptedHead: run.currentHead,
+      ...overrides,
+    });
+
+    const judgement = {
+      selected: "beta",
+      scores: [
+        { candidateId: "alpha", score: 0.4, rationale: "Weaker." },
+        { candidateId: "beta", score: 0.9, rationale: "Stronger." },
+      ],
+    };
+
+    const implementAttempt = (run: RunSnapshot): Attempt => ({
+      id: "attempt_implement_consumer",
+      runId: run.id,
+      runRevision: run.revision,
+      kind: "agent",
+      nodeId: "implement",
+      executor: "agent.write",
+      stage: "implement",
+      role: "implement",
+      state: "created",
+      deadlineAt: 1,
+      baseCommit: run.baseCommit,
+      expectedHead: run.currentHead,
+    });
+
+    it("resolves ordinary selectors to the selected competition attempt only", async () => {
+      const profile = await competitionProfile(planCompetitionWorkflow);
+      expect(profile.workflow.nodes.plan?.agent?.competition).toBeDefined();
+      const repository = new MemoryRunRepository();
+      const initial = {
+        ...workflowRun("run_competition_plan", 434, "Compete", "Judge plans."),
+        profile,
+      };
+      seedPreImplementationResults(repository, initial, "feature");
+      repository.attempts.delete("attempt_plan");
+      for (const attempt of [
+        competitionAttempt(initial, {
+          id: "attempt_plan_candidate_alpha",
+          nodeId: "plan",
+          role: "plan-candidate-alpha",
+          competition: { purpose: "candidate", candidateId: "alpha" },
+          result: { plan: { status: "ready", summary: "loser alpha" } },
+        }),
+        competitionAttempt(initial, {
+          id: "attempt_plan_candidate_beta",
+          nodeId: "plan",
+          role: "plan-candidate-beta",
+          competition: { purpose: "candidate", candidateId: "beta" },
+          result: { plan: { status: "ready", summary: "winner beta" } },
+        }),
+        competitionAttempt(initial, {
+          id: "attempt_plan_judge",
+          nodeId: "plan",
+          role: "plan-judge",
+          competition: { purpose: "judge" },
+          result: { judgement },
+        }),
+        competitionAttempt(initial, {
+          id: "attempt_plan_selected",
+          nodeId: "plan",
+          role: "plan",
+          competition: {
+            purpose: "selected",
+            candidateId: "beta",
+            judgement,
+          },
+          result: { plan: { status: "ready", summary: "winner beta" } },
+        }),
+      ])
+        repository.attempts.set(attempt.id, attempt);
+      const run = {
+        ...initial,
+        revision: 4,
+        stage: "implement" as const,
+        currentNodeId: "implement",
+      };
+
+      const resolved = await resolveWorkflowAgentInputs(
+        repository,
+        run,
+        implementAttempt(run),
+        profile.workflow.nodes.implement!.agent!,
+      );
+
+      expect(resolved.values.plan).toEqual({
+        status: "ready",
+        summary: "winner beta",
+      });
+      expect(resolved.evidence.plan).toMatchObject({
+        present: true,
+        sourceAttemptId: "attempt_plan_selected",
+      });
+    });
+
+    it("excludes competition candidates and judges from implementation evidence", async () => {
+      const repository = new MemoryRunRepository();
+      const initial = workflowRun(
+        "run_competition_implementation",
+        434,
+        "Compete implementations",
+        "Judge implementations.",
+      );
+      seedPreImplementationResults(repository, initial, "feature");
+      const implementation = (
+        id: string,
+        summary: string,
+        competition?: Attempt["competition"],
+        screenshots: readonly Readonly<Record<string, unknown>>[] = [],
+      ): Attempt => ({
+        id,
+        runId: initial.id,
+        runRevision: 4,
+        kind: "agent",
+        nodeId: "implement",
+        executor: "agent.write",
+        stage: "implement",
+        role: "implement",
+        state: "completed",
+        deadlineAt: 1,
+        baseCommit: initial.baseCommit,
+        expectedHead: initial.currentHead,
+        acceptedHead: initial.currentHead,
+        ...(competition ? { competition } : {}),
+        result: { implementation: { summary, validation: [], screenshots } },
+      });
+      const candidateAlpha = implementation(
+        "attempt_implement_candidate_alpha",
+        "loser alpha",
+        { purpose: "candidate", candidateId: "alpha" },
+        [{ url: "https://example.test/loser", description: "Loser shot" }],
+      );
+      const candidateBeta = implementation(
+        "attempt_implement_candidate_beta",
+        "winner beta",
+        { purpose: "candidate", candidateId: "beta" },
+        [{ url: "https://example.test/winner", description: "Winner shot" }],
+      );
+      const judge = implementation("attempt_implement_judge", "judge", {
+        purpose: "judge",
+      });
+      const selected = implementation(
+        "attempt_implement_selected",
+        "winner beta",
+        { purpose: "selected", candidateId: "beta", judgement },
+        [{ url: "https://example.test/winner", description: "Winner shot" }],
+      );
+      for (const attempt of [candidateAlpha, candidateBeta, judge, selected])
+        repository.attempts.set(attempt.id, attempt);
+      const run = {
+        ...initial,
+        revision: 5,
+        stage: "implement" as const,
+        currentNodeId: "implement",
+      };
+
+      const resolved = await resolveWorkflowAgentInputs(
+        repository,
+        run,
+        implementAttempt(run),
+        workflow.nodes.implement!.agent!,
+      );
+
+      expect(resolved.values.implementation).toEqual({
+        summary: "winner beta",
+        validation: [],
+        screenshots: [
+          { url: "https://example.test/winner", description: "Winner shot" },
+        ],
+      });
+      expect(resolved.evidence.implementation).toMatchObject({
+        present: true,
+        sourceAttemptId: "attempt_implement_selected",
+      });
+    });
+
+    it("aggregates review inputs from the selected competition reviewer only", async () => {
+      const profile = await competitionProfile(reviewCompetitionWorkflow);
+      expect(
+        profile.workflow.nodes.review?.review?.reviewers.find(
+          (reviewer) => reviewer.id === "review-security",
+        )?.competition,
+      ).toBeDefined();
+      const repository = new MemoryRunRepository();
+      const initial = {
+        ...workflowRun(
+          "run_competition_review",
+          434,
+          "Compete reviews",
+          "Judge reviews.",
+        ),
+        profile,
+      };
+      seedPreImplementationResults(repository, initial, "feature");
+      const review = (
+        id: string,
+        role: string,
+        finding: string,
+        competition?: Attempt["competition"],
+      ): Attempt => ({
+        id,
+        runId: initial.id,
+        runRevision: 4,
+        kind: "agent",
+        nodeId: "review",
+        executor: "review",
+        stage: "review",
+        role,
+        state: "completed",
+        deadlineAt: 1,
+        baseCommit: initial.baseCommit,
+        expectedHead: initial.currentHead,
+        acceptedHead: initial.currentHead,
+        ...(competition ? { competition } : {}),
+        result: {
+          review: {
+            status: "changes_requested",
+            summary: finding,
+            findings: [
+              {
+                title: finding,
+                details: `${finding} details`,
+                severity: "medium",
+                file: "src/index.ts",
+              },
+            ],
+            ...(role === "review-holistic"
+              ? {
+                  selections: [
+                    {
+                      role: "review-security",
+                      applicable: true,
+                      rationale: "Authentication changed.",
+                    },
+                    {
+                      role: "review-data",
+                      applicable: false,
+                      rationale: "No persistence changes.",
+                    },
+                  ],
+                }
+              : {}),
+          },
+        },
+      });
+      const holistic = review(
+        "attempt_review_holistic",
+        "review-holistic",
+        "Holistic finding",
+      );
+      const loser = review(
+        "attempt_review_security_candidate_alpha",
+        "review-security-candidate-alpha",
+        "Losing security finding",
+        { purpose: "candidate", candidateId: "alpha" },
+      );
+      const winner = review(
+        "attempt_review_security_candidate_beta",
+        "review-security-candidate-beta",
+        "Winning security finding",
+        { purpose: "candidate", candidateId: "beta" },
+      );
+      const judge = review(
+        "attempt_review_security_judge",
+        "review-security-judge",
+        "Judge output",
+        { purpose: "judge" },
+      );
+      const selected = review(
+        "attempt_review_security_selected",
+        "review-security",
+        "Winning security finding",
+        { purpose: "selected", candidateId: "beta", judgement },
+      );
+      for (const attempt of [holistic, loser, winner, judge, selected])
+        repository.attempts.set(attempt.id, attempt);
+      const run = {
+        ...initial,
+        revision: 5,
+        stage: "implement" as const,
+        currentNodeId: "implement",
+      };
+
+      const resolved = await resolveWorkflowAgentInputs(
+        repository,
+        run,
+        implementAttempt(run),
+        profile.workflow.nodes.implement!.agent!,
+      );
+
+      expect(
+        (
+          resolved.values.review as { findings: readonly { title: string }[] }
+        ).findings.map(({ title }) => title),
+      ).toEqual(["Holistic finding", "Winning security finding"]);
+      expect(resolved.evidence.review).toMatchObject({
+        present: true,
+        sourceAttemptIds: [
+          "attempt_review_holistic",
+          "attempt_review_security_selected",
+        ],
+      });
+    });
+  });
+
   it("allows only required attempt services and the package registry", () => {
     expect(
       attemptAllowedHosts(

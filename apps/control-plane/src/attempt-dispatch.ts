@@ -223,6 +223,16 @@ function nestedValue(value: unknown, path: readonly string[]): unknown {
   );
 }
 
+// Competition candidate and judge attempts are retained as evidence only;
+// downstream selectors must resolve to the promoted canonical (`selected`)
+// attempt so losing or judging output can never feed a later stage.
+function canonicalAttempts(attempts: readonly Attempt[]): Attempt[] {
+  return attempts.filter(
+    (attempt) =>
+      !attempt.competition || attempt.competition.purpose === "selected",
+  );
+}
+
 function aggregateImplementationAttempts(
   attempts: readonly Attempt[],
 ): Attempt | undefined {
@@ -285,19 +295,40 @@ export async function resolveWorkflowAgentInputs(
     }
     const match = /^nodes\.([a-z][a-z0-9-]{0,63})\.(.+)$/.exec(selector);
     if (!match) throw new Error("workflow_agent_input_selector_invalid");
-    const source = await repository.latestCompletedNodeAttempt(
+    let source = await repository.latestCompletedNodeAttempt(
       run.id,
       match[1]!,
       run.revision,
     );
     const sourceNode = run.profile?.workflow?.nodes[match[1]!];
+    const competitionNode =
+      sourceNode?.agent?.competition !== undefined ||
+      sourceNode?.review?.reviewers.some(
+        (reviewer) => reviewer.competition !== undefined,
+      ) === true;
     let sourceAttempts: readonly Attempt[] = source ? [source] : [];
+    if (
+      source &&
+      competitionNode &&
+      sourceNode?.executor !== "review" &&
+      sourceNode?.agent?.task !== "implementation"
+    ) {
+      // `latestCompletedNodeAttempt` ties on revision, so for a competition
+      // node resolve explicitly to the promoted canonical attempt.
+      const canonical = canonicalAttempts(
+        await repository.completedNodeAttempts(run.id, match[1]!, run.revision),
+      );
+      source = canonical.at(-1);
+      sourceAttempts = source ? [source] : [];
+    }
     if (source && sourceNode?.executor === "review")
-      sourceAttempts = (
-        await repository.attemptsForRevision(run.id, source.runRevision)
-      ).filter(
-        (candidate) =>
-          candidate.nodeId === match[1] && candidate.state === "completed",
+      sourceAttempts = canonicalAttempts(
+        (
+          await repository.attemptsForRevision(run.id, source.runRevision)
+        ).filter(
+          (candidate) =>
+            candidate.nodeId === match[1] && candidate.state === "completed",
+        ),
       );
     else if (source && sourceNode?.agent?.task === "implementation") {
       const aggregationStartedAt = Date.now();
@@ -310,11 +341,14 @@ export async function resolveWorkflowAgentInputs(
           sourceNodeId: match[1],
         }),
       );
-      sourceAttempts = await repository.completedNodeAttempts(
+      const loadedAttempts = await repository.completedNodeAttempts(
         run.id,
         match[1]!,
         run.revision,
       );
+      sourceAttempts = canonicalAttempts(loadedAttempts);
+      if (sourceAttempts.length !== loadedAttempts.length)
+        source = sourceAttempts.at(-1) ?? source;
       console.log(
         JSON.stringify({
           message: "workflow_implementation_evidence_load_completed",
