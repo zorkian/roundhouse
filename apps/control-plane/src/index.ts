@@ -14,6 +14,8 @@ import { attemptInactivityMilliseconds, coordinate } from "./coordinator.js";
 import { verifyCallback } from "./callback.js";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
 import { renderDashboard } from "./dashboard.js";
+import { renderModelUsage } from "./model-usage.js";
+import { summarizeModelUsage } from "./usage.js";
 import { renderRunDetails } from "./run-details.js";
 import { renderWorkflowView } from "./workflow-view.js";
 import { workflowGraphAsset } from "./workflow-client.js";
@@ -448,6 +450,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
     const isUiRoute =
       url.pathname === "/" ||
       url.pathname === "/runs" ||
+      url.pathname === "/usage" ||
       /^\/repositories\/[^/]+\/[^/]+\/(workflow|issues\/\d+)$/.test(
         url.pathname,
       );
@@ -497,6 +500,34 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       );
       return html(
         renderDashboard(runs, { githubLogin: uiSession!.githubLogin }),
+      );
+    }
+    if (url.pathname === "/usage" && isPublicUiRequest()) {
+      if (request.method !== "GET")
+        return json({ error: "method_not_allowed" }, 405, { allow: "GET" });
+      const queryStartedAt = Date.now();
+      const endAt = Date.now();
+      const startAt = endAt - 30 * 24 * 60 * 60_000;
+      const calls = await new D1RunRepository(env.DB).usageForRepositories(
+        uiSession!.repositoryIds,
+        startAt,
+        endAt,
+      );
+      const summary = summarizeModelUsage(calls, endAt);
+      console.log(
+        JSON.stringify({
+          message: "ui_authorized_query",
+          operation: "model_usage_30_day",
+          outcome: "completed",
+          calls: summary.calls,
+          models: summary.models.length,
+          startAt: summary.startAt,
+          endAt: summary.endAt,
+          durationMs: Date.now() - queryStartedAt,
+        }),
+      );
+      return html(
+        renderModelUsage(summary, { githubLogin: uiSession!.githubLogin }),
       );
     }
     const workflowMatch = url.pathname.match(

@@ -382,6 +382,27 @@ export class D1RunRepository implements RunRepository {
     return (result.results ?? []).map(usageFromRow);
   }
 
+  // Rolling-window model usage across all repositories the session is
+  // authorized for, filtered by stable GitHub repository ID and call
+  // timestamp in SQL without the dashboard's 50-run recency limit.
+  async usageForRepositories(
+    githubRepositoryIds: readonly string[],
+    startAt: number,
+    endAt: number,
+  ): Promise<readonly (ModelUsage & { readonly createdAt?: number })[]> {
+    if (!githubRepositoryIds.length) return [];
+    const placeholders = githubRepositoryIds
+      .map((_, index) => `?${index + 3}`)
+      .join(",");
+    const result = await this.db
+      .prepare(
+        `SELECT u.call_id,u.attempt_id,u.model,u.provider,u.configured_model,u.routing_rule,u.input_tokens,u.cached_input_tokens,u.cache_creation_input_tokens,u.reasoning_tokens,u.output_tokens,u.total_tokens,u.cost_usd,u.created_at FROM model_usage u JOIN attempts a ON a.id=u.attempt_id JOIN runs r ON r.id=a.run_id JOIN work_items w ON w.id=r.work_item_id JOIN repositories p ON p.id=w.repository_id WHERE u.created_at>=?1 AND u.created_at<=?2 AND p.github_id IN (${placeholders}) ORDER BY u.created_at,u.call_id`,
+      )
+      .bind(startAt, endAt, ...githubRepositoryIds)
+      .all<UsageRow>();
+    return (result.results ?? []).map(usageFromRow);
+  }
+
   async recordModelUsage(usage: ModelUsage): Promise<"created" | "exists"> {
     const result = await this.db
       .prepare(
