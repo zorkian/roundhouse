@@ -3,6 +3,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import {
+  actionableConversationStatus,
   renderConversation,
   renderConversationIndex,
 } from "./conversation-ui.js";
@@ -93,7 +94,9 @@ describe("conversation UI", () => {
       );
       expect(html).toContain("<strong>New conversation</strong>");
       expect(html).toContain("octo/&lt;project&gt;");
-      expect(html).toContain('<span class="status open">Open</span>');
+      expect(html).toContain(
+        '<span class="status waiting">Waiting for your response</span>',
+      );
       expect(html).toContain(
         '<span class="status waiting">Waiting to start delivery</span>',
       );
@@ -117,9 +120,66 @@ describe("conversation UI", () => {
     }
   });
 
+  it("selects actionable states in precedence order", () => {
+    const cases = [
+      [
+        "completed delivery overrides every conversation state",
+        {
+          status: "open" as const,
+          promotionState: "accepted" as const,
+          promotionRunStatus: "succeeded" as const,
+          currentBriefState: "draft" as const,
+          activeTurnState: "running" as const,
+          latestTurnState: "failed" as const,
+        },
+        "Delivery complete",
+      ],
+      [
+        "active delivery is started",
+        {
+          status: "promoted" as const,
+          promotionState: "accepted" as const,
+          promotionRunStatus: "waiting" as const,
+        },
+        "Delivery started",
+      ],
+      [
+        "brief review overrides active work",
+        {
+          status: "open" as const,
+          currentBriefState: "draft" as const,
+          activeTurnState: "running" as const,
+        },
+        "Delivery brief ready for review",
+      ],
+      [
+        "active work overrides failed-turn attention",
+        {
+          status: "open" as const,
+          activeTurnState: "pending" as const,
+          latestTurnState: "failed" as const,
+        },
+        "Roundhouse is working",
+      ],
+      [
+        "failed turns need attention before user response",
+        { status: "open" as const, latestTurnState: "failed" as const },
+        "Needs attention",
+      ],
+      [
+        "waiting user response is the fallback",
+        { status: "open" as const },
+        "Waiting for your response",
+      ],
+    ] as const;
+    for (const [, input, label] of cases)
+      expect(actionableConversationStatus(input).label).toBe(label);
+  });
+
   it("renders a private, read-only thread without trusting message HTML", () => {
     const html = renderConversation(base, "octocat");
     expect(html).toContain("Prepare delivery brief");
+    expect(html).toContain("Waiting for your response");
     expect(html).toContain("cannot modify anything");
     expect(html).toContain("Continue the conversation");
     expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
@@ -247,6 +307,7 @@ describe("conversation UI", () => {
       },
       "octocat",
     );
+    expect(html).toContain("Delivery brief ready for review");
     expect(html).toContain("Review and edit delivery brief");
     expect(html).toContain("Start delivery");
     expect(html).toContain("Build &lt;carefully&gt;");
@@ -272,7 +333,7 @@ describe("conversation UI", () => {
       },
       "octocat",
     );
-    expect(pending).toContain("Waiting for Roundhouse intake");
+    expect(pending).toContain("Waiting to start delivery");
     expect(pending).not.toContain("Delivery started");
 
     const promoted = renderConversation(
@@ -308,6 +369,73 @@ describe("conversation UI", () => {
     expect(promoted).not.toContain("Continue the conversation");
   });
 
+  it("refreshes active delivery and renders its successful transition", () => {
+    const active: Conversation = {
+      ...base,
+      status: "promoted",
+      promotion: {
+        id: "promotion",
+        briefId: "brief",
+        state: "accepted",
+        runStatus: "active",
+        actorGithubUserId: 7,
+        actorGithubLogin: "octocat",
+        runId: "run-42",
+        createdAt: 2,
+        updatedAt: 2,
+      },
+    };
+    const activeDetail = renderConversation(active, "octocat");
+    const completeDetail = renderConversation(
+      {
+        ...active,
+        promotion: { ...active.promotion!, runStatus: "succeeded" },
+      },
+      "octocat",
+    );
+    expect(activeDetail).toContain("Delivery started");
+    expect(activeDetail).toContain('<meta http-equiv="refresh" content="2">');
+    expect(completeDetail).toContain("Delivery complete");
+    expect(completeDetail).not.toContain(
+      '<meta http-equiv="refresh" content="2">',
+    );
+
+    const activeIndex = renderConversationIndex(
+      [base.repository],
+      [
+        {
+          id: base.id,
+          repository: base.repository.name,
+          status: "promoted",
+          promotionState: "accepted",
+          promotionRunStatus: "active",
+          updatedAt: 1,
+        },
+      ],
+      "octocat",
+    );
+    const completeIndex = renderConversationIndex(
+      [base.repository],
+      [
+        {
+          id: base.id,
+          repository: base.repository.name,
+          status: "promoted",
+          promotionState: "accepted",
+          promotionRunStatus: "succeeded",
+          updatedAt: 1,
+        },
+      ],
+      "octocat",
+    );
+    expect(activeIndex).toContain("Delivery started");
+    expect(activeIndex).toContain('<meta http-equiv="refresh" content="2">');
+    expect(completeIndex).toContain("Delivery complete");
+    expect(completeIndex).not.toContain(
+      '<meta http-equiv="refresh" content="2">',
+    );
+  });
+
   it("surfaces a terminal turn failure without exposing its internal error", () => {
     const html = renderConversation(
       {
@@ -330,6 +458,7 @@ describe("conversation UI", () => {
       },
       "octocat",
     );
+    expect(html).toContain("Needs attention");
     expect(html).toContain("could not complete the last reply");
     expect(html).toContain("Continue the conversation");
     expect(html).not.toContain("sensitive_upstream_detail");
