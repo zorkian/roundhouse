@@ -201,9 +201,12 @@ export class GitHubCiAutomation {
   // integration with the same reviewed candidate instead of restarting
   // general implementation.
   private async reintegrate(run: RunSnapshot): Promise<"recorded" | "stale"> {
+    // Atomically clear the superseded integration/base identities so the
+    // run never pairs a pending integration with an obsolete validated head.
     const next = await this.repository.transition(run.id, run.revision, {
       status: "active",
       stage: "integrate",
+      heads: { integrationHead: null, targetBaseHead: null },
     });
     return next ? "recorded" : "stale";
   }

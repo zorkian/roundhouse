@@ -1320,7 +1320,7 @@ describe("single coordinator", () => {
     ).toEqual({
       status: "active",
       stage: "integrate",
-      heads: { targetBaseHead: base },
+      heads: { targetBaseHead: base, integrationHead: null },
     });
     expect(
       integrateTransition({
@@ -1555,7 +1555,11 @@ describe("single coordinator", () => {
           },
         },
       }),
-    ).toEqual({ status: "active", stage: "integrate" });
+    ).toEqual({
+      status: "active",
+      stage: "integrate",
+      heads: { integrationHead: null },
+    });
     expect(
       integrateTransition({
         ...attempt,

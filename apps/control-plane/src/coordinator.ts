@@ -160,7 +160,11 @@ export function integrateTransition(attempt: Attempt) {
         heads: { integrationHead: attempt.expectedHead },
       } as const;
     if (review?.status === "changes_requested")
-      return { status: "active", stage: "integrate" } as const;
+      return {
+        status: "active",
+        stage: "integrate",
+        heads: { integrationHead: null },
+      } as const;
     return { status: "failed", stage: "integrate" } as const;
   }
   const outcome = attempt.result?.integration as
@@ -176,7 +180,9 @@ export function integrateTransition(attempt: Attempt) {
     return {
       status: "active",
       stage: "integrate",
-      heads: { targetBaseHead: baseHead },
+      // Select the conflicting base and clear any integration head validated
+      // against an older base so the identities never mismatch.
+      heads: { targetBaseHead: baseHead, integrationHead: null },
     } as const;
   if (
     outcome.status === "clean" &&

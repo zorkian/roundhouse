@@ -383,13 +383,64 @@ describe("GitHub exact-head CI and merge", () => {
     expect(api.get).not.toHaveBeenCalledWith(
       expect.stringContaining("/check-runs?"),
     );
-    await expect(repository.get(run.id)).resolves.toMatchObject({
+    const next = await repository.get(run.id);
+    expect(next).toMatchObject({
       status: "active",
       stage: "integrate",
       revision: 8,
       currentHead: head,
-      targetBaseHead: "e".repeat(40),
     });
+    expect(next?.targetBaseHead).toBeUndefined();
+    expect(next?.integrationHead).toBeUndefined();
+  });
+
+  it("clears the superseded validated integration head when reintegrating", async () => {
+    const { repository, run } = await setupCi();
+    const integrateAttempt: Attempt = {
+      id: `${run.id}_rev_${run.revision}_integrate`,
+      runId: run.id,
+      runRevision: run.revision,
+      kind: "agent",
+      stage: "integrate",
+      role: "integrate",
+      state: "created",
+      deadlineAt: 1_000,
+      baseCommit: run.baseCommit,
+      expectedHead: head,
+    };
+    await repository.createAttempt(integrateAttempt);
+    await repository.completeAttempt(
+      integrateAttempt.id,
+      integrateAttempt.runRevision,
+      head,
+      {
+        integration: {
+          status: "clean",
+          candidateHead: head,
+          baseHead: "e".repeat(40),
+          head,
+        },
+      },
+    );
+    const integrated = await repository.transition(run.id, run.revision, {
+      status: "active",
+      stage: "ci",
+      heads: {
+        targetBaseHead: "e".repeat(40),
+        integrationHead: head,
+      },
+    });
+    if (!integrated) throw new Error("run_missing");
+    const api = github(head, "success", true, [], {
+      baseSha: "9".repeat(40),
+    });
+    await expect(
+      new GitHubCiAutomation(repository, api.api).reconcileCi(integrated, 100),
+    ).resolves.toBe("recorded");
+    const next = await repository.get(run.id);
+    expect(next).toMatchObject({ status: "active", stage: "integrate" });
+    expect(next?.targetBaseHead).toBeUndefined();
+    expect(next?.integrationHead).toBeUndefined();
   });
 
   it("does not accept successful CI without a clean exact-head review", async () => {
@@ -587,14 +638,15 @@ describe("GitHub exact-head CI and merge", () => {
     const automation = new GitHubCiAutomation(repository, api.api);
     await expect(automation.merge(merging, 200)).resolves.toBe("recorded");
     expect(api.put).not.toHaveBeenCalled();
-    await expect(repository.get(run.id)).resolves.toMatchObject({
+    const next = await repository.get(run.id);
+    expect(next).toMatchObject({
       status: "active",
       stage: "integrate",
       currentHead: integration,
       reviewedHead: head,
-      targetBaseHead: targetBase,
-      integrationHead: integration,
     });
+    expect(next?.targetBaseHead).toBeUndefined();
+    expect(next?.integrationHead).toBeUndefined();
   });
 
   it("rejects merge when the pull-request head is not the integration head", async () => {

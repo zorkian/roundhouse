@@ -98,10 +98,12 @@ export interface RunTransition {
   readonly stage: RunStage;
   readonly waitingReason?: WaitingReason;
   readonly acceptedHead?: string;
+  // Identity heads may be set to a commit or explicitly cleared with null
+  // (for example, superseding an integration when the target base moves).
   readonly heads?: Partial<
     Record<
       "candidateHead" | "reviewedHead" | "targetBaseHead" | "integrationHead",
-      string
+      string | null
     >
   >;
 }
@@ -164,7 +166,8 @@ function assertTransition(transition: RunTransition): void {
   )
     throw new Error("invalid_accepted_head");
   for (const value of Object.values(transition.heads ?? {}))
-    if (!/^[a-f0-9]{40}$/.test(value)) throw new Error("invalid_identity_head");
+    if (value !== null && !/^[a-f0-9]{40}$/.test(value))
+      throw new Error("invalid_identity_head");
 }
 
 export function transitionRun(
@@ -178,13 +181,18 @@ export function transitionRun(
 
   const { waitingReason: _waitingReason, ...current } = run;
   const { acceptedHead, heads, ...nextTransition } = transition;
-  return {
+  const next: RunSnapshot = {
     ...current,
     ...nextTransition,
-    ...(heads ?? {}),
     currentHead: acceptedHead ?? current.currentHead,
     revision: run.revision + 1,
   };
+  const mutable = next as unknown as Record<string, unknown>;
+  for (const [key, value] of Object.entries(heads ?? {})) {
+    if (value === null) delete mutable[key];
+    else mutable[key] = value;
+  }
+  return next;
 }
 
 export function resumeRun(
