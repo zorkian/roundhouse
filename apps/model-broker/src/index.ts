@@ -295,6 +295,9 @@ export function resolveRoute(
   )
     throw new Error("invalid_routing_configuration");
   return {
+    ...(envelope.requestedReasoning
+      ? { requestedEffort: envelope.requestedReasoning }
+      : {}),
     provider,
     model,
     protocol,

@@ -150,10 +150,10 @@ function runStatusSummary(status: RunStatus, stage: string): string {
 
 function usageTable(items: NonNullable<RunDetails["usage"]>): string {
   if (!items.length) return '<p class="muted">No model calls recorded.</p>';
-  return `<table><thead><tr><th>Provider</th><th>Configured model</th><th>Actual model</th><th>Tokens</th><th>Cost</th></tr></thead><tbody>${items
+  return `<table><thead><tr><th>Provider</th><th>Configured model</th><th>Actual model</th><th>Requested effort</th><th>Resolved effort</th><th>Token breakdown</th><th>Cost</th><th>Latency</th><th>Tool calls</th></tr></thead><tbody>${items
     .map((item) => {
       const priced = withEstimatedUsageCost(item);
-      return `<tr><td>${escapeHtml(item.provider ?? "Unavailable")}</td><td>${escapeHtml(item.configuredModel ?? "Unavailable")}</td><td>${escapeHtml(item.model)}</td><td>${escapeHtml(formatUsage([priced]))}</td><td>${escapeHtml(priced.costUsd === undefined ? "Unavailable" : `$${priced.costUsd.toFixed(6)}`)}</td></tr>`;
+      return `<tr><td>${escapeHtml(item.provider ?? "Unavailable")}</td><td>${escapeHtml(item.configuredModel ?? "Unavailable")}</td><td>${escapeHtml(item.model)}</td><td>${escapeHtml(item.requestedEffort ?? "Unavailable")}</td><td>${escapeHtml(item.resolvedEffort ?? "Unavailable")}</td><td>${escapeHtml(formatUsageBreakdown([priced]))}</td><td>${escapeHtml(priced.costUsd === undefined ? "Unavailable" : `$${priced.costUsd.toFixed(6)}`)}</td><td>${escapeHtml(item.latencyMs === undefined ? "Unavailable" : `${item.latencyMs.toLocaleString("en-US")} ms`)}</td><td>${escapeHtml(item.toolCallCount === undefined ? "Unavailable" : String(item.toolCallCount))}</td></tr>`;
     })
     .join("")}</tbody></table>`;
 }

@@ -133,6 +133,9 @@ export type ModelProtocol = (typeof modelProtocols)[number];
 export type ModelTransport = (typeof modelTransports)[number];
 
 export interface ModelRoute {
+  // Present only when the workflow/profile explicitly requested an effort.
+  // thinkingLevel is the validated normalized effort sent to the provider.
+  readonly requestedEffort?: ModelThinkingLevel;
   readonly provider: string;
   readonly model: string;
   readonly protocol: ModelProtocol;
@@ -151,6 +154,10 @@ export function isModelRoute(value: unknown): value is ModelRoute {
   const thinkingLevelMap = runtime?.thinkingLevelMap as
     Record<string, unknown> | undefined;
   return (
+    (route.requestedEffort === undefined ||
+      modelThinkingLevels.includes(
+        route.requestedEffort as ModelThinkingLevel,
+      )) &&
     typeof route.provider === "string" &&
     route.provider.length > 0 &&
     typeof route.model === "string" &&
@@ -198,6 +205,10 @@ export interface ModelUsage {
   readonly provider?: string;
   readonly configuredModel?: string;
   readonly routingRule?: string;
+  readonly requestedEffort?: ModelThinkingLevel;
+  readonly resolvedEffort?: ModelThinkingLevel;
+  readonly latencyMs?: number;
+  readonly toolCallCount?: number;
   readonly inputTokens?: number;
   readonly cachedInputTokens?: number;
   readonly cacheCreationInputTokens?: number;

@@ -270,6 +270,10 @@ function selectedTranscript(messages: readonly ConversationMessage[]) {
   return selected.reverse();
 }
 
+function nativeEffort(route: ModelRoute): string | undefined {
+  return route.runtime.thinkingLevelMap[route.thinkingLevel] ?? undefined;
+}
+
 function textFromUnknown(value: unknown): string | undefined {
   if (typeof value === "string" && value.trim()) return value.trim();
   if (!Array.isArray(value)) return undefined;
@@ -310,9 +314,9 @@ const openAiResponsesAdapter: ProtocolAdapter = {
         store: false,
         include: ["reasoning.encrypted_content"],
         max_output_tokens: input.maxOutputTokens,
-        ...(input.route.thinkingLevel === "off"
+        ...(input.route.thinkingLevel === "off" || !nativeEffort(input.route)
           ? {}
-          : { reasoning: { effort: input.route.thinkingLevel } }),
+          : { reasoning: { effort: nativeEffort(input.route) } }),
         ...(input.structuredOutput
           ? {
               text: {
@@ -415,6 +419,9 @@ const openAiCompletionsAdapter: ProtocolAdapter = {
             }
           : {}),
         max_tokens: input.maxOutputTokens,
+        ...(nativeEffort(input.route)
+          ? { reasoning_effort: nativeEffort(input.route) }
+          : {}),
         ...(input.structuredOutput
           ? {
               response_format: {
@@ -502,6 +509,9 @@ const anthropicMessagesAdapter: ProtocolAdapter = {
             }
           : {}),
         max_tokens: input.maxOutputTokens,
+        ...(nativeEffort(input.route)
+          ? { thinking: { type: "enabled", effort: nativeEffort(input.route) } }
+          : {}),
       },
     };
   },
@@ -784,6 +794,32 @@ function number(value: unknown): number | undefined {
     : undefined;
 }
 
+function toolCallCount(value: Record<string, unknown>): number | undefined {
+  const output = Array.isArray(value.output) ? value.output : undefined;
+  if (output)
+    return output.filter(
+      (item) =>
+        Boolean(item) &&
+        typeof item === "object" &&
+        (item as Record<string, unknown>).type === "function_call",
+    ).length;
+  const choices = Array.isArray(value.choices) ? value.choices : undefined;
+  const message =
+    choices?.[0] && typeof choices[0] === "object"
+      ? (choices[0] as { message?: { tool_calls?: unknown } }).message
+      : undefined;
+  if (Array.isArray(message?.tool_calls)) return message.tool_calls.length;
+  const content = Array.isArray(value.content) ? value.content : undefined;
+  return content
+    ? content.filter(
+        (item) =>
+          Boolean(item) &&
+          typeof item === "object" &&
+          (item as Record<string, unknown>).type === "tool_use",
+      ).length
+    : undefined;
+}
+
 function usageForResponse(input: {
   readonly value: Record<string, unknown>;
   readonly route: ModelRoute;
@@ -868,6 +904,13 @@ function usageForResponse(input: {
     configuredModel: input.turn.configuredModel,
     protocol: input.route.protocol,
     reasoningLevel: input.route.thinkingLevel,
+    ...(input.route.requestedEffort
+      ? { requestedEffort: input.route.requestedEffort }
+      : {}),
+    resolvedEffort: input.route.thinkingLevel,
+    ...(toolCallCount(value) === undefined
+      ? {}
+      : { toolCallCount: toolCallCount(value) }),
     routingRule: input.route.rule,
     ...(inputTokens === undefined ? {} : { inputTokens }),
     ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
@@ -1088,6 +1131,10 @@ async function callModel(input: {
       configuredModel: input.turn.configuredModel,
       protocol: input.route.protocol,
       reasoningLevel: input.route.thinkingLevel,
+      ...(input.route.requestedEffort
+        ? { requestedEffort: input.route.requestedEffort }
+        : {}),
+      resolvedEffort: input.route.thinkingLevel,
       routingRule: input.route.rule,
       latencyMs: 0,
       outcome: "failed",

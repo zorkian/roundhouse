@@ -351,6 +351,7 @@ describe("conversation engine", () => {
         .json()) as Record<string, unknown>;
       if (protocol === "openai-completions")
         expect(requestBody).toMatchObject({
+          reasoning_effort: "high",
           response_format: {
             json_schema: {
               name: "conversation_first_reply",
@@ -358,8 +359,12 @@ describe("conversation engine", () => {
             },
           },
         });
-      if (protocol === "anthropic-messages")
+      if (protocol === "anthropic-messages") {
         expect(requestBody.system).toContain("conversation_first_reply");
+        expect(requestBody).toMatchObject({
+          thinking: { type: "enabled", effort: "high" },
+        });
+      }
       if (protocol === "google-generative-ai")
         expect(requestBody).toMatchObject({
           generationConfig: {
