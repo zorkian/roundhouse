@@ -3,6 +3,7 @@
 
 import {
   immutableAttemptId,
+  reviewerForRole,
   runSchemaVersion,
   type Attempt,
   type RunSnapshot,
@@ -207,6 +208,14 @@ class ContainerDispatcher implements AttemptDispatcher {
       attempt.stage === "implement"
         ? await this.runs.latestCompletedAttempt(run.id, "review", run.revision)
         : undefined;
+    const reviewAttempts = reviewAttempt
+      ? (
+          await this.runs.attemptsForRevision(run.id, reviewAttempt.runRevision)
+        ).filter(
+          (candidate) =>
+            candidate.stage === "review" && candidate.state === "completed",
+        )
+      : [];
     const ciAttempt =
       attempt.stage === "implement"
         ? await this.runs.latestCompletedAttempt(run.id, "ci", run.revision)
@@ -215,8 +224,40 @@ class ContainerDispatcher implements AttemptDispatcher {
     const reproduction = reproductionAttempt?.result?.reproduction;
     const plan = planAttempt?.result?.plan;
     const implementation = implementationAttempt?.result?.implementation;
-    const review = reviewAttempt?.result?.review;
+    const review = reviewAttempt
+      ? {
+          status: reviewAttempts.some(
+            (candidate) =>
+              (candidate.result?.review as Record<string, unknown> | undefined)
+                ?.status === "changes_requested",
+          )
+            ? "changes_requested"
+            : "clean",
+          findings: reviewAttempts.flatMap((candidate) => {
+            const result = candidate.result?.review as
+              Record<string, unknown> | undefined;
+            return Array.isArray(result?.findings)
+              ? result.findings.map((finding) => ({
+                  reviewer: candidate.role,
+                  finding,
+                }))
+              : [];
+          }),
+          reviewers: reviewAttempts.map((candidate) => ({
+            role: candidate.role,
+            routing: candidate.routing,
+          })),
+        }
+      : undefined;
     const ci = ciAttempt?.result?.ci;
+    const reviewer = reviewerForRole(attempt.role);
+    const sameRevisionReviews =
+      attempt.stage === "review"
+        ? await this.runs.attemptsForRevision(run.id, run.revision)
+        : [];
+    const holisticSelection = sameRevisionReviews.find(
+      (candidate) => candidate.role === "review-holistic",
+    )?.result?.review;
     if (attempt.stage === "reproduce" && !qualification)
       throw new Error("reproduction_qualification_missing");
     if (attempt.stage === "plan" && !reproduction)
@@ -256,6 +297,7 @@ class ContainerDispatcher implements AttemptDispatcher {
               ...(reproduction ? { reproduction } : {}),
               ...(plan ? { plan } : {}),
               ...(implementation ? { implementation } : {}),
+              ...(holisticSelection ? { holisticSelection } : {}),
               ...(review ? { review } : {}),
               ...(ci ? { ci } : {}),
             }
@@ -266,6 +308,7 @@ class ContainerDispatcher implements AttemptDispatcher {
         complexity: "unknown",
         rule: routingRule,
       },
+      ...(reviewer ? { reviewer } : {}),
       artifact: {
         repositoryId: repository.id,
         repository: repository.name,

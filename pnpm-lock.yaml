@@ -36,7 +36,11 @@ importers:
         specifier: workspace:*
         version: link:../../packages/core
 
-  apps/model-broker: {}
+  apps/model-broker:
+    dependencies:
+      '@roundhouse/core':
+        specifier: workspace:*
+        version: link:../../packages/core
 
   packages/core: {}
 

@@ -75,6 +75,42 @@ export interface Reviewer {
   readonly provider: string;
   readonly model: string;
   readonly blockingSeverities: readonly string[];
+  readonly prompt: string;
+}
+
+export const reviewers = [
+  {
+    role: "review-holistic",
+    label: "Holistic design review",
+    provider: "anthropic",
+    model: "anthropic/claude-opus-4.8",
+    blockingSeverities: ["critical", "high", "medium"],
+    prompt:
+      "Review the change holistically for design and correctness. Do not perform the specialist reviews. Select which of review-security and review-data should run, and give a rationale for each selection.",
+  },
+  {
+    role: "review-security",
+    label: "Security review",
+    provider: "moonshotai",
+    model: "moonshotai/kimi-k3",
+    blockingSeverities: ["critical", "high", "medium"],
+    prompt:
+      "Perform a focused security review, including authorization, authentication, injection, secrets, trust boundaries, and unsafe input handling.",
+  },
+  {
+    role: "review-data",
+    label: "Data consistency review",
+    provider: "anthropic",
+    model: "anthropic/claude-sonnet-4.6",
+    blockingSeverities: ["critical", "high", "medium"],
+    prompt:
+      "Perform a focused review of data consistency, durability, transactions, schemas, migrations, and backward compatibility.",
+  },
+] as const satisfies readonly Reviewer[];
+
+export type ReviewerRole = (typeof reviewers)[number]["role"];
+export function reviewerForRole(role: string): Reviewer | undefined {
+  return reviewers.find((reviewer) => reviewer.role === role);
 }
 
 export interface RiskAssessment {
@@ -134,9 +170,21 @@ export interface RunRepository {
     stage: RunStage,
     beforeRevision: number,
   ): Promise<Attempt | undefined>;
+  attemptsForRevision(
+    runId: string,
+    revision: number,
+  ): Promise<readonly Attempt[]>;
   expiredLeases(now: number): Promise<readonly Wakeup[]>;
 }
 
 export function immutableAttemptId(runId: string, revision: number): string {
   return `${runId}_rev_${revision}`;
+}
+
+export function reviewerAttemptId(
+  runId: string,
+  revision: number,
+  role: ReviewerRole,
+): string {
+  return `${immutableAttemptId(runId, revision)}_${role}`;
 }

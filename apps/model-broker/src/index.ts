@@ -1,6 +1,8 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
+import { reviewerForRole } from "@roundhouse/core";
+
 const routingHeaders = [
   "x-roundhouse-attempt-id",
   "x-roundhouse-role",
@@ -34,25 +36,36 @@ export interface BrokerRoute {
     | "reproduction-default-v1"
     | "planning-default-v1"
     | "implementation-default-v1"
-    | "review-default-v1";
+    | "review-default-v1"
+    | "review-holistic-v1"
+    | "review-security-v1"
+    | "review-data-v1";
 }
 
 export function selectRoute(request: Request, env: BrokerEnv): BrokerRoute {
   for (const header of routingHeaders)
     if (!request.headers.get(header)) throw new Error(`missing_${header}`);
+  const role = request.headers.get("x-roundhouse-role")!;
+  const reviewer = reviewerForRole(role);
   return {
-    model: env.ROUTING_MODEL,
+    model: reviewer?.model ?? env.ROUTING_MODEL,
     reasoningEffort: env.ROUTING_REASONING_EFFORT,
     rule:
-      request.headers.get("x-roundhouse-role") === "reproduce"
-        ? "reproduction-default-v1"
-        : request.headers.get("x-roundhouse-role") === "plan"
-          ? "planning-default-v1"
-          : request.headers.get("x-roundhouse-role") === "implement"
-            ? "implementation-default-v1"
-            : request.headers.get("x-roundhouse-role") === "review"
-              ? "review-default-v1"
-              : "qualification-default-v1",
+      role === "review-holistic"
+        ? "review-holistic-v1"
+        : role === "review-security"
+          ? "review-security-v1"
+          : role === "review-data"
+            ? "review-data-v1"
+            : role === "reproduce"
+              ? "reproduction-default-v1"
+              : request.headers.get("x-roundhouse-role") === "plan"
+                ? "planning-default-v1"
+                : request.headers.get("x-roundhouse-role") === "implement"
+                  ? "implementation-default-v1"
+                  : request.headers.get("x-roundhouse-role") === "review"
+                    ? "review-default-v1"
+                    : "qualification-default-v1",
   };
 }
 

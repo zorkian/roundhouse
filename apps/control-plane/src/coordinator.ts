@@ -3,6 +3,8 @@
 
 import {
   immutableAttemptId,
+  reviewerAttemptId,
+  reviewers,
   type Attempt,
   type RunRepository,
   type RunSnapshot,
@@ -141,6 +143,49 @@ function completedTransition(attempt: Attempt) {
   return undefined;
 }
 
+function selectedSpecialists(attempt: Attempt): readonly string[] {
+  const review = attempt.result?.review as Record<string, unknown> | undefined;
+  const selections = review?.selections;
+  if (!Array.isArray(selections)) return [];
+  return selections.flatMap((selection) => {
+    if (typeof selection === "string") return [selection];
+    if (!selection || typeof selection !== "object") return [];
+    const value = selection as Record<string, unknown>;
+    return value.applicable === false || typeof value.role !== "string"
+      ? []
+      : [value.role];
+  });
+}
+
+function aggregateReviews(attempts: readonly Attempt[]): Attempt {
+  const findings = attempts.flatMap((attempt) => {
+    const review = attempt.result?.review as
+      Record<string, unknown> | undefined;
+    return Array.isArray(review?.findings)
+      ? review.findings.map((finding) => ({ reviewer: attempt.role, finding }))
+      : [];
+  });
+  const changesRequested = attempts.some(
+    (attempt) =>
+      (attempt.result?.review as Record<string, unknown> | undefined)
+        ?.status === "changes_requested",
+  );
+  const source = attempts[attempts.length - 1]!;
+  return {
+    ...source,
+    result: {
+      review: {
+        status: changesRequested ? "changes_requested" : "clean",
+        findings,
+        reviewers: attempts.map((attempt) => ({
+          role: attempt.role,
+          routing: attempt.routing,
+        })),
+      },
+    },
+  };
+}
+
 export async function coordinate(
   repository: RunRepository,
   dispatcher: AttemptDispatcher,
@@ -156,6 +201,53 @@ export async function coordinate(
     run.status !== "active"
   )
     return "stale";
+  if (run.stage === "review") {
+    const current = await repository.attemptsForRevision(run.id, run.revision);
+    const holisticRole = "review-holistic" as const;
+    const holistic = current.find((attempt) => attempt.role === holisticRole);
+    if (!holistic || holistic.state !== "completed") {
+      return dispatchReview(
+        repository,
+        dispatcher,
+        run,
+        holisticRole,
+        now,
+        leaseMilliseconds,
+      );
+    }
+    const allowed = new Set(
+      reviewers.slice(1).map((reviewer) => reviewer.role),
+    );
+    const selected = selectedSpecialists(holistic).filter((role) =>
+      allowed.has(role as "review-security" | "review-data"),
+    ) as ("review-security" | "review-data")[];
+    for (const role of selected) {
+      const attempt = current.find((candidate) => candidate.role === role);
+      if (!attempt || attempt.state !== "completed")
+        return dispatchReview(
+          repository,
+          dispatcher,
+          run,
+          role,
+          now,
+          leaseMilliseconds,
+        );
+    }
+    const aggregate = aggregateReviews([
+      holistic,
+      ...selected.map((role) =>
+        current.find((attempt) => attempt.role === role)!,
+      ),
+    ]);
+    const next = await repository.transition(
+      run.id,
+      run.revision,
+      reviewTransition(aggregate),
+    );
+    if (!next) return "stale";
+    if (reporter) await reporter.report(next, aggregate);
+    return "dispatched";
+  }
   const attemptId = immutableAttemptId(run.id, run.revision);
   const previous = await repository.getAttempt(attemptId);
   if (previous?.state === "completed") {
@@ -206,5 +298,54 @@ export async function coordinate(
     throw error;
   }
   await repository.markDispatched(attemptId);
+  return "dispatched";
+}
+
+async function dispatchReview(
+  repository: RunRepository,
+  dispatcher: AttemptDispatcher,
+  run: RunSnapshot,
+  role: "review-holistic" | "review-security" | "review-data",
+  now: number,
+  leaseMilliseconds: number,
+): Promise<"dispatched" | "duplicate"> {
+  const attemptId = reviewerAttemptId(run.id, run.revision, role);
+  const claimed = await repository.claimLease(
+    run.id,
+    run.revision,
+    {
+      attemptId,
+      runRevision: run.revision,
+      expiresAt: now + leaseMilliseconds,
+    },
+    now,
+  );
+  if (!claimed) return "duplicate";
+  const attempt: Attempt = {
+    id: attemptId,
+    runId: run.id,
+    runRevision: run.revision,
+    kind: "agent",
+    stage: "review",
+    role,
+    state: "created",
+    deadlineAt: now + leaseMilliseconds,
+    baseCommit: run.baseCommit,
+    expectedHead: run.currentHead,
+    routing: {
+      provider: reviewers.find((reviewer) => reviewer.role === role)!.provider,
+      configuredModel: reviewers.find((reviewer) => reviewer.role === role)!
+        .model,
+      rule: `${role}-v1`,
+    },
+  };
+  await repository.createAttempt(attempt);
+  try {
+    await dispatcher.submit(attempt, run);
+  } catch (error) {
+    await repository.releaseLease(run.id, run.revision, attempt.id);
+    throw error;
+  }
+  await repository.markDispatched(attempt.id);
   return "dispatched";
 }

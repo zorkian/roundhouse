@@ -144,6 +144,12 @@ export class MemoryRunRepository implements RunRepository {
       .sort((left, right) => right.runRevision - left.runRevision)[0];
   }
 
+  async attemptsForRevision(runId: string, revision: number) {
+    return [...this.attempts.values()].filter(
+      (attempt) => attempt.runId === runId && attempt.runRevision === revision,
+    );
+  }
+
   async expiredLeases(now: number): Promise<readonly Wakeup[]> {
     return [...this.leases.entries()].flatMap(([runId, lease]) =>
       lease.expiresAt <= now &&

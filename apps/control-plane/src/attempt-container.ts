@@ -118,6 +118,7 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
     ),
   );
   const routing = {
+    ...attempt.routing,
     model: response.headers.get("x-roundhouse-routing-model"),
     reasoningEffort: response.headers.get("x-roundhouse-routing-effort"),
     rule: response.headers.get("x-roundhouse-routing-rule"),

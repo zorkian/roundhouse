@@ -312,6 +312,19 @@ export const reviewSchema = Object.freeze({
         },
       },
     },
+    selections: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["role", "applicable", "rationale"],
+        properties: {
+          role: { type: "string", enum: ["review-security", "review-data"] },
+          applicable: { type: "boolean" },
+          rationale: { type: "string" },
+        },
+      },
+    },
   },
 });
 
@@ -573,7 +586,16 @@ export async function review(assignment, directory, attemptSecret) {
     JSON.stringify(assignment.context?.plan ?? {}),
     "Implementation result:",
     JSON.stringify(assignment.context?.implementation ?? {}),
-    "Inspect the change from the base commit to the candidate and the surrounding code. Focus on concrete correctness problems, regressions, and unmet acceptance criteria.",
+    assignment.reviewer?.prompt ??
+      "Inspect the change from the base commit to the candidate and the surrounding code. Focus on concrete correctness problems, regressions, and unmet acceptance criteria.",
+    ...(assignment.role === "review-holistic"
+      ? [
+          "Return a selections entry for both review-security and review-data, including whether each is applicable and why. Keep specialist analysis out of this review.",
+        ]
+      : [
+          "Holistic review selection:",
+          JSON.stringify(assignment.context?.holisticSelection ?? {}),
+        ]),
     "Do not request speculative hardening, policy, limits, retries, broad refactors, or style-only changes.",
     "If there are actionable problems, set status to changes_requested and describe each one precisely. Otherwise set status to clean with an empty findings array.",
     "The summary and findings may be posted to maintainers. Write clear, approachable language without mentioning internal schemas or workflow machinery.",
