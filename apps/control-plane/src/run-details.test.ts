@@ -1,6 +1,7 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
+import { JSDOM } from "jsdom";
 import { describe, expect, it } from "vitest";
 import type { RunDetails } from "./d1-store.js";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
@@ -504,69 +505,280 @@ describe("run details", () => {
     expect(html).not.toContain("<h2>Usage by workflow step</h2>");
   });
 
-  it("keeps an inactive usage breakdown out of document layout so nowrap content cannot widen the page", () => {
-    const html = renderRunDetails({
-      run: {
-        schemaVersion: 2,
-        id: "run_tooltip_overflow",
-        repository: "zorkian/roundhouse",
-        issueNumber: 399,
-        baseCommit: "base",
-        currentHead: "head",
-        profileVersion: "test",
-        status: "succeeded",
-        stage: "implement",
-        revision: 1,
-      },
-      createdAt: 1_000,
-      updatedAt: 2_000,
-      attempts: [],
-      events: [],
-      usage: [
-        {
-          callId: "call-long",
-          attemptId: "implement-1",
-          model: "test-model",
-          totalTokens: 123_456_789,
-          costUsd: 123.45,
-        },
-      ],
-    });
+  describe("rendered layout regression for issue #399", () => {
+    const remPx = 16;
+    const blockDisplays = new Set([
+      "block",
+      "grid",
+      "flex",
+      "list-item",
+      "table",
+      "flow-root",
+    ]);
 
-    const style = html.match(/<style>(.*?)<\/style>/s)?.[1] ?? "";
-    expect(style).not.toBe("");
-    const rules = new Map<string, string>();
-    for (const match of style.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-      const selector = (match[1] ?? "").trim();
-      if (!rules.has(selector)) rules.set(selector, match[2] ?? "");
+    const layoutFixture = () =>
+      renderRunDetails({
+        run: {
+          schemaVersion: 2,
+          id: "run_tooltip_overflow",
+          repository: "zorkian/roundhouse",
+          issueNumber: 399,
+          baseCommit: "base",
+          currentHead: "head",
+          profileVersion: "test",
+          status: "succeeded",
+          stage: "implement",
+          revision: 1,
+        },
+        createdAt: 1_000,
+        updatedAt: 2_000,
+        attempts: [],
+        events: [],
+        usage: [
+          {
+            callId: "call-long",
+            attemptId: "implement-1",
+            model: "test-model",
+            totalTokens: 123_456_789,
+            inputTokens: 123_456_789,
+            outputTokens: 123_456_789,
+            costUsd: 123.45,
+          },
+        ],
+      });
+
+    // jsdom does not evaluate @media conditions against the window size, so
+    // the harness resolves max-width media blocks for the target viewport
+    // before jsdom applies the real selector cascade.
+    const resolveMediaQueries = (html: string, viewportWidth: number) =>
+      html.replace(/<style>(.*?)<\/style>/s, (block, css: string) => {
+        let out = "";
+        let index = 0;
+        while (index < css.length) {
+          const at = css.indexOf("@media(max-width:", index);
+          if (at === -1) {
+            out += css.slice(index);
+            break;
+          }
+          out += css.slice(index, at);
+          const open = css.indexOf("{", at);
+          let depth = 1;
+          let end = open + 1;
+          while (depth > 0) {
+            if (css[end] === "{") depth += 1;
+            else if (css[end] === "}") depth -= 1;
+            end += 1;
+          }
+          const limit = Number(css.slice(at, open).match(/(\d+)px/)?.[1]);
+          if (viewportWidth <= limit) out += css.slice(open + 1, end - 1);
+          index = end;
+        }
+        return `<style>${out}</style>`;
+      });
+
+    interface Measurement {
+      documentRightEdge: number;
+      bodyContentWidth: number;
+      bodyLeft: number;
+      tooltipDisplay: string;
+      tooltipWhiteSpace: string;
     }
 
-    // Regression for issue #399: the hidden tooltip previously used only
-    // opacity:0/visibility:hidden, so its nowrap text still contributed
-    // horizontal scroll overflow and expanded the mobile document well past
-    // the viewport. The inactive tooltip must be removed from layout
-    // entirely (display:none) so it cannot affect scroll width.
-    const inactive = rules.get(".usage-breakdown") ?? "";
-    expect(inactive).toContain("display:none");
-    expect(inactive).not.toContain("visibility:hidden");
-    expect(inactive).toContain("position:absolute");
+    // Purpose-built layout harness: resolves every element's computed style
+    // from the real stylesheet (including the hover-reveal rule mirrored via
+    // an .is-revealed class) and estimates the document's right edge the way
+    // scroll overflow is produced: out-of-flow or non-wrapping content
+    // extends past its container, while display:none contributes nothing.
+    const measure = (
+      html: string,
+      viewportWidth: number,
+      options: { revealTooltips?: boolean; viewportHeight?: number } = {},
+    ): Measurement => {
+      const dom = new JSDOM(resolveMediaQueries(html, viewportWidth), {
+        beforeParse(window) {
+          Object.defineProperty(window, "innerWidth", {
+            value: viewportWidth,
+            configurable: true,
+          });
+          Object.defineProperty(window, "innerHeight", {
+            value: options.viewportHeight ?? 844,
+            configurable: true,
+          });
+        },
+      });
+      const { document } = dom.window;
+      const view = dom.window;
+      if (options.revealTooltips) {
+        const mirror = document.createElement("style");
+        mirror.textContent =
+          ".usage-hint.is-revealed .usage-breakdown{display:block}";
+        document.head.appendChild(mirror);
+        for (const hint of document.querySelectorAll(".usage-hint"))
+          hint.classList.add("is-revealed");
+      }
 
-    // Hover, keyboard focus, and focus-within must restore the tooltip.
-    const restore = [...rules.entries()].find(
-      ([selector]) =>
-        selector.includes(".usage-hint:hover .usage-breakdown") &&
-        selector.includes(".usage-hint:focus .usage-breakdown"),
-    );
-    expect(restore?.[1]).toContain("display:block");
+      const parseLength = (value: string, reference: number): number | null => {
+        if (!value || value === "auto" || value === "none") return null;
+        if (value.endsWith("px")) return Number.parseFloat(value);
+        if (value.endsWith("rem")) return Number.parseFloat(value) * remPx;
+        if (value.endsWith("%"))
+          return (Number.parseFloat(value) / 100) * reference;
+        return null;
+      };
 
-    // On narrow viewports the displayed tooltip must stay inside the
-    // viewport instead of forcing the document wider.
-    const media =
-      style.match(/@media\(max-width:700px\)\{(.*)\}\s*$/s)?.[1] ?? "";
-    expect(media).toContain(".usage-breakdown{");
-    const mobileRule = media.match(/\.usage-breakdown\{([^{}]*)\}/)?.[1] ?? "";
-    expect(mobileRule).toContain("max-width:calc(100vw - 2rem)");
-    expect(mobileRule).toContain("white-space:normal");
+      const textWidth = (el: Element): number => {
+        const fontSize =
+          parseLength(view.getComputedStyle(el).fontSize, remPx) ?? remPx;
+        let chars = 0;
+        const walk = (node: Node) => {
+          if (node.nodeType === 3) {
+            chars += (node.textContent ?? "").length;
+            return;
+          }
+          if (node.nodeType !== 1) return;
+          const style = view.getComputedStyle(node as Element);
+          if (style.display === "none") return;
+          if ((node as Element) !== el && style.position === "absolute") return;
+          for (const child of node.childNodes) walk(child);
+        };
+        walk(el);
+        return chars * fontSize * 0.55;
+      };
+
+      const rightEdge = (
+        el: Element,
+        left: number,
+        containerWidth: number,
+      ): number => {
+        const style = view.getComputedStyle(el);
+        if (style.display === "none") return Number.NEGATIVE_INFINITY;
+        let myLeft = left;
+        let myWidth: number;
+        if (style.position === "absolute") {
+          myLeft = left + (parseLength(style.left, containerWidth) ?? 0);
+          const maxWidth = style.maxWidth.includes("100vw")
+            ? viewportWidth - 2 * remPx
+            : (parseLength(style.maxWidth, containerWidth) ??
+              Number.POSITIVE_INFINITY);
+          const intrinsic = textWidth(el);
+          myWidth =
+            style.whiteSpace === "nowrap"
+              ? intrinsic
+              : Math.min(intrinsic, maxWidth);
+        } else if (blockDisplays.has(style.display)) {
+          const marginLeft = parseLength(style.marginLeft, containerWidth) ?? 0;
+          const marginRight =
+            parseLength(style.marginRight, containerWidth) ?? 0;
+          myLeft = left + marginLeft;
+          myWidth = Math.max(0, containerWidth - marginLeft - marginRight);
+        } else {
+          const intrinsic = textWidth(el);
+          myWidth =
+            style.whiteSpace === "nowrap"
+              ? intrinsic
+              : Math.min(intrinsic, containerWidth);
+        }
+        let right = myLeft + myWidth;
+        let childLeft = myLeft;
+        let childWidth = myWidth;
+        if (blockDisplays.has(style.display)) {
+          const padLeft = parseLength(style.paddingLeft, myWidth) ?? 0;
+          const padRight = parseLength(style.paddingRight, myWidth) ?? 0;
+          childLeft = myLeft + padLeft;
+          childWidth = Math.max(0, myWidth - padLeft - padRight);
+        }
+        for (const child of el.children)
+          right = Math.max(right, rightEdge(child, childLeft, childWidth));
+        return right;
+      };
+
+      const body = document.body;
+      const bodyStyle = view.getComputedStyle(body);
+      const padLeft = parseLength(bodyStyle.paddingLeft, viewportWidth) ?? 0;
+      const padRight = parseLength(bodyStyle.paddingRight, viewportWidth) ?? 0;
+      const borderBox = bodyStyle.boxSizing === "border-box";
+      let boxWidth: number;
+      if (bodyStyle.width === "100%") boxWidth = viewportWidth;
+      else {
+        const maxWidth =
+          parseLength(bodyStyle.maxWidth, viewportWidth) ?? viewportWidth;
+        const margin =
+          parseLength(bodyStyle.marginLeft, viewportWidth) ?? 2 * remPx;
+        boxWidth = Math.min(maxWidth, viewportWidth - 2 * margin);
+        if (!borderBox) boxWidth += padLeft + padRight;
+      }
+      const bodyLeft =
+        bodyStyle.marginLeft === "auto" || bodyStyle.marginRight === "auto"
+          ? Math.max(0, (viewportWidth - boxWidth) / 2)
+          : (parseLength(bodyStyle.marginLeft, viewportWidth) ?? 0);
+      const contentWidth = boxWidth - padLeft - padRight;
+      const documentRightEdge = Math.max(
+        bodyLeft + boxWidth,
+        rightEdge(body, bodyLeft + padLeft, contentWidth),
+      );
+      const tooltip = document.querySelector(".usage-breakdown");
+      const tooltipStyle = tooltip ? view.getComputedStyle(tooltip) : null;
+      return {
+        documentRightEdge,
+        bodyContentWidth: contentWidth,
+        bodyLeft,
+        tooltipDisplay: tooltipStyle?.display ?? "",
+        tooltipWhiteSpace: tooltipStyle?.whiteSpace ?? "",
+      };
+    };
+
+    const mobileViewport = 390;
+
+    it("keeps the document inside the iPhone portrait viewport while the usage breakdown is inactive", () => {
+      const measurement = measure(layoutFixture(), mobileViewport);
+      // The diagnosed issue #399 failure rendered an 848px document at this
+      // viewport because the hidden nowrap tooltip stayed in layout.
+      expect(measurement.documentRightEdge).toBeLessThanOrEqual(mobileViewport);
+      expect(measurement.bodyContentWidth).toBe(mobileViewport - 2 * 0.75 * 16);
+      expect(measurement.tooltipDisplay).toBe("none");
+    });
+
+    it("keeps the revealed usage breakdown inside the portrait viewport", () => {
+      const measurement = measure(layoutFixture(), mobileViewport, {
+        revealTooltips: true,
+      });
+      expect(measurement.tooltipDisplay).toBe("block");
+      expect(measurement.tooltipWhiteSpace).toBe("normal");
+      expect(measurement.documentRightEdge).toBeLessThanOrEqual(mobileViewport);
+    });
+
+    it("preserves the centered desktop layout and nowrap hover tooltip", () => {
+      const desktopViewport = 1280;
+      const measurement = measure(layoutFixture(), desktopViewport, {
+        revealTooltips: true,
+      });
+      expect(measurement.bodyContentWidth).toBe(1000);
+      expect(measurement.bodyLeft).toBe((desktopViewport - (1000 + 32)) / 2);
+      expect(measurement.tooltipDisplay).toBe("block");
+      expect(measurement.tooltipWhiteSpace).toBe("nowrap");
+      expect(measurement.documentRightEdge).toBeLessThanOrEqual(
+        desktopViewport,
+      );
+    });
+
+    it("detects the original failure mode when the hidden tooltip stays in layout", () => {
+      // Guard the harness itself: restoring the pre-fix pattern
+      // (visibility:hidden with the element still laid out) must reproduce
+      // the horizontal overflow measured in the issue reproduction.
+      const regressed = layoutFixture()
+        .replace(
+          ".usage-breakdown{background:#202124;",
+          ".usage-breakdown{visibility:hidden;background:#202124;",
+        )
+        .replace("display:none;font-size:.875rem", "font-size:.875rem")
+        .replace(
+          ".usage-breakdown{max-width:calc(100vw - 2rem);white-space:normal}",
+          "",
+        );
+      const measurement = measure(regressed, mobileViewport);
+      expect(measurement.tooltipDisplay).not.toBe("none");
+      expect(measurement.documentRightEdge).toBeGreaterThan(mobileViewport);
+    });
   });
 
   it("shows recovered executions with separate outcomes and usage", () => {
