@@ -194,6 +194,58 @@ describe("run details", () => {
     expect(html).toContain(
       "https://github.com/zorkian/roundhouse/pull/99/files",
     );
+    expect(html).toContain('<a href="https://example.test">test</a>');
+    expect(html).not.toContain("<section><h2>Qualification</h2>");
+  });
+
+  it("renders attempts chronologically as collapsed timeline rows", () => {
+    const attempt = (
+      id: string,
+      stage: "implement" | "review",
+      createdAt: number,
+    ) => ({
+      id,
+      runId: "run_timeline",
+      runRevision: 1,
+      kind: "agent" as const,
+      stage,
+      role: "worker",
+      state: "completed" as const,
+      deadlineAt: createdAt + 10_000,
+      baseCommit: "base",
+      expectedHead: "base",
+      createdAt,
+      updatedAt: createdAt + 65_000,
+    });
+    const html = renderRunDetails({
+      run: {
+        schemaVersion: 2,
+        id: "run_timeline",
+        repository: "zorkian/roundhouse",
+        issueNumber: 3,
+        baseCommit: "base",
+        currentHead: "base",
+        profileVersion: "test",
+        status: "active",
+        stage: "review",
+        revision: 2,
+      },
+      createdAt: 1,
+      updatedAt: 2,
+      attempts: [
+        attempt("later", "review", Date.UTC(2026, 0, 2)),
+        attempt("earlier", "implement", Date.UTC(2026, 0, 1)),
+      ],
+    });
+
+    expect(html.indexOf(">implement</span>")).toBeLessThan(
+      html.indexOf(">review</span>"),
+    );
+    expect(html).toContain("2026-01-01T00:00:00.000Z");
+    expect(html).toContain("1m 5s");
+    expect(html).toContain('<span class="label">Status</span>completed');
+    expect(html.match(/<details>/g)).toHaveLength(2);
+    expect(html).not.toContain("<details open");
   });
 
   it("identifies missing optional evidence", () => {
@@ -251,6 +303,8 @@ describe("run details", () => {
         },
       ],
     });
-    expect(html).toContain("<dt>Merged</dt><dd><code>Unavailable</code></dd>");
+    expect(html).toContain(
+      "<dt>Accepted head</dt><dd><code>Unavailable</code></dd>",
+    );
   });
 });
