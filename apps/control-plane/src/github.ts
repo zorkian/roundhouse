@@ -1611,9 +1611,11 @@ export async function acceptGitHubIssueClosed(
   const state = payload.action === "closed" ? "closed" : "open";
   await repository.setGitHubIssueState(run.id, state);
   if (payload.action === "reopened") return { outcome: "reopened" };
+  // Closing the issue during merge is often the success path (Fixes #N after
+  // an automatic merge, or a maintainer merge). Do not cancel; wake the
+  // coordinator so it can finish or reconcile to succeeded.
   if (
     run.stage === "merge" &&
-    run.profile?.merge?.mode === "maintainer" &&
     (run.status === "active" ||
       (run.status === "waiting" && run.waitingReason === "maintainer_merge"))
   ) {

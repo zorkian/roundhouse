@@ -22,6 +22,31 @@ import type { RoundhouseRuntimeSandbox } from "./attempt-container.js";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
 import { githubClientForRun, type GitHubEnv } from "./github.js";
 
+const checkpointIdentityRejectionDetails = new Set([
+  "protected_path_changed",
+  "path_outside_allowlist",
+  "invalid_repository_path",
+  "unexpected_repository",
+  "unexpected_base",
+  "unexpected_input_head",
+  "unexpected_ref",
+  "invalid_output_head",
+]);
+
+export function checkpointIdentityRejection(
+  error: unknown,
+): CheckpointRejectedError | undefined {
+  if (error instanceof CheckpointRejectedError) return error;
+  const detail = error instanceof Error ? error.message : String(error);
+  if (!checkpointIdentityRejectionDetails.has(detail)) return undefined;
+  // Path-policy and identity mismatches are permanent for this checkpoint.
+  // Re-running settlement cannot repair them and must not retry forever.
+  return new CheckpointRejectedError(
+    422,
+    JSON.stringify({ error: "invalid_checkpoint", detail }),
+  );
+}
+
 export interface AttemptStub {
   destroy(): Promise<void>;
 }
@@ -372,15 +397,19 @@ export class SandboxCheckpointValidator implements CheckpointValidator {
         changedPathCount: input.checkpoint.changedPaths.length,
       }),
     );
-    validateCheckpointIdentity(
-      input.checkpoint,
-      checkpointIdentityExpectation(
-        attempt,
-        run,
-        artifact.id,
-        !integrationValidation,
-      ),
-    );
+    try {
+      validateCheckpointIdentity(
+        input.checkpoint,
+        checkpointIdentityExpectation(
+          attempt,
+          run,
+          artifact.id,
+          !integrationValidation,
+        ),
+      );
+    } catch (error) {
+      throw checkpointIdentityRejection(error) ?? error;
+    }
     if (!attemptHasCapability(attempt, "artifact.write")) {
       try {
         validateReadOnlyCheckpoint(input.checkpoint);
