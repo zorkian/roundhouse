@@ -161,6 +161,8 @@ export const workflowGraphClientScript = `(function () {
       });
     }
     function selectStage(node) {
+      // Enforce single selection so a new stage always replaces the old one.
+      cy.$("node:selected").difference(node).unselect();
       clearEmphasis();
       node.addClass("selected-node");
       node.connectedEdges().addClass("connected-edge");
@@ -183,7 +185,15 @@ export const workflowGraphClientScript = `(function () {
         var candidate = cy.getElementById(
           button.getAttribute("data-stage")
         );
-        if (candidate.nonempty()) candidate.select();
+        if (!candidate.nonempty()) return;
+        // Select explicitly instead of relying on the select event: a node
+        // Cytoscape already considers selected would not fire it again.
+        cy.$("node:selected").difference(candidate).unselect();
+        if (candidate.selected()) {
+          selectStage(candidate);
+        } else {
+          candidate.select();
+        }
       });
     });
     cy.on("tap", function (event) {

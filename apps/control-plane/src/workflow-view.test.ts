@@ -248,4 +248,161 @@ describe("workflow graph view", () => {
     expect(workflowGraphClientScript).toContain('getElementById("copy")');
     expect(workflowGraphClientScript).toContain("data-source-commit");
   });
+
+  it("switches stage-button selection back and forth (A \u2192 B \u2192 A)", () => {
+    // Minimal DOM + Cytoscape harness that preserves the real selection
+    // semantics: selecting an already-selected node fires no select event.
+    class FakeElement {
+      attributes: Record<string, string> = {};
+      children: FakeElement[] = [];
+      listeners: Record<string, Array<() => void>> = {};
+      textContent = "";
+      get firstChild(): FakeElement | null {
+        return this.children[0] ?? null;
+      }
+      appendChild(child: FakeElement) {
+        this.children.push(child);
+      }
+      removeChild(child: FakeElement) {
+        this.children = this.children.filter((item) => item !== child);
+      }
+      setAttribute(name: string, value: string) {
+        this.attributes[name] = String(value);
+      }
+      getAttribute(name: string) {
+        return this.attributes[name] ?? null;
+      }
+      addEventListener(type: string, handler: () => void) {
+        (this.listeners[type] ??= []).push(handler);
+      }
+      click() {
+        for (const handler of this.listeners["click"] ?? []) handler();
+      }
+    }
+
+    type FakeNode = ReturnType<typeof makeNode>;
+    function collection(items: FakeNode[]): any {
+      return {
+        items,
+        addClass(names: string) {
+          items.forEach((item) => item.addClass(names));
+          return collection(items);
+        },
+        removeClass(names: string) {
+          items.forEach((item) => item.removeClass(names));
+          return collection(items);
+        },
+        unselect() {
+          items.forEach((item) => item.unselect());
+        },
+        difference(other: any) {
+          const excluded: FakeNode[] = other.items ?? [other];
+          return collection(items.filter((item) => !excluded.includes(item)));
+        },
+      };
+    }
+    const selectHandlers: Array<(event: { target: FakeNode }) => void> = [];
+    function makeNode(id: string) {
+      const node = {
+        selectedState: false,
+        classes: new Set<string>(),
+        id: () => id,
+        data: () => ({ id, name: id, summary: `summary ${id}` }),
+        nonempty: () => true,
+        selected: () => node.selectedState,
+        select: () => {
+          // Real Cytoscape does not re-emit select for a selected node.
+          if (node.selectedState) return;
+          node.selectedState = true;
+          selectHandlers.forEach((handler) => handler({ target: node }));
+        },
+        unselect: () => {
+          node.selectedState = false;
+        },
+        addClass: (names: string) => {
+          names.split(" ").forEach((name) => node.classes.add(name));
+        },
+        removeClass: (names: string) => {
+          names.split(" ").forEach((name) => node.classes.delete(name));
+        },
+        hasClass: (name: string) => node.classes.has(name),
+        connectedEdges: () => collection([]),
+        closedNeighborhood: () => collection([node as FakeNode]),
+      };
+      return node;
+    }
+    const nodes = [makeNode("alpha"), makeNode("beta")];
+    const cy = {
+      on: (event: string, _selector: unknown, handler?: unknown) => {
+        if (event === "select") {
+          selectHandlers.push(
+            (handler ?? _selector) as (event: { target: FakeNode }) => void,
+          );
+        }
+      },
+      elements: () => collection(nodes),
+      $: () => collection(nodes.filter((node) => node.selected())),
+      getElementById: (id: string) =>
+        nodes.find((node) => node.id() === id) ?? { nonempty: () => false },
+      nodes: () => ({ length: nodes.length }),
+      edges: () => ({ length: 0 }),
+    };
+
+    const container = new FakeElement();
+    const dataElement = new FakeElement();
+    dataElement.textContent = JSON.stringify([
+      { group: "nodes", data: { id: "alpha" } },
+      { group: "nodes", data: { id: "beta" } },
+    ]);
+    const status = new FakeElement();
+    const list = new FakeElement();
+    const buttons = ["alpha", "beta"].map((id) => {
+      const button = new FakeElement();
+      button.setAttribute("data-stage", id);
+      return button;
+    });
+    const byId: Record<string, FakeElement> = {
+      "workflow-graph": container,
+      "workflow-graph-data": dataElement,
+      "stage-details-status": status,
+      "stage-details-list": list,
+    };
+    const document = {
+      getElementById: (id: string) => byId[id] ?? null,
+      querySelectorAll: (selector: string) =>
+        selector === ".stage-button[data-stage]" ? buttons : [],
+      createElement: () => new FakeElement(),
+    };
+    const window = { cytoscape: () => cy };
+
+    new Function("window", "document", workflowGraphClientScript)(
+      window,
+      document,
+    );
+
+    const [buttonA, buttonB] = buttons;
+    const [nodeA, nodeB] = nodes;
+    const selectedStage = () =>
+      status.textContent.match(/Selected stage: (\w+)/)?.[1] ?? null;
+
+    buttonA!.click();
+    expect(selectedStage()).toBe("alpha");
+    expect(buttonA!.getAttribute("aria-pressed")).toBe("true");
+
+    buttonB!.click();
+    expect(selectedStage()).toBe("beta");
+    expect(nodeA!.selected()).toBe(false);
+    expect(nodeB!.selected()).toBe(true);
+    expect(buttonA!.getAttribute("aria-pressed")).toBe("false");
+    expect(buttonB!.getAttribute("aria-pressed")).toBe("true");
+
+    // Regression: switching back to the first stage must update details and
+    // emphasis even though Cytoscape may still consider nodes selected.
+    buttonA!.click();
+    expect(selectedStage()).toBe("alpha");
+    expect(nodeA!.selected()).toBe(true);
+    expect(nodeB!.selected()).toBe(false);
+    expect(buttonA!.getAttribute("aria-pressed")).toBe("true");
+    expect(buttonB!.getAttribute("aria-pressed")).toBe("false");
+  });
 });
