@@ -20,7 +20,7 @@ import {
   type WorkflowReviewer,
 } from "@roundhouse/core";
 import { aggregatedReview } from "./aggregated-review.js";
-import { signCallback } from "./callback.js";
+import { signCallback, type AttemptCompletion } from "./callback.js";
 import {
   aggregateReviewAttempts,
   type AttemptDispatcher,
@@ -517,6 +517,62 @@ export function judgementCandidateAttempts(
   );
 }
 
+// Builds the untrusted evidence one judge receives per candidate. Beyond the
+// candidate's self-reported result, the judge gets the candidate's validated
+// checkpoint evidence — the read-only workspace ref, base/result heads, and
+// recorded changed paths — so it can fetch the ref read-only and diff
+// base..head to evaluate what the candidate actually changed. The judge
+// never receives writable access to candidate workspaces.
+export async function judgementCandidateEvidence(
+  runs: {
+    getAttemptCompletion(
+      attemptId: string,
+    ): Promise<AttemptCompletion | undefined>;
+  },
+  candidates: readonly Attempt[],
+): Promise<
+  readonly {
+    candidateId: string;
+    result: Readonly<Record<string, unknown>>;
+    model: string | null;
+    expectedHead: string;
+    acceptedHead: string;
+    change: {
+      ref: string;
+      baseHead: string;
+      head: string;
+      changedPaths: readonly string[];
+    };
+  }[]
+> {
+  return Promise.all(
+    candidates.map(async (candidate) => {
+      const completion = await runs
+        .getAttemptCompletion(candidate.id)
+        .catch(() => undefined);
+      return {
+        candidateId:
+          candidate.competition?.purpose === "candidate"
+            ? candidate.competition.candidateId
+            : "",
+        result: candidate.result ?? {},
+        model: candidate.routing?.model ?? null,
+        expectedHead: candidate.expectedHead,
+        acceptedHead: candidate.acceptedHead ?? candidate.expectedHead,
+        change: {
+          ref: attemptWorkspaceRef(candidate),
+          baseHead: completion?.checkpoint.inputHead ?? candidate.expectedHead,
+          head:
+            completion?.checkpoint.outputHead ??
+            candidate.acceptedHead ??
+            candidate.expectedHead,
+          changedPaths: completion?.checkpoint.changedPaths ?? [],
+        },
+      };
+    }),
+  );
+}
+
 class SandboxAttemptPreparer {
   constructor(
     private readonly env: AttemptPreparationEnv,
@@ -890,20 +946,14 @@ class SandboxAttemptPreparer {
     // competition as untrusted data, alongside the node's resolved inputs.
     const judgementCandidates =
       attempt.competition?.purpose === "judge"
-        ? judgementCandidateAttempts(
-            await this.runs.attemptsForRevision(run.id, run.revision),
-            attempt,
-            competitionForAttempt(workflowNode, attempt),
-          ).map((candidate) => ({
-            candidateId:
-              candidate.competition?.purpose === "candidate"
-                ? candidate.competition.candidateId
-                : "",
-            result: candidate.result ?? {},
-            model: candidate.routing?.model ?? null,
-            expectedHead: candidate.expectedHead,
-            acceptedHead: candidate.acceptedHead ?? candidate.expectedHead,
-          }))
+        ? await judgementCandidateEvidence(
+            this.runs,
+            judgementCandidateAttempts(
+              await this.runs.attemptsForRevision(run.id, run.revision),
+              attempt,
+              competitionForAttempt(workflowNode, attempt),
+            ),
+          )
         : undefined;
     const assignment = {
       ...attempt,

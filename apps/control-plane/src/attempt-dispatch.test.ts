@@ -7,6 +7,7 @@ import {
   competitionForAttempt,
   DurableAttemptDispatcher,
   judgementCandidateAttempts,
+  judgementCandidateEvidence,
   reviewerForAttempt,
 } from "./attempt-dispatch.js";
 
@@ -112,6 +113,107 @@ describe("durable attempt dispatch", () => {
       "review-data-candidate-alpha",
       "review-data-candidate-beta",
     ]);
+  });
+
+  it("gives the judge each implementation candidate's distinct change evidence", async () => {
+    const head = (marker: string) => marker.repeat(40);
+    const candidate = (candidateId: string, acceptedHead: string): Attempt => ({
+      ...attempt,
+      id: `run_1_rev_2_implement-candidate-${candidateId}`,
+      stage: "implement",
+      role: `implement-candidate-${candidateId}`,
+      state: "completed",
+      acceptedHead,
+      result: { implementation: { summary: `candidate ${candidateId}` } },
+      routing: {
+        provider: "openai",
+        model: `openai/gpt-${candidateId}`,
+        protocol: "openai-responses",
+        thinkingLevel: "low",
+        rule: `rule-${candidateId}`,
+      },
+      competition: { purpose: "candidate", candidateId },
+    });
+    const alpha = candidate("alpha", head("b"));
+    const beta = candidate("beta", head("c"));
+    const completions = new Map([
+      [
+        alpha.id,
+        {
+          checkpoint: {
+            inputHead: head("a"),
+            outputHead: head("b"),
+            changedPaths: ["src/alpha.ts"],
+          },
+        },
+      ],
+      [
+        beta.id,
+        {
+          checkpoint: {
+            inputHead: head("a"),
+            outputHead: head("c"),
+            changedPaths: ["src/beta.ts", "test/beta.test.ts"],
+          },
+        },
+      ],
+    ]);
+    const runs = {
+      getAttemptCompletion: async (attemptId: string) =>
+        completions.get(attemptId) as never,
+    };
+
+    const evidence = await judgementCandidateEvidence(runs, [alpha, beta]);
+
+    expect(evidence).toHaveLength(2);
+    expect(evidence.map((entry) => entry.candidateId)).toEqual([
+      "alpha",
+      "beta",
+    ]);
+    // Each candidate's validated checkpoint diff evidence is distinct and
+    // read-only: its own workspace ref, base/result heads, and changed paths.
+    expect(evidence[0]?.change).toEqual({
+      ref: `refs/heads/roundhouse/${alpha.id}`,
+      baseHead: head("a"),
+      head: head("b"),
+      changedPaths: ["src/alpha.ts"],
+    });
+    expect(evidence[1]?.change).toEqual({
+      ref: `refs/heads/roundhouse/${beta.id}`,
+      baseHead: head("a"),
+      head: head("c"),
+      changedPaths: ["src/beta.ts", "test/beta.test.ts"],
+    });
+    expect(evidence[0]?.change.ref).not.toBe(evidence[1]?.change.ref);
+    expect(evidence[0]?.change.head).not.toBe(evidence[1]?.change.head);
+    expect(evidence.map((entry) => entry.model)).toEqual([
+      "openai/gpt-alpha",
+      "openai/gpt-beta",
+    ]);
+  });
+
+  it("falls back to attempt heads when a candidate completion is missing", async () => {
+    const candidate: Attempt = {
+      ...attempt,
+      id: "run_1_rev_2_implement-candidate-alpha",
+      stage: "implement",
+      role: "implement-candidate-alpha",
+      state: "completed",
+      acceptedHead: "b".repeat(40),
+      competition: { purpose: "candidate", candidateId: "alpha" },
+    };
+    const runs = {
+      getAttemptCompletion: async () => {
+        throw new Error("missing");
+      },
+    };
+    const evidence = await judgementCandidateEvidence(runs, [candidate]);
+    expect(evidence[0]?.change).toEqual({
+      ref: `refs/heads/roundhouse/${candidate.id}`,
+      baseHead: candidate.expectedHead,
+      head: "b".repeat(40),
+      changedPaths: [],
+    });
   });
 
   it("resolves the base reviewer for competition candidates", () => {
