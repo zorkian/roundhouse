@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { observeResponse } from "@roundhouse/response-observer";
+import { developmentBadge, developmentBadgeStyles } from "./ui-header.js";
 import type { D1Like } from "./d1-store.js";
 
 export interface UiAuthEnv {
@@ -40,14 +41,15 @@ const escapeHtml = (value: unknown) =>
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
 
-function page(body: string): string {
+function page(body: string, showDevelopmentBadge = false): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Roundhouse</title><style>
-:root{color-scheme:light;--ink:#18212f;--muted:#647084;--line:#dde3ea;--paper:#fff;--wash:#f4f7fa}*{box-sizing:border-box}body{margin:0;background:var(--wash);color:var(--ink);font:15px/1.5 ui-sans-serif,system-ui,-apple-system,sans-serif}main{max-width:480px;margin:12vh auto;padding:0 1.25rem}.card{background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:2rem;text-align:center}h1{font-size:1.5rem;margin:0 0 .5rem}p{color:var(--muted)}.button{display:inline-block;margin-top:1rem;background:#18212f;color:#fff;border-radius:8px;padding:.7rem 1.4rem;text-decoration:none;font-weight:650}</style></head><body><main><div class="card">${body}</div></main></body></html>`;
+:root{color-scheme:light;--ink:#18212f;--muted:#647084;--line:#dde3ea;--paper:#fff;--wash:#f4f7fa}*{box-sizing:border-box}body{margin:0;background:var(--wash);color:var(--ink);font:15px/1.5 ui-sans-serif,system-ui,-apple-system,sans-serif}body>.env-badge{position:absolute;top:1.25rem;left:50%;transform:translateX(-50%)}${developmentBadgeStyles}main{max-width:480px;margin:12vh auto;padding:0 1.25rem}.card{background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:2rem;text-align:center}h1{font-size:1.5rem;margin:0 0 .5rem}p{color:var(--muted)}.button{display:inline-block;margin-top:1rem;background:#18212f;color:#fff;border-radius:8px;padding:.7rem 1.4rem;text-decoration:none;font-weight:650}</style></head><body>${showDevelopmentBadge ? developmentBadge : ""}<main><div class="card">${body}</div></main></body></html>`;
 }
 
 export function renderSignInPage(notice?: string): string {
   return page(
     `<h1>Roundhouse</h1><p>Sign in with GitHub to see the repositories you can access.</p>${notice ? `<p>${escapeHtml(notice)}</p>` : ""}<a class="button" href="/auth/github">Sign in with GitHub</a>`,
+    true,
   );
 }
 
