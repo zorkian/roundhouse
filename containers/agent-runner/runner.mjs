@@ -292,28 +292,45 @@ export const implementationSchema = Object.freeze({
   },
 });
 
+const reviewProperties = {
+  status: { type: "string", enum: ["clean", "changes_requested"] },
+  summary: { type: "string" },
+  findings: {
+    type: "array",
+    items: {
+      type: "object",
+      additionalProperties: false,
+      required: ["title", "details", "file", "severity"],
+      properties: {
+        title: { type: "string" },
+        details: { type: "string" },
+        file: { type: "string" },
+        severity: {
+          type: "string",
+          enum: ["critical", "high", "medium", "low"],
+        },
+      },
+    },
+  },
+};
+
 export const reviewSchema = Object.freeze({
   type: "object",
   additionalProperties: false,
   required: ["status", "summary", "findings"],
+  properties: reviewProperties,
+});
+
+export const holisticReviewSchema = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: ["status", "summary", "findings", "selections"],
   properties: {
-    status: { type: "string", enum: ["clean", "changes_requested"] },
-    summary: { type: "string" },
-    findings: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["title", "details", "file"],
-        properties: {
-          title: { type: "string" },
-          details: { type: "string" },
-          file: { type: "string" },
-        },
-      },
-    },
+    ...reviewProperties,
     selections: {
       type: "array",
+      minItems: 2,
+      maxItems: 2,
       items: {
         type: "object",
         additionalProperties: false,
@@ -606,7 +623,7 @@ export async function review(assignment, directory, attemptSecret) {
     directory,
     attemptSecret,
     "review",
-    reviewSchema,
+    assignment.role === "review-holistic" ? holisticReviewSchema : reviewSchema,
     prompt,
   );
 }

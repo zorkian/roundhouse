@@ -143,18 +143,28 @@ function completedTransition(attempt: Attempt) {
   return undefined;
 }
 
-function selectedSpecialists(attempt: Attempt): readonly string[] {
+function selectedSpecialists(attempt: Attempt): readonly string[] | undefined {
   const review = attempt.result?.review as Record<string, unknown> | undefined;
   const selections = review?.selections;
-  if (!Array.isArray(selections)) return [];
-  return selections.flatMap((selection) => {
-    if (typeof selection === "string") return [selection];
-    if (!selection || typeof selection !== "object") return [];
+  if (!Array.isArray(selections)) return undefined;
+  const decisions = new Map<string, boolean>();
+  for (const selection of selections) {
+    if (!selection || typeof selection !== "object") return undefined;
     const value = selection as Record<string, unknown>;
-    return value.applicable === false || typeof value.role !== "string"
-      ? []
-      : [value.role];
-  });
+    if (
+      !["review-security", "review-data"].includes(String(value.role)) ||
+      typeof value.applicable !== "boolean" ||
+      typeof value.rationale !== "string" ||
+      decisions.has(String(value.role))
+    )
+      return undefined;
+    decisions.set(String(value.role), value.applicable);
+  }
+  if (!decisions.has("review-security") || !decisions.has("review-data"))
+    return undefined;
+  return [...decisions].flatMap(([role, applicable]) =>
+    applicable ? [role] : [],
+  );
 }
 
 function aggregateReviews(attempts: readonly Attempt[]): Attempt {
@@ -165,11 +175,23 @@ function aggregateReviews(attempts: readonly Attempt[]): Attempt {
       ? review.findings.map((finding) => ({ reviewer: attempt.role, finding }))
       : [];
   });
-  const changesRequested = attempts.some(
-    (attempt) =>
-      (attempt.result?.review as Record<string, unknown> | undefined)
-        ?.status === "changes_requested",
-  );
+  const changesRequested = attempts.some((attempt) => {
+    const review = attempt.result?.review as
+      Record<string, unknown> | undefined;
+    const blocking = new Set<string>(
+      reviewers.find((reviewer) => reviewer.role === attempt.role)
+        ?.blockingSeverities ?? [],
+    );
+    return (
+      Array.isArray(review?.findings) &&
+      review.findings.some(
+        (finding) =>
+          !!finding &&
+          typeof finding === "object" &&
+          blocking.has(String((finding as Record<string, unknown>).severity)),
+      )
+    );
+  });
   const source = attempts[attempts.length - 1]!;
   return {
     ...source,
@@ -218,7 +240,17 @@ export async function coordinate(
     const allowed = new Set(
       reviewers.slice(1).map((reviewer) => reviewer.role),
     );
-    const selected = selectedSpecialists(holistic).filter((role) =>
+    const selection = selectedSpecialists(holistic);
+    if (!selection) {
+      const next = await repository.transition(run.id, run.revision, {
+        status: "failed",
+        stage: "review",
+      });
+      if (!next) return "stale";
+      if (reporter) await reporter.report(next, holistic);
+      return "dispatched";
+    }
+    const selected = selection.filter((role) =>
       allowed.has(role as "review-security" | "review-data"),
     ) as ("review-security" | "review-data")[];
     for (const role of selected) {
