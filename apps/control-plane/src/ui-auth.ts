@@ -125,6 +125,26 @@ async function githubUserRepositories(
   }
 }
 
+async function githubRepositoryReadable(
+  accessToken: string,
+  githubId: string,
+): Promise<boolean> {
+  const response = await observeResponse(
+    await fetch(`https://api.github.com/repositories/${githubId}`, {
+      headers: {
+        accept: "application/vnd.github+json",
+        authorization: `Bearer ${accessToken}`,
+        "user-agent": "roundhouse-control-plane",
+      },
+    }),
+    { api: "github", operation: "ui_auth_check_repository" },
+  );
+  if (response.status === 404 || response.status === 403) return false;
+  if (!response.ok)
+    throw new Error(`github_repository_http_${response.status}`);
+  return true;
+}
+
 async function enrolledRepositoryIds(db: D1Like): Promise<ReadonlySet<string>> {
   const result = await db
     .prepare("SELECT github_id FROM repositories")
@@ -224,7 +244,16 @@ export async function handleGitHubCallback(
     const user = (await userResponse.json()) as { id: number; login: string };
     const readable = await githubUserRepositories(accessToken);
     const enrolled = await enrolledRepositoryIds(env.DB);
+    const readableSet = new Set(readable);
     const repositoryIds = readable.filter((id) => enrolled.has(id));
+    // /user/repos only lists repositories affiliated with the user; enrolled
+    // public repositories must be visible to any signed-in GitHub user, so
+    // check the remaining enrolled repositories directly.
+    for (const id of enrolled) {
+      if (readableSet.has(id)) continue;
+      if (await githubRepositoryReadable(accessToken, id))
+        repositoryIds.push(id);
+    }
     const sessionToken = randomToken();
     await env.DB.prepare(
       "INSERT INTO ui_sessions (session_hash, github_user_id, github_login, repository_ids_json, expires_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
