@@ -240,17 +240,13 @@ describe("GitHub UI sign-in", () => {
       30 * 24 * 60 * 60 * 1000 - 60_000,
     );
     const maxAge = Number(cookie.match(/Max-Age=(\d+)/)![1]);
-    // Within one second of the full lifetime, depending on when the header
-    // was built relative to the persisted expiration.
-    expect(maxAge).toBeGreaterThanOrEqual(
-      Math.floor(uiSessionLifetimeMs / 1000) - 1,
-    );
-    expect(maxAge).toBeLessThanOrEqual(Math.floor(uiSessionLifetimeMs / 1000));
-    expect(maxAge).toBeGreaterThanOrEqual(30 * 24 * 60 * 60 - 1);
-    // Max-Age is floored to whole seconds, so allow up to a second of skew.
-    expect(session.expires_at).toBeLessThanOrEqual(
-      Date.now() + maxAge * 1000 + 1000,
-    );
+    // Max-Age is rounded up, so the browser lifetime is at least the full
+    // 30-day session lifetime regardless of when the header was built
+    // relative to the persisted expiration.
+    expect(maxAge).toBeGreaterThanOrEqual(uiSessionLifetimeMs / 1000);
+    expect(maxAge).toBeGreaterThanOrEqual(30 * 24 * 60 * 60);
+    // Rounding up adds less than a second beyond the stored deadline.
+    expect(maxAge).toBeLessThanOrEqual(uiSessionLifetimeMs / 1000 + 1);
     // The cookie's absolute Expires deadline matches the stored expiration.
     expect(cookie).toContain(
       `Expires=${new Date(session.expires_at).toUTCString()}`,

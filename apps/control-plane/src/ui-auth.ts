@@ -96,14 +96,16 @@ function stateCookieHeader(token: string, maxAgeSeconds: number): string {
 
 // The cookie carries the same absolute deadline as the stored session: an
 // Expires attribute derived from expiresAtMs plus the Max-Age remaining at
-// the moment the header is built. Building the header when the response is
-// decorated keeps both sides aligned even on slow requests.
+// the moment the header is built. Max-Age is rounded up so the emitted
+// browser lifetime is never shorter than the full session lifetime
+// (browsers give Max-Age precedence over Expires). Building the header when
+// the response is decorated keeps both sides aligned even on slow requests.
 export function sessionCookieHeader(
   token: string,
   expiresAtMs: number,
   nowMs = Date.now(),
 ): string {
-  const maxAgeSeconds = Math.max(0, Math.floor((expiresAtMs - nowMs) / 1000));
+  const maxAgeSeconds = Math.max(0, Math.ceil((expiresAtMs - nowMs) / 1000));
   return `${uiSessionCookie}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAgeSeconds}; Expires=${new Date(expiresAtMs).toUTCString()}`;
 }
 

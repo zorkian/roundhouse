@@ -521,7 +521,7 @@ describe("V2 control plane", () => {
     expect(renewedCookie).toContain("HttpOnly");
     expect(renewedCookie).toContain("Secure");
     const renewedMaxAge = Number(renewedCookie.match(/Max-Age=(\d+)/)![1]);
-    expect(renewedMaxAge).toBeGreaterThanOrEqual(30 * 24 * 60 * 60 - 5);
+    expect(renewedMaxAge).toBeGreaterThanOrEqual(30 * 24 * 60 * 60);
     expect(renewals[0]!).toBeLessThanOrEqual(
       Date.now() + (renewedMaxAge + 1) * 1000,
     );
@@ -583,7 +583,7 @@ describe("V2 control plane", () => {
     const errorCookie = post.headers.get("set-cookie")!;
     expect(errorCookie).toContain("roundhouse_ui_session=test-session");
     const errorMaxAge = Number(errorCookie.match(/Max-Age=(\d+)/)![1]);
-    expect(errorMaxAge).toBeGreaterThanOrEqual(30 * 24 * 60 * 60 - 5);
+    expect(errorMaxAge).toBeGreaterThanOrEqual(30 * 24 * 60 * 60);
     expect(renewals[0]!).toBeLessThanOrEqual(
       Date.now() + (errorMaxAge + 1) * 1000,
     );
