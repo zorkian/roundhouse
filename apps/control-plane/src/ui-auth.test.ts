@@ -31,6 +31,10 @@ function authDb(options?: {
   // Hook invoked after the session SELECT but before the renewal UPDATE
   // commits, to simulate a concurrent write landing in between.
   beforeRenewalCommit?: (hash: string) => void;
+  // Hook invoked after the session SELECT observes an expired row but before
+  // the conditional cleanup delete commits, to simulate a concurrent
+  // renewal landing in between.
+  beforeExpiredCleanup?: (hash: string) => void;
 }) {
   const states = new Map<string, { expiresAt: number; cookieHash: string }>();
   const sessions = new Map(
@@ -111,12 +115,17 @@ function authDb(options?: {
               expires_at: Number(values[4]),
               created_at: Number(values[5]),
             });
-          if (sql.includes("DELETE FROM ui_sessions WHERE session_hash"))
-            sessions.delete(String(values[0]));
-          if (sql.includes("DELETE FROM ui_sessions WHERE expires_at"))
-            for (const [hash, session] of sessions)
-              if (session.expires_at <= Number(values[0]))
-                sessions.delete(hash);
+          if (sql.includes("DELETE FROM ui_sessions WHERE session_hash")) {
+            if (sql.includes("expires_at <= ?2"))
+              options?.beforeExpiredCleanup?.(String(values[0]));
+            const session = sessions.get(String(values[0]));
+            if (
+              session &&
+              (!sql.includes("expires_at <= ?2") ||
+                session.expires_at <= Number(values[1]))
+            )
+              sessions.delete(String(values[0]));
+          }
           return { meta: { changes: 1 } };
         },
       };
@@ -563,6 +572,31 @@ describe("GitHub UI sign-in", () => {
     // No server-side session remains, so validation must fail rather than
     // fabricating an expiration and issuing a fresh 30-day cookie.
     expect(session).toBeUndefined();
+  });
+
+  it("does not delete a session renewed concurrently with expired cleanup", async () => {
+    const token = "raced-expired-token";
+    const hash = await sha256Hex(token);
+    const renewed = Date.now() + 30 * 24 * 60 * 60 * 1000;
+    const { db, sessions } = authDb({
+      sessions: [{ hash, expiresAt: Date.now() - 1 }],
+      // Simulate a concurrent valid request renewing the row after this
+      // request's SELECT saw it expired but before its cleanup delete
+      // commits.
+      beforeExpiredCleanup: (deletedHash) => {
+        sessions.get(deletedHash)!.expires_at = renewed;
+      },
+    });
+    const session = await validateUiSession(
+      new Request("https://v2.invalid/", {
+        headers: { cookie: `${uiSessionCookie}=${token}` },
+      }),
+      env(db),
+    );
+    // This request still sees an expired session and is rejected, but the
+    // cleanup must not delete the concurrently renewed row.
+    expect(session).toBeUndefined();
+    expect(sessions.get(hash)?.expires_at).toBe(renewed);
   });
 });
 

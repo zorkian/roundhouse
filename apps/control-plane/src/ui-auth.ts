@@ -401,11 +401,10 @@ export async function validateUiSession(
     return undefined;
   }
   if (row.expires_at <= startedAt) {
-    await env.DB.prepare("DELETE FROM ui_sessions WHERE expires_at <= ?1")
-      .bind(startedAt)
-      .run();
-    await env.DB.prepare("DELETE FROM ui_sessions WHERE session_hash = ?1")
-      .bind(await sha256Hex(token))
+    await env.DB.prepare(
+      "DELETE FROM ui_sessions WHERE session_hash = ?1 AND expires_at <= ?2",
+    )
+      .bind(await sha256Hex(token), startedAt)
       .run();
     log("ui_session_validated", {
       outcome: "expired",
