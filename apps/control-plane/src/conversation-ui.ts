@@ -62,10 +62,22 @@ function page(
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">${refresh ? '<meta http-equiv="refresh" content="2">' : ""}<title>${escapeHtml(title)} · Roundhouse</title>${styles}</head><body><header><h1>Roundhouse</h1><p>Signed in as ${escapeHtml(user)} · <a href="/">Runs</a> · <a href="/usage">Model usage</a> · <a href="/auth/sign-out">Sign out</a></p></header><main>${body}</main></body></html>`;
 }
 
-function conversationStatus(conversation: ConversationSummary): {
+export interface ActionableConversationStatus {
   readonly label: string;
   readonly tone: "open" | "active" | "waiting" | "succeeded" | "failed";
-} {
+}
+
+type ConversationStatusInput = Pick<ConversationSummary, "status"> & {
+  readonly promotionState?: ConversationSummary["promotionState"];
+  readonly promotionRunStatus?: ConversationSummary["promotionRunStatus"];
+  readonly currentBriefState?: ConversationSummary["currentBriefState"];
+  readonly activeTurnState?: ConversationSummary["latestTurnState"];
+  readonly latestTurnState?: ConversationSummary["latestTurnState"];
+};
+
+export function actionableConversationStatus(
+  conversation: ConversationStatusInput,
+): ActionableConversationStatus {
   switch (conversation.promotionState) {
     case "requested":
       return { label: "Preparing delivery", tone: "active" };
@@ -74,20 +86,77 @@ function conversationStatus(conversation: ConversationSummary): {
     case "awaiting_intake":
       return { label: "Waiting to start delivery", tone: "waiting" };
     case "accepted":
-      return { label: "Delivery started", tone: "succeeded" };
+      return conversation.promotionRunStatus === "succeeded"
+        ? { label: "Delivery complete", tone: "succeeded" }
+        : { label: "Delivery started", tone: "succeeded" };
     case "rejected":
       return { label: "Delivery not accepted", tone: "failed" };
     case undefined:
       break;
   }
-  switch (conversation.status) {
-    case "open":
-      return { label: "Open", tone: "open" };
-    case "handoff_pending":
-      return { label: "Preparing delivery", tone: "active" };
-    case "promoted":
-      return { label: "Delivery started", tone: "succeeded" };
-  }
+  if (conversation.status === "handoff_pending")
+    return { label: "Preparing delivery", tone: "active" };
+  if (conversation.status === "promoted")
+    return { label: "Delivery started", tone: "succeeded" };
+  if (conversation.currentBriefState === "draft")
+    return { label: "Delivery brief ready for review", tone: "waiting" };
+  if (conversation.activeTurnState)
+    return { label: "Roundhouse is working", tone: "active" };
+  if (conversation.latestTurnState === "failed")
+    return { label: "Needs attention", tone: "failed" };
+  return { label: "Waiting for your response", tone: "waiting" };
+}
+
+function isConversation(
+  conversation: Conversation | ConversationSummary,
+): conversation is Conversation {
+  return typeof conversation.repository !== "string";
+}
+
+function conversationStatus(
+  conversation: Conversation | ConversationSummary,
+): ActionableConversationStatus {
+  if (isConversation(conversation))
+    return actionableConversationStatus({
+      status: conversation.status,
+      promotionState: conversation.promotion?.state,
+      promotionRunStatus: conversation.promotion?.runStatus,
+      currentBriefState: conversation.currentBrief?.state,
+      activeTurnState: conversation.activeTurn?.state,
+      latestTurnState: conversation.latestTurn?.state,
+    });
+  return actionableConversationStatus({
+    status: conversation.status,
+    promotionState: conversation.promotionState,
+    promotionRunStatus: conversation.promotionRunStatus,
+    currentBriefState: conversation.currentBriefState,
+    activeTurnState: conversation.activeTurn?.state,
+    latestTurnState: conversation.latestTurnState,
+  });
+}
+
+function conversationNeedsRefresh(
+  conversation: Conversation | ConversationSummary,
+): boolean {
+  const promotion = isConversation(conversation)
+    ? conversation.promotion
+    : undefined;
+  const runStatus = isConversation(conversation)
+    ? promotion?.runStatus
+    : conversation.promotionRunStatus;
+  const promotionState = isConversation(conversation)
+    ? promotion?.state
+    : conversation.promotionState;
+  const activeTurn = conversation.activeTurn;
+  return Boolean(
+    activeTurn ||
+    (promotionState &&
+      ["requested", "issue_created", "awaiting_intake"].includes(
+        promotionState,
+      )) ||
+    (promotionState === "accepted" &&
+      (runStatus === "active" || runStatus === "waiting")),
+  );
 }
 
 function updatedAgo(updatedAt: number): string {
@@ -131,6 +200,7 @@ export function renderConversationIndex(
     "Conversations",
     user,
     `<h1>Start with a conversation</h1><p class="muted">Ask a question, explore an idea, or clarify a change before deciding whether to build it.</p>${error ? `<div class="notice">${escapeHtml(error)}</div>` : ""}<section class="card"><h2>New conversation</h2>${repositories.length ? `<form method="post" action="/conversations"><input type="hidden" name="message_id" value="${escapeHtml(messageId)}"><label for="repository">Public repository</label><select id="repository" name="repository" required>${options}</select><label for="message">What would you like to discuss?</label><textarea id="message" name="message" maxlength="12000" required></textarea><button type="submit">Start conversation</button></form>` : '<p class="muted">You do not currently have access to an enrolled public repository.</p>'}</section><section class="card"><h2>Recent conversations</h2>${recent}</section>`,
+    conversations.some(conversationNeedsRefresh),
   );
 }
 
@@ -155,12 +225,12 @@ function promotionControls(conversation: Conversation): string {
     : "";
   const run = conversation.links.find((link) => link.kind === "roundhouse.run");
   if (promotion.state === "accepted" || conversation.status === "promoted")
-    return `<section class="card"><h2>Delivery started</h2>${issue}${run ? `<p><a class="button" href="${escapeHtml(run.url)}">Open Roundhouse run</a></p>` : ""}</section>`;
+    return `<section class="card">${issue}${run ? `<p><a class="button" href="${escapeHtml(run.url)}">Open Roundhouse run</a></p>` : ""}</section>`;
   if (promotion.state === "rejected")
-    return `<section class="card"><h2>Delivery was not accepted</h2>${issue}<p class="notice">${escapeHtml(promotion.errorCode ?? "GitHub intake rejected this promotion")}. This conversation has not been marked delivered.</p></section>`;
+    return `<section class="card">${issue}<p class="notice">${escapeHtml(promotion.errorCode ?? "GitHub intake rejected this promotion")}. This conversation has not been marked delivered.</p></section>`;
   if (promotion.state === "awaiting_intake")
-    return `<section class="card"><h2 class="waiting">Waiting for Roundhouse intake</h2>${issue}<p class="muted">The issue and start comment exist. This conversation will close only after the normal GitHub webhook authorizes the actor and records the run.</p></section>`;
-  return `<section class="card"><h2 class="waiting">Creating the delivery request…</h2>${issue}<p class="muted">This operation is durable and reconciles existing GitHub writes before retrying.</p></section>`;
+    return `<section class="card">${issue}<p class="muted">The issue and start comment exist. This conversation will close only after the normal GitHub webhook authorizes the actor and records the run.</p></section>`;
+  return `<section class="card">${issue}<p class="muted">This operation is durable and reconciles existing GitHub writes before retrying.</p></section>`;
 }
 
 export function renderConversation(
@@ -185,17 +255,12 @@ export function renderConversation(
     conversation.latestTurn?.state === "failed"
       ? `<div class="notice">Roundhouse could not complete the last ${conversation.latestTurn.kind === "brief" ? "delivery brief" : "reply"}. You can try again or continue the conversation.</div>`
       : "";
-  const refresh = Boolean(
-    conversation.activeTurn ||
-    (conversation.promotion &&
-      ["requested", "issue_created", "awaiting_intake"].includes(
-        conversation.promotion.state,
-      )),
-  );
+  const refresh = conversationNeedsRefresh(conversation);
+  const status = conversationStatus(conversation);
   const rendered = page(
     "Conversation",
     user,
-    `<div class="meta"><a href="/conversations">Conversations</a> · ${escapeHtml(conversation.repository.name)} · ${escapeHtml(conversation.context.model.id)} / ${escapeHtml(conversation.context.model.reasoning)}</div><h1>Conversation</h1><p class="muted"><span class="readonly">Read only</span> Repository context is pinned to <code>${escapeHtml(conversation.sourceCommit.slice(0, 12))}</code>. The assistant can read this public snapshot and research the public web, but cannot modify anything.</p>${notice ? `<div class="notice">${escapeHtml(notice)}</div>` : ""}${failure}${messages}${controls}`,
+    `<div class="meta"><a href="/conversations">Conversations</a> · ${escapeHtml(conversation.repository.name)} · ${escapeHtml(conversation.context.model.id)} / ${escapeHtml(conversation.context.model.reasoning)}</div><h1>Conversation</h1><p><span class="status ${status.tone}">${escapeHtml(status.label)}</span></p><p class="muted"><span class="readonly">Read only</span> Repository context is pinned to <code>${escapeHtml(conversation.sourceCommit.slice(0, 12))}</code>. The assistant can read this public snapshot and research the public web, but cannot modify anything.</p>${notice ? `<div class="notice">${escapeHtml(notice)}</div>` : ""}${failure}${messages}${controls}`,
     refresh,
   );
   console.log(

@@ -1,7 +1,7 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ModelRoute, ProfileModel } from "@roundhouse/core";
+import type { ModelRoute, ProfileModel, RunStatus } from "@roundhouse/core";
 import type { D1Like } from "./d1-store.js";
 
 export interface ConversationRepositoryRef {
@@ -88,6 +88,7 @@ export interface ConversationPromotion {
   readonly briefId: string;
   readonly state:
     "requested" | "issue_created" | "awaiting_intake" | "accepted" | "rejected";
+  readonly runStatus?: RunStatus;
   readonly actorGithubUserId: number;
   readonly actorGithubLogin: string;
   readonly issueNumber?: number;
@@ -131,7 +132,11 @@ export interface ConversationSummary {
   readonly title?: string;
   readonly repository: string;
   readonly status: Conversation["status"];
+  readonly activeTurn?: Pick<ConversationTurn, "kind" | "state">;
+  readonly currentBriefState?: DeliveryBrief["state"];
+  readonly latestTurnState?: ConversationTurn["state"];
   readonly promotionState?: ConversationPromotion["state"];
+  readonly promotionRunStatus?: RunStatus;
   readonly issueNumber?: number;
   readonly issueUrl?: string;
   readonly updatedAt: number;
@@ -236,6 +241,7 @@ type PromotionRow = {
   id: string;
   brief_id: string;
   state: ConversationPromotion["state"];
+  run_status?: RunStatus | null;
   actor_github_user_id: number;
   actor_github_login: string;
   issue_number: number | null;
@@ -327,6 +333,7 @@ function promotionFromRow(row: PromotionRow): ConversationPromotion {
     id: row.id,
     briefId: row.brief_id,
     state: row.state,
+    ...(row.run_status ? { runStatus: row.run_status } : {}),
     actorGithubUserId: row.actor_github_user_id,
     actorGithubLogin: row.actor_github_login,
     ...(row.issue_number === null ? {} : { issueNumber: row.issue_number }),
@@ -409,10 +416,19 @@ export class D1ConversationRepository {
       .prepare(
         `SELECT c.id,c.title,c.status,
                 CASE WHEN p.updated_at>c.updated_at THEN p.updated_at ELSE c.updated_at END AS updated_at,
-                r.profile_json,p.state AS promotion_state,p.issue_number,p.issue_url
+                r.profile_json,active_turn.kind AS active_turn_kind,
+                active_turn.state AS active_turn_state,current_brief.state AS current_brief_state,
+                latest_turn.state AS latest_turn_state,p.state AS promotion_state,
+                delivery_run.status AS promotion_run_status,p.issue_number,p.issue_url
          FROM conversations c
          JOIN repositories r ON r.id=c.repository_id
+         LEFT JOIN conversation_turns active_turn ON active_turn.id=c.active_turn_id
+         LEFT JOIN conversation_delivery_briefs current_brief ON current_brief.id=c.current_brief_id
+         LEFT JOIN conversation_turns latest_turn ON latest_turn.id=(
+           SELECT id FROM conversation_turns WHERE conversation_id=c.id ORDER BY ordinal DESC LIMIT 1
+         )
          LEFT JOIN conversation_promotions p ON p.conversation_id=c.id
+         LEFT JOIN runs delivery_run ON delivery_run.id=p.run_id
          WHERE c.creator_github_user_id=?1
            AND r.github_id IN (${placeholders(authorizedGithubIds, 2)})
          ORDER BY CASE WHEN p.updated_at>c.updated_at THEN p.updated_at ELSE c.updated_at END DESC LIMIT 50`,
@@ -424,7 +440,12 @@ export class D1ConversationRepository {
         status: Conversation["status"];
         updated_at: number;
         profile_json: string;
+        active_turn_kind: ConversationTurn["kind"] | null;
+        active_turn_state: ConversationTurn["state"] | null;
+        current_brief_state: DeliveryBrief["state"] | null;
+        latest_turn_state: ConversationTurn["state"] | null;
         promotion_state: ConversationPromotion["state"] | null;
+        promotion_run_status: RunStatus | null;
         issue_number: number | null;
         issue_url: string | null;
       }>();
@@ -437,7 +458,24 @@ export class D1ConversationRepository {
         profile_json: row.profile_json,
       }).name,
       status: row.status,
+      ...(row.active_turn_kind && row.active_turn_state
+        ? {
+            activeTurn: {
+              kind: row.active_turn_kind,
+              state: row.active_turn_state,
+            },
+          }
+        : {}),
+      ...(row.current_brief_state
+        ? { currentBriefState: row.current_brief_state }
+        : {}),
+      ...(row.latest_turn_state
+        ? { latestTurnState: row.latest_turn_state }
+        : {}),
       ...(row.promotion_state ? { promotionState: row.promotion_state } : {}),
+      ...(row.promotion_run_status
+        ? { promotionRunStatus: row.promotion_run_status }
+        : {}),
       ...(row.issue_number === null ? {} : { issueNumber: row.issue_number }),
       ...(row.issue_url ? { issueUrl: row.issue_url } : {}),
       updatedAt: row.updated_at,
@@ -874,7 +912,10 @@ export class D1ConversationRepository {
           : Promise.resolve(null),
         this.db
           .prepare(
-            "SELECT * FROM conversation_promotions WHERE conversation_id=?1",
+            `SELECT p.*,delivery_run.status AS run_status
+             FROM conversation_promotions p
+             LEFT JOIN runs delivery_run ON delivery_run.id=p.run_id
+             WHERE p.conversation_id=?1`,
           )
           .bind(id)
           .first<PromotionRow>(),
