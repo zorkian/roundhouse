@@ -519,6 +519,14 @@ describe("run details", () => {
           createdAt: 3_000,
         },
         {
+          callId: "during-teardown",
+          attemptId: "implementation",
+          model: "model-a",
+          totalTokens: 50,
+          costUsd: 0.005,
+          createdAt: 4_500,
+        },
+        {
           callId: "after-1",
           attemptId: "implementation",
           model: "model-b",
@@ -542,11 +550,10 @@ describe("run details", () => {
     expect(html).toContain("Restarted · Completed");
     expect(html).toContain("2s");
     expect(html).toContain("4s");
-    expect(html).toContain("<dt>Model calls</dt><dd>1</dd>");
-    expect(html).toContain("<dt>Model calls</dt><dd>2</dd>");
-    expect(html).toContain("100 tokens · $0.01");
+    expect(html.match(/<dt>Model calls<\/dt><dd>2<\/dd>/g)).toHaveLength(2);
+    expect(html).toContain("150 tokens · $0.01");
     expect(html).toContain("500 tokens · $0.05");
-    expect(html).toContain("600 tokens · $0.06");
+    expect(html).toContain("650 tokens · $0.07");
     expect(html).toContain("<h4>Model usage total</h4>");
   });
 
@@ -593,7 +600,60 @@ describe("run details", () => {
     });
     expect(html).toContain("In progress");
     expect(html).toContain("<dt>State</dt><dd>Active</dd>");
+    expect(html).toContain("<dt>Elapsed</dt><dd>3 ms</dd>");
   });
+
+  it.each([
+    ["failed", "active", "Failed"],
+    ["dispatched", "cancelled", "Cancelled"],
+  ] as const)(
+    "shows a %s execution on a %s run as %s rather than active or completed",
+    (attemptState, runStatus, outcome) => {
+      const html = renderRunDetails({
+        run: {
+          schemaVersion: 2,
+          id: "terminal",
+          repository: "zorkian/roundhouse",
+          issueNumber: 336,
+          baseCommit: "base",
+          currentHead: "base",
+          profileVersion: "test",
+          status: runStatus,
+          stage: "implement",
+          revision: 1,
+        },
+        createdAt: 1,
+        updatedAt: 5,
+        attempts: [
+          {
+            id: "attempt",
+            runId: "terminal",
+            runRevision: 1,
+            kind: "agent",
+            stage: "implement",
+            role: "developer",
+            state: attemptState,
+            deadlineAt: 10,
+            baseCommit: "base",
+            expectedHead: "base",
+            createdAt: 1,
+            updatedAt: 5,
+          },
+        ],
+        events: [
+          {
+            attemptId: "attempt",
+            kind: "attempt_progress",
+            payload: { phase: "workspace_started" },
+            createdAt: 2,
+          },
+        ],
+      });
+
+      expect(html).toContain(`<dt>Outcome</dt><dd>${outcome}</dd>`);
+      expect(html).not.toContain("<dt>State</dt><dd>Active</dd>");
+    },
+  );
 
   it("identifies missing optional evidence", () => {
     const html = renderRunDetails({

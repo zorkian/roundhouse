@@ -136,20 +136,32 @@ function executionDisplay(
     const active =
       !expiry &&
       index === starts.length - 1 &&
+      details.run.status === "active" &&
       attempt.state !== "completed" &&
       attempt.state !== "failed";
     const end =
       expiry?.createdAt ??
       (active ? undefined : (nextStart ?? attempt.updatedAt));
+    // Calls finishing while an interrupted workspace is being torn down still
+    // belong to that execution, up until the replacement workspace starts.
+    const usageEnd = expiry ? (nextStart ?? attempt.updatedAt) : end;
     const episodeUsage = usage.filter(
       (item) =>
         item.attemptId === attempt.id &&
         item.createdAt !== undefined &&
         item.createdAt >= start.createdAt &&
-        (end === undefined ||
-          item.createdAt < end ||
-          (expiry !== undefined && item.createdAt === end)),
+        (usageEnd === undefined ||
+          item.createdAt < usageEnd ||
+          (expiry !== undefined &&
+            nextStart === undefined &&
+            item.createdAt === usageEnd)),
     );
+    const finalOutcome =
+      attempt.state === "failed"
+        ? "Failed"
+        : details.run.status === "cancelled"
+          ? "Cancelled"
+          : "Completed";
     const outcome = expiry
       ? "Interrupted"
       : active
@@ -157,12 +169,12 @@ function executionDisplay(
           ? "Restarted · In progress"
           : "In progress"
         : index > 0
-          ? "Restarted · Completed"
-          : "Completed";
+          ? `Restarted · ${finalOutcome}`
+          : finalOutcome;
     const models =
       [...new Set(episodeUsage.map((item) => item.model))].join(", ") ||
       "Model unavailable";
-    return `<li class="execution"><h5>Execution ${index + 1}</h5><dl><dt>Started</dt><dd>${escapeHtml(timestamp(start.createdAt))}</dd><dt>${active ? "State" : "Ended"}</dt><dd>${active ? "Active" : escapeHtml(timestamp(end))}</dd><dt>Elapsed</dt><dd>${active ? "In progress" : escapeHtml(elapsed(start.createdAt, end))}</dd><dt>Outcome</dt><dd>${escapeHtml(outcome)}</dd><dt>Model calls</dt><dd>${episodeUsage.length}</dd><dt>Usage</dt><dd>${usageDisplay(episodeUsage)}</dd><dt>Models</dt><dd>${escapeHtml(models)}</dd></dl></li>`;
+    return `<li class="execution"><h5>Execution ${index + 1}</h5><dl><dt>Started</dt><dd>${escapeHtml(timestamp(start.createdAt))}</dd><dt>${active ? "State" : "Ended"}</dt><dd>${active ? "Active" : escapeHtml(timestamp(end))}</dd><dt>Elapsed</dt><dd>${escapeHtml(elapsed(start.createdAt, active ? attempt.updatedAt : end))}</dd><dt>Outcome</dt><dd>${escapeHtml(outcome)}</dd><dt>Model calls</dt><dd>${episodeUsage.length}</dd><dt>Usage</dt><dd>${usageDisplay(episodeUsage)}</dd><dt>Models</dt><dd>${escapeHtml(models)}</dd></dl></li>`;
   });
   return `<h4>Executions</h4><ol class="executions">${episodes.join("")}</ol>`;
 }
