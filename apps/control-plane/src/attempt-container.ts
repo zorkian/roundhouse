@@ -140,7 +140,19 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
           attemptId,
           routing.model ?? "unknown",
         );
-        if (usage) await repository.recordModelUsage(usage);
+        if (usage) {
+          try {
+            await repository.recordModelUsage(usage);
+          } catch (error) {
+            console.error(
+              JSON.stringify({
+                message: "model_usage_record_failed",
+                attemptId,
+                error: error instanceof Error ? error.message : String(error),
+              }),
+            );
+          }
+        }
       },
     }),
   );
