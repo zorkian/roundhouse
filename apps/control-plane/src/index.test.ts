@@ -21,6 +21,7 @@ import {
 } from "./attempt-container.js";
 import {
   artifactNeedsSync,
+  attemptArtifactAccess,
   attemptContext,
   controlPlaneService,
   handleRequest,
@@ -145,7 +146,16 @@ describe("V2 control plane", () => {
         phases.push(phase);
       },
       restoreWorkspace: async () => restoring,
-      runAttempt: async () => 202,
+      runAttempt: async () => ({
+        status: 200,
+        responseBody: JSON.stringify({
+          attemptId: "attempt_1",
+          expectedRevision: 1,
+          checkpoint: {},
+          artifactTokenId: "token-id",
+          result: { outcome: "ok" },
+        }),
+      }),
     });
     const attempt = {
       id: "attempt_1",
@@ -159,25 +169,27 @@ describe("V2 control plane", () => {
       },
     } as never;
 
-    await sandbox.prepareAttempt(
-      attempt,
-      "secret",
-      "https://control.invalid/attempts/callback",
-      {
-        id: "backup_1",
-        name: "workspace",
-        dir: "/workspace/roundhouse",
-        localBucket: true,
-      } as never,
-    );
+    await sandbox.prepareAttempt(attempt, "secret", "https://control.invalid", {
+      id: "backup_1",
+      name: "workspace",
+      dir: "/workspace/roundhouse",
+      localBucket: true,
+    } as never);
     expect(storage.has("prepared:attempt_1")).toBe(true);
     expect(phases).toContain("attempt_workflow_preparation_completed");
 
-    const execution = sandbox.executePreparedAttempt("attempt_1");
-    expect(phases).not.toContain("attempt_workflow_execution_completed");
+    const restore = sandbox.restorePreparedAttempt("attempt_1");
+    expect(phases).not.toContain("attempt_workflow_restore_completed");
     finishRestore();
-    await expect(execution).resolves.toBe(202);
+    await restore;
+    expect(storage.has("prepared:attempt_1")).toBe(true);
+    const execution = sandbox.executePreparedAttempt("attempt_1");
+    await expect(execution).resolves.toMatchObject({
+      attemptId: "attempt_1",
+      expectedRevision: 1,
+    });
     expect(storage.has("prepared:attempt_1")).toBe(false);
+    expect(phases).toContain("attempt_workflow_restore_completed");
     expect(phases).toContain("attempt_workflow_execution_completed");
   });
 
@@ -517,7 +529,7 @@ describe("V2 control plane", () => {
           stage: "plan",
           publish: { hostname: "github.com" },
         },
-        "https://control.test/attempts/callback",
+        "https://control.test",
       ),
     ).toEqual([
       "model.roundhouse.internal",
@@ -577,6 +589,30 @@ describe("V2 control plane", () => {
         { ...run, candidateHead: "c".repeat(40) },
       ),
     ).toBe(false);
+  });
+
+  it("gives artifact write access only to executors that produce checkpoints", () => {
+    expect(
+      attemptArtifactAccess({ executor: "agent.write", role: "implement" }),
+    ).toBe("write");
+    expect(
+      attemptArtifactAccess({ executor: "validate", role: "integrate" }),
+    ).toBe("write");
+    expect(
+      attemptArtifactAccess({
+        executor: "validate",
+        role: "conflict-resolution",
+      }),
+    ).toBe("write");
+    expect(
+      attemptArtifactAccess({
+        executor: "review",
+        role: "review-integration",
+      }),
+    ).toBe("read");
+    expect(
+      attemptArtifactAccess({ executor: "validate", role: "validate" }),
+    ).toBe("read");
   });
 
   it("passes CI failure diagnostics to the repair assignment as untrusted evidence without credentials", () => {

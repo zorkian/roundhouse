@@ -183,6 +183,15 @@ plugin, MCP server, URL, or secret as a provider.
 D1 is the only workflow authority. Queue messages contain a run ID and expected
 revision and serve only as wakeups.
 
+One Cloudflare Workflow instance owns the transport lifetime of each Sandbox
+attempt. Its durable steps restore the prepared workspace, keep the runner
+request attached until the executor returns a completion, settle that completion
+through the trusted checkpoint boundary, and release the Sandbox. Agent
+execution is not automatically retried: the existing D1 attempt deadline and
+recovery path decide what happens after an interrupted paid operation. The
+Cloudflare Workflow does not choose nodes, transitions, retries, or product
+outcomes and stores no attempt capability.
+
 For each node execution the coordinator:
 
 1. loads the run revision and immutable workflow snapshot;
@@ -255,6 +264,10 @@ publication, checks, merge, and the dashboard. D1 stores lifecycle state and
 small structured results. One Queue plus a dead-letter queue wakes the
 coordinator. Durable Objects exist only where the Cloudflare Sandbox/Container
 lifecycle requires them; they do not own workflow state.
+
+Cloudflare Workflows provide the durable execution context for the generic
+restore-execute-settle Sandbox boundary. They do not mirror D1 run state or
+implement repository workflow composition.
 
 Cloudflare Artifacts is the durable Git workspace for each run. It stores the
 exact upstream base, stable work branch, successful checkpoints, and exact

@@ -13,8 +13,20 @@ export interface AttemptCallback {
   readonly signature: string;
 }
 
+export type AttemptCompletion = Omit<AttemptCallback, "signature">;
+
 export interface CheckpointValidator {
   validate(input: AttemptCallback): Promise<void>;
+}
+
+export class CheckpointRejectedError extends Error {
+  constructor(
+    readonly status: number,
+    readonly detail: string,
+  ) {
+    super("checkpoint_rejected");
+    this.name = "CheckpointRejectedError";
+  }
 }
 
 const encoder = new TextEncoder();
@@ -73,7 +85,8 @@ export async function acceptCallback(
   secret: string,
   validator: CheckpointValidator,
   input: AttemptCallback,
-): Promise<"completed" | "duplicate" | "stale" | "unauthorized"> {
+): Promise<"completed" | "duplicate" | "rejected" | "stale" | "unauthorized"> {
+  const startedAt = Date.now();
   const { signature, ...unsigned } = input;
   if (!(await verifyCallback(secret, callbackPayload(unsigned), signature)))
     return "unauthorized";
@@ -81,7 +94,53 @@ export async function acceptCallback(
   if (!attempt || attempt.runRevision !== input.expectedRevision)
     return "stale";
   if (attempt.state === "completed") return "duplicate";
-  await validator.validate(input);
+  if (attempt.state === "failed") return "rejected";
+  try {
+    await validator.validate(input);
+  } catch (error) {
+    if (!(error instanceof CheckpointRejectedError)) throw error;
+    const run = await repository.get(attempt.runId);
+    const waiting =
+      run?.revision === input.expectedRevision
+        ? await repository.transition(run.id, run.revision, {
+            status: "waiting",
+            stage: run.stage,
+            currentNodeId: run.currentNodeId,
+            waitingReason: "checkpoint_rejected",
+          })
+        : undefined;
+    if (!waiting) return "stale";
+    const failed = await repository.failAttempt(
+      input.attemptId,
+      input.expectedRevision,
+      {
+        failure: {
+          reason: "checkpoint_rejected",
+          source: "checkpoint_validator",
+          status: error.status,
+          detail: error.detail,
+        },
+      },
+    );
+    console.error(
+      JSON.stringify({
+        message: "checkpoint_rejection_settled",
+        runId: attempt.runId,
+        attemptId: attempt.id,
+        expectedRevision: input.expectedRevision,
+        waitingRevision: waiting.revision,
+        stage: attempt.stage,
+        nodeId: attempt.nodeId,
+        status: error.status,
+        detail: error.detail,
+        attemptSettlement: failed,
+        durationMs: Date.now() - startedAt,
+      }),
+    );
+    if (failed === "stale")
+      throw new Error("checkpoint_rejection_attempt_settlement_failed");
+    return "rejected";
+  }
   return repository.completeAttempt(
     input.attemptId,
     input.expectedRevision,

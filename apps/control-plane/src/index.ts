@@ -16,23 +16,13 @@ import {
   type WorkflowAgent,
   type Wakeup,
 } from "@roundhouse/core";
-import {
-  CloudflareArtifactsNamespace,
-  validateCheckpointIdentity,
-  validateReadOnlyCheckpoint,
-} from "./artifacts.js";
+import { CloudflareArtifactsNamespace } from "./artifacts.js";
 import {
   attemptInactivityMilliseconds,
   coordinate,
   type AttemptDispatcher,
 } from "./coordinator.js";
-import {
-  acceptCallback,
-  signCallback,
-  verifyCallback,
-  type AttemptCallback,
-  type CheckpointValidator,
-} from "./callback.js";
+import { signCallback, verifyCallback } from "./callback.js";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
 import { renderDashboard } from "./dashboard.js";
 import { renderRunDetails } from "./run-details.js";
@@ -47,13 +37,26 @@ import {
   acceptGitHubIssueClosed,
   githubClientForRun,
   GitHubStageReporter,
-  type GitHubEnv,
 } from "./github.js";
 import { observeResponse } from "@roundhouse/response-observer";
 import { aggregatedReview } from "./aggregated-review.js";
-import { getSandbox, type DirectoryBackup } from "@cloudflare/sandbox";
 import { launch } from "@cloudflare/playwright";
 import { RoundhouseAttemptSandbox } from "./attempt-container.js";
+import {
+  artifactsNamespace,
+  attemptSandbox,
+  conflictedIntegrationOutcome,
+  destroyAttemptSandbox,
+  destroyAttemptSandboxWithTrace,
+  githubBranch,
+  sandboxName,
+  workspaceBackup,
+  workspaceName,
+  workspaceRef,
+  type AttemptNamespace,
+  type SandboxDestructionTrace,
+  type SandboxNamespace,
+} from "./attempt-runtime.js";
 export { ContainerProxy } from "@cloudflare/sandbox";
 export { RoundhouseAttemptSandbox } from "./attempt-container.js";
 export { AttemptExecutionWorkflow } from "./attempt-workflow.js";
@@ -167,88 +170,6 @@ export function attemptContext(parts: {
   };
 }
 
-interface AttemptStub {
-  destroy(): Promise<void>;
-}
-interface AttemptNamespace {
-  idFromName(name: string): unknown;
-  get(id: unknown): AttemptStub;
-}
-
-type SandboxNamespace = DurableObjectNamespace<RoundhouseAttemptSandbox>;
-
-function attemptSandbox(
-  sandboxes: SandboxNamespace,
-  name: string,
-): RoundhouseAttemptSandbox {
-  return getSandbox(sandboxes, name, { enableDefaultSession: false });
-}
-
-function sandboxName(attempt: Pick<Attempt, "id" | "runId" | "stage">): string {
-  return attempt.stage === "implement" ? attempt.runId : attempt.id;
-}
-
-export async function destroyAttemptSandbox(
-  containers: AttemptNamespace,
-  name: string,
-): Promise<void> {
-  await containers.get(containers.idFromName(name)).destroy();
-}
-
-type SandboxDestructionTrace = (
-  attemptId: string,
-  phase: string,
-  detail: Readonly<Record<string, unknown>>,
-) => Promise<void>;
-
-async function destroyAttemptSandboxWithTrace(
-  containers: AttemptNamespace,
-  name: string,
-  attemptId: string,
-  trace?: SandboxDestructionTrace,
-): Promise<void> {
-  const startedAt = Date.now();
-  const emit = async (
-    phase: string,
-    detail: Readonly<Record<string, unknown>> = {},
-  ): Promise<void> => {
-    const payload = {
-      phase,
-      sandboxName: name,
-      durationMs: Date.now() - startedAt,
-      ...detail,
-    };
-    const log = { message: "sandbox_destruction_trace", attemptId, ...payload };
-    if (phase.endsWith("_failed")) console.error(JSON.stringify(log));
-    else console.log(JSON.stringify(log));
-    if (!trace) return;
-    try {
-      await trace(attemptId, phase, payload);
-    } catch (error) {
-      console.error(
-        JSON.stringify({
-          message: "sandbox_destruction_trace_record_failed",
-          attemptId,
-          phase,
-          sandboxName: name,
-          error: error instanceof Error ? error.message : String(error),
-        }),
-      );
-    }
-  };
-  await emit("sandbox_destroy_started");
-  try {
-    await destroyAttemptSandbox(containers, name);
-    await emit("sandbox_destroy_completed");
-  } catch (error) {
-    await emit("sandbox_destroy_failed", {
-      errorType: error instanceof Error ? error.constructor.name : typeof error,
-      error: error instanceof Error ? error.message : String(error),
-    });
-    throw error;
-  }
-}
-
 export function scheduleAttemptSandboxDestruction(
   containers: AttemptNamespace,
   name: string,
@@ -354,8 +275,8 @@ const progressPhases = new Set([
   "agent_completed",
   "checkpoint_started",
   "checkpoint_completed",
-  "callback_started",
-  "callback_completed",
+  "completion_started",
+  "completion_completed",
   ...observedDevcontainerPhases.flatMap((phase) => [
     `${phase}_started`,
     `${phase}_completed`,
@@ -448,85 +369,7 @@ type RuntimeEnv = Cloudflare.Env & {
   ROUNDHOUSE_GITHUB_WEBHOOK_SECRET: string;
 };
 
-async function workspaceBackup(
-  db: D1Like,
-  runId: string,
-): Promise<DirectoryBackup | undefined> {
-  const row = await db
-    .prepare(
-      "SELECT backup_json FROM implementation_workspaces WHERE run_id = ?",
-    )
-    .bind(runId)
-    .first<{ backup_json: string }>();
-  return row ? (JSON.parse(row.backup_json) as DirectoryBackup) : undefined;
-}
-
-async function saveWorkspaceBackup(
-  db: D1Like,
-  runId: string,
-  attemptId: string,
-  backup: DirectoryBackup,
-): Promise<void> {
-  await db
-    .prepare(
-      `INSERT INTO implementation_workspaces (run_id, attempt_id, backup_json, updated_at)
-       VALUES (?, ?, ?, ?)
-       ON CONFLICT(run_id) DO UPDATE SET
-         attempt_id = excluded.attempt_id,
-         backup_json = excluded.backup_json,
-         updated_at = excluded.updated_at`,
-    )
-    .bind(runId, attemptId, JSON.stringify(backup), Date.now())
-    .run();
-}
-
-function artifactsNamespace(env: RuntimeEnv) {
-  return new CloudflareArtifactsNamespace(env.ARTIFACTS, {
-    namespace: env.ARTIFACTS_NAMESPACE,
-    remoteOrigin: env.ARTIFACTS_REMOTE_ORIGIN,
-  });
-}
-
-function workspaceName(runId: string): string {
-  return runId;
-}
-function workspaceRef(runId: string): string {
-  return `refs/heads/roundhouse/${runId}`;
-}
-export function githubBranch(issueNumber: number): string {
-  return `roundhouse/issue-${issueNumber}`;
-}
-
-// The conflict details a conflict-resolution or integration-delta review
-// needs may live several revisions back (for example after a failed delta
-// review), so scan revisions until the conflicted integration is found.
-async function conflictedIntegrationOutcome(
-  runs: D1RunRepository,
-  run: RunSnapshot,
-): Promise<Record<string, unknown> | undefined> {
-  const latest = await runs.latestCompletedAttempt(
-    run.id,
-    "integrate",
-    run.revision,
-  );
-  const latestOutcome = latest?.result?.integration as
-    Record<string, unknown> | undefined;
-  if (latestOutcome?.status === "conflict") return latestOutcome;
-  for (let revision = run.revision - 1; revision >= 1; revision -= 1) {
-    const attempts = await runs.attemptsForRevision(run.id, revision);
-    for (const attempt of attempts) {
-      const outcome = attempt.result?.integration as
-        Record<string, unknown> | undefined;
-      if (
-        attempt.stage === "integrate" &&
-        attempt.state === "completed" &&
-        outcome?.status === "conflict"
-      )
-        return outcome;
-    }
-  }
-  return undefined;
-}
+export { destroyAttemptSandbox, githubBranch };
 
 export function artifactNeedsSync(
   artifact: { readonly empty: boolean; readonly head?: string },
@@ -540,6 +383,18 @@ export function artifactNeedsSync(
       !run.candidateHead &&
       artifact.head !== run.currentHead)
   );
+}
+
+export function attemptArtifactAccess(
+  attempt: Pick<Attempt, "executor" | "role">,
+): "read" | "write" {
+  if (attempt.executor === "agent.write") return "write";
+  if (
+    attempt.executor === "validate" &&
+    ["integrate", "conflict-resolution"].includes(attempt.role)
+  )
+    return "write";
+  return "read";
 }
 
 interface ResolvedWorkflowInputs {
@@ -807,7 +662,7 @@ class SandboxDispatcher implements AttemptDispatcher {
       );
       const bootstrapToken = await repository.createToken("write", 30 * 60);
       try {
-        const status = await sandbox.runAttempt(
+        const response = await sandbox.runAttempt(
           "/bootstrap",
           {
             ...attempt,
@@ -830,7 +685,8 @@ class SandboxDispatcher implements AttemptDispatcher {
           },
           attemptSecret,
         );
-        if (status !== 204) throw new Error("sandbox_bootstrap_failed");
+        if (response.status !== 204)
+          throw new Error("sandbox_bootstrap_failed");
       } catch (error) {
         const failure = {
           phase: "artifact_sync_failed",
@@ -873,12 +729,7 @@ class SandboxDispatcher implements AttemptDispatcher {
         completed,
       );
     }
-    const access =
-      attempt.executor === "agent.write" ||
-      (attempt.executor === "validate" &&
-        attempt.role === "conflict-resolution")
-        ? "write"
-        : "read";
+    const access = attemptArtifactAccess(attempt);
     const token = await repository.createToken(access, 30 * 60);
     const qualificationAttempt = [
       "reproduce",
@@ -1077,7 +928,7 @@ class SandboxDispatcher implements AttemptDispatcher {
       await sandbox.prepareAttempt(
         assignment,
         attemptSecret,
-        new URL("/attempts/callback", this.controlPlaneOrigin).toString(),
+        this.controlPlaneOrigin,
         backup,
       );
       const workflowInstanceId = `${attempt.id}-${attempt.deadlineAt}`;
@@ -1113,117 +964,6 @@ class SandboxDispatcher implements AttemptDispatcher {
         );
       }
       throw error;
-    }
-  }
-}
-
-class SandboxCheckpointValidator implements CheckpointValidator {
-  constructor(
-    private readonly containers: SandboxNamespace,
-    private readonly artifacts: CloudflareArtifactsNamespace,
-    private readonly repository: D1RunRepository,
-    private readonly githubEnv: GitHubEnv,
-  ) {}
-
-  async validate(input: AttemptCallback): Promise<void> {
-    const attempt = await this.repository.getAttempt(input.attemptId);
-    const run = attempt && (await this.repository.get(attempt.runId));
-    if (!attempt || !run) throw new Error("attempt_not_found");
-    const artifact = await this.artifacts.get(input.checkpoint.repository);
-    if (!artifact) throw new Error("artifact_repository_not_found");
-    validateCheckpointIdentity(input.checkpoint, {
-      repositoryId: artifact.id,
-      repository: workspaceName(run.id),
-      baseCommit: run.baseCommit,
-      inputHead: attempt.expectedHead,
-      ref: workspaceRef(run.id),
-      profile:
-        run.profile ??
-        (() => {
-          throw new Error("run_profile_missing");
-        })(),
-    });
-    if (
-      !["implement", "integrate"].includes(attempt.stage) ||
-      attempt.role === "review-integration"
-    ) {
-      try {
-        validateReadOnlyCheckpoint(input.checkpoint);
-      } finally {
-        await artifact.revokeToken(input.artifactTokenId);
-      }
-      return;
-    }
-    const conflicted =
-      attempt.role === "conflict-resolution"
-        ? await conflictedIntegrationOutcome(this.repository, run)
-        : undefined;
-    const token = await artifact.createToken("read", 5 * 60);
-    try {
-      const status = await attemptSandbox(
-        this.containers,
-        `${attempt.id}-validation`,
-      ).validateCheckpoint({
-        ...attempt,
-        baseCommit: run.baseCommit,
-        profile: run.profile,
-        checkpoint: input.checkpoint,
-        ...(conflicted
-          ? {
-              integration: {
-                ...(typeof conflicted.baseHead === "string"
-                  ? { baseHead: conflicted.baseHead }
-                  : {}),
-                ...(Array.isArray(conflicted.conflicts)
-                  ? { conflicts: conflicted.conflicts }
-                  : {}),
-              },
-            }
-          : {}),
-        artifact: {
-          repositoryId: artifact.id,
-          repository: artifact.name,
-          remote: artifact.remote,
-          hostname: artifact.hostname,
-          tokenId: token.id,
-          token: token.plaintext,
-          access: token.access,
-          ref: input.checkpoint.ref,
-        },
-        ...(input.checkpoint.outputHead !== input.checkpoint.inputHead
-          ? {
-              publish: {
-                remote: `https://github.com/${run.repository}.git`,
-                hostname: "github.com",
-                token: await githubClientForRun(
-                  this.githubEnv,
-                  run,
-                ).installationToken(),
-                ref: `refs/heads/${githubBranch(run.issueNumber)}`,
-              },
-            }
-          : {}),
-      });
-      if (status < 200 || status >= 300)
-        throw new Error("checkpoint_git_validation_failed");
-    } finally {
-      await Promise.all([
-        artifact.revokeToken(token.id),
-        artifact.revokeToken(input.artifactTokenId),
-        destroyAttemptSandbox(this.containers, `${attempt.id}-validation`),
-      ]);
-    }
-    if (attempt.stage === "implement") {
-      const backup = await attemptSandbox(
-        this.containers,
-        sandboxName(attempt),
-      ).backupWorkspace(attempt.id, attempt.runId);
-      await saveWorkspaceBackup(
-        this.repository.database,
-        attempt.runId,
-        attempt.id,
-        backup,
-      );
     }
   }
 }
@@ -1881,47 +1621,6 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       return json(
         { outcome },
         outcome === "unauthorized" ? 401 : outcome === "ignored" ? 202 : 202,
-      );
-    }
-    if (url.pathname === "/attempts/callback" && request.method === "POST") {
-      const input = await request.json<AttemptCallback>();
-      const repository = new D1RunRepository(env.DB);
-      const artifacts = artifactsNamespace(env);
-      const outcome = await acceptCallback(
-        repository,
-        await signCallback(env.CALLBACK_SIGNING_SECRET, input.attemptId),
-        new SandboxCheckpointValidator(
-          env.ATTEMPT_SANDBOXES,
-          artifacts,
-          repository,
-          env,
-        ),
-        input,
-      );
-      if (outcome === "completed" || outcome === "duplicate") {
-        const attempt = await repository.getAttempt(input.attemptId);
-        if (attempt) {
-          await env.RUN_WAKEUPS.send({
-            runId: attempt.runId,
-            expectedRevision: attempt.runRevision,
-          });
-          scheduleAttemptSandboxDestruction(
-            env.ATTEMPT_SANDBOXES,
-            sandboxName(attempt),
-            context,
-            attempt.id,
-            async (attemptId, phase, detail) => {
-              await repository.recordAttemptEvent(attemptId, "sandbox_trace", {
-                phase,
-                ...detail,
-              });
-            },
-          );
-        }
-      }
-      return json(
-        { outcome },
-        outcome === "unauthorized" ? 401 : outcome === "stale" ? 409 : 202,
       );
     }
     return handleRequest(request);
