@@ -136,7 +136,9 @@ describe("GitHub intake", () => {
       deadlineAt: 1,
       baseCommit: run.baseCommit,
       expectedHead: run.currentHead,
-      result: { qualification: { classification: "feature", summary: "Ready" } },
+      result: {
+        qualification: { classification: "feature", summary: "Ready" },
+      },
     });
     expect(body).toContain(
       "[View Roundhouse run details](https://roundhouse.example/repositories/zorkian/roundhouse/issues/42)",
@@ -148,7 +150,9 @@ describe("GitHub intake", () => {
     const reporter = new GitHubStageReporter(
       {
         get: async <T>(path: string) =>
-          (path.endsWith("/pulls?state=open&head=zorkian%3Aroundhouse%2Fissue-42")
+          (path.endsWith(
+            "/pulls?state=open&head=zorkian%3Aroundhouse%2Fissue-42",
+          )
             ? [
                 {
                   number: 99,

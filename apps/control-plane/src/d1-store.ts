@@ -140,7 +140,11 @@ export class D1RunRepository implements RunRepository {
         "SELECT r.document_json,r.created_at,r.updated_at FROM repositories p JOIN work_items w ON w.repository_id=p.id JOIN runs r ON r.id=w.current_run_id WHERE p.github_id=?1 AND w.issue_number=?2",
       )
       .bind(repository, issueNumber)
-      .first<{ document_json: string; created_at: number; updated_at: number }>();
+      .first<{
+        document_json: string;
+        created_at: number;
+        updated_at: number;
+      }>();
     if (!row) return undefined;
     const run = JSON.parse(row.document_json) as RunSnapshot;
     const result = await this.db

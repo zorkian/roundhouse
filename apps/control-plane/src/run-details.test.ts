@@ -58,7 +58,7 @@ describe("run details", () => {
           }),
           run: async () => ({ meta: {} }),
         };
-        return statement;
+        return statement as unknown as ReturnType<D1Like["prepare"]>;
       },
     };
     const details = await new D1RunRepository(db).detailsByIssue(
@@ -160,7 +160,9 @@ describe("run details", () => {
           baseCommit: "base-sha",
           expectedHead: "candidate-sha",
           acceptedHead: "candidate-sha",
-          result: { ci: { checks: [{ name: "test", url: "https://example.test" }] } },
+          result: {
+            ci: { checks: [{ name: "test", url: "https://example.test" }] },
+          },
           createdAt: 7,
           updatedAt: 8,
         },
@@ -189,7 +191,9 @@ describe("run details", () => {
     expect(html).toContain("npm test");
     expect(html).toContain("&lt;b&gt;bad&lt;/b&gt;");
     expect(html).not.toContain("<img");
-    expect(html).toContain("https://github.com/zorkian/roundhouse/pull/99/files");
+    expect(html).toContain(
+      "https://github.com/zorkian/roundhouse/pull/99/files",
+    );
   });
 
   it("identifies missing optional evidence", () => {

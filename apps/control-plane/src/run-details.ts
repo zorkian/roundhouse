@@ -55,14 +55,11 @@ function ciResult(valueToRender: unknown): string {
 export function renderRunDetails(details: RunDetails): string {
   const { run, attempts } = details;
   const pullRequest = resultFor(attempts, "merge") as
-    | { pullRequest?: { html_url?: string; number?: number } }
-    | undefined;
+    { pullRequest?: { html_url?: string; number?: number } } | undefined;
   const implementation = resultFor(attempts, "implementation") as
-    | { pullRequest?: { html_url?: string; number?: number } }
-    | undefined;
+    { pullRequest?: { html_url?: string; number?: number } } | undefined;
   const ci = resultFor(attempts, "ci") as
-    | { pullRequest?: { html_url?: string; number?: number } }
-    | undefined;
+    { pullRequest?: { html_url?: string; number?: number } } | undefined;
   const pr =
     pullRequest?.pullRequest ?? implementation?.pullRequest ?? ci?.pullRequest;
   const prUrl = pr?.html_url;
@@ -72,12 +69,14 @@ export function renderRunDetails(details: RunDetails): string {
   ) => [...attempts].reverse().find((item) => item.stage === stage)?.[field];
   const rows = attempts
     .map(
-      (attempt) => `<article><h3>${escapeHtml(attempt.stage)} · ${escapeHtml(attempt.state)}</h3>
+      (
+        attempt,
+      ) => `<article><h3>${escapeHtml(attempt.stage)} · ${escapeHtml(attempt.state)}</h3>
 <dl><dt>Role</dt><dd>${escapeHtml(attempt.role)}</dd><dt>Revision</dt><dd>${escapeHtml(attempt.runRevision)}</dd><dt>Created</dt><dd>${escapeHtml(new Date(attempt.createdAt).toISOString())}</dd><dt>Updated</dt><dd>${escapeHtml(new Date(attempt.updatedAt).toISOString())}</dd><dt>Base commit</dt><dd><code>${escapeHtml(attempt.baseCommit)}</code></dd><dt>Expected head</dt><dd><code>${escapeHtml(attempt.expectedHead)}</code></dd><dt>Accepted head</dt><dd><code>${escapeHtml(attempt.acceptedHead ?? "Unavailable")}</code></dd></dl>
 <h4>Model routing</h4>${value(attempt.routing)}<h4>Result</h4>${value(attempt.result)}</article>`,
     )
     .join("");
-  const sections: readonly (readonly [string, unknown])[] = [
+  const sectionData: readonly (readonly [string, unknown])[] = [
     ["Qualification", resultFor(attempts, "qualification")],
     ["Reproduction", resultFor(attempts, "reproduction")],
     ["Plan", resultFor(attempts, "plan")],
@@ -85,7 +84,8 @@ export function renderRunDetails(details: RunDetails): string {
     ["Review", resultFor(attempts, "review")],
     ["CI checks", resultFor(attempts, "ci")],
     ["Merge", resultFor(attempts, "merge")],
-  ]
+  ];
+  const sections = sectionData
     .map(
       ([heading, content]) =>
         `<section><h2>${heading}</h2>${heading === "CI checks" ? ciResult(content) : value(content)}</section>`,

@@ -41,7 +41,7 @@ function detailsDb(found = true): D1Like {
           results: sql.includes("FROM attempts") ? [] : undefined,
         }),
       };
-      return statement;
+      return statement as unknown as ReturnType<D1Like["prepare"]>;
     },
   };
 }
@@ -113,7 +113,11 @@ describe("V2 control plane", () => {
   });
 
   it("serves run details and handles unknown, malformed, and non-GET routes", async () => {
-    const fetch = worker.fetch!;
+    const fetch = worker.fetch as unknown as (
+      request: Request,
+      env: unknown,
+      context: unknown,
+    ) => Promise<Response>;
     const html = await fetch(
       new Request(
         "https://v2.invalid/repositories/zorkian/roundhouse/issues/281",

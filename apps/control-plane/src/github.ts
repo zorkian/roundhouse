@@ -451,7 +451,9 @@ export class GitHubStageReporter implements AttemptReporter {
       if (comments.some((comment) => comment.body?.includes(marker))) return;
       await this.github.post(
         `/repos/${run.repository}/issues/${pullRequest.number}/comments`,
-        { body: this.withDetails(run, reviewComment(attempt)).slice(0, 65_000) },
+        {
+          body: this.withDetails(run, reviewComment(attempt)).slice(0, 65_000),
+        },
       );
       return;
     }
@@ -513,10 +515,10 @@ export class GitHubStageReporter implements AttemptReporter {
       await this.github.post(
         `/repos/${run.repository}/issues/${run.issueNumber}/comments`,
         {
-          body: this.withDetails(
-            run,
-            reproductionComment(run, attempt),
-          ).slice(0, 65_000),
+          body: this.withDetails(run, reproductionComment(run, attempt)).slice(
+            0,
+            65_000,
+          ),
         },
       );
       return;
