@@ -265,6 +265,41 @@ describe("conversation UI", () => {
     expect(renderConversationPollState(terminal).polling).toBe(false);
   });
 
+  it("announces an active promotion after its turn has completed", () => {
+    const state = renderConversationPollState({
+      ...base,
+      latestTurn: {
+        id: "complete-turn",
+        conversationId: base.id,
+        kind: "brief" as const,
+        ordinal: 1,
+        state: "succeeded" as const,
+        sourceCommit: base.sourceCommit,
+        configuredModel: "openai/gpt-5.6-sol",
+        configuredReasoning: "high",
+        attempts: 1,
+        createdAt: 2,
+        updatedAt: 3,
+        completedAt: 3,
+      },
+      status: "handoff_pending" as const,
+      promotion: {
+        id: "promotion",
+        briefId: "brief",
+        state: "awaiting_intake" as const,
+        actorGithubUserId: 7,
+        actorGithubLogin: "octocat",
+        issueNumber: 42,
+        issueUrl: "https://github.test/octo/project/issues/42",
+        createdAt: 3,
+        updatedAt: 4,
+      },
+    });
+    expect(state.polling).toBe(true);
+    expect(state.status.key).toBe("promotion:awaiting_intake");
+    expect(state.status.announcement).toBe("Waiting for Roundhouse intake.");
+  });
+
   it("surfaces a terminal turn failure without exposing its internal error", () => {
     const html = renderConversation(
       {

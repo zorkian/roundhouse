@@ -133,9 +133,9 @@ function messageHtml(message: Conversation["messages"][number]): string {
 
 function statusKey(conversation: Conversation): string {
   if (conversation.activeTurn) return `turn:${conversation.activeTurn.state}`;
-  if (conversation.latestTurn) return `turn:${conversation.latestTurn.state}`;
   if (conversation.promotion)
     return `promotion:${conversation.promotion.state}`;
+  if (conversation.latestTurn) return `turn:${conversation.latestTurn.state}`;
   return `conversation:${conversation.status}`;
 }
 
