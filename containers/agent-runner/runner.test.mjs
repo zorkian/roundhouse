@@ -675,6 +675,59 @@ describe("V2 agent runner", () => {
     ]);
   });
 
+  it("includes both sides when a protected path is renamed", async () => {
+    const source = resolve(testRoot, "renamed-paths");
+    await mkdir(resolve(source, ".github", "workflows"), { recursive: true });
+    execFileSync("git", ["init", "--initial-branch=main"], { cwd: source });
+    await writeFile(
+      resolve(source, ".github", "workflows", "build.yml"),
+      "x\n",
+    );
+    execFileSync("git", ["add", "--all"], { cwd: source });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@invalid",
+        "commit",
+        "-m",
+        "base",
+      ],
+      { cwd: source },
+    );
+    const base = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: source,
+      encoding: "utf8",
+    }).trim();
+    execFileSync("git", ["mv", ".github/workflows/build.yml", "build.yml"], {
+      cwd: source,
+    });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@invalid",
+        "commit",
+        "-m",
+        "rename",
+      ],
+      { cwd: source },
+    );
+    const head = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: source,
+      encoding: "utf8",
+    }).trim();
+
+    await expect(repositoryChangedPaths(source, base, head)).resolves.toEqual([
+      ".github/workflows/build.yml",
+      "build.yml",
+    ]);
+  });
+
   it("rejects repository paths containing malformed UTF-8", async () => {
     const source = resolve(testRoot, "invalid-utf8-path");
     await mkdir(source, { recursive: true });

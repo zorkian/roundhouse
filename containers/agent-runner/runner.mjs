@@ -1007,7 +1007,7 @@ export async function repositoryChangedPaths(
 ) {
   const output = await command(
     "git",
-    ["diff", "--name-only", "-z", from, ...(to ? [to] : [])],
+    ["diff", "--no-renames", "--name-only", "-z", from, ...(to ? [to] : [])],
     { ...options, cwd: directory, rawOutput: true },
   );
   if (!output.length) return [];
@@ -1052,7 +1052,22 @@ export async function checkpointWorkspace(
     undefined,
     commandOptions,
   );
-  if (!staged.length) {
+  if (staged.length) {
+    const deterministicEnvironment = roundhouseGitEnvironment();
+    await command(
+      "git",
+      ["commit", "-m", `Implement issue #${assignment.issueNumber}`],
+      {
+        cwd: directory,
+        env: deterministicEnvironment,
+        onProgress,
+      },
+    );
+  }
+  const outputHead = await command("git", ["rev-parse", "HEAD"], {
+    ...commandOptions,
+  });
+  if (outputHead === assignment.expectedHead) {
     return {
       repositoryId: assignment.artifact.repositoryId,
       repository: assignment.artifact.repository,
@@ -1063,19 +1078,6 @@ export async function checkpointWorkspace(
       changedPaths: [],
     };
   }
-  const deterministicEnvironment = roundhouseGitEnvironment();
-  await command(
-    "git",
-    ["commit", "-m", `Implement issue #${assignment.issueNumber}`],
-    {
-      cwd: directory,
-      env: deterministicEnvironment,
-      onProgress,
-    },
-  );
-  const outputHead = await command("git", ["rev-parse", "HEAD"], {
-    ...commandOptions,
-  });
   const changedPaths = await repositoryChangedPaths(
     directory,
     assignment.expectedHead,
