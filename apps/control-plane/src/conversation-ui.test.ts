@@ -53,6 +53,106 @@ describe("conversation UI", () => {
     expect(html).not.toContain("<script>alert(1)</script>");
   });
 
+  it("renders Markdown for user and assistant messages", () => {
+    const userMessage = base.messages[0]!;
+    const logs: unknown[] = [];
+    const originalLog = console.log;
+    let html = "";
+    console.log = (line: string) => logs.push(JSON.parse(line));
+    try {
+      html = renderConversation(
+        {
+          ...base,
+          messages: [
+            {
+              ...userMessage,
+              body: "# User heading\n\nA **bold** and *emphasized* line.\nA second line.\n\n- one\n- two\n\n[Roundhouse](https://example.test/docs)\n\n```ts\nconst answer = 42;\n```",
+            },
+            {
+              ...userMessage,
+              id: "assistant-message",
+              direction: "outbound",
+              role: "assistant",
+              actorId: "roundhouse",
+              actorLogin: "Roundhouse",
+              body: "## Assistant heading\n\n1. first\n2. second\n\n[Email](mailto:hello@example.test)",
+            },
+          ],
+        },
+        "octocat",
+      );
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(html).toContain('<article class="message user">');
+    expect(html).toContain('<article class="message assistant">');
+    expect(html).toContain('<div class="message-body"><h1>User heading</h1>');
+    expect(html).toContain("<h2>Assistant heading</h2>");
+    expect(html).toContain("<strong>bold</strong>");
+    expect(html).toContain("<em>emphasized</em>");
+    expect(html).toContain("line.<br>A second line.");
+    expect(html).toContain("<ul>\n<li>one</li>");
+    expect(html).toContain("<ol>\n<li>first</li>");
+    expect(html).toContain(
+      '<a href="https://example.test/docs" target="_blank" rel="noopener noreferrer">Roundhouse</a>',
+    );
+    expect(html).toContain(
+      '<a href="mailto:hello@example.test" target="_blank" rel="noopener noreferrer">Email</a>',
+    );
+    expect(html).toContain(
+      '<pre><code class="language-ts">const answer = 42;\n</code></pre>',
+    );
+    expect(html).not.toContain("**bold**");
+    expect(logs).toEqual([
+      {
+        message: "conversation_markdown_rendered",
+        conversationId: base.id,
+        messageCount: 2,
+        durationMs: expect.any(Number),
+      },
+    ]);
+  });
+
+  it("keeps raw HTML, unsafe links, and images inert", () => {
+    const userMessage = base.messages[0]!;
+    const html = renderConversation(
+      {
+        ...base,
+        messages: [
+          {
+            ...userMessage,
+            body: '<script>alert(1)</script>\n<div onclick="alert(2)">unsafe</div>',
+          },
+          {
+            ...userMessage,
+            id: "unsafe-assistant-message",
+            direction: "outbound",
+            role: "assistant",
+            actorId: "roundhouse",
+            actorLogin: "Roundhouse",
+            body: "[bad script](javascript:alert(3))\n[bad data](data:text/html;base64,PHNjcmlwdD4=)\n![diagram alt](https://example.test/diagram.png)",
+          },
+        ],
+      },
+      "octocat",
+    );
+
+    expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(html).toContain(
+      "&lt;div onclick=&quot;alert(2)&quot;&gt;unsafe&lt;/div&gt;",
+    );
+    expect(html).not.toContain("<script>alert(1)</script>");
+    expect(html).not.toContain('<div onclick="alert(2)">');
+    expect(html).not.toContain('href="javascript:');
+    expect(html).not.toContain('href="data:');
+    expect(html).toContain("bad script");
+    expect(html).toContain("bad data");
+    expect(html).toContain("diagram alt");
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain("diagram.png");
+  });
+
   it("renders an editable draft while still allowing more conversation", () => {
     const html = renderConversation(
       {
