@@ -1701,7 +1701,10 @@ describe("V2 agent runner", () => {
       runRevision: 1,
       issueNumber: 42,
       deadlineAt: Date.now() + 60_000,
-      baseCommit,
+      // The selected target commit is deliberately absent from the artifact
+      // repository. Conflict preparation must fetch it from upstream before
+      // asking the implementation agent to resolve the merge.
+      baseCommit: mainHead,
       expectedHead: featureHead,
       role: "conflict-resolution",
       integration: {

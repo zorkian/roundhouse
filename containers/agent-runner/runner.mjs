@@ -2203,16 +2203,20 @@ export async function prepareWorkspace(assignment, onProgress) {
       onProgress,
     });
   }
-  await command(
-    "git",
-    [
-      "merge-base",
-      "--is-ancestor",
-      assignment.baseCommit,
-      assignment.expectedHead,
-    ],
-    { cwd: directory, onProgress },
-  );
+  // Conflict resolution starts from a reviewed candidate that has diverged
+  // from the selected target commit. That target is fetched and merged below;
+  // it is intentionally not required to be an ancestor of the candidate.
+  if (assignment.role !== "conflict-resolution")
+    await command(
+      "git",
+      [
+        "merge-base",
+        "--is-ancestor",
+        assignment.baseCommit,
+        assignment.expectedHead,
+      ],
+      { cwd: directory, onProgress },
+    );
   if (
     assignment.artifact.access === "write" &&
     assignment.role === "conflict-resolution" &&
@@ -2224,27 +2228,65 @@ export async function prepareWorkspace(assignment, onProgress) {
     const upstreamEnvironment = roundhouseGitEnvironment({
       GIT_TERMINAL_PROMPT: "0",
     });
+    const integrationStartedAt = Date.now();
+    runnerLog("info", "conflict_base_integration_started", {
+      attemptId: assignment.id,
+      candidateHead: assignment.expectedHead,
+      baseHead,
+    });
     // Conflict resolution must integrate with the exact target commit that
     // was selected when the conflicts were detected, not a moving branch
     // tip; later branch movement starts a new integration generation.
-    await command(
-      "git",
-      ["fetch", "--no-tags", assignment.upstream.remote, baseHead],
-      { cwd: directory, env: upstreamEnvironment },
-    );
+    try {
+      await command(
+        "git",
+        ["fetch", "--no-tags", assignment.upstream.remote, baseHead],
+        { cwd: directory, env: upstreamEnvironment, onProgress },
+      );
+    } catch (error) {
+      runnerLog("error", "conflict_base_integration_failed", {
+        attemptId: assignment.id,
+        candidateHead: assignment.expectedHead,
+        baseHead,
+        operation: "fetch",
+        durationMs: Date.now() - integrationStartedAt,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+    let outcome = "clean";
     try {
       await command("git", ["merge", "--no-commit", baseHead], {
         cwd: directory,
         env: upstreamEnvironment,
+        onProgress,
       });
     } catch (error) {
       const conflicts = await command(
         "git",
         ["diff", "--name-only", "--diff-filter=U"],
-        { cwd: directory },
+        { cwd: directory, onProgress },
       );
-      if (!conflicts) throw error;
+      if (!conflicts) {
+        runnerLog("error", "conflict_base_integration_failed", {
+          attemptId: assignment.id,
+          candidateHead: assignment.expectedHead,
+          baseHead,
+          operation: "merge",
+          durationMs: Date.now() - integrationStartedAt,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+      outcome = "conflicted";
     }
+    runnerLog("info", "conflict_base_integration_completed", {
+      attemptId: assignment.id,
+      candidateHead: assignment.expectedHead,
+      baseHead,
+      outcome,
+      durationMs: Date.now() - integrationStartedAt,
+    });
   }
   return directory;
 }
