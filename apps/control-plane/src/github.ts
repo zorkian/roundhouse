@@ -743,6 +743,35 @@ export class GitHubStageReporter implements AttemptReporter {
       attempt.executor === "external.check"
     )
       return;
+    if (run.status === "waiting" && run.waitingReason === "retry_exhausted") {
+      const marker = `<!-- roundhouse:v2:retry-exhausted:${attempt.id} -->`;
+      const comments = await listComments(
+        this.github,
+        `/repos/${run.repository}/issues/${run.issueNumber}/comments`,
+      );
+      if (comments.some((comment) => comment.body?.includes(marker))) return;
+      const code =
+        attempt.outcome?.kind === "execution_interrupted"
+          ? (attempt.outcome.code ?? "unclassified")
+          : "unclassified";
+      await this.github.post(
+        `/repos/${run.repository}/issues/${run.issueNumber}/comments`,
+        {
+          body: this.withDetails(
+            run,
+            [
+              marker,
+              "## Roundhouse paused after repeated infrastructure failures",
+              "",
+              "Automatic retries stopped after three consecutive failures.",
+              `Failure code: \`${code}\``,
+              "Open the run details for the full failure and attempt history.",
+            ].join("\n"),
+          ),
+        },
+      );
+      return;
+    }
     if (attempt.stage === "implement" && run.status === "failed") return;
     if (attempt.stage === "ci") {
       if (run.status !== "waiting" || run.waitingReason !== "maintainer_merge")

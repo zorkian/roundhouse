@@ -133,6 +133,12 @@ function stageResultSummary(attempt: Attempt): string {
   return `${stage} is in progress.`;
 }
 
+function executionInterruptionDetail(attempt: Attempt): string | undefined {
+  return attempt.outcome?.kind === "execution_interrupted"
+    ? (attempt.outcome.detail ?? attempt.outcome.code)
+    : undefined;
+}
+
 function runStatusSummary(status: RunStatus, stage: string): string {
   switch (status) {
     case "active":
@@ -656,7 +662,7 @@ export function renderRunDetails(
     pullRequest?.pullRequest ?? implementation?.pullRequest ?? ci?.pullRequest;
   const prUrl = pr?.html_url;
   const profileSection = run.profile
-    ? `<details class="diagnostics"><summary class="diagnostics-summary">Repository profile</summary><dl><dt>Source path</dt><dd><code>${escapeHtml(run.profile.sourcePath)}</code></dd><dt>Source commit</dt><dd><code>${escapeHtml(run.profile.sourceCommit)}</code></dd><dt>Schema version</dt><dd>${escapeHtml(run.profile.version)}</dd><dt>Profile hash</dt><dd><code>${escapeHtml(run.profile.hash)}</code></dd><dt>Allowed paths</dt><dd>${value(run.profile.paths.allowed)}</dd><dt>Protected paths</dt><dd>${value(run.profile.paths.protected)}</dd><dt>Merge policy</dt><dd>${value(run.profile.merge)}</dd><dt>Operators</dt><dd>${value(run.profile.permissions?.operators)}</dd><dt>Development environment</dt><dd>${value(run.profile.developmentEnvironment)}</dd><dt>Project instructions</dt><dd>${value(run.profile.instructions?.project)}</dd><dt>Stages</dt><dd>${value(run.profile.stages)}</dd><dt>Reviewers</dt><dd>${value(run.profile.reviewers)}</dd><dt>Validation</dt><dd>${value(run.profile.validation)}</dd></dl></details>`
+    ? `<details class="diagnostics"><summary class="diagnostics-summary">Repository profile</summary><dl><dt>Source path</dt><dd><code>${escapeHtml(run.profile.sourcePath)}</code></dd><dt>Source commit</dt><dd><code>${escapeHtml(run.profile.sourceCommit)}</code></dd><dt>Schema version</dt><dd>${escapeHtml(run.profile.version)}</dd><dt>Profile hash</dt><dd><code>${escapeHtml(run.profile.hash)}</code></dd><dt>Allowed paths</dt><dd>${value(run.profile.paths.allowed)}</dd><dt>Protected paths</dt><dd>${value(run.profile.paths.protected)}</dd><dt>Merge policy</dt><dd>${value(run.profile.merge)}</dd><dt>Operators</dt><dd>${value(run.profile.permissions?.operators)}</dd><dt>Execution environment</dt><dd>${value(run.profile.developmentEnvironment)}</dd><dt>Project instructions</dt><dd>${value(run.profile.instructions?.project)}</dd><dt>Stages</dt><dd>${value(run.profile.stages)}</dd><dt>Reviewers</dt><dd>${value(run.profile.reviewers)}</dd><dt>Validation</dt><dd>${value(run.profile.validation)}</dd></dl></details>`
     : `<details class="diagnostics"><summary class="diagnostics-summary">Repository profile</summary><p class="muted">${escapeHtml(run.profileError ?? "No profile snapshot is available for this run.")}</p></details>`;
   const chronological = [...attempts].sort(
     (left, right) =>
@@ -690,6 +696,14 @@ ${workflowEvidence(details, attempt)}<h4>Model routing</h4>${value(attempt.routi
   if (run.status === "waiting" && run.waitingReason)
     outcomeParts.push(
       `<dl><dt>Waiting on</dt><dd>${escapeHtml(run.waitingReason.replaceAll("_", " "))}</dd></dl>`,
+    );
+  const interruption = [...chronological]
+    .reverse()
+    .map(executionInterruptionDetail)
+    .find((detail) => detail !== undefined);
+  if (run.waitingReason === "retry_exhausted" && interruption)
+    outcomeParts.push(
+      `<p><strong>Last infrastructure failure:</strong> ${escapeHtml(interruption)}</p>`,
     );
   if (
     latestAttempt &&

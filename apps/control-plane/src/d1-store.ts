@@ -804,7 +804,7 @@ export class D1RunRepository implements RunRepository {
   async createAttempt(attempt: Attempt): Promise<"created" | "exists"> {
     const result = await this.db
       .prepare(
-        "INSERT OR IGNORE INTO attempts (id,run_id,run_revision,kind,node_id,executor,stage,role,capabilities_json,state,deadline_at,base_commit,expected_head,routing_json,outcome_json,competition_json,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?17)",
+        "INSERT OR IGNORE INTO attempts (id,run_id,run_revision,kind,node_id,executor,stage,role,capabilities_json,state,deadline_at,base_commit,expected_head,accepted_head,result_json,routing_json,outcome_json,competition_json,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?19)",
       )
       .bind(
         attempt.id,
@@ -820,6 +820,8 @@ export class D1RunRepository implements RunRepository {
         attempt.deadlineAt,
         attempt.baseCommit,
         attempt.expectedHead,
+        attempt.acceptedHead ?? null,
+        attempt.result ? JSON.stringify(attempt.result) : null,
         attempt.routing ? JSON.stringify(attempt.routing) : null,
         attempt.outcome ? JSON.stringify(attempt.outcome) : null,
         attempt.competition ? JSON.stringify(attempt.competition) : null,

@@ -244,6 +244,41 @@ async function callbackFor(
 }
 
 describe("single coordinator", () => {
+  it("persists completed boundary attempt results when they are created", async () => {
+    const store = new D1RunRepository(new LocalD1() as never);
+    const acceptedHead = "b".repeat(40);
+    await store.create(runFixture());
+    await store.createAttempt(
+      attemptFixture({
+        kind: "external",
+        nodeId: "approval",
+        executor: "human",
+        stage: "review",
+        role: "approval",
+        acceptedHead,
+        result: {
+          human: {
+            status: "answered",
+            actor: "operator",
+            body: "LGTM",
+          },
+        },
+      }),
+    );
+
+    await expect(store.getAttempt("run_slice_rev_1")).resolves.toMatchObject({
+      state: "completed",
+      acceptedHead,
+      result: {
+        human: {
+          status: "answered",
+          actor: "operator",
+          body: "LGTM",
+        },
+      },
+    });
+  });
+
   it("mints node authority and only attenuates the read-only integration review", () => {
     const investigate = workflow.nodes.investigate!;
     expect(
@@ -310,6 +345,199 @@ describe("single coordinator", () => {
         targetBaseHead: null,
         integrationHead: null,
       },
+    });
+  });
+
+  it("waits after three consecutive interruptions with the same infrastructure code", async () => {
+    const store = new MemoryRunRepository();
+    const run = runFixture({
+      revision: 3,
+      stage: "reproduce",
+      currentNodeId: "investigate",
+    });
+    await store.create(run);
+    for (const revision of [1, 2, 3])
+      store.attempts.set(
+        `run_slice_rev_${revision}`,
+        attemptFixture({
+          id: `run_slice_rev_${revision}`,
+          runRevision: revision,
+          nodeId: "investigate",
+          executor: "agent.read",
+          stage: "reproduce",
+          role: "investigate",
+          state: "failed",
+          outcome: {
+            kind: "execution_interrupted",
+            source: "attempt_workflow",
+            code: "docker_builder_registry_ca_verification_failed",
+            detail: `OCI failure from attempt ${revision}`,
+          },
+        }),
+      );
+    const report = vi.fn(async () => undefined);
+
+    await expect(
+      coordinate(
+        store,
+        { submit: async () => undefined },
+        { runId: input.id, expectedRevision: 3 },
+        100,
+        undefined,
+        { report },
+      ),
+    ).resolves.toBe("dispatched");
+
+    await expect(store.get(input.id)).resolves.toMatchObject({
+      status: "waiting",
+      stage: "reproduce",
+      currentNodeId: "investigate",
+      revision: 4,
+      waitingReason: "retry_exhausted",
+    });
+    expect(report).toHaveBeenCalledOnce();
+    expect(store.events.at(-1)).toMatchObject({
+      kind: "attempt_outcome_reconciled",
+      payload: {
+        consecutiveInterruptions: 3,
+        retryExhausted: true,
+      },
+    });
+  });
+
+  it("waits after three consecutive legacy interruptions without a code", async () => {
+    const store = new MemoryRunRepository();
+    const run = runFixture({
+      revision: 3,
+      stage: "reproduce",
+      currentNodeId: "investigate",
+    });
+    await store.create(run);
+    for (const revision of [1, 2, 3])
+      store.attempts.set(
+        `run_slice_rev_${revision}`,
+        attemptFixture({
+          id: `run_slice_rev_${revision}`,
+          runRevision: revision,
+          nodeId: "investigate",
+          executor: "agent.read",
+          stage: "reproduce",
+          role: "investigate",
+          state: "failed",
+          outcome: {
+            kind: "execution_interrupted",
+            source: "attempt_recovery",
+          },
+        }),
+      );
+
+    await expect(
+      coordinate(
+        store,
+        { submit: async () => undefined },
+        { runId: input.id, expectedRevision: 3 },
+        100,
+      ),
+    ).resolves.toBe("dispatched");
+    await expect(store.get(input.id)).resolves.toMatchObject({
+      status: "waiting",
+      revision: 4,
+      waitingReason: "retry_exhausted",
+    });
+  });
+
+  it("counts the same infrastructure interruption across review roles", async () => {
+    const store = new MemoryRunRepository();
+    const run = runFixture({
+      revision: 3,
+      stage: "review",
+      currentNodeId: "review",
+      currentHead: "b".repeat(40),
+    });
+    await store.create(run);
+    for (const [revision, role] of [
+      [1, "review-holistic"],
+      [2, "review-security"],
+      [3, "review-data"],
+    ] as const)
+      store.attempts.set(
+        `review_${revision}_${role}`,
+        attemptFixture({
+          id: `review_${revision}_${role}`,
+          runRevision: revision,
+          nodeId: "review",
+          executor: "agent.read",
+          stage: "review",
+          role,
+          state: "failed",
+          expectedHead: run.currentHead,
+          outcome: {
+            kind: "execution_interrupted",
+            source: "attempt_workflow",
+            code: "docker_start_timeout",
+          },
+        }),
+      );
+
+    await expect(
+      coordinate(
+        store,
+        { submit: async () => undefined },
+        { runId: input.id, expectedRevision: 3 },
+        100,
+      ),
+    ).resolves.toBe("dispatched");
+    await expect(store.get(input.id)).resolves.toMatchObject({
+      status: "waiting",
+      stage: "review",
+      currentNodeId: "review",
+      revision: 4,
+      waitingReason: "retry_exhausted",
+    });
+  });
+
+  it("retries when the preceding interruption has a different code", async () => {
+    const store = new MemoryRunRepository();
+    const run = runFixture({
+      revision: 3,
+      stage: "reproduce",
+      currentNodeId: "investigate",
+    });
+    await store.create(run);
+    for (const [revision, code] of [
+      [1, "docker_start_timeout"],
+      [2, "docker_start_timeout"],
+      [3, "docker_builder_registry_ca_verification_failed"],
+    ] as const)
+      store.attempts.set(
+        `run_slice_rev_${revision}`,
+        attemptFixture({
+          id: `run_slice_rev_${revision}`,
+          runRevision: revision,
+          nodeId: "investigate",
+          executor: "agent.read",
+          stage: "reproduce",
+          role: "investigate",
+          state: "failed",
+          outcome: {
+            kind: "execution_interrupted",
+            source: "attempt_workflow",
+            code,
+          },
+        }),
+      );
+
+    await expect(
+      coordinate(
+        store,
+        { submit: async () => undefined },
+        { runId: input.id, expectedRevision: 3 },
+        100,
+      ),
+    ).resolves.toBe("dispatched");
+    await expect(store.get(input.id)).resolves.toMatchObject({
+      status: "active",
+      revision: 4,
     });
   });
 
@@ -2823,10 +3051,9 @@ nodes:
     });
   });
 
-  // Same interrupted-promotion scenario against the D1-backed store, which
-  // drops the in-memory-only result/acceptedHead on attempt creation. The
-  // recovered canonical attempt must still complete with the winner's result
-  // and accepted commit, reconstructed from the durable winner attempt.
+  // Same interrupted-promotion scenario against the D1-backed store. The
+  // canonical selection must retain the winner's result and accepted commit,
+  // and recovery must still finish publication after the interruption.
   it("recovers the winner result and head from durable state after an interrupted publication", async () => {
     const competition = await competitionInput();
     const store = new D1RunRepository(new LocalD1() as never);
@@ -2877,9 +3104,11 @@ nodes:
     await expect(step(102)).rejects.toThrow("publication_interrupted");
     const recorded = await store.getAttempt("run_competition_rev_1");
     expect(recorded?.competition?.purpose).toBe("selected");
-    expect(recorded?.result).toBeUndefined();
-    // Recovery completes the canonical attempt with the winner's result and
-    // accepted head even though the selection row never stored them.
+    expect(recorded?.acceptedHead).toBe(winnerHead);
+    expect(recorded?.result).toEqual(
+      qualificationResult("qualify-candidate-alpha"),
+    );
+    // Recovery completes publication using the durable canonical selection.
     failPromotion = false;
     await expect(step(103)).resolves.toBe("dispatched");
     expect(promoted).toEqual([submitted[0]!.id]);

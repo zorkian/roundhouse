@@ -23,9 +23,12 @@ function successful(command: string, stdout = ""): ExecResult {
 function successfulRuntimeCommand(command: string): ExecResult {
   if (command.startsWith("sha256sum "))
     return successful(command, "matching-ca  /etc/cloudflare/ca.crt\n");
-  if (command.includes(" sha256sum /etc/buildkit/certs/"))
+  if (command.includes("docker cp") && command.includes("/etc/buildkit/certs/"))
     return successful(command, "matching-ca  /etc/buildkit/ca.crt\n");
-  if (command.includes(" cat /etc/buildkit/buildkitd.toml"))
+  if (
+    command.includes("docker cp") &&
+    command.includes("/etc/buildkit/buildkitd.toml")
+  )
     return successful(command, "[registry.'ghcr.io']\n");
   if (command.includes("docker info"))
     return successful(command, "fuse-overlayfs\n");
@@ -178,6 +181,7 @@ describe("attempt Sandbox components", () => {
 
   it("owns Docker and BuildKit readiness in the nested runtime component", async () => {
     const phases: string[] = [];
+    const commands: string[] = [];
     const process = runningProcess();
     const runtime = new NestedContainerRuntime(
       componentHost({
@@ -185,13 +189,22 @@ describe("attempt Sandbox components", () => {
           phases.push(phase);
         },
         getProcess: async () => process,
-        exec: async (command) => successfulRuntimeCommand(command),
+        exec: async (command) => {
+          commands.push(command);
+          return successfulRuntimeCommand(command);
+        },
       }),
     );
 
     await expect(runtime.ensure("attempt_1")).resolves.toBe(process);
     expect(phases).toContain("docker_daemon_ready");
     expect(phases.at(-1)).toBe("docker_builder_ready");
+    expect(commands.some((command) => command.includes("docker cp"))).toBe(
+      true,
+    );
+    expect(commands.some((command) => command.includes("docker exec"))).toBe(
+      false,
+    );
   });
 
   it("reconciles a restored builder that no longer satisfies its registry CA contract", async () => {
@@ -208,7 +221,11 @@ describe("attempt Sandbox components", () => {
         exec: async (command) => {
           commands.push(command);
           if (command.startsWith("docker buildx create")) recreated = true;
-          if (command.includes(" sha256sum /etc/buildkit/certs/") && !recreated)
+          if (
+            command.includes("docker cp") &&
+            command.includes("/etc/buildkit/certs/") &&
+            !recreated
+          )
             return {
               ...successful(command),
               success: false,
@@ -230,5 +247,36 @@ describe("attempt Sandbox components", () => {
     expect(phases).toContain("docker_builder_reconciliation_started");
     expect(phases).toContain("docker_builder_reconciliation_completed");
     expect(phases.at(-1)).toBe("docker_builder_ready");
+  });
+
+  it("keeps stdout diagnostics when builder filesystem inspection fails", async () => {
+    const runtime = new NestedContainerRuntime(
+      componentHost({
+        exec: async (command) => {
+          if (command === "docker buildx inspect roundhouse-host-v1")
+            return {
+              ...successful(command),
+              success: false,
+              exitCode: 1,
+              stderr: "builder not found",
+            };
+          if (
+            command.includes("docker cp") &&
+            command.includes("/etc/buildkit/certs/")
+          )
+            return {
+              ...successful(command),
+              success: false,
+              exitCode: 127,
+              stdout: "OCI runtime failure: cgroup missing\n",
+            };
+          return successfulRuntimeCommand(command);
+        },
+      }),
+    );
+
+    await expect(runtime.ensure("attempt_1")).rejects.toThrow(
+      "docker_builder_registry_ca_verification_failed: inner_ca_exit=127: OCI runtime failure: cgroup missing",
+    );
   });
 });

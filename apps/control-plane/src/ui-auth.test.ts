@@ -305,10 +305,15 @@ afterEach(() => {
 });
 
 describe("GitHub UI sign-in", () => {
-  it("shows the Development badge on sign-in pages but not on the not-found page", () => {
-    for (const page of [renderSignInPage(), renderSignInPage("Try again.")])
-      expect(page.match(/class="env-badge"/g)).toHaveLength(1);
-    expect(renderNotFoundPage()).not.toContain('class="env-badge"');
+  it("keeps authentication pages free of environment branding", () => {
+    for (const page of [
+      renderSignInPage(),
+      renderSignInPage("Try again."),
+      renderNotFoundPage(),
+    ]) {
+      expect(page).not.toContain('class="env-badge"');
+      expect(page).not.toContain("Development");
+    }
   });
 
   it("redirects to GitHub with a one-time state and no secrets in the URL", async () => {

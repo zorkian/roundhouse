@@ -2967,6 +2967,67 @@ describe("GitHub intake", () => {
     expect(api.post).not.toHaveBeenCalled();
   });
 
+  it.each(["reproduce", "implement", "review"] as const)(
+    "reports retry exhaustion without entering the %s completion path",
+    async (stage) => {
+      const comments: { body: string }[] = [];
+      const get = vi.fn(async <T>(path: string) => {
+        if (path.includes("/comments")) return comments as T;
+        throw new Error(`unexpected_get:${path}`);
+      });
+      const post = vi.fn(async <T>(path: string, value: unknown) => {
+        expect(path).toBe("/repos/zorkian/roundhouse/issues/42/comments");
+        comments.push({
+          body: String((value as { body?: unknown }).body ?? ""),
+        });
+        return {} as T;
+      });
+      const reporter = new GitHubStageReporter(
+        {
+          get: get as GitHubApi["get"],
+          post: post as GitHubApi["post"],
+        },
+        "https://roundhouse.example",
+      );
+      const run = reportRun(`run_${stage}_retry_exhausted`, {
+        status: "waiting",
+        stage,
+        revision: 4,
+        waitingReason: "retry_exhausted",
+      });
+      const attempt = reportAttempt(run, {
+        id: `attempt_${stage}_retry_exhausted`,
+        state: "failed",
+        outcome: {
+          kind: "execution_interrupted",
+          source: "attempt_workflow",
+          code: "docker_start_timeout",
+          detail: "Docker never became ready",
+        },
+      });
+
+      await reporter.report(run, attempt);
+      await reporter.report(run, attempt);
+
+      expect(post).toHaveBeenCalledOnce();
+      expect(comments[0]?.body).toContain(
+        "## Roundhouse paused after repeated infrastructure failures",
+      );
+      expect(comments[0]?.body).toContain(
+        "Failure code: `docker_start_timeout`",
+      );
+      expect(comments[0]?.body).toContain(
+        "<!-- roundhouse:v2:retry-exhausted:attempt_",
+      );
+      expect(comments[0]?.body).toContain(
+        "[View Roundhouse run details](https://roundhouse.example/repositories/zorkian/roundhouse/issues/42)",
+      );
+      expect(get.mock.calls.every(([path]) => path.includes("/comments"))).toBe(
+        true,
+      );
+    },
+  );
+
   it("posts an implementation start on the issue once the attempt is dispatched", async () => {
     const post = vi.fn(async (_path: string, _body: unknown) => ({}));
     const reporter = new GitHubStageReporter(
