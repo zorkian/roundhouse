@@ -263,6 +263,77 @@ describe("run details", () => {
     expect(html).not.toContain("<details open");
   });
 
+  it("aggregates retries by workflow step and shows unavailable steps", () => {
+    const html = renderRunDetails({
+      run: {
+        schemaVersion: 2,
+        id: "run_usage",
+        repository: "zorkian/roundhouse",
+        issueNumber: 4,
+        baseCommit: "base",
+        currentHead: "base",
+        profileVersion: "test",
+        status: "active",
+        stage: "implement",
+        revision: 2,
+      },
+      createdAt: 1,
+      updatedAt: 2,
+      attempts: [
+        {
+          id: "implement-1",
+          runId: "run_usage",
+          runRevision: 1,
+          kind: "agent",
+          stage: "implement",
+          role: "developer",
+          state: "failed",
+          deadlineAt: 2,
+          baseCommit: "base",
+          expectedHead: "base",
+          createdAt: 1,
+          updatedAt: 2,
+        },
+        {
+          id: "implement-2",
+          runId: "run_usage",
+          runRevision: 2,
+          kind: "agent",
+          stage: "implement",
+          role: "developer",
+          state: "completed",
+          deadlineAt: 3,
+          baseCommit: "base",
+          expectedHead: "base",
+          createdAt: 2,
+          updatedAt: 3,
+        },
+      ],
+      usage: [
+        {
+          callId: "call-1",
+          attemptId: "implement-1",
+          model: "test-model",
+          totalTokens: 100,
+          costUsd: 0.01,
+        },
+        {
+          callId: "call-2",
+          attemptId: "implement-2",
+          model: "test-model",
+          totalTokens: 250,
+          costUsd: 0.02,
+        },
+      ],
+    });
+
+    expect(html).toContain("<h2>Usage by workflow step</h2>");
+    expect(html).toContain("<dt>implement</dt><dd>350 tokens");
+    expect(html).toContain("$0.030000");
+    expect(html).toContain("<dt>qualify</dt><dd>Usage unavailable</dd>");
+    expect(html).toContain("<dt>merge</dt><dd>Usage unavailable</dd>");
+  });
+
   it("identifies missing optional evidence", () => {
     const html = renderRunDetails({
       run: {
