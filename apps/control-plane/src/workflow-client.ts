@@ -102,6 +102,37 @@ export const workflowGraphClientScript = `(function () {
         layoutMs: Date.now() - initStartedAt
       });
     });
+    // One-time post-layout framing: the cose fit leaves the whole graph in
+    // view at a distant, hard-to-read scale, so enforce a readable minimum
+    // zoom and pan if needed to keep the workflow entry stage visible.
+    var entryId = container.getAttribute("data-entry");
+    cy.on("layoutstop", function frameOnce() {
+      cy.off("layoutstop", frameOnce);
+      var mobile = container.clientWidth <= 700;
+      var zoomFloor = mobile ? 0.6 : 1;
+      if (cy.zoom() < zoomFloor) cy.zoom(zoomFloor);
+      var entry = entryId ? cy.getElementById(entryId) : null;
+      var entryVisible = true;
+      if (entry && entry.nonempty()) {
+        var bounds = entry.renderedBoundingBox();
+        entryVisible =
+          bounds.x1 >= 0 &&
+          bounds.y1 >= 0 &&
+          bounds.x2 <= container.clientWidth &&
+          bounds.y2 <= container.clientHeight;
+        if (!entryVisible) {
+          cy.center(entry);
+          entryVisible = true;
+        }
+      }
+      log("workflow_graph_viewport_initialized", {
+        entryStage: entryId,
+        mobile: mobile,
+        zoom: cy.zoom(),
+        entryVisible: entryVisible,
+        framingMs: Date.now() - initStartedAt
+      });
+    });
     function clearEmphasis() {
       cy.elements().removeClass("selected-node connected-edge muted");
     }

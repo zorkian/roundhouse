@@ -7,7 +7,11 @@ import {
   type RunSnapshot,
 } from "@roundhouse/core";
 import { describe, expect, it } from "vitest";
-import { renderWorkflowView, workflowGraphElements } from "./workflow-view.js";
+import {
+  renderWorkflowView,
+  workflowEntryStage,
+  workflowGraphElements,
+} from "./workflow-view.js";
 import { workflowGraphClientScript } from "./workflow-client.js";
 
 async function runFixture(): Promise<RunSnapshot> {
@@ -50,6 +54,27 @@ describe("workflow graph view", () => {
     expect(unselected).not.toContain("data-select");
     const unknown = render({ ...run, currentNodeId: 'missing"><script>' });
     expect(unknown).not.toContain("data-select");
+  });
+
+  it("emits the trigger-derived entry stage as graph metadata", async () => {
+    const run = await runFixture();
+    const workflow = run.profile!.workflow!;
+    expect(workflowEntryStage(workflow)).toBe("qualify");
+    const html = renderWorkflowView(run);
+    expect(html).toContain(
+      'id="workflow-graph" data-select="implement" data-entry="qualify"',
+    );
+    // A trigger pointing at a missing node emits no entry metadata.
+    const broken = {
+      ...workflow,
+      triggers: { "github.issue.started": 'missing"><script>' },
+    };
+    expect(workflowEntryStage(broken)).toBeNull();
+    const rendered = renderWorkflowView({
+      ...run,
+      profile: { ...run.profile!, workflow: broken },
+    });
+    expect(rendered).not.toContain("data-entry");
   });
 
   it("renders the labeled graph container, editor, and GitHub proposal path", async () => {
@@ -224,6 +249,12 @@ describe("workflow graph view", () => {
       '"selected-node connected-edge muted"',
     );
     expect(workflowGraphClientScript).toContain("event.target === cy");
+    // One-time post-layout viewport framing with the entry stage.
+    expect(workflowGraphClientScript).toContain('getAttribute("data-entry")');
+    expect(workflowGraphClientScript).toContain("renderedBoundingBox");
+    expect(workflowGraphClientScript).toContain(
+      "workflow_graph_viewport_initialized",
+    );
     // Structured timing logs at the graph initialization boundary.
     expect(workflowGraphClientScript).toContain("workflow_graph_initialized");
     expect(workflowGraphClientScript).toContain(
@@ -247,6 +278,155 @@ describe("workflow graph view", () => {
     expect(workflowGraphClientScript).toContain('getElementById("validate")');
     expect(workflowGraphClientScript).toContain('getElementById("copy")');
     expect(workflowGraphClientScript).toContain("data-source-commit");
+  });
+
+  it("frames the initial viewport after layout, keeping the entry visible", () => {
+    class FakeElement {
+      attributes: Record<string, string> = {};
+      listeners: Record<string, Array<() => void>> = {};
+      textContent = "";
+      clientWidth = 1186;
+      clientHeight = 560;
+      setAttribute(name: string, value: string) {
+        this.attributes[name] = String(value);
+      }
+      getAttribute(name: string) {
+        return this.attributes[name] ?? null;
+      }
+      addEventListener(type: string, handler: () => void) {
+        (this.listeners[type] ??= []).push(handler);
+      }
+    }
+    function harness(options: {
+      width: number;
+      initialZoom: number;
+      entryBounds: { x1: number; y1: number; x2: number; y2: number };
+      entryId?: string;
+      preselect?: string;
+    }) {
+      const logs: Record<string, unknown>[] = [];
+      const layoutstopHandlers: Array<() => void> = [];
+      const centered: string[] = [];
+      const state = { zoom: options.initialZoom };
+      const entryNode = {
+        nonempty: () => true,
+        renderedBoundingBox: () => options.entryBounds,
+        select: () => {},
+      };
+      const cy = {
+        on: (event: string, _selector: unknown, handler?: unknown) => {
+          if (event === "layoutstop") {
+            layoutstopHandlers.push((handler ?? _selector) as () => void);
+          }
+        },
+        off: (event: string, handler: () => void) => {
+          const index = layoutstopHandlers.indexOf(handler);
+          if (index >= 0) layoutstopHandlers.splice(index, 1);
+        },
+        zoom: (level?: number) => {
+          if (level !== undefined) state.zoom = level;
+          return state.zoom;
+        },
+        center: (node: unknown) => {
+          centered.push(node === entryNode ? "entry" : "other");
+        },
+        nodes: () => ({ length: 3 }),
+        edges: () => ({ length: 2 }),
+        getElementById: (id: string) =>
+          id === options.entryId || id === options.preselect
+            ? entryNode
+            : { nonempty: () => false },
+        elements: () => ({ removeClass: () => {} }),
+        $: () => ({ difference: () => ({ unselect: () => {} }) }),
+      };
+      const container = new FakeElement();
+      container.clientWidth = options.width;
+      if (options.entryId)
+        container.setAttribute("data-entry", options.entryId);
+      if (options.preselect)
+        container.setAttribute("data-select", options.preselect);
+      const dataElement = new FakeElement();
+      dataElement.textContent = JSON.stringify([
+        { group: "nodes", data: { id: "qualify" } },
+      ]);
+      const byId: Record<string, FakeElement> = {
+        "workflow-graph": container,
+        "workflow-graph-data": dataElement,
+      };
+      const document = {
+        getElementById: (id: string) => byId[id] ?? null,
+        querySelectorAll: () => [],
+        createElement: () => new FakeElement(),
+      };
+      const window = { cytoscape: () => cy };
+      const originalLog = console.log;
+      console.log = (line: string) => logs.push(JSON.parse(line));
+      try {
+        new Function("window", "document", workflowGraphClientScript)(
+          window,
+          document,
+        );
+        const handlers = [...layoutstopHandlers];
+        for (const handler of handlers) handler();
+        // A second layoutstop must not re-frame: the handler runs once.
+        for (const handler of [...layoutstopHandlers]) handler();
+      } finally {
+        console.log = originalLog;
+      }
+      const viewportLog = logs.find(
+        (entry) => entry.message === "workflow_graph_viewport_initialized",
+      );
+      return { state, centered, viewportLog, logs };
+    }
+
+    // Desktop: the distant cose fit is raised to a readable zoom floor and
+    // the entry stage already in view is left alone.
+    const desktop = harness({
+      width: 1186,
+      initialZoom: 0.4,
+      entryId: "qualify",
+      preselect: "qualify",
+      entryBounds: { x1: 100, y1: 100, x2: 400, y2: 240 },
+    });
+    expect(desktop.state.zoom).toBe(1);
+    expect(desktop.centered).toEqual([]);
+    expect(desktop.viewportLog).toMatchObject({
+      entryStage: "qualify",
+      mobile: false,
+      zoom: 1,
+      entryVisible: true,
+    });
+    expect(
+      desktop.logs.filter(
+        (entry) => entry.message === "workflow_graph_viewport_initialized",
+      ),
+    ).toHaveLength(1);
+
+    // Mobile: a lower zoom floor applies and an off-screen entry is panned
+    // back into view.
+    const mobile = harness({
+      width: 390,
+      initialZoom: 0.3,
+      entryId: "qualify",
+      entryBounds: { x1: -500, y1: 60, x2: -200, y2: 200 },
+    });
+    expect(mobile.state.zoom).toBe(0.6);
+    expect(mobile.centered).toEqual(["entry"]);
+    expect(mobile.viewportLog).toMatchObject({
+      mobile: true,
+      zoom: 0.6,
+      entryVisible: true,
+    });
+
+    // Current-stage preselection still runs alongside the framing.
+    const both = harness({
+      width: 1186,
+      initialZoom: 0.5,
+      entryId: "qualify",
+      preselect: "implement",
+      entryBounds: { x1: 0, y1: 0, x2: 240, y2: 110 },
+    });
+    expect(both.viewportLog).toMatchObject({ entryStage: "qualify", zoom: 1 });
   });
 
   it("switches stage-button selection back and forth (A \u2192 B \u2192 A)", () => {
