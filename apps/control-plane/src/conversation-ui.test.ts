@@ -267,6 +267,101 @@ describe("conversation UI", () => {
     expect(html).not.toContain("<script>alert(1)</script>");
   });
 
+  it("marks each state-relevant landing region while keeping messages chronological", () => {
+    const assistant = {
+      ...base.messages[0]!,
+      id: "assistant-message",
+      role: "assistant" as const,
+      direction: "outbound" as const,
+      actorId: "roundhouse",
+      actorLogin: "Roundhouse",
+      body: "Latest response",
+    };
+    const waiting = renderConversation(
+      {
+        ...base,
+        title: "Conversation title",
+        messages: [base.messages[0]!, assistant],
+      },
+      "octocat",
+    );
+    expect(waiting).toContain("<h1>Conversation title</h1>");
+    expect(waiting).toContain("octo/project");
+    expect(waiting).toContain('<span class="readonly">Read only</span>');
+    expect(waiting).toContain('data-conversation-landing="composer"');
+    expect(waiting).toContain('class="primary" type="submit">Send</button>');
+    expect(waiting).toContain('class="secondary" type="submit"');
+    expect(waiting).toContain(".composer{position:sticky;bottom:0");
+    expect(waiting.indexOf('data-message-id="message"')).toBeLessThan(
+      waiting.indexOf('data-message-id="assistant-message"'),
+    );
+
+    const working = renderConversation(
+      {
+        ...base,
+        activeTurn: {
+          id: "turn",
+          conversationId: base.id,
+          kind: "message",
+          ordinal: 1,
+          state: "running",
+          sourceCommit: base.sourceCommit,
+          configuredModel: base.context.model.id,
+          configuredReasoning: "high",
+          attempts: 1,
+          createdAt: 2,
+          updatedAt: 2,
+        },
+      },
+      "octocat",
+    );
+    expect(working).toContain('data-conversation-landing="working"');
+
+    const brief = renderConversation(
+      {
+        ...base,
+        currentBrief: {
+          id: "brief",
+          revision: 1,
+          state: "draft",
+          title: "Brief",
+          body: "Body",
+          outcome: "Outcome",
+          acceptanceCriteria: [],
+          constraints: [],
+          evidence: [],
+          uncertainties: [],
+          sourceCommit: base.sourceCommit,
+          createdAt: 2,
+          updatedAt: 2,
+        },
+      },
+      "octocat",
+    );
+    expect(brief).toContain('data-conversation-landing="brief"');
+
+    const delivery = renderConversation(
+      {
+        ...base,
+        status: "promoted",
+        promotion: {
+          id: "promotion",
+          briefId: "brief",
+          state: "accepted",
+          actorGithubUserId: 7,
+          actorGithubLogin: "octocat",
+          issueNumber: 42,
+          issueUrl: "https://github.test/issues/42",
+          createdAt: 2,
+          updatedAt: 2,
+        },
+      },
+      "octocat",
+    );
+    expect(delivery).toContain('data-conversation-landing="delivery"');
+    expect(delivery).toContain('id="conversation-new-response"');
+  });
+
   it("renders Markdown for user and assistant messages", () => {
     const userMessage = base.messages[0]!;
     const logs: unknown[] = [];
@@ -518,9 +613,9 @@ describe("conversation UI", () => {
         completedAt: 3,
       },
     };
-    expect(renderConversation(terminal, "octocat")).not.toContain(
-      "conversation-poll.js",
-    );
+    const html = renderConversation(terminal, "octocat");
+    expect(html).toContain("conversation-poll.js");
+    expect(html).toContain('data-polling="false"');
     expect(renderConversationPollState(terminal).polling).toBe(false);
   });
 
