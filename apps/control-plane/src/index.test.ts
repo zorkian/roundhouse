@@ -9,6 +9,7 @@ import {
   RoundhouseAttemptContainer,
 } from "./attempt-container.js";
 import {
+  attemptContext,
   controlPlaneService,
   handleRequest,
   recoverExpiredAttempts,
@@ -16,6 +17,7 @@ import {
   successorWakeup,
   validAttemptProgress,
 } from "./index.js";
+import { ciDiagnosticsNotice } from "./github-ci.js";
 import worker from "./index.js";
 import type { D1Like } from "./d1-store.js";
 
@@ -268,6 +270,64 @@ describe("V2 control plane", () => {
       "github.com",
       "control.test",
     ]);
+  });
+
+  it("passes CI failure diagnostics to the repair assignment as untrusted evidence without credentials", () => {
+    const candidate = "b".repeat(40);
+    const log =
+      "File t/customtext-module.t needs tidying\n" +
+      "Process completed with exit code 1.\n";
+    const ci = {
+      status: "failure",
+      head: candidate,
+      pullRequest: { number: 24, html_url: "https://github.test/pull/24" },
+      checks: [{ name: "test", status: "completed", conclusion: "failure" }],
+      diagnostics: {
+        evidenceKey: `${candidate}:11:31:1`,
+        untrusted: true,
+        notice: ciDiagnosticsNotice,
+        failures: [
+          {
+            key: `${candidate}:11:31:1`,
+            repository: "zorkian/dreamwidth",
+            candidateSha: candidate,
+            checkRun: { id: 11, name: "test", conclusion: "failure" },
+            workflowRun: {
+              id: 31,
+              attempt: 1,
+              name: "CI (fast)",
+              conclusion: "failure",
+              url: "https://github.test/actions/runs/31",
+            },
+            jobs: [
+              {
+                id: 41,
+                name: "test",
+                conclusion: "failure",
+                failedSteps: [
+                  {
+                    name: "Formatting (changed files only)",
+                    conclusion: "failure",
+                  },
+                ],
+                log,
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    const context = attemptContext({ plan: { status: "ready" }, ci });
+    const serialized = JSON.stringify(context);
+    expect(serialized).toContain("CI (fast)");
+    expect(serialized).toContain("Formatting (changed files only)");
+    expect(serialized).toContain("File t/customtext-module.t needs tidying");
+    expect(serialized).toContain("Process completed with exit code 1.");
+    expect(serialized).toContain("untrusted");
+    expect(serialized).not.toContain("installationToken");
+    expect(serialized).not.toContain("token");
+    expect(attemptContext({})).toBeUndefined();
   });
 
   it("stops an account-limited attempt in the budget waiting state", async () => {

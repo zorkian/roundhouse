@@ -533,6 +533,20 @@ export class D1RunRepository implements RunRepository {
     return row ? attemptFromRow(row) : undefined;
   }
 
+  async consumedCiEvidence(
+    runId: string,
+    evidenceKey: string,
+    beforeRevision: number,
+  ): Promise<boolean> {
+    const row = await this.db
+      .prepare(
+        "SELECT 1 AS found FROM attempts WHERE run_id=?1 AND stage='ci' AND state='completed' AND run_revision<?2 AND json_extract(result_json,'$.ci.diagnostics.evidenceKey')=?3 LIMIT 1",
+      )
+      .bind(runId, beforeRevision, evidenceKey)
+      .first<{ found: number }>();
+    return row !== null && row !== undefined;
+  }
+
   async attemptsForRevision(runId: string, revision: number) {
     const result = await this.db
       .prepare(

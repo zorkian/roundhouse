@@ -502,6 +502,56 @@ describe("GitHub intake", () => {
     );
   });
 
+  it("retrieves Actions log text under the installation token without exposing it", async () => {
+    const key = await crypto.subtle.generateKey(
+      {
+        name: "RSASSA-PKCS1-v1_5",
+        modulusLength: 2048,
+        publicExponent: new Uint8Array([1, 0, 1]),
+        hash: "SHA-256",
+      },
+      true,
+      ["sign", "verify"],
+    );
+    const bytes = new Uint8Array(
+      await crypto.subtle.exportKey("pkcs8", key.privateKey),
+    );
+    const pem = `-----BEGIN PRIVATE KEY-----\n${btoa(String.fromCharCode(...bytes))}\n-----END PRIVATE KEY-----`;
+    const githubEnv = { ...env, ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY: pem };
+
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ token: "short-lived" }))
+      .mockResolvedValueOnce(
+        new Response("File t/customtext-module.t needs tidying\n", {
+          status: 200,
+        }),
+      );
+    const client = new GitHubClient(githubEnv, 654, send);
+    await expect(
+      client.getText("/repos/zorkian/dreamwidth/actions/jobs/41/logs"),
+    ).resolves.toBe("File t/customtext-module.t needs tidying\n");
+    expect(send).toHaveBeenLastCalledWith(
+      "https://api.github.com/repos/zorkian/dreamwidth/actions/jobs/41/logs",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({
+          authorization: "Bearer short-lived",
+        }),
+      }),
+    );
+
+    const failing = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ token: "short-lived" }))
+      .mockResolvedValueOnce(new Response("not found", { status: 404 }));
+    await expect(
+      new GitHubClient(githubEnv, 654, failing).getText(
+        "/repos/zorkian/dreamwidth/actions/jobs/41/logs",
+      ),
+    ).rejects.toThrow("github_get_404");
+  });
+
   it("acknowledges a new run after persisting it and before queueing work", async () => {
     const repository = new IntakeRepository();
     const order: string[] = [];

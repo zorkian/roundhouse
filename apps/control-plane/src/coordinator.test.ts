@@ -1283,6 +1283,41 @@ describe("single coordinator", () => {
         result: { ci: { status: "failure", head } },
       }),
     ).toEqual({ status: "active", stage: "implement" });
+    expect(
+      ciTransition({
+        ...attempt,
+        result: {
+          ci: {
+            status: "failure",
+            head,
+            reason: "diagnostics_unavailable",
+            diagnosticsError: "github_get_404",
+          },
+        },
+      }),
+    ).toEqual({
+      status: "waiting",
+      stage: "ci",
+      waitingReason: "external_check",
+    });
+    expect(
+      ciTransition({
+        ...attempt,
+        result: {
+          ci: { status: "failure", head, reason: "evidence_consumed" },
+        },
+      }),
+    ).toEqual({
+      status: "waiting",
+      stage: "ci",
+      waitingReason: "external_check",
+    });
+    expect(
+      ciTransition({
+        ...attempt,
+        result: { ci: { status: "failure", head, reason: "base_conflict" } },
+      }),
+    ).toEqual({ status: "active", stage: "implement" });
     expect(ciTransition({ ...attempt, acceptedHead: "c".repeat(40) })).toEqual({
       status: "failed",
       stage: "ci",

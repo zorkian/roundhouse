@@ -389,6 +389,59 @@ function repositoryContract(label, createRepository) {
       });
     });
 
+    it("detects CI failure evidence consumed by an earlier revision only", async () => {
+      const repository = createRepository();
+      const run = createRun({ ...input, id: "run_ci_evidence" });
+      await repository.create(run);
+      const head = "b".repeat(40);
+      const evidenceKey = `${head}:11:31:1`;
+      const attempt = {
+        id: "run_ci_evidence_rev_1",
+        runId: run.id,
+        runRevision: 1,
+        kind: "external",
+        stage: "ci",
+        role: "github-checks",
+        state: "created",
+        deadlineAt: 200,
+        baseCommit: run.baseCommit,
+        expectedHead: head,
+      };
+      await repository.createAttempt(attempt);
+      await expect(
+        repository.consumedCiEvidence(run.id, evidenceKey, 2),
+      ).resolves.toBe(false);
+      await expect(
+        repository.completeAttempt(attempt.id, 1, head, {
+          ci: {
+            status: "failure",
+            head,
+            diagnostics: {
+              evidenceKey,
+              untrusted: true,
+              notice: "untrusted diagnostic data",
+              failures: [],
+            },
+          },
+        }),
+      ).resolves.toBe("completed");
+
+      await expect(
+        repository.consumedCiEvidence(run.id, evidenceKey, 2),
+      ).resolves.toBe(true);
+      // The same revision is not yet history, and other keys or runs do not
+      // match the recorded evidence.
+      await expect(
+        repository.consumedCiEvidence(run.id, evidenceKey, 1),
+      ).resolves.toBe(false);
+      await expect(
+        repository.consumedCiEvidence(run.id, `${head}:11:31:2`, 2),
+      ).resolves.toBe(false);
+      await expect(
+        repository.consumedCiEvidence("run_contract", evidenceKey, 2),
+      ).resolves.toBe(false);
+    });
+
     it("records an attempt failure without accepting later completion", async () => {
       const repository = createRepository();
       const run = createRun({ ...input, id: "run_failed_attempt" });
