@@ -50,4 +50,75 @@ describe("workflow graph view", () => {
     expect(html).toContain(workflow.hash);
     expect(html).toContain("Existing runs keep their original snapshot.");
   });
+
+  it("routes edges around nodes with arrowed paths instead of center-to-center lines", async () => {
+    const workflow = await compileWorkflow(
+      defaultIssueWorkflowSource,
+      "a".repeat(40),
+    );
+    const run = {
+      schemaVersion: 2,
+      id: "run_workflow",
+      repository: "zorkian/roundhouse",
+      githubDefaultBranch: "main",
+      issueNumber: 1,
+      baseCommit: "a".repeat(40),
+      currentHead: "b".repeat(40),
+      profileVersion: "c".repeat(64),
+      profile: {
+        sourcePath: ".roundhouse/profile.yaml",
+        sourceCommit: "a".repeat(40),
+        version: 2,
+        hash: "c".repeat(64),
+        workflow,
+        paths: { allowed: ["**"], protected: [] },
+      },
+      workflowHash: workflow.hash,
+      currentNodeId: "implement",
+      status: "active",
+      stage: "implement",
+      revision: 4,
+    } satisfies RunSnapshot;
+    const html = renderWorkflowView(run);
+    const svg = html.slice(html.indexOf("<svg"), html.indexOf("</svg>"));
+    // No straight center-to-center lines remain; every edge is a routed path
+    // with a direction marker.
+    expect(svg).not.toContain("<line");
+    const edgePaths =
+      svg.match(
+        /<path class="edge" d="[^"]+" marker-end="url\(#arrow\)"><title>[^<]+<\/title><\/path>/g,
+      ) ?? [];
+    const routed = Object.entries(workflow.nodes).flatMap(([from, node]) =>
+      node.transitions.filter((transition) => transition.to),
+    );
+    expect(edgePaths).toHaveLength(routed.length);
+    // The default workflow crosses columns and rows, so at least one edge
+    // must use a multi-segment routed path rather than a direct segment.
+    expect(
+      edgePaths.some((path) => (path.match(/ L /g) ?? []).length >= 3),
+    ).toBe(true);
+    // The integrate → integrate self-transition renders as a nonzero loop
+    // outside its node instead of a zero-length line.
+    const selfLoop = edgePaths.find((path) =>
+      path.includes("<title>integrate → integrate</title>"),
+    );
+    expect(selfLoop).toBeDefined();
+    const selfNumbers = (selfLoop!.match(/-?\d+/g) ?? []).map(Number);
+    expect(Math.max(...selfNumbers) - Math.min(...selfNumbers)).toBeGreaterThan(
+      0,
+    );
+    expect(selfLoop).toContain("L");
+    // The backward review → implement route terminates on node boundaries,
+    // not box centers.
+    const backward = edgePaths.find((path) =>
+      path.includes("<title>review → implement</title>"),
+    );
+    expect(backward).toBeDefined();
+    expect(backward).not.toMatch(/M 490 175 L 150 175/);
+    // Every edge carries a visible direction marker.
+    expect(
+      edgePaths.every((path) => path.includes('marker-end="url(#arrow)"')),
+    ).toBe(true);
+    expect(html).toContain('aria-label="Workflow graph"');
+  });
 });
