@@ -298,6 +298,7 @@ describe("conversation UI", () => {
           revision: 1,
           state: "draft",
           title: "Build <carefully>",
+          body: "Preamble\n\n## Outcome\n\nAdd the agreed flow.",
           outcome: "Add the agreed flow.",
           acceptanceCriteria: ["The user confirms"],
           constraints: ["No shell"],
@@ -315,6 +316,12 @@ describe("conversation UI", () => {
     expect(html).toContain("Start delivery");
     expect(html).toContain("Build &lt;carefully&gt;");
     expect(html).toContain("Continue the conversation");
+    expect(html).toContain('name="body"');
+    expect(html).toContain("Preamble");
+    expect(html).not.toContain('name="acceptance_criteria"');
+    expect(html).toContain(
+      'formaction="/conversations/b1f486ff-7744-49f9-ab78-f74e8409fc2b/brief"',
+    );
   });
 
   it("closes the conversation only after webhook-confirmed intake", () => {

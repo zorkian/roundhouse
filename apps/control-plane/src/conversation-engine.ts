@@ -670,6 +670,7 @@ function conversationInstructions(conversation: Conversation): string {
 const prices: Record<string, readonly [number, number, number, number?]> = {
   "anthropic/claude-opus-4.8": [15, 1.5, 75, 18.75],
   "anthropic/claude-fable-5": [3, 0.3, 15, 3.75],
+  "anthropic/claude-sonnet-5": [2, 0.2, 10, 2.5],
   "moonshotai/kimi-k3": [0.6, 0.15, 2.5],
   "openai/gpt-5": [1.25, 0.125, 10],
   "openai/gpt-5.2": [1.75, 0.175, 14],
@@ -847,7 +848,13 @@ export interface ConversationExecutionResult {
   readonly firstReply?: ConversationFirstReply;
   readonly brief?: Omit<
     DeliveryBrief,
-    "id" | "revision" | "state" | "sourceCommit" | "createdAt" | "updatedAt"
+    | "id"
+    | "revision"
+    | "state"
+    | "body"
+    | "sourceCommit"
+    | "createdAt"
+    | "updatedAt"
   >;
   readonly usage: readonly ConversationCallUsage[];
 }
@@ -1102,33 +1109,13 @@ export function parsePromotionMarker(
 }
 
 export function renderDeliveryBrief(
-  brief: Pick<
-    DeliveryBrief,
-    | "id"
-    | "title"
-    | "outcome"
-    | "acceptanceCriteria"
-    | "constraints"
-    | "evidence"
-    | "uncertainties"
-  >,
+  brief: Pick<DeliveryBrief, "id" | "body">,
   conversationId: string,
   conversationUrl?: string,
 ): string {
-  const section = (heading: string, items: readonly string[]) =>
-    items.length
-      ? [`## ${heading}`, "", ...items.map((item) => `- ${item}`), ""]
-      : [];
   return [
     promotionIssueMarker(conversationId, brief.id),
-    "## Outcome",
-    "",
-    brief.outcome,
-    "",
-    ...section("Acceptance criteria", brief.acceptanceCriteria),
-    ...section("Constraints", brief.constraints),
-    ...section("Evidence and decisions", brief.evidence),
-    ...section("Remaining uncertainties", brief.uncertainties),
+    brief.body,
     conversationUrl
       ? `_Promoted from a [private Roundhouse conversation](${conversationUrl})._`
       : "_Promoted from a private Roundhouse conversation._",

@@ -44,6 +44,7 @@ describe("model usage", () => {
     ["anthropic/claude-opus-4.8", 0.0075],
     ["anthropic/claude-fable-5", 0.015],
     ["anthropic/claude-opus-5", 0.0075],
+    ["anthropic/claude-sonnet-5", 0.003],
     ["moonshotai/kimi-k3", 0.0045],
   ])("calculates fallback cost for %s", (model, expected) => {
     const usage = extractModelUsage(
@@ -86,6 +87,35 @@ describe("model usage", () => {
       cachedInputTokens: 100,
       cacheCreationInputTokens: 20,
       costUsd: 0.00035,
+    });
+  });
+
+  it("prices Claude Sonnet 5 including cache creation tokens", () => {
+    const usage = extractModelUsage(
+      JSON.stringify({
+        id: "msg_sonnet",
+        model: "claude-sonnet-5",
+        usage: {
+          input_tokens: 10,
+          input_tokens_details: {
+            cached_tokens: 100,
+            cache_creation_tokens: 20,
+          },
+          output_tokens: 5,
+          total_tokens: 135,
+        },
+      }),
+      "attempt_sonnet",
+      "anthropic/claude-sonnet-5",
+      { provider: "anthropic" },
+    );
+    expect(usage).toMatchObject({
+      model: "claude-sonnet-5",
+      configuredModel: "anthropic/claude-sonnet-5",
+      cachedInputTokens: 100,
+      cacheCreationInputTokens: 20,
+      // (10*2 + 100*0.2 + 20*2.5 + 5*10) / 1e6
+      costUsd: 0.00014,
     });
   });
 
