@@ -1,6 +1,7 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
+import { Marked } from "marked";
 import type {
   Conversation,
   ConversationRepositoryRef,
@@ -16,16 +17,69 @@ const escapeHtml = (value: unknown) =>
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
 
-const styles = `<style>:root{color-scheme:light;--ink:#18212f;--muted:#647084;--line:#dde3ea;--paper:#fff;--wash:#f4f7fa;--brand:#175cd3;--warn:#8a5b00}*{box-sizing:border-box}body{margin:0;background:var(--wash);color:var(--ink);font:15px/1.5 ui-sans-serif,system-ui,-apple-system,sans-serif}a{color:inherit}header{background:#18212f;color:#fff;padding:2rem max(1.25rem,calc((100% - 900px)/2))}header p{color:#bdc7d5;margin:.35rem 0 0}main{max-width:900px;margin:0 auto;padding:1.5rem 1.25rem 4rem}.card,.message{background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:1rem 1.2rem;margin-bottom:1rem}h1{margin:0;font-size:1.8rem}h2{font-size:1.1rem;margin:.2rem 0 .8rem}h3{font-size:1rem;margin:1rem 0 .3rem}.muted,.meta{color:var(--muted)}label{display:block;font-weight:650;margin:.8rem 0 .3rem}textarea,input,select{width:100%;font:inherit;border:1px solid #b8c2cf;border-radius:8px;padding:.65rem;background:white}textarea{min-height:110px}button,.button{display:inline-block;border:0;border-radius:8px;background:#18212f;color:white;padding:.65rem 1rem;font:inherit;font-weight:650;text-decoration:none;cursor:pointer;margin-top:.8rem}button.promote,.button.promote{background:var(--brand)}button[disabled]{opacity:.55;cursor:not-allowed}.message{white-space:pre-wrap}.message.user{margin-left:12%}.message.assistant{margin-right:12%;border-left:4px solid #7589a3}.message .meta{font-size:.78rem;margin-bottom:.45rem;white-space:normal}.conversation{display:flex;justify-content:space-between;gap:1rem;border-bottom:1px solid var(--line);padding:.8rem 0}.conversation:last-child{border:0}.conversation-meta{display:flex;align-items:center;gap:.45rem;flex-wrap:wrap;margin-top:.2rem;font-size:.78rem;color:var(--muted)}.status{border-radius:999px;padding:.22rem .55rem;font-weight:700;color:#344054;background:#eef1f5}.status.active{background:#e6f0ff;color:#175cd3}.status.waiting{background:#fff4d6;color:#8a5b00}.status.failed{background:#fee9e7;color:#b42318}.status.succeeded{background:#e8f7ee;color:#087443}.actions{display:flex;gap:.65rem;flex-wrap:wrap}.notice{background:#fff4d6;border:1px solid #f3d27c;border-radius:8px;padding:.8rem;margin-bottom:1rem}.readonly{display:inline-block;border:1px solid #a9b5c4;border-radius:999px;padding:.2rem .55rem;font-size:.78rem;font-weight:650}.brief-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 1rem}.brief-grid .wide{grid-column:1/-1}.waiting{color:var(--warn)}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}@media(max-width:650px){header{display:block}.message.user,.message.assistant{margin-left:0;margin-right:0}.brief-grid{display:block}}</style>`;
+const markdownLinkProtocols = new Set(["http:", "https:", "mailto:"]);
 
-function page(title: string, user: string, body: string, script = ""): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(title)} · Roundhouse</title>${styles}</head><body><header><h1>Roundhouse</h1><p>Signed in as ${escapeHtml(user)} · <a href="/">Runs</a> · <a href="/usage">Model usage</a> · <a href="/auth/sign-out">Sign out</a></p></header><main>${body}</main>${script}</body></html>`;
+function safeMarkdownLink(value: string): string | undefined {
+  try {
+    const url = new URL(value);
+    return markdownLinkProtocols.has(url.protocol) ? url.toString() : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
-function conversationStatus(conversation: ConversationSummary): {
+const conversationMarkdown = new Marked({
+  gfm: true,
+  breaks: true,
+  renderer: {
+    html({ text }) {
+      return escapeHtml(text);
+    },
+    link({ href, tokens }) {
+      const text = this.parser.parseInline(tokens);
+      const destination = safeMarkdownLink(href);
+      return destination
+        ? `<a href="${escapeHtml(destination)}" target="_blank" rel="noopener noreferrer">${text}</a>`
+        : text;
+    },
+    image({ text }) {
+      return escapeHtml(text);
+    },
+  },
+});
+
+function renderMarkdown(value: string): string {
+  return conversationMarkdown.parse(value, { async: false });
+}
+
+const styles = `<style>:root{color-scheme:light;--ink:#18212f;--muted:#647084;--line:#dde3ea;--paper:#fff;--wash:#f4f7fa;--brand:#175cd3;--warn:#8a5b00}*{box-sizing:border-box}body{margin:0;background:var(--wash);color:var(--ink);font:15px/1.5 ui-sans-serif,system-ui,-apple-system,sans-serif}a{color:inherit}header{background:#18212f;color:#fff;padding:2rem max(1.25rem,calc((100% - 900px)/2))}header p{color:#bdc7d5;margin:.35rem 0 0}main{max-width:900px;margin:0 auto;padding:1.5rem 1.25rem 4rem}.card,.message{background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:1rem 1.2rem;margin-bottom:1rem}h1{margin:0;font-size:1.8rem}h2{font-size:1.1rem;margin:.2rem 0 .8rem}h3{font-size:1rem;margin:1rem 0 .3rem}.muted,.meta{color:var(--muted)}label{display:block;font-weight:650;margin:.8rem 0 .3rem}textarea,input,select{width:100%;font:inherit;border:1px solid #b8c2cf;border-radius:8px;padding:.65rem;background:white}textarea{min-height:110px}button,.button{display:inline-block;border:0;border-radius:8px;background:#18212f;color:white;padding:.65rem 1rem;font:inherit;font-weight:650;text-decoration:none;cursor:pointer;margin-top:.8rem}button.promote,.button.promote{background:var(--brand)}button[disabled]{opacity:.55;cursor:not-allowed}.message-body{overflow-wrap:anywhere}.message-body>*:first-child{margin-top:0}.message-body>*:last-child{margin-bottom:0}.message-body p{margin:.65rem 0}.message-body h1,.message-body h2,.message-body h3,.message-body h4,.message-body h5,.message-body h6{line-height:1.25}.message-body h1{font-size:1.45rem;margin:1rem 0 .5rem}.message-body h2{font-size:1.25rem;margin:1rem 0 .5rem}.message-body h3,.message-body h4,.message-body h5,.message-body h6{font-size:1rem;margin:1rem 0 .4rem}.message-body ul,.message-body ol{margin:.65rem 0;padding-left:1.4rem}.message-body a{color:var(--brand);overflow-wrap:anywhere}.message-body code{background:#edf1f5;border-radius:4px;padding:.1rem .25rem;font:85%/1.4 ui-monospace,SFMono-Regular,Menlo,monospace}.message-body pre{max-width:100%;overflow-x:auto;overflow-wrap:normal;background:#18212f;color:#f4f7fa;border-radius:8px;padding:.8rem;white-space:pre}.message-body pre code{background:transparent;color:inherit;padding:0;white-space:pre}.message-body blockquote{border-left:3px solid #b8c2cf;margin:.65rem 0;padding-left:.8rem;color:var(--muted)}.message.user{margin-left:12%}.message.assistant{margin-right:12%;border-left:4px solid #7589a3}.message .meta{font-size:.78rem;margin-bottom:.45rem;white-space:normal}.conversation{display:flex;justify-content:space-between;gap:1rem;border-bottom:1px solid var(--line);padding:.8rem 0}.conversation:last-child{border:0}.conversation-meta{display:flex;align-items:center;gap:.45rem;flex-wrap:wrap;margin-top:.2rem;font-size:.78rem;color:var(--muted)}.status{border-radius:999px;padding:.22rem .55rem;font-weight:700;color:#344054;background:#eef1f5}.status.active{background:#e6f0ff;color:#175cd3}.status.waiting{background:#fff4d6;color:#8a5b00}.status.failed{background:#fee9e7;color:#b42318}.status.succeeded{background:#e8f7ee;color:#087443}.actions{display:flex;gap:.65rem;flex-wrap:wrap}.notice{background:#fff4d6;border:1px solid #f3d27c;border-radius:8px;padding:.8rem;margin-bottom:1rem}.readonly{display:inline-block;border:1px solid #a9b5c4;border-radius:999px;padding:.2rem .55rem;font-size:.78rem;font-weight:650}.brief-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 1rem}.brief-grid .wide{grid-column:1/-1}.waiting{color:var(--warn)}@media(max-width:650px){header{display:block}.message.user,.message.assistant{margin-left:0;margin-right:0}.brief-grid{display:block}}</style>`;
+function page(
+  title: string,
+  user: string,
+  body: string,
+  scriptOrRefresh: string | boolean = "",
+): string {
+  const refresh = scriptOrRefresh === true;
+  const script = typeof scriptOrRefresh === "string" ? scriptOrRefresh : "";
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">${refresh ? '<meta http-equiv="refresh" content="2">' : ""}<title>${escapeHtml(title)} · Roundhouse</title>${styles}</head><body><header><h1>Roundhouse</h1><p>Signed in as ${escapeHtml(user)} · <a href="/">Runs</a> · <a href="/usage">Model usage</a> · <a href="/auth/sign-out">Sign out</a></p></header><main>${body}</main>${script}</body></html>`;
+}
+
+export interface ActionableConversationStatus {
   readonly label: string;
   readonly tone: "open" | "active" | "waiting" | "succeeded" | "failed";
-} {
+}
+
+type ConversationStatusInput = Pick<ConversationSummary, "status"> & {
+  readonly promotionState?: ConversationSummary["promotionState"];
+  readonly promotionRunStatus?: ConversationSummary["promotionRunStatus"];
+  readonly currentBriefState?: ConversationSummary["currentBriefState"];
+  readonly activeTurnState?: ConversationSummary["latestTurnState"];
+  readonly latestTurnState?: ConversationSummary["latestTurnState"];
+};
+
+export function actionableConversationStatus(
+  conversation: ConversationStatusInput,
+): ActionableConversationStatus {
   switch (conversation.promotionState) {
     case "requested":
       return { label: "Preparing delivery", tone: "active" };
@@ -34,20 +88,77 @@ function conversationStatus(conversation: ConversationSummary): {
     case "awaiting_intake":
       return { label: "Waiting to start delivery", tone: "waiting" };
     case "accepted":
-      return { label: "Delivery started", tone: "succeeded" };
+      return conversation.promotionRunStatus === "succeeded"
+        ? { label: "Delivery complete", tone: "succeeded" }
+        : { label: "Delivery started", tone: "succeeded" };
     case "rejected":
       return { label: "Delivery not accepted", tone: "failed" };
     case undefined:
       break;
   }
-  switch (conversation.status) {
-    case "open":
-      return { label: "Open", tone: "open" };
-    case "handoff_pending":
-      return { label: "Preparing delivery", tone: "active" };
-    case "promoted":
-      return { label: "Delivery started", tone: "succeeded" };
-  }
+  if (conversation.status === "handoff_pending")
+    return { label: "Preparing delivery", tone: "active" };
+  if (conversation.status === "promoted")
+    return { label: "Delivery started", tone: "succeeded" };
+  if (conversation.currentBriefState === "draft")
+    return { label: "Delivery brief ready for review", tone: "waiting" };
+  if (conversation.activeTurnState)
+    return { label: "Roundhouse is working", tone: "active" };
+  if (conversation.latestTurnState === "failed")
+    return { label: "Needs attention", tone: "failed" };
+  return { label: "Waiting for your response", tone: "waiting" };
+}
+
+function isConversation(
+  conversation: Conversation | ConversationSummary,
+): conversation is Conversation {
+  return typeof conversation.repository !== "string";
+}
+
+function conversationStatus(
+  conversation: Conversation | ConversationSummary,
+): ActionableConversationStatus {
+  if (isConversation(conversation))
+    return actionableConversationStatus({
+      status: conversation.status,
+      promotionState: conversation.promotion?.state,
+      promotionRunStatus: conversation.promotion?.runStatus,
+      currentBriefState: conversation.currentBrief?.state,
+      activeTurnState: conversation.activeTurn?.state,
+      latestTurnState: conversation.latestTurn?.state,
+    });
+  return actionableConversationStatus({
+    status: conversation.status,
+    promotionState: conversation.promotionState,
+    promotionRunStatus: conversation.promotionRunStatus,
+    currentBriefState: conversation.currentBriefState,
+    activeTurnState: conversation.activeTurn?.state,
+    latestTurnState: conversation.latestTurnState,
+  });
+}
+
+function conversationNeedsRefresh(
+  conversation: Conversation | ConversationSummary,
+): boolean {
+  const promotion = isConversation(conversation)
+    ? conversation.promotion
+    : undefined;
+  const runStatus = isConversation(conversation)
+    ? promotion?.runStatus
+    : conversation.promotionRunStatus;
+  const promotionState = isConversation(conversation)
+    ? promotion?.state
+    : conversation.promotionState;
+  const activeTurn = conversation.activeTurn;
+  return Boolean(
+    activeTurn ||
+    (promotionState &&
+      ["requested", "issue_created", "awaiting_intake"].includes(
+        promotionState,
+      )) ||
+    (promotionState === "accepted" &&
+      (runStatus === "active" || runStatus === "waiting")),
+  );
 }
 
 function updatedAgo(updatedAt: number): string {
@@ -69,7 +180,7 @@ export function renderConversationIndex(
   conversations: readonly ConversationSummary[],
   user: string,
   error?: string,
-  messageId: string = crypto.randomUUID(),
+  messageId = crypto.randomUUID(),
 ): string {
   const options = repositories
     .map(
@@ -91,6 +202,7 @@ export function renderConversationIndex(
     "Conversations",
     user,
     `<h1>Start with a conversation</h1><p class="muted">Ask a question, explore an idea, or clarify a change before deciding whether to build it.</p>${error ? `<div class="notice">${escapeHtml(error)}</div>` : ""}<section class="card"><h2>New conversation</h2>${repositories.length ? `<form method="post" action="/conversations"><input type="hidden" name="message_id" value="${escapeHtml(messageId)}"><label for="repository">Public repository</label><select id="repository" name="repository" required>${options}</select><label for="message">What would you like to discuss?</label><textarea id="message" name="message" maxlength="12000" required></textarea><button type="submit">Start conversation</button></form>` : '<p class="muted">You do not currently have access to an enrolled public repository.</p>'}</section><section class="card"><h2>Recent conversations</h2>${recent}</section>`,
+    conversations.some(conversationNeedsRefresh),
   );
 }
 
@@ -106,9 +218,9 @@ function openControls(conversation: Conversation, messageId: string): string {
   if (conversation.activeTurn)
     return '<section class="card"><h2 class="waiting">Roundhouse is working…</h2><p class="muted">This turn is durable. You can leave this page and return later.</p></section>';
   const reply = `<section class="card"><form method="post" action="/conversations/${encodeURIComponent(conversation.id)}/messages"><input type="hidden" name="message_id" value="${escapeHtml(messageId)}"><label for="message">Continue the conversation</label><textarea id="message" name="message" maxlength="12000" required></textarea><button type="submit">Send</button></form></section>`;
-  return conversation.currentBrief?.state === "draft"
-    ? `${briefEditor(conversation, conversation.currentBrief)}${reply}`
-    : `${reply}<section class="card"><form method="post" action="/conversations/${encodeURIComponent(conversation.id)}/brief"><button class="promote" type="submit">Prepare delivery brief</button></form><p class="muted">You will be able to edit the exact issue brief or continue the conversation before starting delivery.</p></section>`;
+  if (conversation.currentBrief?.state === "draft")
+    return `${briefEditor(conversation, conversation.currentBrief)}${reply}`;
+  return `${reply}<section class="card"><form method="post" action="/conversations/${encodeURIComponent(conversation.id)}/brief"><button class="promote" type="submit">Prepare delivery brief</button></form><p class="muted">You will be able to edit the exact issue brief or continue the conversation before starting delivery.</p></section>`;
 }
 
 function promotionControls(conversation: Conversation): string {
@@ -119,16 +231,16 @@ function promotionControls(conversation: Conversation): string {
     : "";
   const run = conversation.links.find((link) => link.kind === "roundhouse.run");
   if (promotion.state === "accepted" || conversation.status === "promoted")
-    return `<section class="card"><h2>Delivery started</h2>${issue}${run ? `<p><a class="button" href="${escapeHtml(run.url)}">Open Roundhouse run</a></p>` : ""}</section>`;
+    return `<section class="card">${issue}${run ? `<p><a class="button" href="${escapeHtml(run.url)}">Open Roundhouse run</a></p>` : ""}</section>`;
   if (promotion.state === "rejected")
-    return `<section class="card"><h2>Delivery was not accepted</h2>${issue}<p class="notice">${escapeHtml(promotion.errorCode ?? "GitHub intake rejected this promotion")}. This conversation has not been marked delivered.</p></section>`;
+    return `<section class="card">${issue}<p class="notice">${escapeHtml(promotion.errorCode ?? "GitHub intake rejected this promotion")}. This conversation has not been marked delivered.</p></section>`;
   if (promotion.state === "awaiting_intake")
-    return `<section class="card"><h2 class="waiting">Waiting for Roundhouse intake</h2>${issue}<p class="muted">The issue and start comment exist. This conversation will close only after the normal GitHub webhook authorizes the actor and records the run.</p></section>`;
-  return `<section class="card"><h2 class="waiting">Creating the delivery request…</h2>${issue}<p class="muted">This operation is durable and reconciles existing GitHub writes before retrying.</p></section>`;
+    return `<section class="card">${issue}<p class="muted">The issue and start comment exist. This conversation will close only after the normal GitHub webhook authorizes the actor and records the run.</p></section>`;
+  return `<section class="card">${issue}<p class="muted">This operation is durable and reconciles existing GitHub writes before retrying.</p></section>`;
 }
 
 function messageHtml(message: Conversation["messages"][number]): string {
-  return `<article class="message ${message.role}" data-message-id="${escapeHtml(message.id)}"><div class="meta">${message.role === "user" ? escapeHtml(message.actorLogin) : "Roundhouse"}</div>${escapeHtml(message.body)}</article>`;
+  return `<article class="message ${message.role}" data-message-id="${escapeHtml(message.id)}"><div class="meta">${message.role === "user" ? escapeHtml(message.actorLogin) : "Roundhouse"}</div><div class="message-body">${renderMarkdown(message.body)}</div></article>`;
 }
 
 function statusKey(conversation: Conversation): string {
@@ -173,9 +285,12 @@ export function conversationPollingActive(conversation: Conversation): boolean {
 }
 
 function statusHtml(conversation: Conversation): string {
-  return conversation.latestTurn?.state === "failed"
-    ? `<div class="notice">Roundhouse could not complete the last ${conversation.latestTurn.kind === "brief" ? "delivery brief" : "reply"}. You can try again or continue the conversation.</div>`
-    : "";
+  const status = conversationStatus(conversation);
+  const failure =
+    conversation.latestTurn?.state === "failed"
+      ? `<div class="notice">Roundhouse could not complete the last ${conversation.latestTurn.kind === "brief" ? "delivery brief" : "reply"}. You can try again or continue the conversation.</div>`
+      : "";
+  return `<p><span class="status ${status.tone}">${escapeHtml(status.label)}</span></p>${failure}`;
 }
 
 function controlsHtml(conversation: Conversation, messageId: string): string {
@@ -213,7 +328,12 @@ export function renderConversationPollState(
       html: messageHtml(message),
     })),
     status: {
-      version: version([key, conversation.latestTurn?.updatedAt]),
+      version: version([
+        key,
+        conversation.status,
+        conversation.latestTurn?.updatedAt,
+        conversation.promotion?.updatedAt,
+      ]),
       html: statusHtml(conversation),
       key,
       announcement: statusAnnouncement(key),
@@ -226,6 +346,7 @@ export function renderConversationPollState(
         conversation.activeTurn?.updatedAt,
         conversation.currentBrief?.id,
         conversation.currentBrief?.revision,
+        conversation.currentBrief?.state,
         conversation.promotion?.id,
         conversation.promotion?.state,
         conversation.promotion?.updatedAt,
@@ -243,14 +364,24 @@ export function renderConversation(
   notice?: string,
   messageId: string = crypto.randomUUID(),
 ): string {
+  const startedAt = Date.now();
   const state = renderConversationPollState(conversation, messageId);
   const script = state.polling
     ? `<script defer src="/assets/conversation-poll.js" data-state-url="/conversations/${encodeURIComponent(conversation.id)}/state"></script>`
     : "";
-  return page(
+  const rendered = page(
     "Conversation",
     user,
     `<div class="meta"><a href="/conversations">Conversations</a> · ${escapeHtml(conversation.repository.name)} · ${escapeHtml(conversation.context.model.id)} / ${escapeHtml(conversation.context.model.reasoning)}</div><h1>Conversation</h1><p class="muted"><span class="readonly">Read only</span> Repository context is pinned to <code>${escapeHtml(conversation.sourceCommit.slice(0, 12))}</code>. The assistant can read this public snapshot and research the public web, but cannot modify anything.</p>${notice ? `<div class="notice">${escapeHtml(notice)}</div>` : ""}<div id="conversation-status" data-version="${escapeHtml(state.status.version)}" data-status-key="${escapeHtml(state.status.key)}">${state.status.html}</div><section id="conversation-messages">${state.messages.map((message) => message.html).join("")}</section><section id="conversation-controls" data-version="${escapeHtml(state.controls.version)}">${state.controls.html}</section><div id="conversation-live-status" class="sr-only" role="status" aria-live="polite"></div>`,
     script,
   );
+  console.log(
+    JSON.stringify({
+      message: "conversation_markdown_rendered",
+      conversationId: conversation.id,
+      messageCount: conversation.messages.length,
+      durationMs: Date.now() - startedAt,
+    }),
+  );
+  return rendered;
 }

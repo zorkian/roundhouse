@@ -122,7 +122,7 @@ describe("repository profile parsing", () => {
           plan: {
             agent: {
               task: "planning",
-              model: { id: "openai/gpt-5.6-sol", reasoning: "max" },
+              model: { id: "openai/gpt-5.6-sol", reasoning: "high" },
               prompt: { sourcePath: ".roundhouse/prompts/planning.md" },
             },
           },

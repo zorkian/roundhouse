@@ -3,6 +3,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import {
+  actionableConversationStatus,
   renderConversation,
   renderConversationIndex,
   renderConversationPollState,
@@ -94,7 +95,9 @@ describe("conversation UI", () => {
       );
       expect(html).toContain("<strong>New conversation</strong>");
       expect(html).toContain("octo/&lt;project&gt;");
-      expect(html).toContain('<span class="status open">Open</span>');
+      expect(html).toContain(
+        '<span class="status waiting">Waiting for your response</span>',
+      );
       expect(html).toContain(
         '<span class="status waiting">Waiting to start delivery</span>',
       );
@@ -118,13 +121,172 @@ describe("conversation UI", () => {
     }
   });
 
+  it("selects actionable states in precedence order", () => {
+    const cases = [
+      [
+        "completed delivery overrides every conversation state",
+        {
+          status: "open" as const,
+          promotionState: "accepted" as const,
+          promotionRunStatus: "succeeded" as const,
+          currentBriefState: "draft" as const,
+          activeTurnState: "running" as const,
+          latestTurnState: "failed" as const,
+        },
+        "Delivery complete",
+      ],
+      [
+        "active delivery is started",
+        {
+          status: "promoted" as const,
+          promotionState: "accepted" as const,
+          promotionRunStatus: "waiting" as const,
+        },
+        "Delivery started",
+      ],
+      [
+        "brief review overrides active work",
+        {
+          status: "open" as const,
+          currentBriefState: "draft" as const,
+          activeTurnState: "running" as const,
+        },
+        "Delivery brief ready for review",
+      ],
+      [
+        "active work overrides failed-turn attention",
+        {
+          status: "open" as const,
+          activeTurnState: "pending" as const,
+          latestTurnState: "failed" as const,
+        },
+        "Roundhouse is working",
+      ],
+      [
+        "failed turns need attention before user response",
+        { status: "open" as const, latestTurnState: "failed" as const },
+        "Needs attention",
+      ],
+      [
+        "waiting user response is the fallback",
+        { status: "open" as const },
+        "Waiting for your response",
+      ],
+    ] as const;
+    for (const [, input, label] of cases)
+      expect(actionableConversationStatus(input).label).toBe(label);
+  });
+
   it("renders a private, read-only thread without trusting message HTML", () => {
     const html = renderConversation(base, "octocat");
     expect(html).toContain("Prepare delivery brief");
+    expect(html).toContain("Waiting for your response");
     expect(html).toContain("cannot modify anything");
     expect(html).toContain("Continue the conversation");
     expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
     expect(html).not.toContain("<script>alert(1)</script>");
+  });
+
+  it("renders Markdown for user and assistant messages", () => {
+    const userMessage = base.messages[0]!;
+    const logs: unknown[] = [];
+    const originalLog = console.log;
+    let html = "";
+    console.log = (line: string) => logs.push(JSON.parse(line));
+    try {
+      html = renderConversation(
+        {
+          ...base,
+          messages: [
+            {
+              ...userMessage,
+              body: "# User heading\n\nA **bold** and *emphasized* line.\nA second line.\n\n- one\n- two\n\n[Roundhouse](https://example.test/docs)\n\n```ts\nconst answer = 42;\n```",
+            },
+            {
+              ...userMessage,
+              id: "assistant-message",
+              direction: "outbound",
+              role: "assistant",
+              actorId: "roundhouse",
+              actorLogin: "Roundhouse",
+              body: "## Assistant heading\n\n1. first\n2. second\n\n[Email](mailto:hello@example.test)",
+            },
+          ],
+        },
+        "octocat",
+      );
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(html).toContain('<article class="message user" data-message-id=');
+    expect(html).toContain(
+      '<article class="message assistant" data-message-id=',
+    );
+    expect(html).toContain('<div class="message-body"><h1>User heading</h1>');
+    expect(html).toContain("<h2>Assistant heading</h2>");
+    expect(html).toContain("<strong>bold</strong>");
+    expect(html).toContain("<em>emphasized</em>");
+    expect(html).toContain("line.<br>A second line.");
+    expect(html).toContain("<ul>\n<li>one</li>");
+    expect(html).toContain("<ol>\n<li>first</li>");
+    expect(html).toContain(
+      '<a href="https://example.test/docs" target="_blank" rel="noopener noreferrer">Roundhouse</a>',
+    );
+    expect(html).toContain(
+      '<a href="mailto:hello@example.test" target="_blank" rel="noopener noreferrer">Email</a>',
+    );
+    expect(html).toContain(
+      '<pre><code class="language-ts">const answer = 42;\n</code></pre>',
+    );
+    expect(html).not.toContain("**bold**");
+    expect(logs).toEqual([
+      {
+        message: "conversation_markdown_rendered",
+        conversationId: base.id,
+        messageCount: 2,
+        durationMs: expect.any(Number),
+      },
+    ]);
+  });
+
+  it("keeps raw HTML, unsafe links, and images inert", () => {
+    const userMessage = base.messages[0]!;
+    const html = renderConversation(
+      {
+        ...base,
+        messages: [
+          {
+            ...userMessage,
+            body: '<script>alert(1)</script>\n<div onclick="alert(2)">unsafe</div>',
+          },
+          {
+            ...userMessage,
+            id: "unsafe-assistant-message",
+            direction: "outbound",
+            role: "assistant",
+            actorId: "roundhouse",
+            actorLogin: "Roundhouse",
+            body: "[bad script](javascript:alert(3))\n[bad data](data:text/html;base64,PHNjcmlwdD4=)\n![diagram alt](https://example.test/diagram.png)",
+          },
+        ],
+      },
+      "octocat",
+    );
+
+    expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(html).toContain(
+      "&lt;div onclick=&quot;alert(2)&quot;&gt;unsafe&lt;/div&gt;",
+    );
+    expect(html).not.toContain("<script>alert(1)</script>");
+    expect(html).not.toContain('<div onclick="alert(2)">');
+    expect(html).not.toContain('href="javascript:');
+    expect(html).not.toContain('href="data:');
+    expect(html).toContain("bad script");
+    expect(html).toContain("bad data");
+    expect(html).toContain("diagram alt");
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain("diagram.png");
   });
 
   it("renders an editable draft while still allowing more conversation", () => {
@@ -148,6 +310,7 @@ describe("conversation UI", () => {
       },
       "octocat",
     );
+    expect(html).toContain("Delivery brief ready for review");
     expect(html).toContain("Review and edit delivery brief");
     expect(html).toContain("Start delivery");
     expect(html).toContain("Build &lt;carefully&gt;");
@@ -173,7 +336,7 @@ describe("conversation UI", () => {
       },
       "octocat",
     );
-    expect(pending).toContain("Waiting for Roundhouse intake");
+    expect(pending).toContain("Waiting to start delivery");
     expect(pending).not.toContain("Delivery started");
 
     const promoted = renderConversation(
@@ -210,14 +373,14 @@ describe("conversation UI", () => {
   });
 
   it("uses same-origin partial polling for active conversations without a hard refresh", () => {
-    const active = {
+    const active: Conversation = {
       ...base,
       activeTurn: {
         id: "active-turn",
         conversationId: base.id,
-        kind: "message" as const,
+        kind: "message",
         ordinal: 1,
-        state: "running" as const,
+        state: "running",
         sourceCommit: base.sourceCommit,
         configuredModel: "openai/gpt-5.6-sol",
         configuredReasoning: "high",
@@ -242,14 +405,14 @@ describe("conversation UI", () => {
   });
 
   it("does not start polling once a turn is terminal", () => {
-    const terminal = {
+    const terminal: Conversation = {
       ...base,
       latestTurn: {
         id: "complete-turn",
         conversationId: base.id,
-        kind: "message" as const,
+        kind: "message",
         ordinal: 1,
-        state: "succeeded" as const,
+        state: "succeeded",
         sourceCommit: base.sourceCommit,
         configuredModel: "openai/gpt-5.6-sol",
         configuredReasoning: "high",
@@ -271,9 +434,9 @@ describe("conversation UI", () => {
       latestTurn: {
         id: "complete-turn",
         conversationId: base.id,
-        kind: "brief" as const,
+        kind: "brief",
         ordinal: 1,
-        state: "succeeded" as const,
+        state: "succeeded",
         sourceCommit: base.sourceCommit,
         configuredModel: "openai/gpt-5.6-sol",
         configuredReasoning: "high",
@@ -282,11 +445,11 @@ describe("conversation UI", () => {
         updatedAt: 3,
         completedAt: 3,
       },
-      status: "handoff_pending" as const,
+      status: "handoff_pending",
       promotion: {
         id: "promotion",
         briefId: "brief",
-        state: "awaiting_intake" as const,
+        state: "awaiting_intake",
         actorGithubUserId: 7,
         actorGithubLogin: "octocat",
         issueNumber: 42,
@@ -322,6 +485,7 @@ describe("conversation UI", () => {
       },
       "octocat",
     );
+    expect(html).toContain("Needs attention");
     expect(html).toContain("could not complete the last reply");
     expect(html).toContain("Continue the conversation");
     expect(html).not.toContain("sensitive_upstream_detail");
