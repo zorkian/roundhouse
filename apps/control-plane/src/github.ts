@@ -739,26 +739,22 @@ export async function acceptGitHubComment(
         content?: string;
         encoding?: string;
         name?: string;
-        sha?: string;
-        default_branch?: string;
+        type?: string;
       }>(
         `/repos/${enrolledRepository.repository}/contents/${profileSourcePath}?ref=${encodeURIComponent(commit.sha)}`,
       );
-      // Older API fakes return the commit response for every GET. Keep those
-      // fixtures compatible; a real contents response always has a name.
-      const yaml =
-        !file.name &&
-        (file.sha === commit.sha || file.default_branch === repo.default_branch)
-          ? 'version: 1\npaths:\n  allowed:\n    - "**"\n  protected:\n    - ".github/workflows/**"\n'
-          : file.encoding === "base64" && file.content
-            ? new TextDecoder().decode(
-                Uint8Array.from(
-                  atob(file.content.replaceAll("\n", "")),
-                  (value) => value.charCodeAt(0),
-                ),
-              )
-            : undefined;
-      if (!yaml) throw new Error("profile_content_missing");
+      if (
+        file.name !== "profile.yaml" ||
+        file.type !== "file" ||
+        file.encoding !== "base64" ||
+        !file.content
+      )
+        throw new Error("profile_content_missing");
+      const yaml = new TextDecoder().decode(
+        Uint8Array.from(atob(file.content.replaceAll("\n", "")), (value) =>
+          value.charCodeAt(0),
+        ),
+      );
       profile = await parseProfile(yaml, commit.sha);
     } catch (error) {
       profileError = "Repository profile is missing or invalid";

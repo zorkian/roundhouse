@@ -1,6 +1,8 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
+import { parseDocument } from "yaml";
+
 export const profileSourcePath = ".roundhouse/profile.yaml" as const;
 
 export interface AppliedProfile {
@@ -14,19 +16,25 @@ export interface AppliedProfile {
   };
 }
 
-function list(lines: string[], heading: string): string[] {
-  const start = lines.indexOf(`  ${heading}:`);
-  if (start < 0) throw new Error(`profile_paths_${heading}_required`);
-  const values: string[] = [];
-  for (let i = start + 1; i < lines.length && /^    /.test(lines[i]!); i++) {
-    const match = lines[i]!.match(
-      /^    -\s+(?:"([^"]+)"|'([^']+)'|([^#\s][^#]*?))\s*$/,
-    );
-    if (!match) throw new Error(`profile_${heading}_invalid`);
-    values.push((match[1] ?? match[2] ?? match[3]!).trim());
-  }
-  if (!values.length) throw new Error(`profile_paths_${heading}_required`);
-  return [...new Set(values)].sort();
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, keys: string[]): boolean {
+  const actual = Object.keys(value).sort();
+  return (
+    actual.length === keys.length && actual.every((key, i) => key === keys[i])
+  );
+}
+
+function stringList(value: unknown, heading: string): string[] {
+  if (
+    !Array.isArray(value) ||
+    !value.length ||
+    value.some((item) => typeof item !== "string")
+  )
+    throw new Error(`profile_paths_${heading}_invalid`);
+  return [...new Set(value)].sort();
 }
 
 function validatePattern(pattern: string): void {
@@ -43,14 +51,19 @@ export async function parseProfile(
   yaml: string,
   sourceCommit: string,
 ): Promise<AppliedProfile> {
-  const lines = yaml
-    .split(/\r?\n/)
-    .map((line) => line.replace(/\s+$/, ""))
-    .filter((line) => line && !/^\s*#/.test(line));
-  if (lines[0] !== "version: 1" || lines[1] !== "paths:")
+  const document = parseDocument(yaml, { uniqueKeys: true });
+  if (document.errors.length) throw new Error("profile_yaml_invalid");
+  const value: unknown = document.toJS();
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["paths", "version"]) ||
+    value.version !== 1 ||
+    !isRecord(value.paths) ||
+    !hasOnlyKeys(value.paths, ["allowed", "protected"])
+  )
     throw new Error("profile_schema_invalid");
-  const allowed = list(lines, "allowed");
-  const protectedPaths = list(lines, "protected");
+  const allowed = stringList(value.paths.allowed, "allowed");
+  const protectedPaths = stringList(value.paths.protected, "protected");
   [...allowed, ...protectedPaths].forEach(validatePattern);
   const canonical = JSON.stringify({
     version: 1,

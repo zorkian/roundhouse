@@ -52,6 +52,15 @@ function github(permission = "write"): GitHubApi {
     get: vi.fn(async (path: string) => {
       if (path.includes("/collaborators/")) return { permission };
       if (path.endsWith("/commits/main")) return { sha: "a".repeat(40) };
+      if (path.includes("/contents/.roundhouse/profile.yaml?ref="))
+        return {
+          name: "profile.yaml",
+          type: "file",
+          encoding: "base64",
+          content: btoa(
+            'version: 1\npaths:\n  allowed:\n    - "**"\n  protected:\n    - ".github/workflows/**"\n',
+          ),
+        };
       return { default_branch: "main" };
     }) as GitHubApi["get"],
     post: vi.fn(async () => ({})) as GitHubApi["post"],
