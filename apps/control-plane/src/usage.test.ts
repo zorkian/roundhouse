@@ -150,3 +150,58 @@ describe("model usage", () => {
     expect(formatUsage([])).toBe("Usage unavailable");
   });
 });
+
+describe("competition usage rollup", () => {
+  it("sums candidate and judge calls exactly once at stage and run level", () => {
+    const calls = [
+      {
+        callId: "a1",
+        attemptId: "candidate-alpha",
+        model: "m1",
+        inputTokens: 40,
+        outputTokens: 60,
+        totalTokens: 100,
+        costUsd: 0.01,
+      },
+      {
+        callId: "a2",
+        attemptId: "candidate-alpha",
+        model: "m1",
+        inputTokens: 10,
+        outputTokens: 15,
+        totalTokens: 25,
+        costUsd: 0.002,
+      },
+      {
+        callId: "b1",
+        attemptId: "candidate-beta",
+        model: "m2",
+        inputTokens: 80,
+        outputTokens: 120,
+        totalTokens: 200,
+        costUsd: 0.02,
+      },
+      {
+        callId: "j1",
+        attemptId: "judge",
+        model: "m3",
+        inputTokens: 20,
+        outputTokens: 30,
+        totalTokens: 50,
+        costUsd: 0.03,
+      },
+    ];
+    const candidateAlpha = calls.filter(
+      (call) => call.attemptId === "candidate-alpha",
+    );
+    expect(totalUsage(candidateAlpha).totalTokens).toBe(125);
+    expect(
+      totalUsage(calls.filter((call) => call.attemptId === "judge")).costUsd,
+    ).toBe(0.03);
+    const totals = totalUsage(calls);
+    expect(totals.totalTokens).toBe(375);
+    expect(totals.costUsd).toBeCloseTo(0.062, 10);
+    expect(totals.inputTokens).toBe(150);
+    expect(totals.outputTokens).toBe(225);
+  });
+});

@@ -1870,3 +1870,233 @@ describe("single coordinator", () => {
     });
   });
 });
+
+describe("model competitions", () => {
+  const competitionWorkflowSource = `
+version: 1
+triggers:
+  github.issue.started: qualify
+nodes:
+  qualify:
+    executor: agent.read
+    role: qualify
+    agent:
+      task: qualification
+      inputs:
+        issue: trigger.issue
+      result:
+        key: qualification
+        schema: roundhouse.qualification.v1
+      competition:
+        candidates:
+          - id: alpha
+            model: { id: openai/gpt-alpha, reasoning: low }
+          - id: beta
+            model: { id: anthropic/claude-beta, reasoning: medium }
+        judge:
+          model: { id: openai/gpt-judge, reasoning: high }
+    capabilities:
+      - repository.read
+      - context.read
+    outputs:
+      - qualification.classification
+    transitions:
+      - when:
+          path: output.qualification.classification
+          equals: bug
+        terminal: succeeded
+      - terminal: failed
+`;
+  const competitionInput = async () => {
+    const competitionWorkflow = await compileWorkflow(
+      competitionWorkflowSource,
+      sourceCommit,
+    );
+    return {
+      ...input,
+      id: "run_competition",
+      profile: { ...input.profile, workflow: competitionWorkflow },
+    };
+  };
+  const qualificationResult = (summary: string) => ({
+    qualification: {
+      classification: "bug",
+      summary,
+      acceptanceCriteria: [],
+      uncertainties: [],
+      sources: [],
+    },
+  });
+  const judgement = (selected = "alpha") => ({
+    judgement: {
+      selected,
+      scores: [
+        { candidateId: "alpha", score: 9, rationale: "Stronger analysis" },
+        { candidateId: "beta", score: 6, rationale: "Weaker analysis" },
+      ],
+    },
+  });
+
+  it("fans out candidates with identical bindings, judges, and promotes only the winner", async () => {
+    const competition = await competitionInput();
+    const store = new MemoryRunRepository();
+    await store.create(createRun(competition));
+    const submitted: Attempt[] = [];
+    const dispatcher = {
+      submit: async (attempt: Attempt) => {
+        submitted.push(attempt);
+      },
+    };
+    const promoted: { winner: Attempt; judgement: unknown }[] = [];
+    const promoter = {
+      promote: async (run: RunSnapshot, winner: Attempt, decision: never) => {
+        promoted.push({ winner, judgement: decision });
+      },
+    };
+    const wakeup = { runId: competition.id, expectedRevision: 1 };
+    const step = (now: number) =>
+      coordinate(
+        store,
+        dispatcher,
+        wakeup,
+        now,
+        undefined,
+        undefined,
+        promoter,
+      );
+
+    await expect(step(100)).resolves.toBe("dispatched");
+    // While a candidate is running, revisits wait without redispatching.
+    await expect(step(101)).resolves.toBe("duplicate");
+    expect(submitted).toHaveLength(1);
+    const alpha = submitted[0]!;
+    expect(alpha.role).toBe("qualify-candidate-alpha");
+    expect(alpha.competition).toEqual({
+      purpose: "candidate",
+      candidateId: "alpha",
+    });
+    expect(alpha.expectedHead).toBe(competition.baseCommit);
+    expect(alpha.nodeId).toBe("qualify");
+
+    // The judge is never dispatched while any candidate is incomplete.
+    await store.completeAttempt(
+      alpha.id,
+      1,
+      alpha.expectedHead,
+      qualificationResult("alpha"),
+    );
+    await expect(step(102)).resolves.toBe("dispatched");
+    expect(submitted).toHaveLength(2);
+    const beta = submitted[1]!;
+    expect(beta.role).toBe("qualify-candidate-beta");
+    expect(beta.expectedHead).toBe(alpha.expectedHead);
+    await expect(step(103)).resolves.toBe("duplicate");
+
+    await store.completeAttempt(
+      beta.id,
+      1,
+      beta.expectedHead,
+      qualificationResult("beta"),
+    );
+    await expect(step(104)).resolves.toBe("dispatched");
+    expect(submitted).toHaveLength(3);
+    const judge = submitted[2]!;
+    expect(judge.role).toBe("qualify-judge");
+    expect(judge.competition).toEqual({ purpose: "judge" });
+    expect(judge.capabilities).not.toContain("artifact.write");
+
+    await store.completeAttempt(judge.id, 1, judge.expectedHead, judgement());
+    await expect(step(105)).resolves.toBe("dispatched");
+
+    expect(promoted).toHaveLength(1);
+    expect(promoted[0]!.winner.id).toBe(alpha.id);
+    const canonical = await store.getAttempt("run_competition_rev_1");
+    expect(canonical?.state).toBe("completed");
+    expect(canonical?.role).toBe("qualify");
+    expect(canonical?.competition?.purpose).toBe("selected");
+    expect(canonical?.result).toEqual(qualificationResult("alpha"));
+    // The run advanced on the winner's result alone.
+    await expect(store.get(competition.id)).resolves.toMatchObject({
+      status: "succeeded",
+    });
+    // Losing candidates remain as evidence but are never canonical.
+    const losers = await store.attemptsForRevision(competition.id, 1);
+    expect(losers.find((attempt) => attempt.id === beta.id)?.state).toBe(
+      "completed",
+    );
+    // Revisiting is idempotent: no further dispatch or transition.
+    await expect(step(106)).resolves.toBe("stale");
+  });
+
+  it("fails the stage on an invalid judgement instead of choosing a fallback", async () => {
+    const competition = await competitionInput();
+    const store = new MemoryRunRepository();
+    await store.create(createRun(competition));
+    const submitted: Attempt[] = [];
+    const dispatcher = {
+      submit: async (attempt: Attempt) => {
+        submitted.push(attempt);
+      },
+    };
+    const wakeup = { runId: competition.id, expectedRevision: 1 };
+    const step = (now: number) => coordinate(store, dispatcher, wakeup, now);
+    await step(100);
+    await store.completeAttempt(
+      submitted[0]!.id,
+      1,
+      submitted[0]!.expectedHead,
+      qualificationResult("alpha"),
+    );
+    await step(101);
+    await store.completeAttempt(
+      submitted[1]!.id,
+      1,
+      submitted[1]!.expectedHead,
+      qualificationResult("beta"),
+    );
+    await step(102);
+    await store.completeAttempt(
+      submitted[2]!.id,
+      1,
+      submitted[2]!.expectedHead,
+      {
+        judgement: {
+          selected: "gamma",
+          scores: [
+            { candidateId: "alpha", score: 9, rationale: "Strong" },
+            { candidateId: "beta", score: 6, rationale: "Weak" },
+          ],
+        },
+      },
+    );
+    await expect(step(103)).resolves.toBe("dispatched");
+    await expect(store.get(competition.id)).resolves.toMatchObject({
+      status: "failed",
+    });
+    expect(await store.getAttempt("run_competition_rev_1")).toBeUndefined();
+  });
+
+  it("fails the stage when any candidate fails", async () => {
+    const competition = await competitionInput();
+    const store = new MemoryRunRepository();
+    await store.create(createRun(competition));
+    const submitted: Attempt[] = [];
+    const dispatcher = {
+      submit: async (attempt: Attempt) => {
+        submitted.push(attempt);
+      },
+    };
+    const wakeup = { runId: competition.id, expectedRevision: 1 };
+    await coordinate(store, dispatcher, wakeup, 100);
+    await store.failAttempt(submitted[0]!.id, 1, {
+      failure: { reason: "execution_failed" },
+    });
+    await expect(coordinate(store, dispatcher, wakeup, 101)).resolves.toBe(
+      "dispatched",
+    );
+    await expect(store.get(competition.id)).resolves.toMatchObject({
+      status: "failed",
+    });
+    expect(submitted).toHaveLength(1);
+  });
+});

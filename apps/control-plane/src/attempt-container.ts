@@ -264,13 +264,16 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
   );
   headers.set(
     "x-roundhouse-task-type",
-    attempt.stage === "plan"
-      ? "planning"
-      : attempt.stage === "implement" || attempt.role === "conflict-resolution"
-        ? "implementation"
-        : attempt.stage === "review" || attempt.role === "review-integration"
-          ? "review"
-          : "validation",
+    attempt.competition?.purpose === "judge"
+      ? "judgement"
+      : attempt.stage === "plan"
+        ? "planning"
+        : attempt.stage === "implement" ||
+            attempt.role === "conflict-resolution"
+          ? "implementation"
+          : attempt.stage === "review" || attempt.role === "review-integration"
+            ? "review"
+            : "validation",
   );
   headers.set("x-roundhouse-complexity", "unknown");
   headers.set("x-roundhouse-routing-provider", route.provider);

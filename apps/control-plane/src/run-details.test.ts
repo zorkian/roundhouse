@@ -526,3 +526,165 @@ describe("run details", () => {
     expect(html).toContain("<dt>Waiting on</dt><dd>plan approval</dd>");
   });
 });
+
+describe("run details competitions", () => {
+  it("renders candidates, scores, winner, judge, and usage for a competition", () => {
+    const judgement = {
+      selected: "alpha",
+      scores: [
+        {
+          candidateId: "alpha",
+          score: 9,
+          rationale: "Stronger <b>analysis</b>",
+        },
+        { candidateId: "beta", score: 6, rationale: "Weaker analysis" },
+      ],
+    };
+    const html = renderRunDetails(
+      detailsFixture({
+        run: {
+          profile: {
+            sourcePath: ".roundhouse/profile.yaml",
+            sourceCommit: "c".repeat(40),
+            version: 1,
+            hash: "d".repeat(64),
+            paths: { allowed: ["**"], protected: [] },
+            workflow: {
+              sourcePath: ".roundhouse/workflow.yaml",
+              sourceCommit: "c".repeat(40),
+              version: 1,
+              hash: "e".repeat(64),
+              triggers: { "github.issue.started": "qualify" },
+              nodes: {
+                qualify: {
+                  executor: "agent.read",
+                  role: "qualify",
+                  agent: {
+                    task: "qualification",
+                    inputs: { issue: "trigger.issue" },
+                    result: {
+                      key: "qualification",
+                      schema: "roundhouse.qualification.v1",
+                    },
+                    competition: {
+                      candidates: [
+                        {
+                          id: "alpha",
+                          model: { id: "openai/gpt-alpha", reasoning: "low" },
+                        },
+                        {
+                          id: "beta",
+                          model: {
+                            id: "anthropic/claude-beta",
+                            reasoning: "medium",
+                          },
+                        },
+                      ],
+                      judge: {
+                        model: { id: "openai/gpt-judge", reasoning: "high" },
+                      },
+                    },
+                  },
+                  capabilities: [],
+                  outputs: ["qualification.classification"],
+                  transitions: [{ terminal: "succeeded" }],
+                },
+              },
+            },
+          } as never,
+        },
+        attempts: [
+          attemptFixture({
+            id: "candidate-alpha",
+            nodeId: "qualify",
+            stage: "qualify",
+            role: "qualify-candidate-alpha",
+            competition: { purpose: "candidate", candidateId: "alpha" },
+            routing: {
+              provider: "openai",
+              model: "gpt-alpha-actual",
+              protocol: "openai-responses",
+              thinkingLevel: "low",
+              rule: "configured",
+            },
+          }),
+          attemptFixture({
+            id: "candidate-beta",
+            nodeId: "qualify",
+            stage: "qualify",
+            role: "qualify-candidate-beta",
+            competition: { purpose: "candidate", candidateId: "beta" },
+          }),
+          attemptFixture({
+            id: "judge",
+            nodeId: "qualify",
+            stage: "qualify",
+            role: "qualify-judge",
+            competition: { purpose: "judge" },
+            routing: {
+              provider: "openai",
+              model: "gpt-judge-actual",
+              protocol: "openai-responses",
+              thinkingLevel: "high",
+              rule: "configured",
+            },
+          }),
+          attemptFixture({
+            id: "canonical",
+            nodeId: "qualify",
+            stage: "qualify",
+            role: "qualify",
+            competition: {
+              purpose: "selected",
+              candidateId: "alpha",
+              judgement,
+            },
+          }),
+        ],
+        usage: [
+          {
+            callId: "c1",
+            attemptId: "candidate-alpha",
+            model: "gpt-alpha-actual",
+            totalTokens: 100,
+            costUsd: 0.01,
+          },
+          {
+            callId: "c2",
+            attemptId: "candidate-beta",
+            model: "claude-beta",
+            totalTokens: 200,
+            costUsd: 0.02,
+          },
+          {
+            callId: "c3",
+            attemptId: "judge",
+            model: "gpt-judge-actual",
+            totalTokens: 50,
+            costUsd: 0.03,
+          },
+        ],
+      }),
+    );
+    expect(html).toContain("Model competitions");
+    expect(html).toContain("Selected");
+    expect(html).toContain("openai/gpt-alpha (low)");
+    expect(html).toContain("anthropic/claude-beta (medium)");
+    expect(html).toContain("gpt-alpha-actual");
+    expect(html).toContain("Stronger &lt;b&gt;analysis&lt;/b&gt;");
+    expect(html).toContain("openai/gpt-judge (high)");
+    expect(html).toContain("gpt-judge-actual");
+    expect(html).toContain("alpha");
+    // Candidate and judge usage stay separate; run total includes all calls.
+    expect(html).toContain("100 tokens · $0.01");
+    expect(html).toContain("50 tokens · $0.03");
+    expect(html).toContain("350 tokens · $0.06");
+  });
+
+  it("does not render a competition section for ordinary single-model runs", () => {
+    const html = renderRunDetails(
+      detailsFixture({ attempts: [attemptFixture({ id: "ordinary" })] }),
+    );
+    expect(html).not.toContain("Model competitions");
+  });
+});

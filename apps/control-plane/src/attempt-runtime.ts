@@ -46,8 +46,11 @@ export function attemptSandbox(
 }
 
 export function sandboxName(
-  attempt: Pick<Attempt, "id" | "runId" | "stage">,
+  attempt: Pick<Attempt, "id" | "runId" | "stage" | "competition">,
 ): string {
+  // Competition candidates each get their own sandbox so parallel candidates
+  // can never observe or overwrite one another's in-progress state.
+  if (attempt.competition?.purpose === "candidate") return attempt.id;
   return attempt.stage === "implement" ? attempt.runId : attempt.id;
 }
 
@@ -191,6 +194,27 @@ export function workspaceRef(runId: string): string {
   return `refs/heads/roundhouse/${runId}`;
 }
 
+// Candidates publish checkpoints to candidate-specific refs inside the run's
+// artifact repository; the canonical run ref is only written when the judged
+// winner is promoted.
+export function attemptWorkspaceRef(
+  attempt: Pick<Attempt, "id" | "runId" | "competition">,
+): string {
+  if (attempt.competition?.purpose === "candidate")
+    return `${workspaceRef(attempt.runId)}-candidate-${attempt.competition.candidateId}`;
+  return workspaceRef(attempt.runId);
+}
+
+// Candidate workspace backups are keyed by attempt so they never overwrite
+// the run's canonical workspace backup before judgement.
+export function attemptWorkspaceBackupKey(
+  attempt: Pick<Attempt, "id" | "runId" | "competition">,
+): string {
+  return attempt.competition?.purpose === "candidate"
+    ? attempt.id
+    : attempt.runId;
+}
+
 export function githubBranch(issueNumber: number): string {
   return `roundhouse/issue-${issueNumber}`;
 }
@@ -309,7 +333,7 @@ export class SandboxCheckpointValidator implements CheckpointValidator {
       repository: workspaceName(run.id),
       baseCommit: run.baseCommit,
       inputHead: attempt.expectedHead,
-      ref: workspaceRef(run.id),
+      ref: attemptWorkspaceRef(attempt),
       profile:
         run.profile ??
         (() => {
@@ -378,7 +402,10 @@ export class SandboxCheckpointPublisher {
     private readonly githubEnv: GitHubEnv,
   ) {}
 
-  async publish(input: AttemptCallback): Promise<void> {
+  async publish(
+    input: AttemptCallback,
+    options?: { readonly promoteCompetitionWinner?: boolean },
+  ): Promise<void> {
     const attempt = await this.repository.getAttempt(input.attemptId);
     const run = attempt && (await this.repository.get(attempt.runId));
     if (!attempt || !run) throw new Error("attempt_not_found");
@@ -387,6 +414,25 @@ export class SandboxCheckpointPublisher {
       !attemptHasCapability(attempt, "artifact.write")
     )
       return;
+    // A losing candidate must never publish to the shared GitHub branch. Its
+    // checkpoint remains under its candidate ref in the artifact repository
+    // as evidence; only the promoted winner is published, via the promoter.
+    if (
+      attempt.competition?.purpose === "candidate" &&
+      !options?.promoteCompetitionWinner
+    ) {
+      console.log(
+        JSON.stringify({
+          message: "competition_candidate_publication_deferred",
+          attemptId: attempt.id,
+          runId: run.id,
+          candidateId: attempt.competition.candidateId,
+          ref: input.checkpoint.ref,
+          outputHead: input.checkpoint.outputHead,
+        }),
+      );
+      return;
+    }
     const artifact = await this.artifacts.get(input.checkpoint.repository);
     if (!artifact) throw new Error("artifact_repository_not_found");
     const token = await artifact.createToken("read", 5 * 60);

@@ -13,6 +13,9 @@ import {
   type RunRepository,
   type RunSnapshot,
   type WorkflowAgent,
+  type WorkflowCompetition,
+  type WorkflowModel,
+  type WorkflowNode,
 } from "@roundhouse/core";
 import { aggregatedReview } from "./aggregated-review.js";
 import { signCallback } from "./callback.js";
@@ -24,12 +27,13 @@ import { D1RunRepository, type D1Like } from "./d1-store.js";
 import {
   artifactsNamespace,
   attemptSandbox,
+  attemptWorkspaceBackupKey,
+  attemptWorkspaceRef,
   conflictedIntegrationOutcome,
   destroyAttemptSandbox,
   sandboxName,
   workspaceBackup,
   workspaceName,
-  workspaceRef,
   type SandboxNamespace,
 } from "./attempt-runtime.js";
 
@@ -371,6 +375,43 @@ export async function resolveWorkflowAgentInputs(
   return { values, evidence };
 }
 
+// Finds the competition definition governing a candidate or judge attempt,
+// whether it is configured on an agent node or on an individual reviewer.
+function competitionForAttempt(
+  node: WorkflowNode | undefined,
+  attempt: Attempt,
+): WorkflowCompetition | undefined {
+  if (node?.agent?.competition) return node.agent.competition;
+  return node?.review?.reviewers.find(
+    (reviewer) =>
+      attempt.role === reviewer.id ||
+      attempt.role.startsWith(`${reviewer.id}-`),
+  )?.competition;
+}
+
+function requestedModelForAttempt(
+  node: WorkflowNode | undefined,
+  attempt: Attempt,
+  run: RunSnapshot,
+): WorkflowModel | undefined {
+  const competition = competitionForAttempt(node, attempt);
+  if (attempt.competition?.purpose === "candidate") {
+    const candidateId = attempt.competition.candidateId;
+    return competition?.candidates.find(
+      (candidate) => candidate.id === candidateId,
+    )?.model;
+  }
+  if (attempt.competition?.purpose === "judge") return competition?.judge.model;
+  return (
+    node?.agent?.model ??
+    node?.review?.reviewers.find((reviewer) => reviewer.id === attempt.role)
+      ?.model ??
+    (run.profile
+      ? profileModelForAttempt(run.profile, attempt.stage, attempt.role)
+      : undefined)
+  );
+}
+
 class SandboxAttemptPreparer {
   constructor(
     private readonly env: AttemptPreparationEnv,
@@ -386,13 +427,7 @@ class SandboxAttemptPreparer {
       attempt.nodeId && run.profile?.workflow
         ? run.profile.workflow.nodes[attempt.nodeId]
         : undefined;
-    const requested =
-      node?.agent?.model ??
-      node?.review?.reviewers.find((reviewer) => reviewer.id === attempt.role)
-        ?.model ??
-      (run.profile
-        ? profileModelForAttempt(run.profile, attempt.stage, attempt.role)
-        : undefined);
+    const requested = requestedModelForAttempt(node, attempt, run);
     const startedAt = Date.now();
     const response = await observeResponse(
       await this.env.MODEL_BROKER.fetch(
@@ -476,8 +511,12 @@ class SandboxAttemptPreparer {
         schema: workflowNode.agent.result.schema,
         resultKey: workflowNode.agent.result.key,
         promptSource: workflowNode.agent.prompt?.sourcePath ?? null,
-        requestedModel: workflowNode.agent.model.id,
-        requestedReasoning: workflowNode.agent.model.reasoning,
+        requestedModel:
+          requestedModelForAttempt(workflowNode, attempt, run)?.id ?? null,
+        requestedReasoning:
+          requestedModelForAttempt(workflowNode, attempt, run)?.reasoning ??
+          null,
+        competition: attempt.competition ?? null,
         capabilities: workflowNode.capabilities,
         effectiveCapabilities: attempt.capabilities ?? [],
         previousOutcomeAttemptId: previousOutcomeAttempt?.id ?? null,
@@ -500,12 +539,15 @@ class SandboxAttemptPreparer {
       );
     }
     const taskType =
-      workflowNode?.agent?.task ??
-      (attempt.role === "conflict-resolution"
-        ? "implementation"
-        : attempt.stage === "review" || attempt.role === "review-integration"
-          ? "review"
-          : "validation");
+      attempt.competition?.purpose === "judge"
+        ? "judgement"
+        : (workflowNode?.agent?.task ??
+          (attempt.role === "conflict-resolution"
+            ? "implementation"
+            : attempt.stage === "review" ||
+                attempt.role === "review-integration"
+              ? "review"
+              : "validation"));
     // Mechanical integration is a no-model operation; only conflict
     // resolution routes to an implementation model.
     const route =
@@ -740,6 +782,27 @@ class SandboxAttemptPreparer {
       throw new Error("implementation_plan_missing");
     if (attempt.stage === "review" && !implementation)
       throw new Error("review_implementation_missing");
+    // The judge receives every completed candidate's structured result and
+    // commit evidence as untrusted data, alongside the node's resolved inputs.
+    const judgementCandidates =
+      attempt.competition?.purpose === "judge"
+        ? (await this.runs.attemptsForRevision(run.id, run.revision))
+            .filter(
+              (candidate) =>
+                candidate.competition?.purpose === "candidate" &&
+                candidate.state === "completed",
+            )
+            .map((candidate) => ({
+              candidateId:
+                candidate.competition?.purpose === "candidate"
+                  ? candidate.competition.candidateId
+                  : "",
+              result: candidate.result ?? {},
+              model: candidate.routing?.model ?? null,
+              expectedHead: candidate.expectedHead,
+              acceptedHead: candidate.acceptedHead ?? candidate.expectedHead,
+            }))
+        : undefined;
     const assignment = {
       ...attempt,
       baseCommit: attempt.baseCommit,
@@ -748,6 +811,9 @@ class SandboxAttemptPreparer {
       issueNumber: run.issueNumber,
       ...(workflowNode ? { workflowNode } : {}),
       ...(resolvedInputs ? { inputs: resolvedInputs.values } : {}),
+      ...(judgementCandidates
+        ? { judgement: { candidates: judgementCandidates } }
+        : {}),
       context: {
         ...(resolvedInputs?.values ??
           attemptContext({
@@ -773,7 +839,7 @@ class SandboxAttemptPreparer {
         tokenId: token.id,
         token: token.plaintext,
         access: token.access,
-        ref: workspaceRef(attempt.runId),
+        ref: attemptWorkspaceRef(attempt),
       },
       ...(attempt.stage === "integrate"
         ? {
@@ -817,7 +883,10 @@ class SandboxAttemptPreparer {
     try {
       const backup =
         attempt.stage === "implement"
-          ? await workspaceBackup(this.runs.database, run.id)
+          ? await workspaceBackup(
+              this.runs.database,
+              attemptWorkspaceBackupKey(attempt),
+            )
           : undefined;
       await sandbox.prepareAttempt(
         assignment,

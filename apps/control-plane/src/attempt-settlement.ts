@@ -10,16 +10,26 @@ import {
   type AttemptCallback,
   type AttemptCompletion,
 } from "./callback.js";
+import type {
+  Attempt,
+  CompetitionJudgement,
+  RunSnapshot,
+} from "@roundhouse/core";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
 import {
   artifactsNamespace,
   attemptSandbox,
+  attemptWorkspaceBackupKey,
+  attemptWorkspaceRef,
   SandboxCheckpointPublisher,
   SandboxCheckpointValidator,
   sandboxName,
   saveWorkspaceBackup,
+  workspaceBackup,
+  workspaceName,
   type SandboxNamespace,
 } from "./attempt-runtime.js";
+import type { CompetitionPromoter } from "./coordinator.js";
 import type { GitHubEnv } from "./github.js";
 
 export type AttemptSettlementOutcome =
@@ -305,7 +315,7 @@ export async function backupRecordedAttemptWorkspace(
     ).backupWorkspace(attempt.id, attempt.runId);
     await saveWorkspaceBackup(
       repository.database,
-      attempt.runId,
+      attemptWorkspaceBackupKey(attempt),
       attempt.id,
       backup,
     );
@@ -442,6 +452,72 @@ export async function acceptRecordedAttemptCompletion(
     outcome,
   });
   return settlementResult(repository, input.attemptId, outcome);
+}
+
+// Promotes the judged winner's repository state to the run's canonical
+// locations: the workspace backup becomes the run backup and the winner's
+// already-validated checkpoint is published to the GitHub branch. Losing
+// candidates keep their candidate-keyed backups and refs as evidence only.
+export function competitionPromoter(
+  env: AttemptSettlementEnv,
+): CompetitionPromoter {
+  return {
+    async promote(
+      run: RunSnapshot,
+      winner: Attempt,
+      judgement: CompetitionJudgement,
+    ): Promise<void> {
+      const repository = new D1RunRepository(env.DB);
+      const startedAt = Date.now();
+      const backup = await workspaceBackup(
+        repository.database,
+        attemptWorkspaceBackupKey(winner),
+      );
+      if (backup)
+        await saveWorkspaceBackup(
+          repository.database,
+          run.id,
+          winner.id,
+          backup,
+        );
+      await new SandboxCheckpointPublisher(
+        env.ATTEMPT_SANDBOXES,
+        artifactsNamespace(env),
+        repository,
+        env,
+      ).publish(
+        {
+          attemptId: winner.id,
+          expectedRevision: run.revision,
+          checkpoint: {
+            repositoryId: "",
+            repository: workspaceName(run.id),
+            baseCommit: winner.baseCommit,
+            ref: attemptWorkspaceRef(winner),
+            inputHead: winner.expectedHead,
+            outputHead: winner.acceptedHead ?? winner.expectedHead,
+            changedPaths: [],
+          },
+          artifactTokenId: "",
+          result: winner.result ?? {},
+          signature: "",
+        },
+        { promoteCompetitionWinner: true },
+      );
+      console.log(
+        JSON.stringify({
+          message: "competition_winner_state_promoted",
+          runId: run.id,
+          revision: run.revision,
+          winnerAttemptId: winner.id,
+          selected: judgement.selected,
+          acceptedHead: winner.acceptedHead ?? winner.expectedHead,
+          hadBackup: Boolean(backup),
+          durationMs: Date.now() - startedAt,
+        }),
+      );
+    },
+  };
 }
 
 export async function settleAttempt(

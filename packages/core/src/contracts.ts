@@ -35,6 +35,28 @@ export interface Lease {
   readonly expiresAt: number;
 }
 
+export interface CompetitionScore {
+  readonly candidateId: string;
+  readonly score: number;
+  readonly rationale: string;
+}
+
+// The judge model's validated decision for one competition: exactly one
+// selected winner plus a numeric score and rationale for every candidate.
+export interface CompetitionJudgement {
+  readonly selected: string;
+  readonly scores: readonly CompetitionScore[];
+}
+
+export type AttemptCompetition =
+  | { readonly purpose: "candidate"; readonly candidateId: string }
+  | { readonly purpose: "judge" }
+  | {
+      readonly purpose: "selected";
+      readonly candidateId: string;
+      readonly judgement: CompetitionJudgement;
+    };
+
 export interface Attempt {
   readonly id: string;
   readonly runId: string;
@@ -44,6 +66,7 @@ export interface Attempt {
   readonly executor?: WorkflowExecutorKind;
   readonly stage: RunStage;
   readonly role: string;
+  readonly competition?: AttemptCompetition;
   readonly capabilities?: readonly WorkflowCapability[];
   readonly state: AttemptState;
   readonly deadlineAt: number;
@@ -323,4 +346,81 @@ export function reviewerAttemptId(
   if (!/^[a-z][a-z0-9-]{0,63}$/.test(role))
     throw new Error("reviewer_role_invalid");
   return `${immutableAttemptId(runId, revision)}_${role}`;
+}
+
+const competitionRolePattern = /^[a-z][a-z0-9-]{0,63}$/;
+
+// Competition candidates and the judge are independent attempts under one
+// workflow node. Their roles derive from the node's base role so durable
+// uniqueness stays (run, revision, role) while the promoted winner keeps the
+// base role untouched until judgement.
+export function competitionCandidateRole(
+  baseRole: string,
+  candidateId: string,
+): string {
+  if (
+    !competitionRolePattern.test(baseRole) ||
+    !competitionRolePattern.test(candidateId)
+  )
+    throw new Error("competition_role_invalid");
+  return `${baseRole}-candidate-${candidateId}`;
+}
+
+export function competitionJudgeRole(baseRole: string): string {
+  if (!competitionRolePattern.test(baseRole))
+    throw new Error("competition_role_invalid");
+  return `${baseRole}-judge`;
+}
+
+export function competitionAttemptId(
+  runId: string,
+  revision: number,
+  role: string,
+): string {
+  return reviewerAttemptId(runId, revision, role);
+}
+
+// Validates an untrusted judgement result against the configured candidate
+// set. Anything incomplete, unknown, duplicated, or malformed is rejected so
+// a bad judgement never silently selects a winner.
+export function validateCompetitionJudgement(
+  value: unknown,
+  candidateIds: readonly string[],
+): CompetitionJudgement | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return undefined;
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.selected !== "string" ||
+    !candidateIds.includes(record.selected) ||
+    !Array.isArray(record.scores) ||
+    record.scores.length !== candidateIds.length
+  )
+    return undefined;
+  const seen = new Set<string>();
+  const scores: CompetitionScore[] = [];
+  for (const entry of record.scores) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry))
+      return undefined;
+    const score = entry as Record<string, unknown>;
+    if (
+      typeof score.candidateId !== "string" ||
+      !candidateIds.includes(score.candidateId) ||
+      seen.has(score.candidateId) ||
+      typeof score.score !== "number" ||
+      !Number.isFinite(score.score) ||
+      typeof score.rationale !== "string" ||
+      !score.rationale.trim()
+    )
+      return undefined;
+    seen.add(score.candidateId);
+    scores.push({
+      candidateId: score.candidateId,
+      score: score.score,
+      rationale: score.rationale,
+    });
+  }
+  if (candidateIds.some((candidateId) => !seen.has(candidateId)))
+    return undefined;
+  return { selected: record.selected, scores };
 }

@@ -11,6 +11,7 @@ import {
   type Wakeup,
 } from "@roundhouse/core";
 import { attemptInactivityMilliseconds, coordinate } from "./coordinator.js";
+import { competitionPromoter } from "./attempt-settlement.js";
 import { verifyCallback } from "./callback.js";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
 import { renderDashboard } from "./dashboard.js";
@@ -1148,6 +1149,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
           Date.now(),
           30 * 60_000,
           reporter,
+          competitionPromoter(env),
         );
         const next = successorWakeup(
           await repository.get(message.body.runId),

@@ -304,3 +304,170 @@ nodes:
     ).rejects.toThrow("workflow_transition_fallback_invalid");
   });
 });
+
+describe("workflow competitions", () => {
+  const competitionSource = (agentBlock: string) => `
+version: 1
+triggers:
+  github.issue.started: qualify
+nodes:
+  qualify:
+    executor: agent.read
+    role: qualify
+    agent:
+      task: qualification
+      inputs:
+        issue: trigger.issue
+      result:
+        key: qualification
+        schema: roundhouse.qualification.v1
+${agentBlock}
+    capabilities:
+      - repository.read
+    outputs:
+      - qualification.classification
+    transitions:
+      - terminal: succeeded
+`;
+  const competitionBlock = `      competition:
+        candidates:
+          - id: alpha
+            model: { id: openai/gpt-alpha, reasoning: low }
+          - id: beta
+            model: { id: anthropic/claude-beta, reasoning: medium }
+        judge:
+          model: { id: openai/gpt-judge, reasoning: high }`;
+
+  it("compiles an agent competition with candidates and a judge", async () => {
+    const compiled = await compileWorkflow(
+      competitionSource(competitionBlock),
+      commit,
+    );
+    const competition = compiled.nodes.qualify?.agent?.competition;
+    expect(competition?.candidates.map((candidate) => candidate.id)).toEqual([
+      "alpha",
+      "beta",
+    ]);
+    expect(competition?.candidates[0]?.model).toEqual({
+      id: "openai/gpt-alpha",
+      reasoning: "low",
+    });
+    expect(competition?.judge.model).toEqual({
+      id: "openai/gpt-judge",
+      reasoning: "high",
+    });
+    expect(compiled.nodes.qualify?.agent?.model).toBeUndefined();
+  });
+
+  it("round-trips a competition through the serializer", async () => {
+    const { serializeWorkflow } = await import("./workflow.js");
+    const compiled = await compileWorkflow(
+      competitionSource(competitionBlock),
+      commit,
+    );
+    const serialized = serializeWorkflow(compiled);
+    expect(serialized).toContain("competition");
+    expect(serialized).toContain("alpha");
+    const reparsed = await compileWorkflow(serialized, commit);
+    expect(reparsed.nodes.qualify?.agent?.competition).toEqual(
+      compiled.nodes.qualify?.agent?.competition,
+    );
+    expect(reparsed.hash).toBe(compiled.hash);
+  });
+
+  it("compiles a reviewer competition", async () => {
+    const reviewCompetition = `
+version: 1
+triggers:
+  github.issue.started: review
+nodes:
+  review:
+    executor: review
+    role: review
+    review:
+      reviewers:
+        - id: review-holistic
+          label: Holistic design review
+          activation: always
+          mode: blocking
+          blocking_severities: [critical]
+          competition:
+            candidates:
+              - id: alpha
+                model: { id: openai/gpt-alpha, reasoning: low }
+              - id: beta
+                model: { id: anthropic/claude-beta, reasoning: low }
+            judge:
+              model: { id: openai/gpt-judge, reasoning: high }
+    capabilities:
+      - repository.read
+    outputs:
+      - review.status
+    transitions:
+      - terminal: succeeded
+`;
+    const compiled = await compileWorkflow(reviewCompetition, commit);
+    const reviewer = compiled.nodes.review?.review?.reviewers[0];
+    expect(reviewer?.competition?.candidates).toHaveLength(2);
+    expect(reviewer?.model).toBeUndefined();
+  });
+
+  it("rejects mixed, incomplete, and duplicate competition definitions", async () => {
+    await expect(
+      compileWorkflow(
+        competitionSource(
+          `      model: { id: openai/gpt-5.6-sol, reasoning: low }\n${competitionBlock}`,
+        ),
+        commit,
+      ),
+    ).rejects.toThrow("workflow_agent_invalid");
+    await expect(
+      compileWorkflow(
+        competitionSource(`      competition:
+        candidates:
+          - id: alpha
+            model: { id: openai/gpt-alpha, reasoning: low }
+        judge:
+          model: { id: openai/gpt-judge, reasoning: high }`),
+        commit,
+      ),
+    ).rejects.toThrow("workflow_competition_invalid");
+    await expect(
+      compileWorkflow(
+        competitionSource(`      competition:
+        candidates:
+          - id: alpha
+            model: { id: openai/gpt-alpha, reasoning: low }
+          - id: alpha
+            model: { id: openai/gpt-beta, reasoning: low }
+        judge:
+          model: { id: openai/gpt-judge, reasoning: high }`),
+        commit,
+      ),
+    ).rejects.toThrow("workflow_competition_duplicate");
+    await expect(
+      compileWorkflow(
+        competitionSource(`      competition:
+        candidates:
+          - id: alpha
+            model: { id: openai/gpt-alpha, reasoning: low }
+          - id: beta
+            model: { id: openai/gpt-beta, reasoning: low }`),
+        commit,
+      ),
+    ).rejects.toThrow("workflow_competition_invalid");
+    await expect(
+      compileWorkflow(
+        competitionSource(`      competition:
+        candidates:
+          - id: alpha
+            model: { id: openai/gpt-alpha, reasoning: low }
+          - id: beta
+            model: { id: openai/gpt-beta, reasoning: low }
+        judge:
+          model: { id: not-a-model, reasoning: high }`),
+        commit,
+      ),
+    ).rejects.toThrow("workflow_competition_judge_invalid");
+  });
+});
