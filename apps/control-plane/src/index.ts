@@ -291,18 +291,7 @@ class ContainerDispatcher implements AttemptDispatcher {
     const reproduction = reproductionAttempt?.result?.reproduction;
     const plan = planAttempt?.result?.plan;
     const implementation = implementationAttempt?.result?.implementation;
-    const review = reviewAttempt
-      ? aggregatedReview(
-          reviewAttempts,
-          reviewAttempts.some(
-            (candidate) =>
-              (candidate.result?.review as Record<string, unknown> | undefined)
-                ?.status === "changes_requested",
-          )
-            ? "changes_requested"
-            : "clean",
-        )
-      : undefined;
+    const review = reviewAttempt ? aggregatedReview(reviewAttempts) : undefined;
     const ci = ciAttempt?.result?.ci;
     const reviewer = reviewerForRole(attempt.role);
     const sameRevisionReviews =

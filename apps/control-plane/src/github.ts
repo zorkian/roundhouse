@@ -434,16 +434,17 @@ function reviewComment(attempt: Attempt): string {
     `## ${clean ? "Review complete" : "Review found changes to make"}`,
     "",
     summary,
+    ...findings.flatMap((finding) => {
+      const file = String(finding.file ?? "").trim();
+      const reviewer = String(finding.reviewer ?? "").trim();
+      return [
+        "",
+        `- **${reviewer ? `${reviewer}: ` : ""}${String(finding.title ?? "Finding")}**${file ? ` (\`${file}\`)` : ""}: ${String(finding.details ?? "")}`,
+      ];
+    }),
     ...(clean
       ? ["", `Reviewed commit \`${attempt.expectedHead}\`. CI is next.`]
-      : findings.flatMap((finding) => {
-          const file = String(finding.file ?? "").trim();
-          const reviewer = String(finding.reviewer ?? "").trim();
-          return [
-            "",
-            `- **${reviewer ? `${reviewer}: ` : ""}${String(finding.title ?? "Finding")}**${file ? ` (\`${file}\`)` : ""}: ${String(finding.details ?? "")}`,
-          ];
-        })),
+      : []),
   ].join("\n");
 }
 

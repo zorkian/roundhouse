@@ -1173,6 +1173,58 @@ describe("GitHub intake", () => {
     expect(body).toContain("The endpoint skips the permission check.");
   });
 
+  it("posts nonblocking findings from a clean aggregated review", async () => {
+    const head = "c".repeat(40);
+    const attempt = {
+      id: "clean-aggregate",
+      runId: "run_clean_aggregate",
+      runRevision: 5,
+      kind: "agent",
+      stage: "review",
+      role: "review-holistic",
+      state: "completed",
+      deadlineAt: Date.now() + 1_000,
+      baseCommit: "a".repeat(40),
+      expectedHead: head,
+      acceptedHead: head,
+      result: {
+        review: {
+          status: "clean",
+          summary: "review-holistic reported 1 finding.",
+          findings: [
+            {
+              reviewer: "review-holistic",
+              title: "Minor cleanup",
+              details: "This name could be clearer.",
+              severity: "low",
+              file: "src/name.ts",
+            },
+          ],
+        },
+      },
+    } satisfies Attempt;
+    const run = {
+      ...createRun({
+        id: attempt.runId,
+        repository: "zorkian/roundhouse",
+        issueNumber: 42,
+        baseCommit: attempt.baseCommit,
+        profileVersion: "v2",
+      }),
+      status: "active",
+      stage: "ci",
+      revision: 6,
+      currentHead: head,
+    } as const;
+
+    const body = await reportedBody(run, attempt);
+    expect(body).toContain("Review complete");
+    expect(body).toContain("review-holistic: Minor cleanup");
+    expect(body).toContain("This name could be clearer.");
+    expect(body).toContain("src/name.ts");
+    expect(body).toContain(`Reviewed commit \`${head}\`. CI is next.`);
+  });
+
   it("posts a concise completion after the exact-head merge", async () => {
     const post = vi.fn(async () => ({}));
     const reporter = new GitHubStageReporter({

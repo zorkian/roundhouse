@@ -169,31 +169,11 @@ function selectedSpecialists(attempt: Attempt): readonly string[] | undefined {
 }
 
 function aggregateReviews(attempts: readonly Attempt[]): Attempt {
-  const changesRequested = attempts.some((attempt) => {
-    const review = attempt.result?.review as
-      Record<string, unknown> | undefined;
-    const blocking = new Set<string>(
-      reviewers.find((reviewer) => reviewer.role === attempt.role)
-        ?.blockingSeverities ?? [],
-    );
-    return (
-      Array.isArray(review?.findings) &&
-      review.findings.some(
-        (finding) =>
-          !!finding &&
-          typeof finding === "object" &&
-          blocking.has(String((finding as Record<string, unknown>).severity)),
-      )
-    );
-  });
   const source = attempts[attempts.length - 1]!;
   return {
     ...source,
     result: {
-      review: aggregatedReview(
-        attempts,
-        changesRequested ? "changes_requested" : "clean",
-      ),
+      review: aggregatedReview(attempts),
     },
   };
 }
