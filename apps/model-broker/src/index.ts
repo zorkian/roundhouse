@@ -305,42 +305,77 @@ function normalizeNative(value: Record<string, unknown>, route: BrokerRoute) {
   const output: Record<string, unknown>[] = [];
   let completionReason: unknown;
   if (route.provider === "anthropic") {
-    for (const part of Array.isArray(value.content) ? value.content : []) {
+    completionReason = value.stop_reason;
+    for (const [index, part] of (Array.isArray(value.content)
+      ? value.content
+      : []
+    ).entries()) {
       if (!part || typeof part !== "object") continue;
       const content = part as Record<string, unknown>;
       if (content.type === "text")
         output.push({
+          id: `${String(value.id ?? "response")}_message_${index}`,
           type: "message",
+          status: "completed",
           role: "assistant",
-          content: [{ type: "output_text", text: content.text ?? "" }],
+          content: [
+            completionReason === "refusal"
+              ? { type: "refusal", refusal: content.text ?? "" }
+              : {
+                  type: "output_text",
+                  text: content.text ?? "",
+                  annotations: [],
+                },
+          ],
         });
       if (content.type === "tool_use")
         output.push({
+          id: String(
+            content.id ?? `${String(value.id ?? "response")}_call_${index}`,
+          ),
           type: "function_call",
+          status: "completed",
           call_id: content.id,
           name: content.name,
           arguments: JSON.stringify(content.input ?? {}),
         });
     }
-    completionReason = value.stop_reason;
   } else {
     const choice = Array.isArray(value.choices)
       ? (value.choices[0] as Record<string, unknown> | undefined)
       : undefined;
     const message = (choice?.message ?? {}) as Record<string, unknown>;
-    if (typeof message.content === "string" && message.content)
+    if (
+      (typeof message.content === "string" && message.content) ||
+      typeof message.refusal === "string"
+    )
       output.push({
+        id: `${String(value.id ?? "response")}_message_0`,
         type: "message",
+        status: "completed",
         role: "assistant",
-        content: [{ type: "output_text", text: message.content }],
+        content: [
+          typeof message.refusal === "string"
+            ? { type: "refusal", refusal: message.refusal }
+            : {
+                type: "output_text",
+                text: message.content,
+                annotations: [],
+              },
+        ],
       });
-    for (const item of Array.isArray(message.tool_calls)
+    for (const [index, item] of (Array.isArray(message.tool_calls)
       ? message.tool_calls
-      : []) {
+      : []
+    ).entries()) {
       const call = item as Record<string, unknown>;
       const fn = (call.function ?? {}) as Record<string, unknown>;
       output.push({
+        id: String(
+          call.id ?? `${String(value.id ?? "response")}_call_${index}`,
+        ),
         type: "function_call",
+        status: "completed",
         call_id: call.id,
         name: fn.name,
         arguments: fn.arguments ?? "{}",
@@ -357,7 +392,7 @@ function normalizeNative(value: Record<string, unknown>, route: BrokerRoute) {
   return {
     id: value.id,
     object: "response",
-    status: completionReason === "refusal" ? "refused" : "completed",
+    status: "completed",
     model: value.model ?? route.model,
     output,
     completion_reason: completionReason,
@@ -383,12 +418,116 @@ function eventPayloads(text: string) {
     .filter((line) => line && line !== "[DONE]");
 }
 
+function streamDelta(event: Record<string, unknown>, route: BrokerRoute) {
+  if (route.provider === "anthropic" && event.type === "content_block_delta") {
+    const delta = (event.delta ?? {}) as Record<string, unknown>;
+    const index = number(event.index);
+    if (typeof delta.text === "string")
+      return {
+        type: "response.output_text.delta",
+        item_id: `message_${index}`,
+        output_index: index,
+        content_index: 0,
+        delta: delta.text,
+      };
+    if (typeof delta.partial_json === "string")
+      return {
+        type: "response.function_call_arguments.delta",
+        item_id: `call_${index}`,
+        output_index: index,
+        delta: delta.partial_json,
+      };
+  }
+  if (route.provider === "moonshotai" && Array.isArray(event.choices)) {
+    const choice = event.choices[0] as Record<string, unknown> | undefined;
+    const delta = (choice?.delta ?? {}) as Record<string, unknown>;
+    if (typeof delta.content === "string")
+      return {
+        type: "response.output_text.delta",
+        item_id: "message_0",
+        output_index: 0,
+        content_index: 0,
+        delta: delta.content,
+      };
+    const call = Array.isArray(delta.tool_calls)
+      ? (delta.tool_calls[0] as Record<string, unknown> | undefined)
+      : undefined;
+    const fn = (call?.function ?? {}) as Record<string, unknown>;
+    if (typeof fn.arguments === "string")
+      return {
+        type: "response.function_call_arguments.delta",
+        item_id: String(call?.id ?? `call_${number(call?.index)}`),
+        output_index: number(call?.index),
+        delta: fn.arguments,
+      };
+  }
+}
+
+function normalizeStream(response: Response, route: BrokerRoute): Response {
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let text = "";
+  let pending = "";
+  return new Response(
+    new ReadableStream({
+      async pull(controller) {
+        const { done, value } = await reader.read();
+        if (!done) {
+          const chunk = decoder.decode(value, { stream: true });
+          text += chunk;
+          pending += chunk;
+          const lines = pending.split(/\r?\n/);
+          pending = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.startsWith("data:")) continue;
+            try {
+              const event = JSON.parse(line.slice(5).trim()) as Record<
+                string,
+                unknown
+              >;
+              const normalized = streamDelta(event, route);
+              if (normalized)
+                controller.enqueue(
+                  encoder.encode(`data: ${JSON.stringify(normalized)}\n\n`),
+                );
+            } catch {
+              // Ignore keepalives and the terminal [DONE] marker.
+            }
+          }
+          return;
+        }
+        const final = await normalizeResponse(
+          new Response(text, {
+            headers: { "content-type": "text/event-stream" },
+          }),
+          route,
+          false,
+        );
+        const normalized = await final.json();
+        controller.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({ type: "response.completed", response: normalized })}\n\ndata: [DONE]\n\n`,
+          ),
+        );
+        controller.close();
+      },
+    }),
+    { headers: { "content-type": "text/event-stream" } },
+  );
+}
+
 export async function normalizeResponse(
   response: Response,
   route: BrokerRoute,
   streamed: boolean,
 ): Promise<Response> {
   if (route.provider === "openai") return response;
+  const eventStream = response.headers
+    .get("content-type")
+    ?.includes("text/event-stream");
+  if (response.ok && streamed && eventStream && response.body)
+    return normalizeStream(response, route);
   const text = await response.text();
   if (!response.ok) {
     let upstream: unknown;
@@ -412,9 +551,6 @@ export async function normalizeResponse(
   const anthropicContent: Record<string, unknown>[] = [];
   const chatToolCalls = new Map<number, Record<string, unknown>>();
   let chatText = "";
-  const eventStream = response.headers
-    .get("content-type")
-    ?.includes("text/event-stream");
   if (!eventStream) {
     try {
       native = JSON.parse(text) as Record<string, unknown>;

@@ -10,6 +10,7 @@ import {
 } from "@roundhouse/core";
 import { describe, expect, it, vi } from "vitest";
 import { signCallback } from "./callback.js";
+import { aggregateReviewAttempts } from "./coordinator.js";
 import {
   acceptGitHubComment,
   acceptGitHubIssueClosed,
@@ -63,7 +64,10 @@ async function reportedBody(
 ): Promise<string> {
   let reported = "";
   const reporter = new GitHubStageReporter({
-    get: async <T>() => [] as T,
+    get: async <T>(path: string) =>
+      (attempt.stage === "review" && path.includes("/pulls?state=open")
+        ? [{ number: 73, html_url: "https://github.com/pull/73" }]
+        : []) as T,
     post: async <T>(_path: string, value: unknown) => {
       reported = String((value as { body?: unknown }).body ?? "");
       return {} as T;
@@ -1087,6 +1091,138 @@ describe("GitHub intake", () => {
         ),
       },
     );
+  });
+
+  it("posts complete reviewer-attributed aggregated findings", async () => {
+    const head = "c".repeat(40);
+    const reviewAttempt = (
+      role: "review-holistic" | "review-security",
+      review: Record<string, unknown>,
+    ): Attempt => ({
+      id: role,
+      runId: "run_aggregated_review",
+      runRevision: 5,
+      kind: "agent",
+      stage: "review",
+      role,
+      state: "completed",
+      deadlineAt: Date.now() + 1_000,
+      baseCommit: "a".repeat(40),
+      expectedHead: head,
+      acceptedHead: head,
+      result: { review },
+    });
+    const aggregated = aggregateReviewAttempts([
+      reviewAttempt("review-holistic", {
+        status: "changes_requested",
+        selections: [
+          {
+            role: "review-security",
+            applicable: true,
+            rationale: "Auth changed",
+          },
+          {
+            role: "review-data",
+            applicable: false,
+            rationale: "No data changes",
+          },
+        ],
+        findings: [
+          {
+            title: "Handle the edge case",
+            details: "The empty value is not handled.",
+            severity: "high",
+            file: "src/input.ts",
+          },
+        ],
+      }),
+      reviewAttempt("review-security", {
+        status: "changes_requested",
+        findings: [
+          {
+            title: "Check authorization",
+            details: "The endpoint skips the permission check.",
+            severity: "high",
+          },
+        ],
+      }),
+    ]);
+    expect(aggregated).toBeDefined();
+    const run = {
+      ...createRun({
+        id: "run_aggregated_review",
+        repository: "zorkian/roundhouse",
+        issueNumber: 42,
+        baseCommit: "a".repeat(40),
+        profileVersion: "v2",
+      }),
+      status: "active",
+      stage: "implement",
+      revision: 6,
+      currentHead: head,
+    } as const;
+
+    const body = await reportedBody(run, aggregated!);
+    expect(body).toContain(
+      "review-holistic, review-security reported 2 findings.",
+    );
+    expect(body).toContain("review-holistic: Handle the edge case");
+    expect(body).toContain("The empty value is not handled.");
+    expect(body).toContain("src/input.ts");
+    expect(body).toContain("review-security: Check authorization");
+    expect(body).toContain("The endpoint skips the permission check.");
+  });
+
+  it("posts nonblocking findings from a clean aggregated review", async () => {
+    const head = "c".repeat(40);
+    const attempt = {
+      id: "clean-aggregate",
+      runId: "run_clean_aggregate",
+      runRevision: 5,
+      kind: "agent",
+      stage: "review",
+      role: "review-holistic",
+      state: "completed",
+      deadlineAt: Date.now() + 1_000,
+      baseCommit: "a".repeat(40),
+      expectedHead: head,
+      acceptedHead: head,
+      result: {
+        review: {
+          status: "clean",
+          summary: "review-holistic reported 1 finding.",
+          findings: [
+            {
+              reviewer: "review-holistic",
+              title: "Minor cleanup",
+              details: "This name could be clearer.",
+              severity: "low",
+              file: "src/name.ts",
+            },
+          ],
+        },
+      },
+    } satisfies Attempt;
+    const run = {
+      ...createRun({
+        id: attempt.runId,
+        repository: "zorkian/roundhouse",
+        issueNumber: 42,
+        baseCommit: attempt.baseCommit,
+        profileVersion: "v2",
+      }),
+      status: "active",
+      stage: "ci",
+      revision: 6,
+      currentHead: head,
+    } as const;
+
+    const body = await reportedBody(run, attempt);
+    expect(body).toContain("Review complete");
+    expect(body).toContain("review-holistic: Minor cleanup");
+    expect(body).toContain("This name could be clearer.");
+    expect(body).toContain("src/name.ts");
+    expect(body).toContain(`Reviewed commit \`${head}\`. CI is next.`);
   });
 
   it("posts a concise completion after the exact-head merge", async () => {

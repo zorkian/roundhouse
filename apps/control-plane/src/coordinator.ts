@@ -10,6 +10,7 @@ import {
   type RunSnapshot,
   type Wakeup,
 } from "@roundhouse/core";
+import { aggregatedReview } from "./aggregated-review.js";
 
 export interface AttemptDispatcher {
   submit(attempt: Attempt, run: RunSnapshot): Promise<void>;
@@ -168,42 +169,11 @@ function selectedSpecialists(attempt: Attempt): readonly string[] | undefined {
 }
 
 function aggregateReviews(attempts: readonly Attempt[]): Attempt {
-  const findings = attempts.flatMap((attempt) => {
-    const review = attempt.result?.review as
-      Record<string, unknown> | undefined;
-    return Array.isArray(review?.findings)
-      ? review.findings.map((finding) => ({ reviewer: attempt.role, finding }))
-      : [];
-  });
-  const changesRequested = attempts.some((attempt) => {
-    const review = attempt.result?.review as
-      Record<string, unknown> | undefined;
-    const blocking = new Set<string>(
-      reviewers.find((reviewer) => reviewer.role === attempt.role)
-        ?.blockingSeverities ?? [],
-    );
-    return (
-      Array.isArray(review?.findings) &&
-      review.findings.some(
-        (finding) =>
-          !!finding &&
-          typeof finding === "object" &&
-          blocking.has(String((finding as Record<string, unknown>).severity)),
-      )
-    );
-  });
   const source = attempts[attempts.length - 1]!;
   return {
     ...source,
     result: {
-      review: {
-        status: changesRequested ? "changes_requested" : "clean",
-        findings,
-        reviewers: attempts.map((attempt) => ({
-          role: attempt.role,
-          routing: attempt.routing,
-        })),
-      },
+      review: aggregatedReview(attempts),
     },
   };
 }

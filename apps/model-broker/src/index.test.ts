@@ -241,8 +241,18 @@ describe("model broker", () => {
       status: "completed",
       completion_reason: "tool_use",
       output: [
-        { content: [{ type: "output_text", text: "A plan" }] },
-        { type: "function_call", call_id: "tool_1", name: "lookup" },
+        {
+          id: "msg_1_message_0",
+          status: "completed",
+          content: [{ type: "output_text", text: "A plan", annotations: [] }],
+        },
+        {
+          id: "tool_1",
+          type: "function_call",
+          status: "completed",
+          call_id: "tool_1",
+          name: "lookup",
+        },
       ],
       usage: {
         input_tokens: 10,
@@ -270,7 +280,35 @@ describe("model broker", () => {
       true,
     );
     expect(response.headers.get("content-type")).toContain("text/event-stream");
-    expect(await response.text()).toContain('"text":"No issues"');
+    const body = await response.text();
+    expect(body).toContain('"type":"response.output_text.delta"');
+    expect(body).toContain('"text":"No issues"');
+  });
+
+  it("normalizes Anthropic refusals as valid response content", async () => {
+    const planning = request();
+    planning.headers.set("x-roundhouse-role", "plan");
+    const response = await normalizeResponse(
+      Response.json({
+        id: "msg_refusal",
+        model: "claude-opus-4.8",
+        content: [{ type: "text", text: "I cannot help with that." }],
+        stop_reason: "refusal",
+        usage: { input_tokens: 3, output_tokens: 5 },
+      }),
+      selectRoute(planning, env),
+      false,
+    );
+    await expect(response.json()).resolves.toMatchObject({
+      status: "completed",
+      output: [
+        {
+          id: "msg_refusal_message_0",
+          status: "completed",
+          content: [{ type: "refusal", refusal: "I cannot help with that." }],
+        },
+      ],
+    });
   });
 
   it("adds hosted web search for a trusted read-stage role", async () => {
