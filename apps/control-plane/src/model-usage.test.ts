@@ -93,17 +93,21 @@ describe("summarizeModelUsage", () => {
     expect(charted).toBe(100);
   });
 
-  it("builds 30 UTC day buckets with per-model tokens", () => {
+  it("builds UTC calendar-date buckets with per-model tokens", () => {
     const summary = summarizeModelUsage(
       [call("gpt-5", endAt - 5 * day, { totalTokens: 40 })],
       endAt,
     );
-    expect(summary.days).toHaveLength(30);
+    // The rolling window runs noon to noon, so it spans 31 calendar dates.
+    expect(summary.days).toHaveLength(31);
     const bucket = summary.days.find(
       (day) => (day.tokensByModel["gpt-5"] ?? 0) > 0,
     );
     expect(bucket?.tokensByModel["gpt-5"]).toBe(40);
-    expect(bucket?.day).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    // The bucket label is the exact UTC date of the call.
+    expect(bucket?.day).toBe(
+      new Date(endAt - 5 * day).toISOString().slice(0, 10),
+    );
   });
 
   it("reports an empty window without collapsing totals to zero", () => {
@@ -111,7 +115,7 @@ describe("summarizeModelUsage", () => {
     expect(summary.calls).toBe(0);
     expect(summary.models).toEqual([]);
     expect(summary.overall.totalTokens).toBeUndefined();
-    expect(summary.days).toHaveLength(30);
+    expect(summary.days).toHaveLength(31);
   });
 });
 

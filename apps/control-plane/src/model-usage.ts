@@ -78,7 +78,11 @@ function renderChart(summary: ModelUsageSummary): string {
       return `<g role="listitem" aria-label="${escapeHtml(label)}"><title>${escapeHtml(label)}</title>${segments}</g>`;
     })
     .join("");
-  const axisLabels = [0, 14, 29]
+  const axisLabels = [
+    0,
+    Math.floor((summary.days.length - 1) / 2),
+    summary.days.length - 1,
+  ]
     .map((index) => {
       const day = summary.days[index];
       return day

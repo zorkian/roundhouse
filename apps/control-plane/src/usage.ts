@@ -94,20 +94,21 @@ export function summarizeModelUsage(
     group.push(call);
     byModel.set(call.model, group);
   }
+  // Bucket by UTC calendar date so each bar matches its visible date label.
+  // The exact rolling window can touch up to `days + 1` partial edge dates.
+  const firstDay = Math.floor(startAt / dayMilliseconds);
+  const lastDay = Math.floor(endAt / dayMilliseconds);
   const buckets: {
     startedAt: number;
     tokensByModel: Record<string, number>;
     callsWithoutTokens: number;
-  }[] = Array.from({ length: days }, (_, index) => ({
-    startedAt: startAt + index * dayMilliseconds,
+  }[] = Array.from({ length: lastDay - firstDay + 1 }, (_, index) => ({
+    startedAt: (firstDay + index) * dayMilliseconds,
     tokensByModel: {},
     callsWithoutTokens: 0,
   }));
   for (const call of inWindow) {
-    const index = Math.min(
-      days - 1,
-      Math.max(0, Math.floor((call.createdAt! - startAt) / dayMilliseconds)),
-    );
+    const index = Math.floor(call.createdAt! / dayMilliseconds) - firstDay;
     const bucket = buckets[index]!;
     if (typeof call.totalTokens === "number") {
       bucket.tokensByModel[call.model] =
