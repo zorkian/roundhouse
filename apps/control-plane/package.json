@@ -9,6 +9,7 @@
     "@cloudflare/sandbox": "0.12.4",
     "@roundhouse/core": "workspace:*",
     "@roundhouse/response-observer": "workspace:*",
-    "cytoscape": "^3.34.0"
+    "cytoscape": "^3.34.0",
+    "marked": "18.0.5"
   }
 }
