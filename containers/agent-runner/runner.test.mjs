@@ -181,6 +181,7 @@ describe("V2 agent runner", () => {
         "relevantFiles",
         "uncertainties",
         "sources",
+        "screenshots",
       ]),
     );
     expect(reproductionSchema.properties.commands.items).toMatchObject({
@@ -242,6 +243,7 @@ describe("V2 agent runner", () => {
       },
     });
     expect(prompt).toContain("install repository-declared dependencies");
+    expect(prompt).toContain("server bound to 0.0.0.0");
     expect(prompt).toContain('"conclusion":"failure"');
   });
 
@@ -299,6 +301,7 @@ describe("V2 agent runner", () => {
     expect(feature).toContain("install repository-declared dependencies");
     expect(feature).toContain("declared package manager and lockfile");
     expect(feature).toContain("desired outcome, current behavior");
+    expect(feature).toContain("bind its server to 0.0.0.0");
     expect(feature).not.toContain("expected behavior, observed behavior");
 
     const maintenance = investigationPrompt({

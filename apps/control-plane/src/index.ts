@@ -918,7 +918,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       const attempt = await repository.getAttempt(attemptId);
       if (
         !attempt ||
-        attempt.stage !== "implement" ||
+        !["reproduce", "implement"].includes(attempt.stage) ||
         !["created", "dispatched"].includes(attempt.state) ||
         attempt.deadlineAt <= Date.now()
       )
@@ -966,55 +966,26 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
         env.ATTEMPT_SANDBOXES,
         sandboxName(attempt),
       );
+      const previewResponse = await sandbox.fetchPreview(
+        new URL(input.path, "http://localhost").toString(),
+        input.port,
+      );
+      if (previewResponse.status < 200 || previewResponse.status >= 300)
+        return json(
+          { error: "preview_request_failed", status: previewResponse.status },
+          422,
+        );
+      const html = new TextDecoder().decode(previewResponse.body);
       const browser = await launch(env.BROWSER);
       try {
         const page = await browser.newPage({
           viewport: { width: input.width, height: input.height },
         });
-        const previewOrigin = "http://roundhouse-preview.invalid";
         type PageRoute = Parameters<Parameters<typeof page.route>[1]>[0];
-        await page.route("**/*", async (route: PageRoute) => {
-          const previewRequest = route.request();
-          const previewUrl = new URL(previewRequest.url());
-          if (
-            previewUrl.origin !== previewOrigin &&
-            !["localhost", "127.0.0.1", "::1"].includes(previewUrl.hostname)
-          ) {
-            await route.abort("blockedbyclient");
-            return;
-          }
-          const body = previewRequest.postDataBuffer() ?? undefined;
-          const response = await sandbox.fetchPreview(
-            new URL(
-              `${previewUrl.pathname}${previewUrl.search}`,
-              "http://localhost",
-            ).toString(),
-            input.port,
-            {
-              method: previewRequest.method(),
-              headers: previewRequest.headers(),
-              ...(body ? { body } : {}),
-            },
-          );
-          const headers = Object.fromEntries(
-            response.headers.filter(
-              ([name]) =>
-                ![
-                  "content-encoding",
-                  "content-length",
-                  "transfer-encoding",
-                ].includes(name.toLowerCase()),
-            ),
-          );
-          await route.fulfill({
-            status: response.status,
-            headers,
-            body: new Uint8Array(response.body),
-          });
-        });
-        await page.goto(new URL(input.path, previewOrigin).toString(), {
-          waitUntil: "networkidle",
-        });
+        await page.route("**/*", (route: PageRoute) =>
+          route.abort("blockedbyclient"),
+        );
+        await page.setContent(html, { waitUntil: "load" });
         const png = await page.screenshot({ type: "png", fullPage: true });
         const id = crypto.randomUUID();
         const objectKey = `screenshots/${id}.png`;

@@ -84,6 +84,7 @@ interface CommentPayload {
     readonly title?: string;
     readonly body?: string | null;
     readonly html_url?: string;
+    readonly state?: string;
   };
   readonly comment?: { readonly body?: string; readonly html_url?: string };
 }
@@ -306,13 +307,31 @@ function sourceLines(value: unknown): readonly string[] {
       .trim();
     try {
       const url = new URL(String(source.url ?? ""));
-      if (!["https:", "http:"].includes(url.protocol)) return [];
+      if (url.protocol !== "https:") return [];
       return [`- [${title || "Source"}](${url.toString()})`];
     } catch {
       return [];
     }
   });
   return sources.length ? ["", "### Sources", ...sources] : [];
+}
+
+function screenshotLines(value: unknown): readonly string[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const screenshot = item as Record<string, unknown>;
+    const description = String(screenshot.description ?? "Screenshot")
+      .replace(/[\[\]\r\n]/g, " ")
+      .trim();
+    try {
+      const url = new URL(String(screenshot.url ?? ""));
+      if (!["https:", "http:"].includes(url.protocol)) return [];
+      return ["", `![${description || "Screenshot"}](${url.toString()})`];
+    } catch {
+      return [];
+    }
+  });
 }
 
 function qualificationHeading(classification: string): string {
@@ -367,6 +386,7 @@ function reproductionComment(run: RunSnapshot, attempt: Attempt): string {
     "",
     "### What I found",
     observed,
+    ...screenshotLines(reproduction?.screenshots),
     ...sourceLines(reproduction?.sources),
     ...(waiting ? questionLines(reproduction?.uncertainties) : []),
     ...(waiting ? [] : ["", "I’ll put together a plan for the change next."]),
@@ -411,26 +431,12 @@ function implementationComment(
   const summary = String(
     implementation?.summary ?? "The requested change is ready for review.",
   );
-  const screenshots = Array.isArray(implementation?.screenshots)
-    ? implementation.screenshots.flatMap((item) => {
-        if (!item || typeof item !== "object") return [];
-        const screenshot = item as Record<string, unknown>;
-        const url = String(screenshot.url ?? "");
-        if (!url.startsWith("https://")) return [];
-        const description = String(
-          screenshot.description ?? "Implementation screenshot",
-        )
-          .replace(/[\[\]\r\n]/g, " ")
-          .trim();
-        return ["", `![${description || "Implementation screenshot"}](${url})`];
-      })
-    : [];
   return [
     `<!-- roundhouse:v2:implementation:${attempt.id} -->`,
     `## I ${created ? "opened" : "updated"} the draft pull request`,
     "",
     summary,
-    ...screenshots,
+    ...screenshotLines(implementation?.screenshots),
     "",
     `[View draft pull request #${pullRequest.number}](${pullRequest.html_url})`,
   ].join("\n");
@@ -1038,7 +1044,8 @@ export async function acceptGitHubComment(
   if (existing) {
     const resumable =
       run.status === "waiting" ||
-      (await concludedNoChangeQualification(repository, run));
+      (await concludedNoChangeQualification(repository, run)) ||
+      (run.status === "cancelled" && payload.issue?.state === "open");
     if (resumable) {
       const issue = run.issue ?? {
         title: payload.issue?.title ?? "",
