@@ -18,29 +18,48 @@ import worker from "./index.js";
 import type { D1Like } from "./d1-store.js";
 
 function detailsDb(found = true): D1Like {
+  // Multi-repository enrollment stores the numeric GitHub repository ID in
+  // github_id and keeps the owner/name in the profile metadata, so the stub
+  // only matches when the query looks the name up in that metadata.
+  const enrolledGithubId = "1297678423";
+  const enrolledRepository = "zorkian/roundhouse";
+  const enrolledIssueNumber = 281;
   return {
     prepare(sql: string) {
+      let values: unknown[] = [];
       const statement = {
-        bind: (..._values: unknown[]) => statement,
-        first: async () =>
-          found
-            ? {
-                document_json: JSON.stringify({
-                  schemaVersion: 2,
-                  id: "run_1",
-                  repository: "zorkian/roundhouse",
-                  issueNumber: 281,
-                  baseCommit: "base",
-                  currentHead: "head",
-                  profileVersion: "v2",
-                  status: "succeeded",
-                  stage: "merge",
-                  revision: 1,
-                }),
-                created_at: 1,
-                updated_at: 2,
-              }
-            : null,
+        bind: (...bound: unknown[]) => {
+          values = bound;
+          return statement;
+        },
+        first: async () => {
+          const [repository, issueNumber] = values;
+          const matchesRepository = sql.includes("github_id")
+            ? repository === enrolledGithubId
+            : repository === enrolledRepository;
+          if (
+            !found ||
+            !matchesRepository ||
+            issueNumber !== enrolledIssueNumber
+          )
+            return null;
+          return {
+            document_json: JSON.stringify({
+              schemaVersion: 2,
+              id: "run_1",
+              repository: "zorkian/roundhouse",
+              issueNumber: 281,
+              baseCommit: "base",
+              currentHead: "head",
+              profileVersion: "v2",
+              status: "succeeded",
+              stage: "merge",
+              revision: 1,
+            }),
+            created_at: 1,
+            updated_at: 2,
+          };
+        },
         run: async () => ({ meta: {} }),
         all: async () => ({
           meta: {},
