@@ -19,6 +19,7 @@ export interface UiSession {
 }
 
 export const uiSessionCookie = "roundhouse_ui_session";
+export const uiStateCookie = "roundhouse_ui_state";
 export const uiSessionLifetimeMs = 8 * 60 * 60 * 1000;
 const uiStateLifetimeMs = 10 * 60 * 1000;
 
@@ -77,13 +78,43 @@ function redirect(location: string, headers?: HeadersInit): Response {
   });
 }
 
+function readCookie(request: Request, name: string): string | undefined {
+  return (request.headers.get("cookie") ?? "")
+    .split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(`${name}=`))
+    ?.slice(name.length + 1);
+}
+
+function stateCookieHeader(token: string, maxAgeSeconds: number): string {
+  return `${uiStateCookie}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/auth/github/callback; Max-Age=${maxAgeSeconds}`;
+}
+
+// The state cookie binds the OAuth state to the browser that began sign-in,
+// so a callback URL captured by a third party cannot install a session in
+// another browser. Cleared after every completed callback attempt.
+function clearStateCookie(response: Response): Response {
+  const headers = new Headers(response.headers);
+  headers.append("set-cookie", stateCookieHeader("", 0));
+  return new Response(response.body, {
+    status: response.status,
+    headers,
+  });
+}
+
 export async function beginGitHubSignIn(env: UiAuthEnv): Promise<Response> {
   const startedAt = Date.now();
   const state = randomToken();
+  const stateCookieToken = randomToken();
   await env.DB.prepare(
-    "INSERT INTO ui_auth_states (state_hash, expires_at, created_at) VALUES (?1, ?2, ?3)",
+    "INSERT INTO ui_auth_states (state_hash, state_cookie_hash, expires_at, created_at) VALUES (?1, ?2, ?3, ?4)",
   )
-    .bind(await sha256Hex(state), startedAt + uiStateLifetimeMs, startedAt)
+    .bind(
+      await sha256Hex(state),
+      await sha256Hex(stateCookieToken),
+      startedAt + uiStateLifetimeMs,
+      startedAt,
+    )
     .run();
   const target = new URL("https://github.com/login/oauth/authorize");
   target.searchParams.set("client_id", env.GITHUB_CLIENT_ID);
@@ -96,7 +127,12 @@ export async function beginGitHubSignIn(env: UiAuthEnv): Promise<Response> {
     outcome: "redirect",
     durationMs: Date.now() - startedAt,
   });
-  return redirect(target.toString());
+  return redirect(target.toString(), {
+    "set-cookie": stateCookieHeader(
+      stateCookieToken,
+      Math.floor(uiStateLifetimeMs / 1000),
+    ),
+  });
 }
 
 async function githubUserRepositories(
@@ -154,6 +190,7 @@ async function enrolledRepositoryIds(db: D1Like): Promise<ReadonlySet<string>> {
 
 export async function handleGitHubCallback(
   url: URL,
+  request: Request,
   env: UiAuthEnv,
   html: (body: string) => Response,
 ): Promise<Response> {
@@ -164,8 +201,10 @@ export async function handleGitHubCallback(
       outcome: "denied",
       durationMs: Date.now() - startedAt,
     });
-    return html(
-      renderSignInPage("GitHub sign-in was not completed. Please try again."),
+    return clearStateCookie(
+      html(
+        renderSignInPage("GitHub sign-in was not completed. Please try again."),
+      ),
     );
   }
   const code = url.searchParams.get("code");
@@ -175,25 +214,35 @@ export async function handleGitHubCallback(
       outcome: "invalid_callback",
       durationMs: Date.now() - startedAt,
     });
-    return html(
-      renderSignInPage("Sign-in could not be completed. Please try again."),
+    return clearStateCookie(
+      html(
+        renderSignInPage("Sign-in could not be completed. Please try again."),
+      ),
     );
   }
   const stateHash = await sha256Hex(state);
   const stateRow = await env.DB.prepare(
-    "SELECT expires_at FROM ui_auth_states WHERE state_hash = ?1",
+    "SELECT state_cookie_hash, expires_at FROM ui_auth_states WHERE state_hash = ?1",
   )
     .bind(stateHash)
-    .first<{ expires_at: number }>();
+    .first<{ state_cookie_hash: string; expires_at: number }>();
   await env.DB.prepare("DELETE FROM ui_auth_states WHERE state_hash = ?1")
     .bind(stateHash)
     .run();
-  if (!stateRow || stateRow.expires_at <= Date.now()) {
+  const stateCookieToken = readCookie(request, uiStateCookie);
+  if (
+    !stateRow ||
+    stateRow.expires_at <= Date.now() ||
+    !stateCookieToken ||
+    stateRow.state_cookie_hash !== (await sha256Hex(stateCookieToken))
+  ) {
     log("ui_auth_callback", {
       outcome: "state_invalid",
       durationMs: Date.now() - startedAt,
     });
-    return html(renderSignInPage("Sign-in expired. Please try again."));
+    return clearStateCookie(
+      html(renderSignInPage("Sign-in expired. Please try again.")),
+    );
   }
   const tokenResponse = await observeResponse(
     await fetch("https://github.com/login/oauth/access_token", {
@@ -223,8 +272,10 @@ export async function handleGitHubCallback(
       status: tokenResponse.status,
       durationMs: Date.now() - startedAt,
     });
-    return html(
-      renderSignInPage("Sign-in could not be completed. Please try again."),
+    return clearStateCookie(
+      html(
+        renderSignInPage("Sign-in could not be completed. Please try again."),
+      ),
     );
   }
   const accessToken = tokenBody.access_token;
@@ -275,17 +326,20 @@ export async function handleGitHubCallback(
       authorizedRepositories: repositoryIds.length,
       durationMs: Date.now() - startedAt,
     });
-    return redirect("/", {
+    const success = redirect("/", {
       "set-cookie": `${uiSessionCookie}=${sessionToken}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${Math.floor(uiSessionLifetimeMs / 1000)}`,
     });
+    return clearStateCookie(success);
   } catch (error) {
     log("ui_auth_callback", {
       outcome: "github_resolution_failed",
       error: error instanceof Error ? error.message : String(error),
       durationMs: Date.now() - startedAt,
     });
-    return html(
-      renderSignInPage("Sign-in could not be completed. Please try again."),
+    return clearStateCookie(
+      html(
+        renderSignInPage("Sign-in could not be completed. Please try again."),
+      ),
     );
   }
 }

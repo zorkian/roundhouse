@@ -1273,7 +1273,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
     if (url.pathname === "/auth/github/callback" && isPublicUiRequest()) {
       if (request.method !== "GET")
         return json({ error: "method_not_allowed" }, 405, { allow: "GET" });
-      return handleGitHubCallback(url, env, html);
+      return handleGitHubCallback(url, request, env, html);
     }
     if (url.pathname === "/auth/sign-out" && isPublicUiRequest()) {
       if (request.method !== "GET")

@@ -8,6 +8,7 @@ import {
   handleGitHubCallback,
   signOut,
   uiSessionCookie,
+  uiStateCookie,
   validateUiSession,
 } from "./ui-auth.js";
 
@@ -25,7 +26,7 @@ function authDb(options?: {
     expiresAt: number;
   }[];
 }) {
-  const states = new Map<string, number>();
+  const states = new Map<string, { expiresAt: number; cookieHash: string }>();
   const sessions = new Map(
     (options?.sessions ?? []).map((session) => [
       session.hash,
@@ -47,8 +48,13 @@ function authDb(options?: {
         },
         first: async () => {
           if (sql.includes("FROM ui_auth_states")) {
-            const expires = states.get(String(values[0]));
-            return expires === undefined ? null : { expires_at: expires };
+            const state = states.get(String(values[0]));
+            return state === undefined
+              ? null
+              : {
+                  expires_at: state.expiresAt,
+                  state_cookie_hash: state.cookieHash,
+                };
           }
           if (sql.includes("FROM ui_sessions")) {
             return sessions.get(String(values[0])) ?? null;
@@ -67,7 +73,10 @@ function authDb(options?: {
         },
         run: async () => {
           if (sql.includes("INSERT INTO ui_auth_states"))
-            states.set(String(values[0]), Number(values[1]));
+            states.set(String(values[0]), {
+              cookieHash: String(values[1]),
+              expiresAt: Number(values[2]),
+            });
           if (sql.includes("DELETE FROM ui_auth_states"))
             states.delete(String(values[0]));
           if (sql.includes("INSERT INTO ui_sessions"))
@@ -90,6 +99,11 @@ function authDb(options?: {
     },
   };
   return { db, states, sessions };
+}
+
+function callbackRequest(url: string, start?: Response): Request {
+  const cookie = start?.headers.get("set-cookie")?.split(";")[0] ?? "";
+  return new Request(url, cookie ? { headers: { cookie } } : {});
 }
 
 const env = (db: D1Like) => ({
@@ -155,6 +169,7 @@ describe("GitHub UI sign-in", () => {
       new URL(
         `https://v2.invalid/auth/github/callback?code=abc&state=${state}`,
       ),
+      callbackRequest("https://v2.invalid/auth/github/callback", start),
       env(db),
       html,
     );
@@ -202,6 +217,7 @@ describe("GitHub UI sign-in", () => {
       new URL(
         `https://v2.invalid/auth/github/callback?code=abc&state=${state}`,
       ),
+      callbackRequest("https://v2.invalid/auth/github/callback", start),
       env(db),
       html,
     );
@@ -239,6 +255,7 @@ describe("GitHub UI sign-in", () => {
       new URL(
         `https://v2.invalid/auth/github/callback?code=abc&state=${state}`,
       ),
+      callbackRequest("https://v2.invalid/auth/github/callback", start),
       env(db),
       html,
     );
@@ -251,6 +268,7 @@ describe("GitHub UI sign-in", () => {
     const { db } = authDb();
     const denied = await handleGitHubCallback(
       new URL("https://v2.invalid/auth/github/callback?error=access_denied"),
+      callbackRequest("https://v2.invalid/auth/github/callback"),
       env(db),
       html,
     );
@@ -258,6 +276,7 @@ describe("GitHub UI sign-in", () => {
 
     const missing = await handleGitHubCallback(
       new URL("https://v2.invalid/auth/github/callback"),
+      callbackRequest("https://v2.invalid/auth/github/callback"),
       env(db),
       html,
     );
@@ -265,10 +284,53 @@ describe("GitHub UI sign-in", () => {
 
     const mismatched = await handleGitHubCallback(
       new URL("https://v2.invalid/auth/github/callback?code=abc&state=nope"),
+      callbackRequest("https://v2.invalid/auth/github/callback"),
       env(db),
       html,
     );
     await expect(mismatched.text()).resolves.toContain("expired");
+  });
+
+  it("rejects a callback replayed in a browser without the state cookie", async () => {
+    const { db, sessions } = authDb();
+    const start = await beginGitHubSignIn(env(db));
+    const state = new URL(start.headers.get("location")!).searchParams.get(
+      "state",
+    )!;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ access_token: "user-token" })),
+    );
+    const callbackUrl = new URL(
+      `https://v2.invalid/auth/github/callback?code=abc&state=${state}`,
+    );
+    // No state cookie at all: a captured callback URL must not create a session.
+    const withoutCookie = await handleGitHubCallback(
+      callbackUrl,
+      callbackRequest("https://v2.invalid/auth/github/callback"),
+      env(db),
+      html,
+    );
+    await expect(withoutCookie.text()).resolves.toContain("expired");
+    expect(sessions.size).toBe(0);
+
+    // A foreign state cookie must not satisfy a different state record.
+    const startAgain = await beginGitHubSignIn(env(db));
+    const stateAgain = new URL(
+      startAgain.headers.get("location")!,
+    ).searchParams.get("state")!;
+    const wrongCookie = await handleGitHubCallback(
+      new URL(
+        `https://v2.invalid/auth/github/callback?code=abc&state=${stateAgain}`,
+      ),
+      new Request("https://v2.invalid/auth/github/callback", {
+        headers: { cookie: `${uiStateCookie}=forged` },
+      }),
+      env(db),
+      html,
+    );
+    await expect(wrongCookie.text()).resolves.toContain("expired");
+    expect(sessions.size).toBe(0);
   });
 
   it("validates, expires, and signs out sessions", async () => {
