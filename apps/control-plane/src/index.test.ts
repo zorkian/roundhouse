@@ -355,6 +355,63 @@ describe("V2 control plane", () => {
     }
   });
 
+  it("serves the workflow graph asset from the public UI origin", async () => {
+    const fetch = worker.fetch as unknown as (
+      request: Request,
+      env: unknown,
+      context: unknown,
+    ) => Promise<Response>;
+    const asset = await fetch(
+      new Request("https://v2.invalid/assets/workflow-graph.js"),
+      uiEnv(dashboardDb()) as never,
+      {} as never,
+    );
+    expect(asset.status).toBe(200);
+    expect(asset.headers.get("content-type")).toBe(
+      "text/javascript; charset=utf-8",
+    );
+    expect(asset.headers.get("content-security-policy")).toBe(
+      "default-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+    );
+    expect(asset.headers.get("x-content-type-options")).toBe("nosniff");
+    await expect(asset.text()).resolves.toContain("workflow_graph_initialized");
+
+    const post = await fetch(
+      new Request("https://v2.invalid/assets/workflow-graph.js", {
+        method: "POST",
+      }),
+      uiEnv(dashboardDb()) as never,
+      {} as never,
+    );
+    expect(post.status).toBe(405);
+
+    const directOrigin = await fetch(
+      new Request("https://direct-worker.invalid/assets/workflow-graph.js"),
+      uiEnv(dashboardDb()) as never,
+      {} as never,
+    );
+    expect(directOrigin.status).toBe(404);
+  });
+
+  it("allows same-origin scripts on UI pages", async () => {
+    const fetch = worker.fetch as unknown as (
+      request: Request,
+      env: unknown,
+      context: unknown,
+    ) => Promise<Response>;
+    const response = await fetch(
+      new Request("https://v2.invalid/", {
+        headers: { cookie: authedUiCookie },
+      }),
+      uiEnv(withUiSession(dashboardDb())) as never,
+      {} as never,
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-security-policy")).toContain(
+      "script-src 'self'",
+    );
+  });
+
   it("serves screenshots from the public Worker origin without exposing the dashboard", async () => {
     const fetch = worker.fetch as unknown as (
       request: Request,

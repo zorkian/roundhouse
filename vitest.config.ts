@@ -11,6 +11,9 @@ export default defineConfig({
       "@cloudflare/containers": fileURLToPath(
         new URL("./tests/cloudflare-containers.ts", import.meta.url),
       ),
+      "cytoscape/dist/cytoscape.min.js": fileURLToPath(
+        new URL("./tests/cytoscape-min-stub.js", import.meta.url),
+      ),
       "cloudflare:workers": fileURLToPath(
         new URL("./tests/cloudflare-workers.ts", import.meta.url),
       ),

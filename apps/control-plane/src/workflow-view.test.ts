@@ -7,7 +7,8 @@ import {
   type RunSnapshot,
 } from "@roundhouse/core";
 import { describe, expect, it } from "vitest";
-import { renderWorkflowView } from "./workflow-view.js";
+import { renderWorkflowView, workflowGraphElements } from "./workflow-view.js";
+import { workflowGraphClientScript } from "./workflow-client.js";
 
 async function runFixture(): Promise<RunSnapshot> {
   const workflow = await compileWorkflow(
@@ -40,14 +41,20 @@ async function runFixture(): Promise<RunSnapshot> {
 }
 
 describe("workflow graph view", () => {
-  it("renders the immutable graph, authority, editor, and GitHub proposal path", async () => {
+  it("renders the labeled graph container, editor, and GitHub proposal path", async () => {
     const run = await runFixture();
     const html = renderWorkflowView(run);
-    expect(html).toContain('aria-label="Workflow graph"');
-    expect(html).toContain("agent.write");
-    expect(html).toContain("artifact.write");
+    expect(html).toContain('id="workflow-graph"');
+    expect(html).toContain('aria-label="Workflow graph.');
+    expect(html).toContain('id="workflow-graph-data"');
+    expect(html).toContain('src="/assets/workflow-graph.js"');
+    // The interactive graph replaces the static server-generated SVG.
+    expect(html).not.toContain("<svg");
+    expect(html).not.toContain("<script>const source=");
     expect(html).toContain("Workflow editor");
     expect(html).toContain("Validate workflow");
+    expect(html).toContain("Copy YAML");
+    expect(html).toContain(`data-source-commit="${"a".repeat(40)}"`);
     expect(html).toContain(
       "https://github.com/zorkian/roundhouse/edit/main/.roundhouse/workflow.yaml",
     );
@@ -55,49 +62,98 @@ describe("workflow graph view", () => {
     expect(html).toContain("Existing runs keep their original snapshot.");
   });
 
-  it("routes edges around nodes with arrowed paths instead of center-to-center lines", async () => {
+  it("emits graph elements with node metadata and every directed edge", async () => {
     const run = await runFixture();
     const workflow = run.profile!.workflow!;
-    const html = renderWorkflowView(run);
-    const svg = html.slice(html.indexOf("<svg"), html.indexOf("</svg>"));
-    // No straight center-to-center lines remain; every edge is a routed path
-    // with a direction marker.
-    expect(svg).not.toContain("<line");
-    const edgePaths =
-      svg.match(
-        /<path class="edge" d="[^"]+" marker-end="url\(#arrow\)"><title>[^<]+<\/title><\/path>/g,
-      ) ?? [];
-    const routed = Object.entries(workflow.nodes).flatMap(([from, node]) =>
+    const elements = workflowGraphElements(workflow);
+    const nodes = elements.filter((element) => element.group === "nodes");
+    const edges = elements.filter((element) => element.group === "edges");
+
+    // One node per workflow node, preserving ID, executor, and authority.
+    expect(nodes.map((node) => node.data["id"])).toEqual(
+      Object.keys(workflow.nodes),
+    );
+    for (const node of nodes) {
+      const compiled = workflow.nodes[node.data["id"]!]!;
+      expect(node.data["executor"]).toBe(compiled.executor);
+      expect(node.data["authority"]).toBe(
+        compiled.capabilities.join(", ") || "no external authority",
+      );
+      expect(node.data["label"]).toContain(node.data["id"]!);
+      expect(node.data["label"]).toContain(compiled.executor);
+    }
+    expect(nodes.some((node) => node.data["executor"] === "agent.write")).toBe(
+      true,
+    );
+    expect(
+      nodes.some((node) => node.data["authority"]!.includes("artifact.write")),
+    ).toBe(true);
+    // A capability-free node falls back to explicit no-authority text.
+    const synthetic = workflowGraphElements({
+      ...workflow,
+      nodes: { lone: { ...workflow.nodes["plan"]!, capabilities: [] } },
+    });
+    expect(synthetic[0]!.data["authority"]).toBe("no external authority");
+
+    // One directed edge per transition with a destination, with unique IDs.
+    const routed = Object.values(workflow.nodes).flatMap((node) =>
       node.transitions.filter((transition) => transition.to),
     );
-    expect(edgePaths).toHaveLength(routed.length);
-    // The default workflow crosses columns and rows, so at least one edge
-    // must use a multi-segment routed path rather than a direct segment.
-    expect(
-      edgePaths.some((path) => (path.match(/ L /g) ?? []).length >= 3),
-    ).toBe(true);
-    // The integrate → integrate self-transition renders as a nonzero loop
-    // outside its node instead of a zero-length line.
-    const selfLoop = edgePaths.find((path) =>
-      path.includes("<title>integrate → integrate</title>"),
+    expect(edges).toHaveLength(routed.length);
+    expect(new Set(edges.map((edge) => edge.data["id"])).size).toBe(
+      edges.length,
     );
-    expect(selfLoop).toBeDefined();
-    const selfNumbers = (selfLoop!.match(/-?\d+/g) ?? []).map(Number);
-    expect(Math.max(...selfNumbers) - Math.min(...selfNumbers)).toBeGreaterThan(
-      0,
+
+    // The default workflow's self-cycle and backward transition survive as
+    // directed edges instead of collapsing.
+    const selfCycle = edges.find(
+      (edge) =>
+        edge.data["source"] === "integrate" &&
+        edge.data["target"] === "integrate",
     );
-    expect(selfLoop).toContain("L");
-    // The backward review → implement route terminates on node boundaries,
-    // not box centers.
-    const backward = edgePaths.find((path) =>
-      path.includes("<title>review → implement</title>"),
+    expect(selfCycle).toBeDefined();
+    const backward = edges.find(
+      (edge) =>
+        edge.data["source"] === "review" && edge.data["target"] === "implement",
     );
     expect(backward).toBeDefined();
-    expect(backward).not.toMatch(/M 490 175 L 150 175/);
-    // Every edge carries a visible direction marker.
-    expect(
-      edgePaths.every((path) => path.includes('marker-end="url(#arrow)"')),
-    ).toBe(true);
-    expect(html).toContain('aria-label="Workflow graph"');
+  });
+
+  it("embeds the graph data as escaped JSON inside the page", async () => {
+    const run = await runFixture();
+    const html = renderWorkflowView(run);
+    const match = html.match(
+      /<script id="workflow-graph-data" type="application\/json">(.+?)<\/script>/,
+    );
+    expect(match).toBeDefined();
+    expect(match![1]).not.toContain("<");
+    const elements = JSON.parse(match![1]!) as ReturnType<
+      typeof workflowGraphElements
+    >;
+    expect(elements).toEqual(workflowGraphElements(run.profile!.workflow!));
+  });
+
+  it("ships client behavior for selection highlighting and the editor actions", () => {
+    // Cycle-capable force-directed layout with directed arrows.
+    expect(workflowGraphClientScript).toContain('"cose"');
+    expect(workflowGraphClientScript).toContain('"target-arrow-shape"');
+    // Selecting a node emphasizes it and its connected edges, mutes the
+    // rest, and tapping the background clears the state.
+    expect(workflowGraphClientScript).toContain('"select", "node"');
+    expect(workflowGraphClientScript).toContain("connectedEdges()");
+    expect(workflowGraphClientScript).toContain(
+      '"selected-node connected-edge muted"',
+    );
+    expect(workflowGraphClientScript).toContain("event.target === cy");
+    // Structured timing logs at the graph initialization boundary.
+    expect(workflowGraphClientScript).toContain("workflow_graph_initialized");
+    expect(workflowGraphClientScript).toContain(
+      "workflow_graph_layout_completed",
+    );
+    expect(workflowGraphClientScript).toContain("elapsedMs");
+    // Validate and copy handlers moved here from the inline script.
+    expect(workflowGraphClientScript).toContain('getElementById("validate")');
+    expect(workflowGraphClientScript).toContain('getElementById("copy")');
+    expect(workflowGraphClientScript).toContain("data-source-commit");
   });
 });
