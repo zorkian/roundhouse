@@ -10,6 +10,11 @@ import {
 import type { AttemptCompletion } from "./callback.js";
 import type { RoundhouseAttemptSandbox } from "./attempt-container.js";
 import {
+  prepareAttemptExecution,
+  type AttemptPreparationEnv,
+  type AttemptWorkflowParams,
+} from "./attempt-dispatch.js";
+import {
   destroyAttemptSandboxWithTrace,
   type SandboxNamespace,
 } from "./attempt-runtime.js";
@@ -25,15 +30,10 @@ import {
 } from "./attempt-settlement.js";
 import { D1RunRepository } from "./d1-store.js";
 
-export interface AttemptWorkflowParams {
-  readonly attemptId: string;
-  readonly sandboxName: string;
-  readonly mode?: "execute" | "settle";
-}
-
-type AttemptWorkflowEnv = AttemptSettlementEnv & {
-  readonly ATTEMPT_SANDBOXES: SandboxNamespace;
-};
+type AttemptWorkflowEnv = AttemptSettlementEnv &
+  AttemptPreparationEnv & {
+    readonly ATTEMPT_SANDBOXES: SandboxNamespace;
+  };
 
 const noExecutionRetry = {
   retries: {
@@ -102,6 +102,62 @@ export class AttemptExecutionWorkflow extends WorkflowEntrypoint<
 
     let completion: AttemptCompletion;
     if (mode === "execute") {
+      await step.do("confirm durable dispatch", async (): Promise<void> => {
+        const startedAt = Date.now();
+        await repository.markDispatched(attemptId);
+        await trace(
+          repository,
+          attemptId,
+          event.instanceId,
+          sandboxName,
+          "attempt_workflow_dispatch_confirmed",
+          startedAt,
+        );
+      });
+
+      await step.do(
+        "prepare attempt",
+        { timeout: attachedStepTimeout },
+        async (): Promise<void> => {
+          const startedAt = Date.now();
+          await trace(
+            repository,
+            attemptId,
+            event.instanceId,
+            sandboxName,
+            "attempt_workflow_preparation_started",
+          );
+          try {
+            await prepareAttemptExecution(this.env, attemptId);
+            await trace(
+              repository,
+              attemptId,
+              event.instanceId,
+              sandboxName,
+              "attempt_workflow_preparation_completed",
+              startedAt,
+            );
+          } catch (error) {
+            await trace(
+              repository,
+              attemptId,
+              event.instanceId,
+              sandboxName,
+              "attempt_workflow_preparation_failed",
+              startedAt,
+              {
+                errorType:
+                  error instanceof Error
+                    ? error.constructor.name
+                    : typeof error,
+                error: error instanceof Error ? error.message : String(error),
+              },
+            );
+            throw error;
+          }
+        },
+      );
+
       await step.do(
         "restore prepared workspace",
         { timeout: attachedStepTimeout },

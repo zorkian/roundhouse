@@ -912,7 +912,7 @@ describe("single coordinator", () => {
     expect(submitted).toBe(1);
   });
 
-  it("does not revisit a start report while the dispatch is still in flight", async () => {
+  it("resumes a created handoff instead of waiting for its lease to expire", async () => {
     const store = new MemoryRunRepository();
     const run = runFixture({
       revision: 4,
@@ -938,11 +938,16 @@ describe("single coordinator", () => {
       { attemptId: "run_slice_rev_4", runRevision: 4, expiresAt: 150 },
       100,
     );
+    let submitted = 0;
     let started = 0;
     await expect(
       coordinate(
         store,
-        { submit: async () => undefined },
+        {
+          submit: async () => {
+            submitted += 1;
+          },
+        },
         { runId: input.id, expectedRevision: 4 },
         101,
         50,
@@ -953,8 +958,20 @@ describe("single coordinator", () => {
           },
         },
       ),
-    ).resolves.toBe("duplicate");
-    expect(started).toBe(0);
+    ).resolves.toBe("dispatched");
+    expect(submitted).toBe(1);
+    expect(started).toBe(1);
+    await expect(store.getAttempt("run_slice_rev_4")).resolves.toMatchObject({
+      state: "dispatched",
+    });
+    expect(
+      store.events
+        .filter(({ kind }) => kind === "attempt_dispatch_resume")
+        .map(({ payload }) => payload.phase),
+    ).toEqual([
+      "created_attempt_dispatch_resume_started",
+      "created_attempt_dispatch_resume_completed",
+    ]);
   });
 
   it("reports a holistic review start after dispatch but stays silent for specialists", async () => {
