@@ -69,6 +69,75 @@ async function sha256Hex(value: string): Promise<string> {
     .join("");
 }
 
+function base64UrlEncode(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
+}
+
+function base64UrlDecode(value: string): Uint8Array {
+  const base64 = value.replaceAll("-", "+").replaceAll("_", "/");
+  const binary = atob(base64 + "=".repeat((4 - (base64.length % 4)) % 4));
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1)
+    bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+// The stored GitHub access token is a reusable bearer credential, so it is
+// never written to the database in plaintext. It is encrypted with AES-GCM
+// under a key derived from the OAuth client secret — key material held by
+// the Worker, outside the database — and decrypted only in memory for the
+// bounded authorization refresh. Format: v1.<iv>.<ciphertext>, base64url.
+async function uiTokenEncryptionKey(secret: string): Promise<CryptoKey> {
+  const material = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`roundhouse-ui-session-token:${secret}`),
+  );
+  return crypto.subtle.importKey("raw", material, "AES-GCM", false, [
+    "encrypt",
+    "decrypt",
+  ]);
+}
+
+export async function encryptUiAccessToken(
+  token: string,
+  secret: string,
+): Promise<string> {
+  const iv = new Uint8Array(12);
+  crypto.getRandomValues(iv);
+  const ciphertext = new Uint8Array(
+    await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv },
+      await uiTokenEncryptionKey(secret),
+      new TextEncoder().encode(token),
+    ),
+  );
+  return `v1.${base64UrlEncode(iv)}.${base64UrlEncode(ciphertext)}`;
+}
+
+export async function decryptUiAccessToken(
+  stored: string,
+  secret: string,
+): Promise<string | undefined> {
+  const [version, iv, ciphertext] = stored.split(".");
+  if (version !== "v1" || iv === undefined || ciphertext === undefined)
+    return undefined;
+  try {
+    const plaintext = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: base64UrlDecode(iv) as BufferSource },
+      await uiTokenEncryptionKey(secret),
+      base64UrlDecode(ciphertext) as BufferSource,
+    );
+    return new TextDecoder().decode(plaintext);
+  } catch {
+    return undefined;
+  }
+}
+
 function randomToken(): string {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
@@ -353,13 +422,17 @@ export async function handleGitHubCallback(
         JSON.stringify(repositoryIds),
         expiresAt,
         Date.now(),
-        accessToken,
+        await encryptUiAccessToken(
+          accessToken,
+          env.ROUNDHOUSE_GITHUB_CLIENT_SECRET,
+        ),
         Date.now(),
       )
       .run();
-    // The GitHub access token persists with the session so a stale
-    // authorization snapshot can be re-resolved against GitHub during
-    // sliding renewal; it is never exposed to the browser.
+    // The GitHub access token persists with the session — encrypted with
+    // key material outside the database — so a stale authorization
+    // snapshot can be re-resolved against GitHub during sliding renewal;
+    // it is never exposed to the browser and never stored in plaintext.
     log("ui_auth_callback", {
       outcome: "signed_in",
       githubUserId: user.id,
@@ -451,7 +524,16 @@ export async function validateUiSession(
   let authorizedAt = row.authorized_at ?? row.created_at;
   if (startedAt - authorizedAt >= uiAuthorizationLifetimeMs) {
     const reauthorizationStartedAt = Date.now();
-    if (!row.github_access_token) {
+    // Decrypt the stored bearer token only in memory, for this refresh.
+    // Sessions predating token encryption hold plaintext here; they cannot
+    // be decrypted safely and must reauthenticate.
+    const accessToken = row.github_access_token
+      ? await decryptUiAccessToken(
+          row.github_access_token,
+          env.ROUNDHOUSE_GITHUB_CLIENT_SECRET,
+        )
+      : undefined;
+    if (!accessToken) {
       await env.DB.prepare("DELETE FROM ui_sessions WHERE session_hash = ?1")
         .bind(await sha256Hex(token))
         .run();
@@ -464,10 +546,7 @@ export async function validateUiSession(
       return undefined;
     }
     try {
-      repositoryIds = await authorizedRepositoryIds(
-        row.github_access_token,
-        env.DB,
-      );
+      repositoryIds = await authorizedRepositoryIds(accessToken, env.DB);
       authorizedAt = Date.now();
       log("ui_session_reauthorized", {
         outcome: "refreshed",

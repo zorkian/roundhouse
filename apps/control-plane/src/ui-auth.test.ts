@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { D1Like } from "./d1-store.js";
 import {
   beginGitHubSignIn,
+  decryptUiAccessToken,
+  encryptUiAccessToken,
   handleGitHubCallback,
   sessionCookieHeader,
   signOut,
@@ -50,7 +52,7 @@ function authDb(options?: {
         created_at: session.createdAt ?? Date.now(),
         github_access_token:
           session.accessToken === undefined
-            ? "user-token"
+            ? ENCRYPTED_USER_TOKEN
             : session.accessToken,
         authorized_at:
           session.authorizedAt === undefined
@@ -154,6 +156,13 @@ function callbackRequest(url: string, start?: Response): Request {
   return new Request(url, cookie ? { headers: { cookie } } : {});
 }
 
+// Sessions store the GitHub access token encrypted under the client
+// secret, so seeded stub sessions use an encrypted default token.
+const ENCRYPTED_USER_TOKEN = await encryptUiAccessToken(
+  "user-token",
+  "client-secret",
+);
+
 const env = (db: D1Like) => ({
   DB: db,
   PUBLIC_ORIGIN: "https://v2.invalid",
@@ -250,7 +259,12 @@ describe("GitHub UI sign-in", () => {
     const session = [...sessions.values()][0]!;
     expect(session.github_login).toBe("octocat");
     expect(JSON.parse(session.repository_ids_json)).toEqual(["1297678423"]);
-    expect(session.github_access_token).toBe("user-token");
+    // The bearer token is encrypted at rest; the database never holds the
+    // reusable plaintext credential.
+    expect(session.github_access_token).not.toContain("user-token");
+    expect(
+      await decryptUiAccessToken(session.github_access_token!, "client-secret"),
+    ).toBe("user-token");
     expect(session.authorized_at).toBeGreaterThan(0);
     // The session and its cookie share a lifetime of at least 30 days.
     expect(session.expires_at - Date.now()).toBeGreaterThanOrEqual(
@@ -643,6 +657,41 @@ describe("GitHub UI sign-in", () => {
     );
     expect(session).toBeUndefined();
     expect(sessions.has(hash)).toBe(false);
+  });
+
+  it("requires reauthentication when a stale session holds an undecryptable token", async () => {
+    const token = "plaintext-token-session";
+    const hash = await sha256Hex(token);
+    const { db, sessions } = authDb({
+      sessions: [
+        {
+          hash,
+          expiresAt: Date.now() + 60_000,
+          // A legacy or tampered row whose stored token is not a ciphertext
+          // produced by this deployment cannot be used for reauthorization.
+          accessToken: "user-token",
+          authorizedAt: Date.now() - 9 * 60 * 60 * 1000,
+        },
+      ],
+    });
+    const logs: Record<string, unknown>[] = [];
+    const logSpy = vi
+      .spyOn(console, "log")
+      .mockImplementation((line: unknown) => {
+        logs.push(JSON.parse(String(line)) as Record<string, unknown>);
+      });
+    const session = await validateUiSession(
+      new Request("https://v2.invalid/", {
+        headers: { cookie: `${uiSessionCookie}=${token}` },
+      }),
+      env(db),
+    );
+    expect(session).toBeUndefined();
+    expect(sessions.has(hash)).toBe(false);
+    expect(
+      logs.find((entry) => entry.message === "ui_session_reauthorized"),
+    ).toMatchObject({ outcome: "reauthentication_required", githubUserId: 7 });
+    logSpy.mockRestore();
   });
 
   it("keeps the later expiration when renewals overlap", async () => {
