@@ -193,6 +193,28 @@ describe("model broker", () => {
     });
   });
 
+  it("supplies Anthropic's required max_tokens when no limit is requested", () => {
+    const planning = request();
+    planning.headers.set("x-roundhouse-role", "plan");
+    expect(
+      adaptRequest({ input: "Plan this." }, selectRoute(planning, env)),
+    ).toMatchObject({ max_tokens: 8192 });
+  });
+
+  it("requests usage in streamed Moonshot chat responses", () => {
+    const review = request();
+    review.headers.set("x-roundhouse-role", "review-security");
+    expect(
+      adaptRequest(
+        { input: "Review this.", stream: true },
+        selectRoute(review, env),
+      ),
+    ).toMatchObject({
+      stream: true,
+      stream_options: { include_usage: true },
+    });
+  });
+
   it("normalizes Anthropic messages and usage to a Responses result", async () => {
     const planning = request();
     planning.headers.set("x-roundhouse-role", "plan");

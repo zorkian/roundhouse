@@ -10,6 +10,7 @@ const routingHeaders = [
   "x-roundhouse-complexity",
 ] as const;
 const researchRoles = new Set(["qualify", "reproduce", "plan"]);
+const defaultAnthropicMaxTokens = 8192;
 
 export type BrokerEnv = Omit<Cloudflare.Env, "ROUTING_ROUTES"> & {
   readonly ROUTING_ROUTES?: string;
@@ -269,7 +270,9 @@ export function adaptRequest(
     messages,
     ...(typeof body.max_output_tokens === "number"
       ? { max_tokens: body.max_output_tokens }
-      : {}),
+      : format === "messages"
+        ? { max_tokens: defaultAnthropicMaxTokens }
+        : {}),
     ...(tools?.length ? { tools } : {}),
     stream: body.stream === true,
   };
@@ -282,6 +285,9 @@ export function adaptRequest(
     };
   return {
     ...common,
+    ...(body.stream === true
+      ? { stream_options: { include_usage: true } }
+      : {}),
     messages:
       typeof body.instructions === "string"
         ? [{ role: "system", content: body.instructions }, ...messages]
