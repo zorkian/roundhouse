@@ -873,12 +873,21 @@ describe("run details competitions", () => {
     expect(html).toContain("gpt-judge-actual");
     expect(html).toContain("alpha");
     // Candidate and judge usage stay separate; run total includes all calls.
-    expect(html).toContain("100 tokens · $0.01");
     expect(html).toContain(
-      "40 output</span></span><table><thead><tr><th>Provider</th>",
+      '<details class="candidate-usage"><summary>100 tokens · $0.01 · Per-call details</summary>',
+    );
+    expect(html).toContain('class="model-usage-details"');
+    expect(html).toContain(
+      "<dt>Provider</dt><dd>openai</dd></div><div><dt>Configured model</dt><dd>openai/gpt-alpha</dd></div><div><dt>Actual model</dt><dd>gpt-alpha-actual</dd>",
     );
     expect(html).toContain(
-      "<td>openai</td><td>openai/gpt-alpha</td><td>gpt-alpha-actual</td><td>medium</td><td>low</td><td>60 input, unavailable cached input, unavailable cache creation input, unavailable reasoning, 40 output</td><td>$0.010000</td><td>1,234 ms</td><td>2</td>",
+      "<dt>Requested effort</dt><dd>medium</dd></div><div><dt>Resolved effort</dt><dd>low</dd>",
+    );
+    expect(html).toContain(
+      "<dt>Token breakdown</dt><dd>60 input, unavailable cached input, unavailable cache creation input, unavailable reasoning, 40 output</dd>",
+    );
+    expect(html).toContain(
+      "<dt>Cost</dt><dd>$0.010000</dd></div><div><dt>Latency</dt><dd>1,234 ms</dd></div><div><dt>Tool calls</dt><dd>2</dd>",
     );
     expect(html).toContain("50 tokens · $0.03");
     expect(html).toContain("350 tokens · $0.06");
