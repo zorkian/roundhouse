@@ -237,8 +237,11 @@ describe("GitHub UI sign-in", () => {
       Math.floor(uiSessionLifetimeMs / 1000) - 1,
     );
     expect(maxAge).toBeLessThanOrEqual(Math.floor(uiSessionLifetimeMs / 1000));
-    expect(maxAge).toBeGreaterThanOrEqual(30 * 24 * 60 * 60);
-    expect(session.expires_at).toBeLessThanOrEqual(Date.now() + maxAge * 1000);
+    expect(maxAge).toBeGreaterThanOrEqual(30 * 24 * 60 * 60 - 1);
+    // Max-Age is floored to whole seconds, so allow up to a second of skew.
+    expect(session.expires_at).toBeLessThanOrEqual(
+      Date.now() + maxAge * 1000 + 1000,
+    );
     // The cookie's absolute Expires deadline matches the stored expiration.
     expect(cookie).toContain(
       `Expires=${new Date(session.expires_at).toUTCString()}`,
@@ -538,6 +541,28 @@ describe("GitHub UI sign-in", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("rejects validation when the session is deleted between SELECT and UPDATE", async () => {
+    const token = "deleted-token";
+    const hash = await sha256Hex(token);
+    const { db, sessions } = authDb({
+      sessions: [{ hash, expiresAt: Date.now() + 60_000 }],
+      // Simulate a concurrent sign-out deleting the row after this
+      // request's SELECT but before its renewal UPDATE commits.
+      beforeRenewalCommit: (updatedHash) => {
+        sessions.delete(updatedHash);
+      },
+    });
+    const session = await validateUiSession(
+      new Request("https://v2.invalid/", {
+        headers: { cookie: `${uiSessionCookie}=${token}` },
+      }),
+      env(db),
+    );
+    // No server-side session remains, so validation must fail rather than
+    // fabricating an expiration and issuing a fresh 30-day cookie.
+    expect(session).toBeUndefined();
   });
 });
 

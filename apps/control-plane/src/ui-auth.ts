@@ -433,9 +433,19 @@ export async function validateUiSession(
   )
     .bind(startedAt + uiSessionLifetimeMs, await sha256Hex(token))
     .first<{ expires_at: number }>();
-  const renewedExpiresAt =
-    updated?.expires_at ??
-    Math.max(previousExpiresAt, startedAt + uiSessionLifetimeMs);
+  if (!updated) {
+    // The row vanished between the SELECT and the UPDATE — typically a
+    // concurrent sign-out deleted it. Treat this as failed validation so we
+    // do not issue a fresh cookie for a session that no longer exists.
+    log("ui_session_renewed", {
+      outcome: "missing",
+      githubUserId: row.github_user_id,
+      previousExpiresAt,
+      durationMs: Date.now() - renewalStartedAt,
+    });
+    return undefined;
+  }
+  const renewedExpiresAt = updated.expires_at;
   log("ui_session_renewed", {
     outcome: "renewed",
     githubUserId: row.github_user_id,
