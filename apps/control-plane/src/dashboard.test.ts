@@ -9,6 +9,7 @@ const summary = (
   status: RunSummary["run"]["status"],
   issueNumber: number,
   title: string,
+  githubIssueState: "open" | "closed" = "open",
 ): RunSummary => ({
   run: {
     schemaVersion: 2,
@@ -28,6 +29,7 @@ const summary = (
       actor: "person",
     },
   },
+  githubIssueState,
   createdAt: 1,
   updatedAt: 2,
 });
@@ -51,6 +53,7 @@ describe("dashboard", () => {
                 document_json: JSON.stringify(summary("active", 1, "One").run),
                 created_at: 10,
                 updated_at: 20,
+                github_issue_state: "open",
               },
             ],
           }),
@@ -64,7 +67,7 @@ describe("dashboard", () => {
     await expect(new D1RunRepository(db).listRuns()).resolves.toMatchObject([
       { run: { issueNumber: 1 }, createdAt: 10, updatedAt: 20 },
     ]);
-    expect(calls[0]?.sql).toContain("ORDER BY updated_at DESC LIMIT ?1");
+    expect(calls[0]?.sql).toContain("ORDER BY r.updated_at DESC LIMIT ?1");
     expect(calls[0]?.values).toEqual([50]);
   });
 
@@ -88,5 +91,15 @@ describe("dashboard", () => {
     const html = renderDashboard([]);
     expect(html).toContain("Nothing here right now.");
     expect(html).toContain("0</strong> need attention");
+  });
+
+  it("moves closed failures to recently finished with a GitHub label", () => {
+    const html = renderDashboard([
+      summary("failed", 4, "Closed failure", "closed"),
+      summary("failed", 5, "Open failure"),
+    ]);
+    expect(html).toContain("Closed on GitHub");
+    expect(html).toContain("<strong>1</strong> need attention");
+    expect(html).toContain("<strong>1</strong> recently finished");
   });
 });
