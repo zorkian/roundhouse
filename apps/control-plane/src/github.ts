@@ -1062,7 +1062,15 @@ export async function acceptGitHubComment(
       run.githubInstallationId !== installationId)
   )
     return "ignored";
-  if (comment.trim() !== env.GITHUB_START_COMMAND) {
+  const trimmedComment = comment.trim();
+  const shortCommands: Record<string, string> = {
+    "/roundhouse start": "/rh start",
+    "/roundhouse-dev start": "/rhd start",
+  };
+  const isStartCommand =
+    trimmedComment === env.GITHUB_START_COMMAND ||
+    trimmedComment === shortCommands[env.GITHUB_START_COMMAND];
+  if (!isStartCommand) {
     if (
       payload.sender?.type === "Bot" ||
       comment.includes("<!-- roundhouse:v2:") ||
