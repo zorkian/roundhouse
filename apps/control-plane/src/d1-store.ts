@@ -54,7 +54,13 @@ export interface RunDetails {
     readonly createdAt: number;
     readonly updatedAt: number;
   })[];
-  readonly usage?: readonly ModelUsage[];
+  readonly usage?: readonly (ModelUsage & { readonly createdAt?: number })[];
+  readonly events?: readonly {
+    readonly attemptId: string;
+    readonly kind: string;
+    readonly payload: Readonly<Record<string, unknown>>;
+    readonly createdAt: number;
+  }[];
 }
 
 export interface RunSummary {
@@ -84,8 +90,11 @@ type UsageRow = {
   output_tokens: number | null;
   total_tokens: number | null;
   cost_usd: number | null;
+  created_at?: number;
 };
-const usageFromRow = (row: UsageRow): ModelUsage => ({
+const usageFromRow = (
+  row: UsageRow,
+): ModelUsage & { readonly createdAt?: number } => ({
   callId: row.call_id,
   attemptId: row.attempt_id,
   model: row.model,
@@ -99,6 +108,7 @@ const usageFromRow = (row: UsageRow): ModelUsage => ({
   ...(row.output_tokens === null ? {} : { outputTokens: row.output_tokens }),
   ...(row.total_tokens === null ? {} : { totalTokens: row.total_tokens }),
   ...(row.cost_usd === null ? {} : { costUsd: row.cost_usd }),
+  ...(row.created_at === undefined ? {} : { createdAt: row.created_at }),
 });
 
 function attemptFromRow(row: AttemptRow): Attempt {
@@ -235,13 +245,38 @@ export class D1RunRepository implements RunRepository {
         updatedAt: attempt.updated_at,
       })),
       usage: await this.usageForRun(run.id),
+      events: await this.eventsForRun(run.id),
     };
   }
 
-  private async usageForRun(runId: string): Promise<readonly ModelUsage[]> {
+  private async eventsForRun(runId: string): Promise<RunDetails["events"]> {
     const result = await this.db
       .prepare(
-        "SELECT u.call_id,u.attempt_id,u.model,u.input_tokens,u.cached_input_tokens,u.reasoning_tokens,u.output_tokens,u.total_tokens,u.cost_usd FROM model_usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.run_id=?1 ORDER BY u.created_at,u.call_id",
+        "SELECT attempt_id,kind,payload_json,created_at FROM events WHERE run_id=?1 AND attempt_id IS NOT NULL AND (kind='attempt_lease_expired' OR (kind='attempt_progress' AND json_extract(payload_json,'$.phase')='workspace_started')) ORDER BY created_at,id",
+      )
+      .bind(runId)
+      .all<{
+        attempt_id: string;
+        kind: string;
+        payload_json: string;
+        created_at: number;
+      }>();
+    return (result.results ?? [])
+      .filter((event) => event.attempt_id && event.kind && event.payload_json)
+      .map((event) => ({
+        attemptId: event.attempt_id,
+        kind: event.kind,
+        payload: JSON.parse(event.payload_json) as Record<string, unknown>,
+        createdAt: event.created_at,
+      }));
+  }
+
+  private async usageForRun(
+    runId: string,
+  ): Promise<readonly (ModelUsage & { readonly createdAt?: number })[]> {
+    const result = await this.db
+      .prepare(
+        "SELECT u.call_id,u.attempt_id,u.model,u.input_tokens,u.cached_input_tokens,u.reasoning_tokens,u.output_tokens,u.total_tokens,u.cost_usd,u.created_at FROM model_usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.run_id=?1 ORDER BY u.created_at,u.call_id",
       )
       .bind(runId)
       .all<UsageRow>();
