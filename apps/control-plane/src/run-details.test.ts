@@ -404,7 +404,10 @@ describe("run details", () => {
     });
 
     expect(html).toContain('<dt>Total usage</dt><dd><span class="usage-hint"');
-    expect(html).toContain(">350 tokens · $0.03</span>");
+    expect(html).toContain('>350 tokens · $0.03<span class="usage-breakdown"');
+    expect(html).toContain(
+      ".usage-hint:hover .usage-breakdown,.usage-hint:focus .usage-breakdown",
+    );
     expect(html).toContain("100 tokens");
     expect(html).toContain("250 tokens");
     expect(html).toContain("$0.03");
