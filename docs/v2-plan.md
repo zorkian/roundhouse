@@ -5,7 +5,7 @@
 
 - Status: Active
 - Audience: Maintainers and implementers
-- Last updated: 2026-07-27
+- Last updated: 2026-07-30
 
 This is the current product, architecture, and implementation plan for
 Roundhouse V2. Git history and the `v1-poc-final` tag preserve earlier designs
@@ -57,6 +57,8 @@ The development deployment currently supports:
 - repository Dev Containers inside isolated Cloudflare Sandboxes;
 - repository validation commands and screenshot evidence;
 - a holistic reviewer with conditional security and data reviewers;
+- operator review of before-and-after screenshots before a visual candidate
+  proceeds to independent review, CI, and merge;
 - remediation, target-branch integration, exact-head CI, and automatic or
   maintainer merge;
 - a GitHub-facing status conversation and a Roundhouse dashboard; and
@@ -367,9 +369,11 @@ configuration. Repository instructions cannot override isolation, tool,
 read-only, credential, or result-submission rules.
 
 Operators may start and explicitly resume Roundhouse. Ordinary participants may
-answer a clarification while the run waits. GitHub permissions remain the
-authority for a human merge. Under maintainer merge mode, Roundhouse leaves a
-clean CI-passing pull request and completes when GitHub reports its merge.
+answer a clarification while the run waits. An operator may answer an
+operator-audience human node in ordinary GitHub prose. GitHub permissions
+remain the authority for a human merge. Under maintainer merge mode, Roundhouse
+leaves a clean CI-passing pull request and completes when GitHub reports its
+merge.
 
 The dashboard visualizes the compiled workflow graph and configuration revision
 from the latest immutable run snapshot. Its editor validates changes with the
@@ -393,24 +397,28 @@ The initial repository workflow preserves the behavior deployed today:
    environment and create a durable checkpoint.
 5. **Validation:** apply formatting, path policy, regression/acceptance checks,
    static/build checks, targeted tests, and profile-required validation.
-6. **Review:** run the configured independent reviewers on the exact candidate.
+6. **Visual feedback when present:** when implementation produced screenshots,
+   show them to a repository operator. Requested changes return to the same
+   durable implementation journey and produce updated evidence; acceptance
+   continues without inventing a separate lifecycle.
+7. **Review:** run the configured independent reviewers on the exact candidate.
    Actionable findings return through implementation and validation.
-7. **Integration:** incorporate the current target branch. Conflicts needing
+8. **Integration:** incorporate the current target branch. Conflicts needing
    judgment return to an agent or human node.
-8. **Publication and CI:** cleanly validate and publish the exact candidate,
+9. **Publication and CI:** cleanly validate and publish the exact candidate,
    then observe required GitHub checks on that same head.
-9. **Merge:** merge automatically or wait for GitHub maintainer merge according
-   to the profile.
+10. **Merge:** merge automatically or wait for GitHub maintainer merge according
+    to the profile.
 
 There is no speculative cap on clarification, implementation, validation,
 review, or remediation. A loop continues while it makes progress and waits when
 information or judgment is genuinely required.
 
-The generic review executor will replace the fixed holistic/security/data
-identities. A configured reviewer will declare a stable ID, label, model,
-prompt, typed inputs, reduced capabilities, activation condition, blocking
-severities, and `shadow`, `advisory`, or `blocking` mode. Findings will add
-stable fingerprints, evidence locations, and proposed acceptance tests.
+The generic review executor has replaced the fixed
+holistic/security/data identities. A configured reviewer declares a stable ID,
+label, model, prompt, typed inputs, reduced capabilities, activation condition,
+blocking severities, and `shadow`, `advisory`, or `blocking` mode. Findings
+carry stable fingerprints, evidence locations, and exact-candidate proof.
 
 ## 8. Fit with Anthropic's AI-native SDLC
 
@@ -420,16 +428,16 @@ combines contextual planning, isolated coding, deterministic and agentic
 testing, deployment-time checks, monitoring, incident response, and
 governance.
 
-| Anthropic capability                            | Roundhouse foundation                                                               | Missing integration                                                 |
-| ----------------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| Security planning with organizational context   | `agent.read` and attributable context providers                                     | Policy, architecture, ownership, and incident indexes               |
-| Repository guidance and isolated coding         | Snapshotted prompts, `agent.write`, Sandbox, and Dev Container                      | Safe private-repository execution and tighter implementation egress |
-| Closed-loop instruction improvement             | Attributable policy recommendation plus human node                                  | Trusted adapter proposing protected policy changes                  |
-| Narrow independent security agents              | Generic review fan-out/join, separate context, exact-head evidence, operating modes | Reviewer registry, proof/fingerprint contract, shadow reporting     |
-| SAST, invariants, and risk-weighted human gates | Deterministic validation, conditions, policy checks, and human nodes                | Specific scanners, risk policy, and approval journeys               |
-| Staging DAST                                    | Deployment triggers and scoped external check adapters                              | Deployment, staging, and scanner adapters                           |
-| Alert triage, logs, postmortem, and fixes       | Alert triggers, log context, agent nodes, issue/PR outputs                          | Alert, production-log, and incident-channel adapters                |
-| Governance, sampling, metrics, and SIEM         | Workflow hashes, operating modes, canonical audit events                            | Sampling, Analytics Engine, SIEM export, governance UI              |
+| Anthropic capability                            | Roundhouse foundation                                                                              | Missing integration                                                 |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| Security planning with organizational context   | `agent.read` and attributable context providers                                                    | Policy, architecture, ownership, and incident indexes               |
+| Repository guidance and isolated coding         | Snapshotted prompts, `agent.write`, Sandbox, and Dev Container                                     | Safe private-repository execution and tighter implementation egress |
+| Closed-loop instruction improvement             | Attributable policy recommendation plus human node                                                 | Trusted adapter proposing protected policy changes                  |
+| Narrow independent security agents              | Repository reviewer registry, generic fan-out/join, exact-head proof/fingerprints, operating modes | Cross-repository reviewer catalog and aggregate shadow metrics      |
+| SAST, invariants, and risk-weighted human gates | Deterministic validation, conditions, policy checks, and human nodes                               | Specific scanners, risk policy, and approval journeys               |
+| Staging DAST                                    | Deployment triggers and scoped external check adapters                                             | Deployment, staging, and scanner adapters                           |
+| Alert triage, logs, postmortem, and fixes       | Alert triggers, log context, agent nodes, issue/PR outputs                                         | Alert, production-log, and incident-channel adapters                |
+| Governance, sampling, metrics, and SIEM         | Workflow hashes, operating modes, canonical audit events                                           | Sampling, Analytics Engine, SIEM export, governance UI              |
 
 The graph provides a place to connect these capabilities without another
 orchestration rewrite. It does not make undeveloped or unauthorized adapters
@@ -463,6 +471,11 @@ interpreter, and structured transition logging. Express the existing lifecycle
 as `.roundhouse/workflow.yaml`. Migrate Roundhouse and Dreamwidth development
 profiles and D1 together, then delete the compiled lifecycle switch.
 
+Implemented: the repository workflow is the sole runtime lifecycle. The
+compiler, immutable snapshot, interpreter, condition evaluator, D1 transitions,
+and structured edge evidence drive the current Roundhouse and Dreamwidth
+journeys; no compiled stage router remains.
+
 Exit gate:
 
 - existing journeys pass through the interpreter with no intended behavior
@@ -476,6 +489,11 @@ Exit gate:
 
 Make `agent.read` and `agent.write` consume typed inputs and schemas and select
 repository prompts, models, context, and transitions.
+
+Implemented: typed agent nodes resolve repository-selected inputs, prompt,
+model, result schema, capabilities, branch, and return edge from the immutable
+workflow snapshot. The timeline records those resolved inputs and the selected
+transition.
 
 Exit gate: a repository changes a meaningful route, prompt, model, branch, and
 return edge without Roundhouse source changes, and the timeline shows the
@@ -532,9 +550,28 @@ does not gain repository mutation authority and D1 remains evidence only.
 Exit gate: a maintainer can round-trip the active workflow without D1 becoming
 configuration authority or a protected change silently altering an active run.
 
-After these slices, choose organizational context, scanners, staging DAST,
-alert triage, or governance export as separate vertical journeys. Their order
-is not approved by this plan.
+### Slice 8.0 — Operator visual feedback
+
+Route implementation attempts that produce screenshots into a configured
+`approval` node using the `human` executor before independent review, CI, and
+merge. Show the before-and-after evidence on the issue. An operator's ordinary
+prose becomes a typed input to the existing implementation node: requested
+changes update the durable candidate and return with new screenshots;
+acceptance makes no code change and continues.
+
+Implemented: Roundhouse's repository workflow includes this conditional gate.
+The control plane authorizes operator prose through Profile V2, records the
+human boundary and selected routes, and posts the visual evidence and
+repository-authored request to GitHub. Repositories without this route retain
+their existing workflow.
+
+Exit gate: a visual candidate cannot reach review or merge until an operator
+responds; requested changes return with updated evidence; an accepted unchanged
+candidate proceeds; and non-visual candidates do not wait at the gate.
+
+After this slice, choose organizational context, scanners, staging DAST, alert
+triage, or governance export as separate vertical journeys. Their order is not
+approved by this plan.
 
 ## 10. Acceptance and observability
 
@@ -555,6 +592,8 @@ The graph migration additionally demonstrates:
 
 - default-workflow parity;
 - a structured branch and human-driven loop;
+- conditional visual feedback that accepts ordinary authorized prose and skips
+  non-visual candidates;
 - generic reviewer fan-out/join and exact-head invalidation;
 - compiler rejection of capability escalation and gate bypass;
 - replay from an exact workflow/profile snapshot after configuration changes;

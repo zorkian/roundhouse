@@ -45,15 +45,14 @@ async function runFixture(): Promise<RunSnapshot> {
 }
 
 describe("workflow graph view", () => {
-  it("preselects the run's current node through data-select", async () => {
+  it("preselects the workflow entry rather than the run's current node", async () => {
     const run = await runFixture();
     const html = renderWorkflowView(run);
-    expect(html).toContain('id="workflow-graph" data-select="implement"');
-    const { renderWorkflowView: render } = await import("./workflow-view.js");
-    const unselected = render({ ...run, currentNodeId: undefined });
-    expect(unselected).not.toContain("data-select");
-    const unknown = render({ ...run, currentNodeId: 'missing"><script>' });
-    expect(unknown).not.toContain("data-select");
+    expect(html).toContain('id="workflow-graph" data-select="qualify"');
+    expect(html).not.toContain('data-select="implement"');
+    expect(
+      renderWorkflowView({ ...run, currentNodeId: 'missing"><script>' }),
+    ).toContain('data-select="qualify"');
   });
 
   it("emits the trigger-derived entry stage as graph metadata", async () => {
@@ -62,7 +61,7 @@ describe("workflow graph view", () => {
     expect(workflowEntryStage(workflow)).toBe("qualify");
     const html = renderWorkflowView(run);
     expect(html).toContain(
-      'id="workflow-graph" data-select="implement" data-entry="qualify"',
+      'id="workflow-graph" data-select="qualify" data-entry="qualify"',
     );
     // A trigger pointing at a missing node emits no entry metadata.
     const broken = {
@@ -75,6 +74,7 @@ describe("workflow graph view", () => {
       profile: { ...run.profile!, workflow: broken },
     });
     expect(rendered).not.toContain("data-entry");
+    expect(rendered).not.toContain("data-select");
   });
 
   it("renders the labeled graph container, editor, and GitHub proposal path", async () => {
@@ -115,13 +115,11 @@ describe("workflow graph view", () => {
       expect(node.data["authority"]).toBe(
         compiled.capabilities.join(", ") || "no external authority",
       );
-      // The compact primary label shows only the stage name and summary.
+      // The compact graph box shows only the stage name. Purpose and
+      // authority remain available to the stage-details panel.
       expect(node.data["name"]).toBeTruthy();
       expect(node.data["summary"]).toBeTruthy();
-      expect(node.data["label"]).toBe(
-        `${node.data["name"]}\n${node.data["summary"]}`,
-      );
-      expect(node.data["label"]).not.toContain(node.data["authority"]!);
+      expect(node.data["label"]).toBeUndefined();
       expect(node.data["outputs"]).toBeTruthy();
     }
     expect(nodes.some((node) => node.data["executor"] === "agent.write")).toBe(
@@ -137,6 +135,13 @@ describe("workflow graph view", () => {
     const review = nodes.find((node) => node.data["id"] === "review")!;
     expect(review.data["reviewers"]).toBeTruthy();
     expect(review.data["summary"]).toContain("reviewer");
+    expect(
+      nodes.find((node) => node.data["id"] === "approval")?.data,
+    ).toMatchObject({
+      name: "approval",
+      role: "approval",
+      human: "operator: visual_feedback",
+    });
     // A capability-free node falls back to explicit no-authority text.
     const synthetic = workflowGraphElements({
       ...workflow,
@@ -151,9 +156,7 @@ describe("workflow graph view", () => {
     expect(synthetic[0]!.data["authority"]).toBe("no external authority");
     expect(synthetic[0]!.data["outputs"]).toBe("none");
 
-    // Long names and summaries are truncated so the wrapped label always
-    // stays inside the fixed 240x110 node box vertically as well as
-    // horizontally.
+    // Long names remain bounded while full detail text is preserved.
     const longName = "a-very-long-stage-".repeat(8);
     const longEvent = "very.long.external.event.".repeat(8);
     const longLabeled = workflowGraphElements({
@@ -170,10 +173,7 @@ describe("workflow graph view", () => {
     const longData = longLabeled[0]!.data;
     expect(longData["name"]!.length).toBeLessThanOrEqual(48);
     expect(longData["name"]!.endsWith("…")).toBe(true);
-    const labelLines = longData["label"]!.split("\n");
-    expect(labelLines).toHaveLength(2);
-    expect(labelLines[0]!.length).toBeLessThanOrEqual(48);
-    expect(labelLines[1]!.length).toBeLessThanOrEqual(96);
+    expect(longData["label"]).toBeUndefined();
     // The full untruncated text remains available in the detail fields.
     expect(longData["external"]).toContain(longEvent);
 
@@ -185,20 +185,65 @@ describe("workflow graph view", () => {
     expect(new Set(edges.map((edge) => edge.data["id"])).size).toBe(
       edges.length,
     );
+    expect(edges.every((edge) => edge.data["outcome"])).toBe(true);
 
     // The default workflow's self-cycle and backward transition survive as
-    // directed edges instead of collapsing.
+    // directed edges instead of collapsing. Return routes alternate outside
+    // lanes so distinct revision paths cannot be mistaken for duplicate lines.
     const selfCycle = edges.find(
       (edge) =>
         edge.data["source"] === "integrate" &&
         edge.data["target"] === "integrate",
     );
-    expect(selfCycle).toBeDefined();
-    const backward = edges.find(
+    expect(selfCycle?.data).toMatchObject({
+      route: "self",
+      outcome: "needs resolution",
+    });
+    const approvalReturn = edges.find(
+      (edge) =>
+        edge.data["source"] === "approval" &&
+        edge.data["target"] === "implement",
+    );
+    expect(approvalReturn?.data).toMatchObject({
+      route: "return",
+      outcome: "answered",
+      returnSide: "left",
+      returnLane: "1",
+      returnBend: "-300",
+    });
+    const reviewReturn = edges.find(
       (edge) =>
         edge.data["source"] === "review" && edge.data["target"] === "implement",
     );
-    expect(backward).toBeDefined();
+    expect(reviewReturn?.data).toMatchObject({
+      route: "return",
+      outcome: "changes requested",
+      returnSide: "right",
+      returnLane: "1",
+      returnBend: "300",
+    });
+    const integrationReturn = edges.find(
+      (edge) =>
+        edge.data["source"] === "integrate" &&
+        edge.data["target"] === "implement",
+    );
+    expect(integrationReturn?.data).toMatchObject({
+      route: "return",
+      outcome: "changes requested",
+      returnSide: "left",
+      returnLane: "2",
+      returnBend: "-390",
+    });
+    const forward = edges.find(
+      (edge) =>
+        edge.data["source"] === "implement" &&
+        edge.data["target"] === "review" &&
+        edge.data["outcome"] === "accepted head",
+    );
+    expect(forward?.data).toMatchObject({
+      route: "forward",
+      outcome: "accepted head",
+    });
   });
 
   it("embeds the graph data as escaped JSON inside the page", async () => {
@@ -224,6 +269,10 @@ describe("workflow graph view", () => {
     expect(html).toContain('id="stage-details"');
     expect(html).toContain('aria-live="polite"');
     expect(html).toContain("Stage details");
+    expect(html).toContain('id="workflow-legend"');
+    expect(html).toContain("Next stage");
+    expect(html).toContain("Return for more work");
+    expect(html).toContain("Retry this stage");
     expect(html).toContain(
       "Select a stage in the graph or the stage list to see its details.",
     );
@@ -238,9 +287,20 @@ describe("workflow graph view", () => {
   });
 
   it("ships client behavior for selection highlighting and the editor actions", () => {
-    // Cycle-capable force-directed layout with directed arrows.
-    expect(workflowGraphClientScript).toContain('"cose"');
+    // Entry-rooted hierarchical layout with directed arrows.
+    expect(workflowGraphClientScript).toContain('"breadthfirst"');
+    expect(workflowGraphClientScript).toContain('direction: "downward"');
+    expect(workflowGraphClientScript).toContain("avoidOverlap: true");
+    expect(workflowGraphClientScript).not.toContain('name: "cose"');
     expect(workflowGraphClientScript).toContain('"target-arrow-shape"');
+    expect(workflowGraphClientScript).toContain('"unbundled-bezier"');
+    expect(workflowGraphClientScript).toContain('"returnBend"');
+    expect(workflowGraphClientScript).toContain("returnBendScale");
+    expect(workflowGraphClientScript).toContain('"line-style": "dashed"');
+    expect(workflowGraphClientScript).toContain("data(outcome)");
+    expect(workflowGraphClientScript).toContain(
+      "workflow_graph_routes_initialized",
+    );
     // Selecting a node emphasizes it and its connected edges, mutes the
     // rest, and tapping the background clears the state.
     expect(workflowGraphClientScript).toContain('"select", "node"');
@@ -255,6 +315,11 @@ describe("workflow graph view", () => {
     expect(workflowGraphClientScript).toContain(
       "workflow_graph_viewport_initialized",
     );
+    expect(workflowGraphClientScript).toContain(
+      "workflow_graph_layout_started",
+    );
+    expect(workflowGraphClientScript).toContain('name: "preset"');
+    expect(workflowGraphClientScript).toContain("cy.layout(graphLayout).run()");
     // Structured timing logs at the graph initialization boundary.
     expect(workflowGraphClientScript).toContain("workflow_graph_initialized");
     expect(workflowGraphClientScript).toContain(
@@ -262,8 +327,11 @@ describe("workflow graph view", () => {
     );
     expect(workflowGraphClientScript).toContain("elapsedMs");
     // Overflow-safe node labels and the selection/details synchronization.
-    expect(workflowGraphClientScript).toContain('"text-overflow-wrap"');
+    expect(workflowGraphClientScript).toContain('"text-wrap": "ellipsis"');
     expect(workflowGraphClientScript).toContain('"text-max-width"');
+    expect(workflowGraphClientScript).toContain('label: "data(name)"');
+    expect(workflowGraphClientScript).toContain('"font-weight": 700');
+    expect(workflowGraphClientScript).toContain("spacingFactor: 0.55");
     expect(workflowGraphClientScript).toContain("selectStage");
     expect(workflowGraphClientScript).toContain("renderDetails");
     expect(workflowGraphClientScript).toContain("syncStageButtons");
@@ -280,7 +348,7 @@ describe("workflow graph view", () => {
     expect(workflowGraphClientScript).toContain("data-source-commit");
   });
 
-  it("frames the initial viewport after layout, keeping the entry visible", () => {
+  it("runs layout after handlers and frames the viewport on the entry", () => {
     class FakeElement {
       attributes: Record<string, string> = {};
       listeners: Record<string, Array<() => void>> = {};
@@ -307,10 +375,36 @@ describe("workflow graph view", () => {
       const logs: Record<string, unknown>[] = [];
       const layoutstopHandlers: Array<() => void> = [];
       const centered: string[] = [];
-      const state = { zoom: options.initialZoom };
+      const state = {
+        zoom: options.initialZoom,
+        layoutRuns: 0,
+        constructorLayout: "",
+        explicitLayout: "",
+        explicitDirection: "",
+        rootApplied: false,
+        pan: { x: 0, y: 0 },
+      };
+      const entryPosition = { x: 100, y: 400 };
       const entryNode = {
         nonempty: () => true,
-        renderedBoundingBox: () => options.entryBounds,
+        position: (axis?: "x" | "y") =>
+          axis ? entryPosition[axis] : entryPosition,
+        outerHeight: () => 52,
+        boundingBox: () => ({
+          x1: entryPosition.x - 80,
+          y1: entryPosition.y - 26,
+          x2: entryPosition.x + 80,
+          y2: entryPosition.y + 26,
+        }),
+        renderedBoundingBox: () => {
+          if (state.pan.x === 0 && state.pan.y === 0)
+            return options.entryBounds;
+          const width = 160 * state.zoom;
+          const height = 52 * state.zoom;
+          const x1 = entryPosition.x * state.zoom + state.pan.x - width / 2;
+          const y1 = entryPosition.y * state.zoom + state.pan.y - height / 2;
+          return { x1, y1, x2: x1 + width, y2: y1 + height };
+        },
         select: () => {},
       };
       const cy = {
@@ -327,10 +421,24 @@ describe("workflow graph view", () => {
           if (level !== undefined) state.zoom = level;
           return state.zoom;
         },
-        center: (node: unknown) => {
-          centered.push(node === entryNode ? "entry" : "other");
+        pan: (position: { x: number; y: number }) => {
+          state.pan = position;
+          centered.push("entry");
         },
-        nodes: () => ({ length: 3 }),
+        layout: (layout: {
+          name: string;
+          direction?: string;
+          roots?: unknown;
+        }) => ({
+          run: () => {
+            state.layoutRuns += 1;
+            state.explicitLayout = layout.name;
+            state.explicitDirection = layout.direction ?? "";
+            state.rootApplied = layout.roots === entryNode;
+            for (const handler of [...layoutstopHandlers]) handler();
+          },
+        }),
+        nodes: () => [entryNode],
         edges: () => ({ length: 2 }),
         getElementById: (id: string) =>
           id === options.entryId || id === options.preselect
@@ -358,7 +466,12 @@ describe("workflow graph view", () => {
         querySelectorAll: () => [],
         createElement: () => new FakeElement(),
       };
-      const window = { cytoscape: () => cy };
+      const window = {
+        cytoscape: (configuration: { layout: { name: string } }) => {
+          state.constructorLayout = configuration.layout.name;
+          return cy;
+        },
+      };
       const originalLog = console.log;
       console.log = (line: string) => logs.push(JSON.parse(line));
       try {
@@ -366,8 +479,6 @@ describe("workflow graph view", () => {
           window,
           document,
         );
-        const handlers = [...layoutstopHandlers];
-        for (const handler of handlers) handler();
         // A second layoutstop must not re-frame: the handler runs once.
         for (const handler of [...layoutstopHandlers]) handler();
       } finally {
@@ -379,8 +490,8 @@ describe("workflow graph view", () => {
       return { state, centered, viewportLog, logs };
     }
 
-    // Desktop: the distant cose fit is raised to a readable zoom floor and
-    // the entry stage already in view is left alone.
+    // Desktop: handlers are attached before the explicit hierarchical run,
+    // then the entry is placed at the top even if it was previously visible.
     const desktop = harness({
       width: 1186,
       initialZoom: 0.4,
@@ -388,13 +499,35 @@ describe("workflow graph view", () => {
       preselect: "qualify",
       entryBounds: { x1: 100, y1: 100, x2: 400, y2: 240 },
     });
+    expect(desktop.state.constructorLayout).toBe("preset");
+    expect(desktop.state.explicitLayout).toBe("breadthfirst");
+    expect(desktop.state.explicitDirection).toBe("downward");
+    expect(desktop.state.rootApplied).toBe(true);
+    expect(desktop.state.layoutRuns).toBe(1);
     expect(desktop.state.zoom).toBe(1);
-    expect(desktop.centered).toEqual([]);
+    expect(desktop.centered).toEqual(["entry"]);
+    expect(desktop.state.pan).toEqual({ x: 493, y: -342 });
     expect(desktop.viewportLog).toMatchObject({
       entryStage: "qualify",
+      entryFound: true,
       mobile: false,
+      initialZoom: 0.4,
       zoom: 1,
       entryVisible: true,
+      entryTop: 32,
+      entryTopPadding: 32,
+    });
+    expect(
+      desktop.logs.find(
+        (entry) => entry.message === "workflow_graph_layout_completed",
+      ),
+    ).toMatchObject({
+      layout: "breadthfirst",
+      direction: "downward",
+      rootStage: "qualify",
+      rootApplied: true,
+      overlappingNodePairs: 0,
+      entryTopmost: true,
     });
     expect(
       desktop.logs.filter(
@@ -402,29 +535,33 @@ describe("workflow graph view", () => {
       ),
     ).toHaveLength(1);
 
-    // Mobile: a lower zoom floor applies and an off-screen entry is panned
-    // back into view.
+    // Mobile: compact framing keeps the complete default workflow visible
+    // while retaining the bold name-only node treatment.
     const mobile = harness({
       width: 390,
       initialZoom: 0.3,
       entryId: "qualify",
       entryBounds: { x1: -500, y1: 60, x2: -200, y2: 200 },
     });
-    expect(mobile.state.zoom).toBe(0.6);
+    expect(mobile.state.zoom).toBe(0.77);
     expect(mobile.centered).toEqual(["entry"]);
     expect(mobile.viewportLog).toMatchObject({
+      entryStage: "qualify",
+      entryFound: true,
       mobile: true,
-      zoom: 0.6,
+      initialZoom: 0.3,
+      zoom: 0.77,
       entryVisible: true,
+      entryTopPadding: 20,
     });
 
-    // Current-stage preselection still runs alongside the framing.
+    // Entry-stage preselection runs alongside the framing.
     const both = harness({
       width: 1186,
       initialZoom: 0.5,
       entryId: "qualify",
-      preselect: "implement",
-      entryBounds: { x1: 0, y1: 0, x2: 240, y2: 110 },
+      preselect: "qualify",
+      entryBounds: { x1: 0, y1: 0, x2: 160, y2: 52 },
     });
     expect(both.viewportLog).toMatchObject({ entryStage: "qualify", zoom: 1 });
   });
@@ -524,6 +661,7 @@ describe("workflow graph view", () => {
       $: () => collection(nodes.filter((node) => node.selected())),
       getElementById: (id: string) =>
         nodes.find((node) => node.id() === id) ?? { nonempty: () => false },
+      layout: () => ({ run: () => {} }),
       nodes: () => ({ length: nodes.length }),
       edges: () => ({ length: 0 }),
     };

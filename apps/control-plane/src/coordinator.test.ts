@@ -1362,6 +1362,42 @@ describe("single coordinator", () => {
     });
   });
 
+  it("routes a changed screenshot candidate to operator visual feedback", () => {
+    const inputHead = "a".repeat(40);
+    const outputHead = "b".repeat(40);
+    const run = runFixture({
+      status: "active",
+      stage: "implement",
+      currentNodeId: "implement",
+      currentHead: inputHead,
+      revision: 4,
+    });
+    const attempt = attemptFixture({
+      id: "run_slice_rev_4",
+      runRevision: 4,
+      stage: "implement",
+      role: "implement",
+      expectedHead: inputHead,
+      acceptedHead: outputHead,
+      result: {
+        implementation: {
+          summary: "Adjusted the mobile layout",
+          screenshots: [
+            { url: "https://example.test/before", description: "Before" },
+            { url: "https://example.test/after", description: "After" },
+          ],
+        },
+      },
+    });
+    expect(graphCompletedTransition(run, attempt)).toEqual({
+      status: "active",
+      stage: "review",
+      currentNodeId: "approval",
+      acceptedHead: outputHead,
+      heads: { candidateHead: outputHead },
+    });
+  });
+
   it("returns screenshot evidence to review when a candidate already exists", () => {
     const head = "b".repeat(40);
     const run = runFixture({

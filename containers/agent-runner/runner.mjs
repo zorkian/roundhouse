@@ -1132,6 +1132,7 @@ export const implementationSchema = Object.freeze({
 });
 
 export function visualEvidenceRequested(assignment) {
+  if (assignment.context?.visualFeedback) return true;
   const issue = assignment.issue ?? {};
   const conversation = Array.isArray(issue.clarifications)
     ? issue.clarifications
@@ -1849,6 +1850,8 @@ export function implementationPrompt(assignment) {
     JSON.stringify(assignment.context?.plan ?? {}),
     "Previous implementation:",
     JSON.stringify(assignment.context?.implementation ?? {}),
+    "Latest maintainer visual feedback:",
+    JSON.stringify(assignment.context?.visualFeedback ?? {}),
     "Review findings to address:",
     JSON.stringify(assignment.context?.review ?? {}),
     "Latest CI result to address:",
@@ -1865,6 +1868,7 @@ export function implementationPrompt(assignment) {
     JSON.stringify(configuredValidation(assignment)),
     "Run every repository-configured validation command plus any other focused validation needed for this change, and record each command, exit code, and useful output in validation.",
     "When the issue or conversation asks for a screenshot, that screenshot is a completion requirement. Run the application with its server bound to 0.0.0.0 (not 127.0.0.1 or localhost), use capture_screenshot before submitting, and include every returned screenshot URL and a short description in screenshots. Do not submit an empty screenshots array after a screenshot was requested, even if you also found and fixed a separate code or test problem. Treat a requested visual adjustment as scoped: preserve unrelated visible elements, and compare the relevant UI before and after so moving one element does not silently remove another.",
+    "When Latest maintainer visual feedback is present, treat it as the current instruction for the visual candidate. If the maintainer accepts the design or asks to continue without a visual change, do not modify the candidate: validate it and preserve its screenshot evidence. If the maintainer requests a change, implement only that feedback and capture updated before-and-after screenshots for another visual review. Later review findings or CI diagnostics remain mandatory and take precedence over an earlier visual acceptance; address them and capture updated visual evidence for another approval.",
     "Write a concise pull request title and body for a maintainer. Describe the change and why; do not include validation commands or command output in the pull request body.",
     "Return only the requested structured implementation result.",
   ].join("\n");

@@ -19,6 +19,30 @@ export const workflowGraphClientScript = `(function () {
   if (container && dataElement && window.cytoscape) {
     var initStartedAt = Date.now();
     var elements = JSON.parse(dataElement.textContent);
+    var entryId = container.getAttribute("data-entry");
+    var nodeWidth = 160;
+    var nodeHeight = 52;
+    var nodeFontSize = 18;
+    var returnBendScale = container.clientWidth <= 700 ? 0.7 : 1;
+    var routeCounts = { forward: 0, return: 0, self: 0 };
+    elements.forEach(function (element) {
+      if (element.group !== "edges") return;
+      var route = element.data.route;
+      if (routeCounts[route] !== undefined) routeCounts[route] += 1;
+    });
+    var graphLayout = {
+      name: "breadthfirst",
+      animate: false,
+      fit: true,
+      directed: true,
+      direction: "downward",
+      circle: false,
+      grid: true,
+      nodeDimensionsIncludeLabels: true,
+      padding: 24,
+      spacingFactor: 0.55,
+      avoidOverlap: true
+    };
     var cy = window.cytoscape({
       container: container,
       elements: elements,
@@ -28,17 +52,17 @@ export const workflowGraphClientScript = `(function () {
         {
           selector: "node",
           style: {
-            label: "data(label)",
-            "text-wrap": "wrap",
-            "text-max-width": "210px",
-            "text-overflow-wrap": "anywhere",
+            label: "data(name)",
+            "text-wrap": "ellipsis",
+            "text-max-width": "136px",
             "text-valign": "center",
             "text-halign": "center",
-            "font-size": 13,
-            "line-height": 1.4,
+            "font-size": nodeFontSize,
+            "font-weight": 700,
+            "line-height": 1.1,
             color: "#18212f",
-            width: 240,
-            height: 110,
+            width: nodeWidth,
+            height: nodeHeight,
             shape: "round-rectangle",
             "background-color": "#ffffff",
             "border-width": 1.5,
@@ -53,9 +77,62 @@ export const workflowGraphClientScript = `(function () {
             "target-arrow-color": "#8391a5",
             "target-arrow-shape": "triangle",
             "arrow-scale": 1.2,
-            "curve-style": "bezier",
+            "curve-style": "straight",
             "loop-direction": "0deg",
             "loop-sweep": "45deg"
+          }
+        },
+        {
+          selector: 'edge[route = "return"]',
+          style: {
+            label: "data(outcome)",
+            "curve-style": "unbundled-bezier",
+            "control-point-distances": function (edge) {
+              return [Number(edge.data("returnBend")) * returnBendScale];
+            },
+            "control-point-weights": [0.5],
+            "line-style": "dashed",
+            "line-dash-pattern": [8, 6],
+            "line-color": "#b54708",
+            "target-arrow-color": "#b54708",
+            color: "#7a2e0e",
+            "font-size": 11,
+            "font-weight": 600,
+            "text-rotation": "none",
+            "text-background-color": "#fffaf5",
+            "text-background-opacity": 0.96,
+            "text-background-shape": "round-rectangle",
+            "text-background-padding": 4
+          }
+        },
+        {
+          selector: 'edge[route = "return"][returnSide = "left"]',
+          style: {
+            "text-margin-x": -8
+          }
+        },
+        {
+          selector: 'edge[route = "return"][returnSide = "right"]',
+          style: {
+            "text-margin-x": 8
+          }
+        },
+        {
+          selector: 'edge[route = "self"]',
+          style: {
+            label: "data(outcome)",
+            "curve-style": "bezier",
+            "line-style": "dotted",
+            "line-color": "#7f56d9",
+            "target-arrow-color": "#7f56d9",
+            "loop-direction": "90deg",
+            "loop-sweep": "-55deg",
+            color: "#53389e",
+            "font-size": 11,
+            "text-background-color": "#f9f5ff",
+            "text-background-opacity": 0.96,
+            "text-background-shape": "round-rectangle",
+            "text-background-padding": 4
           }
         },
         {
@@ -72,7 +149,7 @@ export const workflowGraphClientScript = `(function () {
             width: 4,
             "line-color": "#175cd3",
             "target-arrow-color": "#175cd3",
-            "line-style": "solid",
+            color: "#175cd3",
             "underlay-color": "#175cd3",
             "underlay-opacity": 0.2,
             "underlay-padding": 4
@@ -81,55 +158,118 @@ export const workflowGraphClientScript = `(function () {
         { selector: ".muted", style: { opacity: 0.18 } }
       ],
       layout: {
-        name: "cose",
-        animate: false,
-        nodeDimensionsIncludeLabels: true,
-        padding: 40,
-        idealEdgeLength: 260,
-        nodeRepulsion: function () { return 900000; },
-        gravity: 0.4
+        name: "preset"
       }
     });
     log("workflow_graph_initialized", {
       nodes: cy.nodes().length,
-      edges: cy.edges().length
+      edges: cy.edges().length,
+      nodeWidth: nodeWidth,
+      nodeHeight: nodeHeight,
+      nodeFontSize: nodeFontSize,
+      spacingFactor: graphLayout.spacingFactor
     });
+    log("workflow_graph_routes_initialized", {
+      forwardEdges: routeCounts.forward,
+      returnEdges: routeCounts.return,
+      selfEdges: routeCounts.self,
+      returnBendScale: returnBendScale
+    });
+    var entry = entryId ? cy.getElementById(entryId) : null;
+    var entryFound = Boolean(entry && entry.nonempty());
+    if (entryFound) graphLayout.roots = entry;
+    function layoutGeometry() {
+      var nodes = cy.nodes();
+      var overlappingNodePairs = 0;
+      var topmostY = null;
+      for (var i = 0; i < nodes.length; i += 1) {
+        var first = nodes[i];
+        var firstY = first.position("y");
+        if (topmostY === null || firstY < topmostY) topmostY = firstY;
+        var firstBounds = first.boundingBox({
+          includeLabels: true,
+          includeOverlays: false
+        });
+        for (var j = i + 1; j < nodes.length; j += 1) {
+          var secondBounds = nodes[j].boundingBox({
+            includeLabels: true,
+            includeOverlays: false
+          });
+          if (
+            firstBounds.x1 < secondBounds.x2 &&
+            firstBounds.x2 > secondBounds.x1 &&
+            firstBounds.y1 < secondBounds.y2 &&
+            firstBounds.y2 > secondBounds.y1
+          ) {
+            overlappingNodePairs += 1;
+          }
+        }
+      }
+      var entryY = entryFound ? entry.position("y") : null;
+      return {
+        overlappingNodePairs: overlappingNodePairs,
+        entryY: entryY,
+        topmostY: topmostY,
+        entryTopmost: entryY !== null && entryY === topmostY
+      };
+    }
     cy.on("layoutstop", function () {
+      var geometry = layoutGeometry();
       log("workflow_graph_layout_completed", {
-        layout: "cose",
+        layout: graphLayout.name,
+        direction: graphLayout.direction,
+        rootStage: entryId,
+        rootApplied: entryFound,
         nodes: cy.nodes().length,
         edges: cy.edges().length,
+        overlappingNodePairs: geometry.overlappingNodePairs,
+        entryY: geometry.entryY,
+        topmostY: geometry.topmostY,
+        entryTopmost: geometry.entryTopmost,
         layoutMs: Date.now() - initStartedAt
       });
     });
-    // One-time post-layout framing: the cose fit leaves the whole graph in
-    // view at a distant, hard-to-read scale, so enforce a readable minimum
-    // zoom and pan if needed to keep the workflow entry stage visible.
-    var entryId = container.getAttribute("data-entry");
+    // One-time post-layout framing: anchor the workflow entry near the top of
+    // the viewport at a readable scale so the graph visibly flows downward.
+    // The graph is created with a preset layout and breadthfirst is run
+    // explicitly below so these handlers are installed before the synchronous,
+    // non-animated layoutstop event can fire.
     cy.on("layoutstop", function frameOnce() {
       cy.off("layoutstop", frameOnce);
       var mobile = container.clientWidth <= 700;
-      var zoomFloor = mobile ? 0.6 : 1;
+      var zoomFloor = mobile ? 0.77 : 1;
+      var entryTopPadding = mobile ? 20 : 32;
+      var initialZoom = cy.zoom();
       if (cy.zoom() < zoomFloor) cy.zoom(zoomFloor);
-      var entry = entryId ? cy.getElementById(entryId) : null;
-      var entryVisible = true;
-      if (entry && entry.nonempty()) {
+      var entryVisible = false;
+      if (entryFound) {
+        var entryPosition = entry.position();
+        var zoom = cy.zoom();
+        cy.pan({
+          x: container.clientWidth / 2 - entryPosition.x * zoom,
+          y:
+            entryTopPadding +
+            (entry.outerHeight() * zoom) / 2 -
+            entryPosition.y * zoom
+        });
         var bounds = entry.renderedBoundingBox();
         entryVisible =
           bounds.x1 >= 0 &&
           bounds.y1 >= 0 &&
           bounds.x2 <= container.clientWidth &&
           bounds.y2 <= container.clientHeight;
-        if (!entryVisible) {
-          cy.center(entry);
-          entryVisible = true;
-        }
       }
       log("workflow_graph_viewport_initialized", {
         entryStage: entryId,
+        entryFound: entryFound,
         mobile: mobile,
+        initialZoom: initialZoom,
         zoom: cy.zoom(),
         entryVisible: entryVisible,
+        entryTop: entryFound ? entry.renderedBoundingBox().y1 : null,
+        entryTopPadding: entryTopPadding,
+        containerWidth: container.clientWidth,
+        containerHeight: container.clientHeight,
         framingMs: Date.now() - initStartedAt
       });
     });
@@ -238,6 +378,23 @@ export const workflowGraphClientScript = `(function () {
         if (candidate.nonempty()) candidate.select();
       });
     }
+    log("workflow_graph_layout_started", {
+      layout: graphLayout.name,
+      direction: graphLayout.direction,
+      rootStage: entryId,
+      rootApplied: entryFound,
+      nodes: cy.nodes().length,
+      edges: cy.edges().length,
+      forwardEdges: routeCounts.forward,
+      returnEdges: routeCounts.return,
+      selfEdges: routeCounts.self,
+      nodeWidth: nodeWidth,
+      nodeHeight: nodeHeight,
+      nodeFontSize: nodeFontSize,
+      spacingFactor: graphLayout.spacingFactor,
+      returnBendScale: returnBendScale
+    });
+    cy.layout(graphLayout).run();
   }
   var source = document.getElementById("source");
   var validation = document.getElementById("validation");

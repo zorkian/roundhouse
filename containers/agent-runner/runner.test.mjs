@@ -568,6 +568,41 @@ describe("V2 agent runner", () => {
     ).toBe(implementationSchema);
   });
 
+  it("treats operator visual feedback as the current implementation instruction", () => {
+    const prompt = implementationPrompt({
+      issue: {
+        title: "Adjust the mobile layout",
+        body: "Show before and after screenshots.",
+      },
+      context: {
+        visualFeedback: {
+          status: "answered",
+          actor: "maintainer",
+          body: "Move the action closer to the heading.",
+        },
+      },
+    });
+    expect(prompt).toContain("Latest maintainer visual feedback:");
+    expect(prompt).toContain("Move the action closer to the heading.");
+    expect(prompt).toContain(
+      "If the maintainer accepts the design or asks to continue without a visual change, do not modify the candidate",
+    );
+    expect(prompt).toContain(
+      "If the maintainer requests a change, implement only that feedback",
+    );
+    expect(prompt).toContain(
+      "Later review findings or CI diagnostics remain mandatory",
+    );
+    expect(
+      implementationResultSchema({
+        issue: { title: "Adjust the mobile layout", body: "" },
+        context: {
+          visualFeedback: { status: "answered", body: "Looks good." },
+        },
+      }).properties.screenshots,
+    ).toMatchObject({ minItems: 1 });
+  });
+
   it("labels retrieved CI failure diagnostics as untrusted evidence", () => {
     const prompt = implementationPrompt({
       issue: { title: "Fix the build", body: "", url: "" },

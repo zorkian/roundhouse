@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   advanceWorkflow,
   compileWorkflow,
+  defaultIssueWorkflowSource,
   evaluateWorkflowCondition,
   selectWorkflowTransition,
 } from "./workflow.js";
@@ -182,6 +183,47 @@ nodes:
         output: { implementation: { status: "complete" } },
       }),
     ).toMatchObject({ status: "active", currentNodeId: "implement" });
+  });
+
+  it("routes only changed screenshot candidates through operator visual feedback", async () => {
+    const workflow = await compileWorkflow(defaultIssueWorkflowSource, commit);
+    expect(workflow.nodes.approval?.human).toMatchObject({
+      reason: "visual_feedback",
+      audience: "operator",
+    });
+    expect(
+      advanceWorkflow(workflow, "implement", {
+        attempt: {
+          changed: true,
+          hasScreenshots: true,
+          acceptedHead: "b".repeat(40),
+        },
+        run: { hasCandidate: false },
+      }),
+    ).toMatchObject({
+      status: "active",
+      currentNodeId: "approval",
+    });
+    expect(
+      advanceWorkflow(workflow, "implement", {
+        attempt: {
+          changed: true,
+          hasScreenshots: false,
+          acceptedHead: "b".repeat(40),
+        },
+        run: { hasCandidate: false },
+      }),
+    ).toMatchObject({ status: "active", currentNodeId: "review" });
+    expect(
+      advanceWorkflow(workflow, "implement", {
+        attempt: {
+          changed: false,
+          hasScreenshots: true,
+          acceptedHead: "b".repeat(40),
+        },
+        run: { hasCandidate: true },
+      }),
+    ).toMatchObject({ status: "active", currentNodeId: "review" });
   });
 
   it("snapshots repository-selected prompt, model, branch, and return edge", async () => {

@@ -104,6 +104,7 @@ nodes:
         implementation: nodes.implement.implementation
         review: nodes.review.review
         ci: nodes.checks.ci
+        visualFeedback: nodes.approval.human
       result:
         key: implementation
         schema: roundhouse.implementation.v1
@@ -122,8 +123,33 @@ nodes:
               equals: false
         terminal: succeeded
       - when:
+          all:
+            - path: attempt.changed
+              equals: false
+            - path: run.hasCandidate
+              equals: true
+        to: review
+      - when:
+          path: attempt.hasScreenshots
+          equals: true
+        to: approval
+      - when:
           exists: attempt.acceptedHead
         to: review
+      - terminal: failed
+
+  approval:
+    executor: human
+    role: approval
+    human:
+      reason: visual_feedback
+      audience: operator
+    outputs: [human.status]
+    transitions:
+      - when:
+          path: output.human.status
+          equals: answered
+        to: implement
       - terminal: failed
 
   review:
@@ -672,6 +698,7 @@ function transition(value: unknown): WorkflowTransition {
     value.wait !== undefined &&
     ![
       "clarification",
+      "visual_feedback",
       "plan_approval",
       "final_approval",
       "maintainer_judgment",
@@ -1026,6 +1053,7 @@ async function human(
     !hasOnlyKeys(value, ["reason", "audience"], ["prompt"]) ||
     ![
       "clarification",
+      "visual_feedback",
       "plan_approval",
       "final_approval",
       "maintainer_judgment",
