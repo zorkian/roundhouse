@@ -403,7 +403,7 @@ class ContainerDispatcher implements AttemptDispatcher {
         )
       : undefined;
     const reviewAttempt =
-      attempt.stage === "implement"
+      attempt.stage === "implement" || attempt.role === "conflict-resolution"
         ? await this.runs.latestCompletedAttempt(run.id, "review", run.revision)
         : undefined;
     const reviewAttempts = reviewAttempt
@@ -460,6 +460,7 @@ class ContainerDispatcher implements AttemptDispatcher {
                   run.revision,
                 )
               )?.result?.implementation,
+            review,
           }
         : undefined;
     const reviewer = reviewerForRole(attempt.role);
@@ -537,6 +538,9 @@ class ContainerDispatcher implements AttemptDispatcher {
                       : {}),
                     ...(integrateEvidence.implementation
                       ? { implementation: integrateEvidence.implementation }
+                      : {}),
+                    ...(integrateEvidence.review
+                      ? { review: integrateEvidence.review }
                       : {}),
                   },
                 }

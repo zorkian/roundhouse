@@ -928,6 +928,10 @@ export function conflictResolutionPrompt(assignment) {
     JSON.stringify(assignment.context?.plan?.summary ?? ""),
     "Implementation summary:",
     JSON.stringify(assignment.context?.implementation?.summary ?? ""),
+    "Candidate review evidence:",
+    JSON.stringify(assignment.context?.review ?? {}),
+    "Prior validation evidence:",
+    JSON.stringify(assignment.context?.implementation?.validation ?? []),
     "Conflicted files and hunks:",
     JSON.stringify(conflicts),
     "Run the relevant validation available in the repository and record each command, exit code, and useful output in validation.",
@@ -1427,18 +1431,24 @@ export async function validateCheckpoint(assignment) {
     // The produced integration commit must actually contain the recorded
     // base as a parent so the stored candidate/base/integration identity
     // cannot claim a base the commit does not include.
-    await command(
-      "git",
-      [
-        "merge-base",
-        "--is-ancestor",
-        integration.baseHead,
-        checkpoint.outputHead,
-      ],
-      { cwd: directory },
-    ).catch(() => {
+    const integrationParents = (
+      await command(
+        "git",
+        ["show", "-s", "--format=%P", checkpoint.outputHead],
+        {
+          cwd: directory,
+        },
+      )
+    )
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+    if (
+      integrationParents.length !== 2 ||
+      integrationParents[0] !== checkpoint.inputHead ||
+      integrationParents[1] !== integration.baseHead
+    )
       throw new Error("integration_base_not_parent");
-    });
     const conflictFiles = new Set(
       integration.conflicts
         .map((conflict) => conflict?.path)
