@@ -202,7 +202,17 @@ describe("run details", () => {
     expect(html).toContain("merged-sha");
     expect(html).toContain("test-model");
     expect(html).toContain("120 tokens");
-    expect(html).toContain("$0.010000");
+    expect(html).toContain("$0.01");
+    expect(html).toContain(
+      "<title>&lt;script&gt;alert(1)&lt;/script&gt;</title>",
+    );
+    expect(html).toContain("<h1>&lt;script&gt;alert(1)&lt;/script&gt;</h1>");
+    expect(html).toContain('class="status succeeded">Succeeded</span>');
+    expect(html).toContain("<dt>Elapsed</dt><dd>1 ms</dd>");
+    expect(html).toContain('tabindex="0"');
+    expect(html).toContain(
+      "100 input, 40 cached input, 10 reasoning, 20 output",
+    );
     expect(html).toContain("npm test");
     expect(html).toContain("&lt;b&gt;bad&lt;/b&gt;");
     expect(html).not.toContain("<img");
@@ -272,6 +282,7 @@ describe("run details", () => {
       html.indexOf(">review</span>"),
     );
     expect(html).toContain("2026-01-01T00:00:00.000Z");
+    expect(html).toContain('<span class="label">Revision</span>1');
     expect(html).toContain("1m 5s");
     expect(html).toContain('<span class="label">Status</span>completed');
     expect(html.match(/<details>/g)).toHaveLength(2);
@@ -392,10 +403,11 @@ describe("run details", () => {
       ],
     });
 
-    expect(html).toContain("<dt>Total usage</dt><dd>350 tokens");
+    expect(html).toContain('<dt>Total usage</dt><dd><span class="usage-hint"');
+    expect(html).toContain(">350 tokens · $0.03</span>");
     expect(html).toContain("100 tokens");
     expect(html).toContain("250 tokens");
-    expect(html).toContain("$0.030000");
+    expect(html).toContain("$0.03");
     expect(html).not.toContain("<h2>Usage by workflow step</h2>");
   });
 
@@ -418,6 +430,8 @@ describe("run details", () => {
       attempts: [],
     });
     expect(html).toContain("No attempts recorded");
+    expect(html).toContain("<title>Issue #1</title>");
+    expect(html).toContain("<h1>Issue #1</h1>");
     expect(html).toContain("Unavailable");
   });
 

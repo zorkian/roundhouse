@@ -37,6 +37,14 @@ export function formatUsage(items: readonly ModelUsage[]): string {
   const cost =
     usage.costUsd === undefined
       ? "Cost unavailable"
-      : `$${usage.costUsd.toFixed(6)}`;
-  return `${token(usage.totalTokens)} tokens (${token(usage.inputTokens)} input, ${token(usage.cachedInputTokens)} cached input, ${token(usage.reasoningTokens)} reasoning, ${token(usage.outputTokens)} output) · ${cost}`;
+      : `$${usage.costUsd.toFixed(2)}`;
+  return `${token(usage.totalTokens)} tokens · ${cost}`;
+}
+
+export function formatUsageBreakdown(items: readonly ModelUsage[]): string {
+  const usage = totalUsage(items);
+  if (!items.length) return "Usage unavailable";
+  const token = (value: number | undefined) =>
+    value === undefined ? "unavailable" : value.toLocaleString("en-US");
+  return `${token(usage.inputTokens)} input, ${token(usage.cachedInputTokens)} cached input, ${token(usage.reasoningTokens)} reasoning, ${token(usage.outputTokens)} output`;
 }
