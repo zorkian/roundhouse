@@ -34,4 +34,25 @@ describe("model prices", () => {
       }),
     ).toBeCloseTo(1.25);
   });
+
+  it("does not guess a provider for unresolved bare model IDs", () => {
+    expect(resolveModelPrice({ model: "claude-sonnet-5" })).toBeUndefined();
+  });
+
+  it("keeps missing token data distinct from missing pricing data", () => {
+    const knownWithoutTokens = {
+      model: "openai/gpt-5",
+      provider: "openai",
+    };
+    const unknownWithTokens = {
+      model: "openai/unknown-model",
+      provider: "openai",
+      inputTokens: 1_000,
+      outputTokens: 100,
+    };
+    expect(resolveModelPrice(knownWithoutTokens)).toBeDefined();
+    expect(estimateModelCostUsd(knownWithoutTokens)).toBeUndefined();
+    expect(resolveModelPrice(unknownWithTokens)).toBeUndefined();
+    expect(estimateModelCostUsd(unknownWithTokens)).toBeUndefined();
+  });
 });

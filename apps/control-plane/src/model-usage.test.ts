@@ -68,6 +68,49 @@ describe("summarizeModelUsage", () => {
     ]);
   });
 
+  it("aggregates canonical conversation and delivery identities with the same price", () => {
+    const summary = summarizeModelUsage(
+      [
+        {
+          ...call("openai/gpt-5.6-sol", endAt - day, {
+            inputTokens: 1_000,
+            outputTokens: 100,
+            totalTokens: 1_100,
+            costUsd: undefined,
+          }),
+          source: "delivery" as const,
+        },
+        {
+          ...call("openai/gpt-5.6-sol", endAt - day, {
+            inputTokens: 1_000,
+            outputTokens: 100,
+            totalTokens: 1_100,
+            costUsd: undefined,
+          }),
+          source: "conversation" as const,
+        },
+      ],
+      endAt,
+    );
+    expect(summary.models).toEqual([
+      {
+        model: "openai/gpt-5.6-sol",
+        calls: 2,
+        total: expect.objectContaining({ costUsd: 0.016 }),
+      },
+    ]);
+    expect(summary.sources).toEqual([
+      expect.objectContaining({
+        source: "conversation",
+        total: expect.objectContaining({ costUsd: 0.008 }),
+      }),
+      expect.objectContaining({
+        source: "delivery",
+        total: expect.objectContaining({ costUsd: 0.008 }),
+      }),
+    ]);
+  });
+
   it("separates conversation cost from delivery-run cost", () => {
     const summary = summarizeModelUsage(
       [
@@ -127,10 +170,10 @@ describe("summarizeModelUsage", () => {
     expect(charted).toBe(100);
   });
 
-  it("estimates missing cost from known rates and bare provider model ids", () => {
+  it("estimates missing cost from canonical model identities", () => {
     const summary = summarizeModelUsage(
       [
-        call("claude-sonnet-5", endAt - day, {
+        call("anthropic/claude-sonnet-5", endAt - day, {
           provider: "anthropic",
           configuredModel: "anthropic/claude-sonnet-5",
           inputTokens: 1000,
@@ -139,8 +182,7 @@ describe("summarizeModelUsage", () => {
           totalTokens: 1100,
           costUsd: undefined,
         }),
-        call("claude-sonnet-5", endAt - day, {
-          // Bare API model id with no stored cost — still priceable.
+        call("anthropic/claude-sonnet-5", endAt - day, {
           inputTokens: 10,
           outputTokens: 5,
           totalTokens: 15,
@@ -150,7 +192,7 @@ describe("summarizeModelUsage", () => {
       endAt,
     );
     const model = summary.models.find(
-      (entry) => entry.model === "claude-sonnet-5",
+      (entry) => entry.model === "anthropic/claude-sonnet-5",
     );
     // (1000*2 + 100*10)/1e6 + (10*2 + 5*10)/1e6
     expect(model?.total.costUsd).toBeCloseTo(0.00307);

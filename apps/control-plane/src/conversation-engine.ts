@@ -14,6 +14,7 @@ import type {
   DeliveryBrief,
 } from "./conversation-store.js";
 import type { GitHubApi } from "./github.js";
+import { normalizeModelId } from "./model-identity.js";
 import { estimateModelCostUsd } from "./model-prices.js";
 
 type Broker = Pick<Fetcher, "fetch">;
@@ -721,16 +722,20 @@ function usageForResponse(input: {
     (inputTokens !== undefined && outputTokens !== undefined
       ? inputTokens + outputTokens
       : undefined);
-  const model =
-    typeof value.model === "string"
-      ? value.model
-      : typeof value.modelVersion === "string"
-        ? value.modelVersion
-        : input.route.model;
+  const model = normalizeModelId({
+    model:
+      typeof value.model === "string"
+        ? value.model
+        : typeof value.modelVersion === "string"
+          ? value.modelVersion
+          : input.route.model,
+    provider: input.route.provider,
+    configuredModel: input.turn.configuredModel,
+  });
   const directCost = number(usage.cost_usd ?? usage.cost ?? value.cost_usd);
   const costUsd = estimateModelCostUsd({
     model,
-    configuredModel: input.route.model,
+    configuredModel: input.turn.configuredModel,
     provider: input.route.provider,
     inputTokens,
     cachedInputTokens,
