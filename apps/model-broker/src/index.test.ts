@@ -117,10 +117,9 @@ describe("model broker", () => {
   });
 
   it("serves an empty local model catalog without an upstream call", async () => {
-    const catalog = new Request(
-      "https://broker.invalid/models?client_version=0.144.6",
-      { headers: request().headers },
-    );
+    const catalog = new Request("https://broker.invalid/models", {
+      headers: request().headers,
+    });
     const run = vi.fn();
     const response = await brokerRequest(catalog, env, { run });
     expect(response.status).toBe(200);
