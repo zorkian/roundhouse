@@ -496,12 +496,77 @@ describe("run details", () => {
     expect(html).toContain('<dt>Total usage</dt><dd><span class="usage-hint"');
     expect(html).toContain('>350 tokens · $0.03<span class="usage-breakdown"');
     expect(html).toContain(
-      ".usage-hint:hover .usage-breakdown,.usage-hint:focus .usage-breakdown",
+      ".usage-hint:hover .usage-breakdown,.usage-hint:focus .usage-breakdown,.usage-hint:focus-within .usage-breakdown{display:block}",
     );
     expect(html).toContain("100 tokens");
     expect(html).toContain("250 tokens");
     expect(html).toContain("$0.03");
     expect(html).not.toContain("<h2>Usage by workflow step</h2>");
+  });
+
+  it("keeps an inactive usage breakdown out of document layout so nowrap content cannot widen the page", () => {
+    const html = renderRunDetails({
+      run: {
+        schemaVersion: 2,
+        id: "run_tooltip_overflow",
+        repository: "zorkian/roundhouse",
+        issueNumber: 399,
+        baseCommit: "base",
+        currentHead: "head",
+        profileVersion: "test",
+        status: "succeeded",
+        stage: "implement",
+        revision: 1,
+      },
+      createdAt: 1_000,
+      updatedAt: 2_000,
+      attempts: [],
+      events: [],
+      usage: [
+        {
+          callId: "call-long",
+          attemptId: "implement-1",
+          model: "test-model",
+          totalTokens: 123_456_789,
+          costUsd: 123.45,
+        },
+      ],
+    });
+
+    const style = html.match(/<style>(.*?)<\/style>/s)?.[1] ?? "";
+    expect(style).not.toBe("");
+    const rules = new Map<string, string>();
+    for (const match of style.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const selector = (match[1] ?? "").trim();
+      if (!rules.has(selector)) rules.set(selector, match[2] ?? "");
+    }
+
+    // Regression for issue #399: the hidden tooltip previously used only
+    // opacity:0/visibility:hidden, so its nowrap text still contributed
+    // horizontal scroll overflow and expanded the mobile document well past
+    // the viewport. The inactive tooltip must be removed from layout
+    // entirely (display:none) so it cannot affect scroll width.
+    const inactive = rules.get(".usage-breakdown") ?? "";
+    expect(inactive).toContain("display:none");
+    expect(inactive).not.toContain("visibility:hidden");
+    expect(inactive).toContain("position:absolute");
+
+    // Hover, keyboard focus, and focus-within must restore the tooltip.
+    const restore = [...rules.entries()].find(
+      ([selector]) =>
+        selector.includes(".usage-hint:hover .usage-breakdown") &&
+        selector.includes(".usage-hint:focus .usage-breakdown"),
+    );
+    expect(restore?.[1]).toContain("display:block");
+
+    // On narrow viewports the displayed tooltip must stay inside the
+    // viewport instead of forcing the document wider.
+    const media =
+      style.match(/@media\(max-width:700px\)\{(.*)\}\s*$/s)?.[1] ?? "";
+    expect(media).toContain(".usage-breakdown{");
+    const mobileRule = media.match(/\.usage-breakdown\{([^{}]*)\}/)?.[1] ?? "";
+    expect(mobileRule).toContain("max-width:calc(100vw - 2rem)");
+    expect(mobileRule).toContain("white-space:normal");
   });
 
   it("shows recovered executions with separate outcomes and usage", () => {
