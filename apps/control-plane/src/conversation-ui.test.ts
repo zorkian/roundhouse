@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   renderConversation,
   renderConversationIndex,
+  renderConversationPollState,
 } from "./conversation-ui.js";
 import type {
   Conversation,
@@ -206,6 +207,62 @@ describe("conversation UI", () => {
     expect(promoted).toContain("Delivery started");
     expect(promoted).toContain("Open Roundhouse run");
     expect(promoted).not.toContain("Continue the conversation");
+  });
+
+  it("uses same-origin partial polling for active conversations without a hard refresh", () => {
+    const active = {
+      ...base,
+      activeTurn: {
+        id: "active-turn",
+        conversationId: base.id,
+        kind: "message" as const,
+        ordinal: 1,
+        state: "running" as const,
+        sourceCommit: base.sourceCommit,
+        configuredModel: "openai/gpt-5.6-sol",
+        configuredReasoning: "high",
+        attempts: 1,
+        createdAt: 2,
+        updatedAt: 2,
+      },
+    };
+    const html = renderConversation(active, "octocat");
+    expect(html).not.toContain('http-equiv="refresh"');
+    expect(html).toContain("/assets/conversation-poll.js");
+    expect(html).toContain(`/conversations/${base.id}/state`);
+    expect(html).toContain('id="conversation-messages"');
+    expect(html).toContain('data-message-id="message"');
+    expect(html).toContain('id="conversation-live-status"');
+    expect(html).toContain('role="status" aria-live="polite"');
+
+    const state = renderConversationPollState(active, "message-id");
+    expect(state.polling).toBe(true);
+    expect(state.messages[0]).toMatchObject({ id: "message" });
+    expect(state.status.key).toBe("turn:running");
+  });
+
+  it("does not start polling once a turn is terminal", () => {
+    const terminal = {
+      ...base,
+      latestTurn: {
+        id: "complete-turn",
+        conversationId: base.id,
+        kind: "message" as const,
+        ordinal: 1,
+        state: "succeeded" as const,
+        sourceCommit: base.sourceCommit,
+        configuredModel: "openai/gpt-5.6-sol",
+        configuredReasoning: "high",
+        attempts: 1,
+        createdAt: 2,
+        updatedAt: 3,
+        completedAt: 3,
+      },
+    };
+    expect(renderConversation(terminal, "octocat")).not.toContain(
+      "conversation-poll.js",
+    );
+    expect(renderConversationPollState(terminal).polling).toBe(false);
   });
 
   it("surfaces a terminal turn failure without exposing its internal error", () => {

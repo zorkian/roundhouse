@@ -786,6 +786,42 @@ describe("V2 control plane", () => {
     expect(dashboard.headers.get("referrer-policy")).toBe("same-origin");
   });
 
+  it("serves the conversation polling asset from the public UI origin", async () => {
+    const fetch = worker.fetch as unknown as (
+      request: Request,
+      env: unknown,
+      context: unknown,
+    ) => Promise<Response>;
+    const asset = await fetch(
+      new Request("https://v2.invalid/assets/conversation-poll.js"),
+      uiEnv(dashboardDb()) as never,
+      {} as never,
+    );
+    expect(asset.status).toBe(200);
+    expect(asset.headers.get("content-type")).toBe(
+      "text/javascript; charset=utf-8",
+    );
+    await expect(asset.text()).resolves.toContain(
+      "conversation_poll_initialized",
+    );
+
+    const post = await fetch(
+      new Request("https://v2.invalid/assets/conversation-poll.js", {
+        method: "POST",
+      }),
+      uiEnv(dashboardDb()) as never,
+      {} as never,
+    );
+    expect(post.status).toBe(405);
+
+    const directOrigin = await fetch(
+      new Request("https://direct-worker.invalid/assets/conversation-poll.js"),
+      uiEnv(dashboardDb()) as never,
+      {} as never,
+    );
+    expect(directOrigin.status).toBe(404);
+  });
+
   it("serves the workflow graph asset from the public UI origin", async () => {
     const fetch = worker.fetch as unknown as (
       request: Request,
