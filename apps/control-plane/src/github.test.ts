@@ -523,7 +523,13 @@ describe("GitHub intake", () => {
         { body: string },
       ]
     )[1].body;
-    expect(comment).toContain("about a minute");
+    expect(comment).toContain(
+      "<!-- roundhouse:v2:acknowledgement:run_123_issue_42 -->",
+    );
+    expect(comment).toContain("Roundhouse has started working on this.");
+    expect(comment).not.toContain("set up for the first time");
+    expect(comment).not.toContain("workspace");
+    expect(comment).not.toContain("about a minute");
     expect(comment).not.toContain(env.GITHUB_START_COMMAND);
     expect(comment).not.toContain("enqueue");
     expect(wakeups).toEqual([
