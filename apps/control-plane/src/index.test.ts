@@ -278,6 +278,7 @@ function withUiSession(
             github_login: "octocat",
             repository_ids_json: repositoryIds,
             expires_at: Date.now() + 60_000,
+            created_at: Date.now(),
           }),
           run: async () => {
             if (sql.includes("UPDATE ui_sessions SET expires_at"))
@@ -518,8 +519,14 @@ describe("V2 control plane", () => {
     expect(renewedCookie).toContain("HttpOnly");
     expect(renewedCookie).toContain("Secure");
     const renewedMaxAge = Number(renewedCookie.match(/Max-Age=(\d+)/)![1]);
-    expect(renewedMaxAge).toBeGreaterThanOrEqual(30 * 24 * 60 * 60);
-    expect(renewals[0]!).toBeLessThanOrEqual(Date.now() + renewedMaxAge * 1000);
+    expect(renewedMaxAge).toBeGreaterThanOrEqual(30 * 24 * 60 * 60 - 5);
+    expect(renewals[0]!).toBeLessThanOrEqual(
+      Date.now() + (renewedMaxAge + 1) * 1000,
+    );
+    // The cookie's absolute Expires deadline equals the persisted expiration.
+    expect(renewedCookie).toContain(
+      `Expires=${new Date(renewals[0]!).toUTCString()}`,
+    );
     // The signed-out fallback does not set a renewed session cookie.
     expect(signedOut.headers.get("set-cookie")).toBeNull();
     expect(response.headers.get("content-security-policy")).toContain(
@@ -574,8 +581,13 @@ describe("V2 control plane", () => {
     const errorCookie = post.headers.get("set-cookie")!;
     expect(errorCookie).toContain("roundhouse_ui_session=test-session");
     const errorMaxAge = Number(errorCookie.match(/Max-Age=(\d+)/)![1]);
-    expect(errorMaxAge).toBeGreaterThanOrEqual(30 * 24 * 60 * 60);
-    expect(renewals[0]!).toBeLessThanOrEqual(Date.now() + errorMaxAge * 1000);
+    expect(errorMaxAge).toBeGreaterThanOrEqual(30 * 24 * 60 * 60 - 5);
+    expect(renewals[0]!).toBeLessThanOrEqual(
+      Date.now() + (errorMaxAge + 1) * 1000,
+    );
+    expect(errorCookie).toContain(
+      `Expires=${new Date(renewals[0]!).toUTCString()}`,
+    );
 
     const response = await fetch(
       new Request("https://v2.invalid/usage", {

@@ -6,6 +6,7 @@ import type { D1Like } from "./d1-store.js";
 import {
   beginGitHubSignIn,
   handleGitHubCallback,
+  sessionCookieHeader,
   signOut,
   uiSessionCookie,
   uiSessionLifetimeMs,
@@ -25,6 +26,7 @@ function authDb(options?: {
   sessions?: readonly {
     hash: string;
     expiresAt: number;
+    createdAt?: number;
   }[];
 }) {
   const states = new Map<string, { expiresAt: number; cookieHash: string }>();
@@ -36,6 +38,7 @@ function authDb(options?: {
         github_login: "octocat",
         repository_ids_json: '["1297678423"]',
         expires_at: session.expiresAt,
+        created_at: session.createdAt ?? Date.now(),
       },
     ]),
   );
@@ -89,6 +92,7 @@ function authDb(options?: {
               github_login: String(values[2]),
               repository_ids_json: String(values[3]),
               expires_at: Number(values[4]),
+              created_at: Number(values[5]),
             });
           if (sql.includes("DELETE FROM ui_sessions WHERE session_hash"))
             sessions.delete(String(values[0]));
@@ -217,6 +221,10 @@ describe("GitHub UI sign-in", () => {
     expect(maxAge).toBe(Math.floor(uiSessionLifetimeMs / 1000));
     expect(maxAge).toBeGreaterThanOrEqual(30 * 24 * 60 * 60);
     expect(session.expires_at).toBeLessThanOrEqual(Date.now() + maxAge * 1000);
+    // The cookie's absolute Expires deadline matches the stored expiration.
+    expect(cookie).toContain(
+      `Expires=${new Date(session.expires_at).toUTCString()}`,
+    );
     expect(JSON.stringify([...sessions.values()])).not.toContain("user-token");
     // The access token never appears in the redirect target.
     expect(response.headers.get("location")).not.toContain("token");
@@ -399,11 +407,17 @@ describe("GitHub UI sign-in", () => {
       const expectedExpiresAt = Date.now() + uiSessionLifetimeMs;
       expect(session?.expiresAt).toBe(expectedExpiresAt);
       expect(sessions.get(hash)?.expires_at).toBe(expectedExpiresAt);
-      expect(session?.sessionCookie).toContain(`${uiSessionCookie}=${token}`);
-      expect(session?.sessionCookie).toContain("HttpOnly");
-      expect(session?.sessionCookie).toContain("Secure");
-      expect(session?.sessionCookie).toContain(
+      expect(session?.sessionToken).toBe(token);
+      // The renewed cookie shares the persisted absolute expiration.
+      const renewedCookie = sessionCookieHeader(token, session!.expiresAt);
+      expect(renewedCookie).toContain(`${uiSessionCookie}=${token}`);
+      expect(renewedCookie).toContain("HttpOnly");
+      expect(renewedCookie).toContain("Secure");
+      expect(renewedCookie).toContain(
         `Max-Age=${Math.floor(uiSessionLifetimeMs / 1000)}`,
+      );
+      expect(renewedCookie).toContain(
+        `Expires=${new Date(expectedExpiresAt).toUTCString()}`,
       );
       const renewed = logs.find(
         (entry) => entry.message === "ui_session_renewed",
@@ -416,6 +430,56 @@ describe("GitHub UI sign-in", () => {
       });
       expect(typeof renewed?.durationMs).toBe("number");
       logSpy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("caps renewal at one lifetime from sign-in and rejects stale sessions", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-02-01T00:00:00Z"));
+      const token = "capped-session";
+      const hash = await sha256Hex(token);
+      // Signed in 29 days ago: renewal is capped at 30 days from sign-in, so
+      // the cached repository access cannot be extended indefinitely.
+      const createdAt = Date.now() - 29 * 24 * 60 * 60 * 1000;
+      const { db, sessions } = authDb({
+        sessions: [{ hash, expiresAt: Date.now() + 60_000, createdAt }],
+      });
+      const session = await validateUiSession(
+        new Request("https://v2.invalid/", {
+          headers: { cookie: `${uiSessionCookie}=${token}` },
+        }),
+        env(db),
+      );
+      expect(session?.expiresAt).toBe(createdAt + uiSessionLifetimeMs);
+      expect(sessions.get(hash)?.expires_at).toBe(
+        createdAt + uiSessionLifetimeMs,
+      );
+
+      // Once the bounded authorization age has passed, the session is
+      // rejected and deleted even though its sliding expiration is future.
+      const staleToken = "stale-session";
+      const staleHash = await sha256Hex(staleToken);
+      const stale = authDb({
+        sessions: [
+          {
+            hash: staleHash,
+            expiresAt: Date.now() + 60_000,
+            createdAt: Date.now() - 31 * 24 * 60 * 60 * 1000,
+          },
+        ],
+      });
+      await expect(
+        validateUiSession(
+          new Request("https://v2.invalid/", {
+            headers: { cookie: `${uiSessionCookie}=${staleToken}` },
+          }),
+          env(stale.db),
+        ),
+      ).resolves.toBeUndefined();
+      expect(stale.sessions.has(staleHash)).toBe(false);
     } finally {
       vi.useRealTimers();
     }

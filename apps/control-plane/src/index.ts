@@ -27,6 +27,7 @@ import {
   handleGitHubCallback,
   renderNotFoundPage,
   renderSignInPage,
+  sessionCookieHeader,
   signOut,
   validateUiSession,
   type ValidatedUiSession,
@@ -506,11 +507,16 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       );
     }
     // Successful UI authorization renews the session; attach the renewed
-    // cookie to every response produced for that authorized request.
+    // cookie to every response produced for that authorized request. The
+    // header is built here, when the response is produced, so the cookie's
+    // remaining lifetime matches the persisted expiration.
     const withUiSession = (response: Response): Response => {
       if (!uiSession) return response;
       const headers = new Headers(response.headers);
-      headers.append("set-cookie", uiSession.sessionCookie);
+      headers.append(
+        "set-cookie",
+        sessionCookieHeader(uiSession.sessionToken, uiSession.expiresAt),
+      );
       return new Response(response.body, {
         status: response.status,
         headers,

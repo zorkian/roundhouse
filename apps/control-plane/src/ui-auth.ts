@@ -19,7 +19,7 @@ export interface UiSession {
 }
 
 export interface ValidatedUiSession extends UiSession {
-  readonly sessionCookie: string;
+  readonly sessionToken: string;
 }
 
 export const uiSessionCookie = "roundhouse_ui_session";
@@ -94,8 +94,17 @@ function stateCookieHeader(token: string, maxAgeSeconds: number): string {
   return `${uiStateCookie}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/auth/github/callback; Max-Age=${maxAgeSeconds}`;
 }
 
-function sessionCookieHeader(token: string, maxAgeSeconds: number): string {
-  return `${uiSessionCookie}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAgeSeconds}`;
+// The cookie carries the same absolute deadline as the stored session: an
+// Expires attribute derived from expiresAtMs plus the Max-Age remaining at
+// the moment the header is built. Building the header when the response is
+// decorated keeps both sides aligned even on slow requests.
+export function sessionCookieHeader(
+  token: string,
+  expiresAtMs: number,
+  nowMs = Date.now(),
+): string {
+  const maxAgeSeconds = Math.max(0, Math.floor((expiresAtMs - nowMs) / 1000));
+  return `${uiSessionCookie}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAgeSeconds}; Expires=${new Date(expiresAtMs).toUTCString()}`;
 }
 
 // The state cookie binds the OAuth state to the browser that began sign-in,
@@ -337,7 +346,7 @@ export async function handleGitHubCallback(
     const success = redirect("/", {
       "set-cookie": sessionCookieHeader(
         sessionToken,
-        Math.floor(uiSessionLifetimeMs / 1000),
+        Date.now() + uiSessionLifetimeMs,
       ),
     });
     return clearStateCookie(success);
@@ -374,7 +383,7 @@ export async function validateUiSession(
     return undefined;
   }
   const row = await env.DB.prepare(
-    "SELECT github_user_id, github_login, repository_ids_json, expires_at FROM ui_sessions WHERE session_hash = ?1",
+    "SELECT github_user_id, github_login, repository_ids_json, expires_at, created_at FROM ui_sessions WHERE session_hash = ?1",
   )
     .bind(await sha256Hex(token))
     .first<{
@@ -382,6 +391,7 @@ export async function validateUiSession(
       github_login: string;
       repository_ids_json: string;
       expires_at: number;
+      created_at: number;
     }>();
   if (!row) {
     log("ui_session_validated", {
@@ -390,9 +400,17 @@ export async function validateUiSession(
     });
     return undefined;
   }
-  if (row.expires_at <= startedAt) {
+  // The session caches the repository access resolved at GitHub sign-in, so
+  // its total age is bounded: renewal never extends a session beyond one
+  // lifetime from sign-in. After that the user signs in again and repository
+  // access is re-resolved against GitHub.
+  const authorizationEndsAt = row.created_at + uiSessionLifetimeMs;
+  if (row.expires_at <= startedAt || authorizationEndsAt <= startedAt) {
     await env.DB.prepare("DELETE FROM ui_sessions WHERE expires_at <= ?1")
       .bind(startedAt)
+      .run();
+    await env.DB.prepare("DELETE FROM ui_sessions WHERE session_hash = ?1")
+      .bind(await sha256Hex(token))
       .run();
     log("ui_session_validated", {
       outcome: "expired",
@@ -411,7 +429,10 @@ export async function validateUiSession(
   // signed in. The session token itself is unchanged.
   const renewalStartedAt = Date.now();
   const previousExpiresAt = row.expires_at;
-  const renewedExpiresAt = startedAt + uiSessionLifetimeMs;
+  const renewedExpiresAt = Math.min(
+    startedAt + uiSessionLifetimeMs,
+    authorizationEndsAt,
+  );
   await env.DB.prepare(
     "UPDATE ui_sessions SET expires_at = ?1 WHERE session_hash = ?2",
   )
@@ -422,6 +443,7 @@ export async function validateUiSession(
     githubUserId: row.github_user_id,
     previousExpiresAt,
     expiresAt: renewedExpiresAt,
+    authorizationEndsAt,
     durationMs: Date.now() - renewalStartedAt,
   });
   return {
@@ -429,10 +451,7 @@ export async function validateUiSession(
     githubLogin: row.github_login,
     repositoryIds: JSON.parse(row.repository_ids_json) as string[],
     expiresAt: renewedExpiresAt,
-    sessionCookie: sessionCookieHeader(
-      token,
-      Math.floor(uiSessionLifetimeMs / 1000),
-    ),
+    sessionToken: token,
   };
 }
 
@@ -456,6 +475,6 @@ export async function signOut(
     durationMs: Date.now() - startedAt,
   });
   return redirect("/", {
-    "set-cookie": sessionCookieHeader("", 0),
+    "set-cookie": sessionCookieHeader("", Date.now()),
   });
 }
