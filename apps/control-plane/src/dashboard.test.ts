@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { createRun } from "@roundhouse/core";
 import { renderDashboard } from "./dashboard.js";
 import { D1RunRepository, type D1Like, type RunSummary } from "./d1-store.js";
+import { statusPillStyles } from "./status-ui.js";
 
 const summary = (
   status: RunSummary["run"]["status"],
@@ -179,6 +180,31 @@ describe("dashboard", () => {
     expect(html).toContain("Closed on GitHub");
     expect(html).toContain("<strong>1</strong> need attention");
     expect(html).toContain("<strong>1</strong> recently finished");
+  });
+
+  it("uses shared semantic tones for run statuses and closed work", () => {
+    const html = renderDashboard([
+      summary("active", 101, "Active"),
+      summary("waiting", 102, "Waiting"),
+      summary("succeeded", 103, "Succeeded"),
+      summary("failed", 104, "Failed"),
+      summary("cancelled", 105, "Cancelled"),
+      summary("active", 106, "Closed early", "closed"),
+    ]);
+
+    expect(html).toContain(statusPillStyles);
+    expect(html).toContain('<span class="status active">In progress</span>');
+    expect(html).toContain(
+      '<span class="status waiting">Waiting for a response</span>',
+    );
+    expect(html).toContain('<span class="status succeeded">Completed</span>');
+    expect(html).toContain(
+      '<span class="status failed">Needs attention</span>',
+    );
+    expect(html).toContain('<span class="status failed">Cancelled</span>');
+    expect(html).toContain(
+      '<span class="status failed">Closed on GitHub</span>',
+    );
   });
 
   it("shows a successful closed issue as completed", () => {

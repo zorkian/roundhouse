@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import type { RunDetails } from "./d1-store.js";
 import { renderCompletedRunDetailsFixture } from "./run-details.fixture.js";
 import { renderRunDetails } from "./run-details.js";
+import { statusPillStyles } from "./status-ui.js";
 
 type DetailsRun = RunDetails["run"];
 type DetailsAttempt = RunDetails["attempts"][number];
@@ -76,6 +77,22 @@ describe("run details", () => {
     const html = renderCompletedRunDetailsFixture();
     expect(html).toContain("Pull request merged successfully.");
     expect(html).toContain("Pull request #486");
+  });
+
+  it("uses shared semantic tones for every run status", () => {
+    const cases = [
+      ["active", "active", "In progress"],
+      ["waiting", "waiting", "Waiting"],
+      ["succeeded", "succeeded", "Succeeded"],
+      ["failed", "failed", "Failed"],
+      ["cancelled", "failed", "Cancelled"],
+    ] as const;
+
+    for (const [status, tone, label] of cases) {
+      const html = renderRunDetails(detailsFixture({ run: { status } }));
+      expect(html).toContain(statusPillStyles);
+      expect(html).toContain(`<span class="status ${tone}">${label}</span>`);
+    }
   });
 
   it("renders escaped summary, usage, links, and workflow evidence", () => {
