@@ -208,6 +208,25 @@ function aggregateReviews(attempts: readonly Attempt[]): Attempt {
   };
 }
 
+export function aggregateReviewAttempts(
+  attempts: readonly Attempt[],
+): Attempt | undefined {
+  const holistic = attempts.find(
+    (attempt) =>
+      attempt.role === "review-holistic" && attempt.state === "completed",
+  );
+  if (!holistic) return undefined;
+  const selected = selectedSpecialists(holistic);
+  if (!selected) return undefined;
+  const specialists = selected.map((role) =>
+    attempts.find(
+      (attempt) => attempt.role === role && attempt.state === "completed",
+    ),
+  );
+  if (specialists.some((attempt) => !attempt)) return undefined;
+  return aggregateReviews([holistic, ...(specialists as Attempt[])]);
+}
+
 export async function coordinate(
   repository: RunRepository,
   dispatcher: AttemptDispatcher,
@@ -265,12 +284,8 @@ export async function coordinate(
           leaseMilliseconds,
         );
     }
-    const aggregate = aggregateReviews([
-      holistic,
-      ...selected.map((role) =>
-        current.find((attempt) => attempt.role === role)!,
-      ),
-    ]);
+    const aggregate = aggregateReviewAttempts(current);
+    if (!aggregate) return "stale";
     const next = await repository.transition(
       run.id,
       run.revision,
