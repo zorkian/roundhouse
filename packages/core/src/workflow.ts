@@ -826,6 +826,26 @@ function modelOrCompetition(
   return { competition: competition(value.competition) };
 }
 
+// Candidate and judge attempts persist roles derived from the node's base
+// role, and the runtime attempt ID helper rejects roles longer than 64
+// characters. Compilation must reject definitions whose derived candidate or
+// judge role could never dispatch.
+const attemptRolePattern = /^[a-z][a-z0-9-]{0,63}$/;
+
+function validateCompetitionRoles(
+  baseRole: string,
+  competition: WorkflowCompetition,
+): void {
+  if (
+    !attemptRolePattern.test(`${baseRole}-judge`) ||
+    competition.candidates.some(
+      (candidate) =>
+        !attemptRolePattern.test(`${baseRole}-candidate-${candidate.id}`),
+    )
+  )
+    throw new Error("workflow_competition_role_invalid");
+}
+
 async function agent(
   value: unknown,
   executor: WorkflowExecutorKind,
@@ -976,6 +996,9 @@ async function review(
   const byId = new Map(reviewers.map((reviewer) => [reviewer.id, reviewer]));
   if (byId.size !== reviewers.length)
     throw new Error("workflow_reviewer_duplicate");
+  for (const reviewer of reviewers)
+    if (reviewer.competition)
+      validateCompetitionRoles(reviewer.id, reviewer.competition);
   for (const reviewer of reviewers) {
     if (
       (reviewer.activation === "selected") !== Boolean(reviewer.selectedBy) ||
@@ -1329,7 +1352,7 @@ export async function compileWorkflow(
   )
     throw new Error("workflow_trigger_invalid");
   const triggers = value.triggers as Record<WorkflowTriggerKind, string>;
-  const nodes = Object.fromEntries(
+  const nodes: Record<string, WorkflowNode> = Object.fromEntries(
     await Promise.all(
       Object.entries(value.nodes).map(async ([nodeId, definition]) => [
         nodeId,
@@ -1338,6 +1361,12 @@ export async function compileWorkflow(
     ),
   );
   validateGraph(triggers, nodes);
+  for (const [nodeId, definition] of Object.entries(nodes))
+    if (definition.agent?.competition)
+      validateCompetitionRoles(
+        definition.role ?? nodeId,
+        definition.agent.competition,
+      );
   const normalized = {
     version: workflowVersion,
     triggers,
