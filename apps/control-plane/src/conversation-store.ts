@@ -89,6 +89,7 @@ export interface ConversationPromotion {
   readonly state:
     "requested" | "issue_created" | "awaiting_intake" | "accepted" | "rejected";
   readonly runStatus?: RunStatus;
+  readonly runUpdatedAt?: number;
   readonly actorGithubUserId: number;
   readonly actorGithubLogin: string;
   readonly issueNumber?: number;
@@ -137,6 +138,7 @@ export interface ConversationSummary {
   readonly latestTurnState?: ConversationTurn["state"];
   readonly promotionState?: ConversationPromotion["state"];
   readonly promotionRunStatus?: RunStatus;
+  readonly promotionRunUpdatedAt?: number;
   readonly issueNumber?: number;
   readonly issueUrl?: string;
   readonly updatedAt: number;
@@ -242,6 +244,7 @@ type PromotionRow = {
   brief_id: string;
   state: ConversationPromotion["state"];
   run_status?: RunStatus | null;
+  run_updated_at?: number | null;
   actor_github_user_id: number;
   actor_github_login: string;
   issue_number: number | null;
@@ -334,6 +337,9 @@ function promotionFromRow(row: PromotionRow): ConversationPromotion {
     briefId: row.brief_id,
     state: row.state,
     ...(row.run_status ? { runStatus: row.run_status } : {}),
+    ...(row.run_updated_at === null || row.run_updated_at === undefined
+      ? {}
+      : { runUpdatedAt: row.run_updated_at }),
     actorGithubUserId: row.actor_github_user_id,
     actorGithubLogin: row.actor_github_login,
     ...(row.issue_number === null ? {} : { issueNumber: row.issue_number }),
@@ -415,11 +421,12 @@ export class D1ConversationRepository {
     const rows = await this.db
       .prepare(
         `SELECT c.id,c.title,c.status,
-                CASE WHEN p.updated_at>c.updated_at THEN p.updated_at ELSE c.updated_at END AS updated_at,
+                MAX(c.updated_at,COALESCE(p.updated_at,c.updated_at),COALESCE(delivery_run.updated_at,c.updated_at)) AS updated_at,
                 r.profile_json,active_turn.kind AS active_turn_kind,
                 active_turn.state AS active_turn_state,current_brief.state AS current_brief_state,
                 latest_turn.state AS latest_turn_state,p.state AS promotion_state,
-                delivery_run.status AS promotion_run_status,p.issue_number,p.issue_url
+                delivery_run.status AS promotion_run_status,delivery_run.updated_at AS promotion_run_updated_at,
+                p.issue_number,p.issue_url
          FROM conversations c
          JOIN repositories r ON r.id=c.repository_id
          LEFT JOIN conversation_turns active_turn ON active_turn.id=c.active_turn_id
@@ -431,7 +438,7 @@ export class D1ConversationRepository {
          LEFT JOIN runs delivery_run ON delivery_run.id=p.run_id
          WHERE c.creator_github_user_id=?1
            AND r.github_id IN (${placeholders(authorizedGithubIds, 2)})
-         ORDER BY CASE WHEN p.updated_at>c.updated_at THEN p.updated_at ELSE c.updated_at END DESC LIMIT 50`,
+         ORDER BY MAX(c.updated_at,COALESCE(p.updated_at,c.updated_at),COALESCE(delivery_run.updated_at,c.updated_at)) DESC LIMIT 50`,
       )
       .bind(creatorGithubUserId, ...authorizedGithubIds)
       .all<{
@@ -446,6 +453,7 @@ export class D1ConversationRepository {
         latest_turn_state: ConversationTurn["state"] | null;
         promotion_state: ConversationPromotion["state"] | null;
         promotion_run_status: RunStatus | null;
+        promotion_run_updated_at: number | null;
         issue_number: number | null;
         issue_url: string | null;
       }>();
@@ -476,6 +484,9 @@ export class D1ConversationRepository {
       ...(row.promotion_run_status
         ? { promotionRunStatus: row.promotion_run_status }
         : {}),
+      ...(row.promotion_run_updated_at === null
+        ? {}
+        : { promotionRunUpdatedAt: row.promotion_run_updated_at }),
       ...(row.issue_number === null ? {} : { issueNumber: row.issue_number }),
       ...(row.issue_url ? { issueUrl: row.issue_url } : {}),
       updatedAt: row.updated_at,
@@ -912,7 +923,8 @@ export class D1ConversationRepository {
           : Promise.resolve(null),
         this.db
           .prepare(
-            `SELECT p.*,delivery_run.status AS run_status
+            `SELECT p.*,delivery_run.status AS run_status,
+                    delivery_run.updated_at AS run_updated_at
              FROM conversation_promotions p
              LEFT JOIN runs delivery_run ON delivery_run.id=p.run_id
              WHERE p.conversation_id=?1`,

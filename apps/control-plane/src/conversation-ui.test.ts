@@ -215,13 +215,13 @@ describe("conversation UI", () => {
         "Delivery complete",
       ],
       [
-        "active delivery is started",
+        "waiting delivery is waiting",
         {
           status: "promoted" as const,
           promotionState: "accepted" as const,
           promotionRunStatus: "waiting" as const,
         },
-        "Delivery started",
+        "Delivery waiting",
       ],
       [
         "brief review overrides active work",
@@ -259,6 +259,25 @@ describe("conversation UI", () => {
   it("uses semantic tones for delivery, waiting, and failure states", () => {
     const cases = [
       [
+        "active",
+        {
+          status: "promoted" as const,
+          promotionState: "accepted" as const,
+          promotionRunStatus: "active" as const,
+        },
+        { label: "Delivery started", tone: "active" },
+      ],
+      [
+        "waiting",
+        {
+          status: "promoted" as const,
+          promotionState: "accepted" as const,
+          promotionRunStatus: "waiting" as const,
+        },
+        { label: "Delivery waiting", tone: "waiting" },
+      ],
+      [
+        "succeeded",
         {
           status: "promoted" as const,
           promotionState: "accepted" as const,
@@ -267,21 +286,51 @@ describe("conversation UI", () => {
         { label: "Delivery complete", tone: "succeeded" },
       ],
       [
+        "failed",
+        {
+          status: "promoted" as const,
+          promotionState: "accepted" as const,
+          promotionRunStatus: "failed" as const,
+        },
+        { label: "Delivery failed", tone: "failed" },
+      ],
+      [
+        "cancelled",
+        {
+          status: "promoted" as const,
+          promotionState: "accepted" as const,
+          promotionRunStatus: "cancelled" as const,
+        },
+        { label: "Delivery cancelled", tone: "failed" },
+      ],
+      [
+        "missing run",
         { status: "promoted" as const, promotionState: "accepted" as const },
         { label: "Delivery started", tone: "active" },
       ],
       [
+        "brief",
         { status: "open" as const, currentBriefState: "draft" as const },
         { label: "Delivery brief ready for review", tone: "waiting" },
       ],
       [
+        "turn failure",
         { status: "open" as const, latestTurnState: "failed" as const },
         { label: "Needs attention", tone: "failed" },
       ],
     ] as const;
 
-    for (const [input, expected] of cases)
-      expect(actionableConversationStatus(input)).toEqual(expected);
+    for (const [name, input, expected] of cases) {
+      expect(actionableConversationStatus(input), name).toEqual(expected);
+      const html = renderConversationIndex(
+        [base.repository],
+        [{ ...input, id: name, repository: "octo/project", updatedAt: 1 }],
+        "octocat",
+      );
+      expect(html, name).toContain(
+        `<span class="status ${expected.tone}">${expected.label}</span>`,
+      );
+    }
   });
 
   it("renders a private, read-only thread without trusting message HTML", () => {
@@ -579,6 +628,69 @@ describe("conversation UI", () => {
     expect(promoted).toContain("Delivery started");
     expect(promoted).toContain("Open Roundhouse run");
     expect(promoted).not.toContain("Continue the conversation");
+  });
+
+  it("synchronizes accepted delivery status, polling, and read-only controls with its run", () => {
+    const promotion = {
+      id: "promotion",
+      briefId: "brief",
+      state: "accepted" as const,
+      actorGithubUserId: 7,
+      actorGithubLogin: "octocat",
+      issueNumber: 42,
+      issueUrl: "https://github.test/issues/42",
+      runId: "run-42",
+      createdAt: 2,
+      updatedAt: 3,
+      completedAt: 3,
+    };
+    const cases = [
+      ["active", "Delivery started", "active", true],
+      ["waiting", "Delivery waiting", "waiting", true],
+      ["succeeded", "Delivery complete", "succeeded", false],
+      ["failed", "Delivery failed", "failed", false],
+      ["cancelled", "Delivery cancelled", "failed", false],
+    ] as const;
+
+    for (const [runStatus, label, tone, polling] of cases) {
+      const conversation = {
+        ...base,
+        status: "promoted" as const,
+        promotion: { ...promotion, runStatus, runUpdatedAt: 4 },
+        links: [
+          {
+            kind: "roundhouse.run" as const,
+            externalId: "run-42",
+            url: "https://roundhouse.test/runs/run-42",
+            createdAt: 3,
+          },
+        ],
+      };
+      const html = renderConversation(conversation, "octocat");
+      const state = renderConversationPollState(conversation, "message-id");
+      expect(html).toContain(`<span class="status ${tone}">${label}</span>`);
+      expect(state.polling).toBe(polling);
+      expect(html).toContain('data-conversation-landing="delivery"');
+      expect(html).toContain("Open Roundhouse run");
+      expect(html).not.toContain("Continue the conversation");
+    }
+
+    const cancelled = renderConversationPollState({
+      ...base,
+      status: "promoted",
+      promotion: { ...promotion, runStatus: "cancelled", runUpdatedAt: 4 },
+    });
+    const resumed = renderConversationPollState({
+      ...base,
+      status: "promoted",
+      promotion: { ...promotion, runStatus: "active", runUpdatedAt: 5 },
+    });
+    expect(cancelled.status.key).toBe("promotion:accepted:cancelled");
+    expect(cancelled.status.announcement).toBe("Delivery cancelled.");
+    expect(resumed.status.key).toBe("promotion:accepted:active");
+    expect(resumed.status.announcement).toBe("Delivery started.");
+    expect(resumed.status.version).not.toBe(cancelled.status.version);
+    expect(resumed.controls.version).not.toBe(cancelled.controls.version);
   });
 
   it("uses same-origin partial polling for active conversations without a hard refresh", () => {
