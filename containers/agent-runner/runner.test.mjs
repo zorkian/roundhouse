@@ -20,6 +20,7 @@ import {
   reviewSchema,
   reproductionSchema,
   requestClassification,
+  repositoryChangedPaths,
   runnerIdentity,
   runnerResponse,
   validateCheckpoint,
@@ -602,6 +603,54 @@ describe("V2 agent runner", () => {
         { encoding: "utf8" },
       ).trim(),
     ).toBe(first.outputHead);
+  });
+
+  it("derives literal changed paths without Git quoting", async () => {
+    const source = resolve(testRoot, "quoted-paths");
+    await mkdir(resolve(source, ".github", "workflows"), { recursive: true });
+    execFileSync("git", ["init", "--initial-branch=main"], { cwd: source });
+    await writeFile(resolve(source, "README.md"), "base\n");
+    execFileSync("git", ["add", "README.md"], { cwd: source });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@invalid",
+        "commit",
+        "-m",
+        "base",
+      ],
+      { cwd: source },
+    );
+    const base = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: source,
+      encoding: "utf8",
+    }).trim();
+    await writeFile(resolve(source, ".github", "workflows", "é.yml"), "x\n");
+    execFileSync("git", ["add", "--all"], { cwd: source });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@invalid",
+        "commit",
+        "-m",
+        "unicode path",
+      ],
+      { cwd: source },
+    );
+    const head = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: source,
+      encoding: "utf8",
+    }).trim();
+
+    await expect(repositoryChangedPaths(source, base, head)).resolves.toEqual([
+      ".github/workflows/é.yml",
+    ]);
   });
 
   it("prepares a conflicted base update for the implementation agent", async () => {

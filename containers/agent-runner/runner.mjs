@@ -256,7 +256,8 @@ function command(commandName, args, options = {}) {
           stderrBytes,
         });
         await activity;
-        resolveCommand(Buffer.concat(stdout).toString().trim());
+        const output = Buffer.concat(stdout).toString();
+        resolveCommand(options.preserveOutput ? output : output.trim());
       } else {
         const detail =
           commandName === "git"
@@ -953,6 +954,22 @@ export async function prepareWorkspace(assignment) {
   return directory;
 }
 
+export async function repositoryChangedPaths(
+  directory,
+  from,
+  to,
+  options = {},
+) {
+  const output = await command(
+    "git",
+    ["diff", "--name-only", "-z", from, ...(to ? [to] : [])],
+    { ...options, cwd: directory, preserveOutput: true },
+  );
+  if (!output) return [];
+  if (!output.endsWith("\0")) throw new Error("invalid_git_path_output");
+  return output.slice(0, -1).split("\0");
+}
+
 export async function checkpointWorkspace(assignment, directory, onProgress) {
   if (assignment.artifact.access === "read") {
     return {
@@ -967,10 +984,13 @@ export async function checkpointWorkspace(assignment, directory, onProgress) {
   }
   const commandOptions = { cwd: directory, onProgress };
   await command("git", ["add", "--all"], commandOptions);
-  const staged = await command("git", ["diff", "--cached", "--name-only"], {
-    ...commandOptions,
-  });
-  if (!staged) {
+  const staged = await repositoryChangedPaths(
+    directory,
+    "--cached",
+    undefined,
+    commandOptions,
+  );
+  if (!staged.length) {
     return {
       repositoryId: assignment.artifact.repositoryId,
       repository: assignment.artifact.repository,
@@ -994,9 +1014,10 @@ export async function checkpointWorkspace(assignment, directory, onProgress) {
   const outputHead = await command("git", ["rev-parse", "HEAD"], {
     ...commandOptions,
   });
-  const changed = await command(
-    "git",
-    ["diff", "--name-only", assignment.expectedHead, outputHead],
+  const changedPaths = await repositoryChangedPaths(
+    directory,
+    assignment.expectedHead,
+    outputHead,
     commandOptions,
   );
   await command("git", ["push", "origin", `HEAD:${assignment.artifact.ref}`], {
@@ -1011,7 +1032,7 @@ export async function checkpointWorkspace(assignment, directory, onProgress) {
     inputHead: assignment.expectedHead,
     outputHead,
     ref: assignment.artifact.ref,
-    changedPaths: changed ? changed.split("\n") : [],
+    changedPaths,
   };
 }
 
@@ -1056,12 +1077,11 @@ export async function validateCheckpoint(assignment) {
     ],
     { cwd: directory },
   );
-  const changed = await command(
-    "git",
-    ["diff", "--name-only", checkpoint.inputHead, checkpoint.outputHead],
-    { cwd: directory },
+  const changedPaths = await repositoryChangedPaths(
+    directory,
+    checkpoint.inputHead,
+    checkpoint.outputHead,
   );
-  const changedPaths = changed ? changed.split("\n") : [];
   if (JSON.stringify(changedPaths) !== JSON.stringify(checkpoint.changedPaths))
     throw new Error("changed_paths_mismatch");
   const matches = (pattern, path) => {
