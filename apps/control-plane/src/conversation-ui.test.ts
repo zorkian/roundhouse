@@ -121,6 +121,86 @@ describe("conversation UI", () => {
     }
   });
 
+  it("does not refresh the new-conversation form for active work", () => {
+    const cases: readonly {
+      readonly name: string;
+      readonly conversation: ConversationSummary;
+    }[] = [
+      {
+        name: "an active turn",
+        conversation: {
+          id: "active-turn",
+          repository: "octo/project",
+          status: "open",
+          activeTurn: { kind: "message", state: "running" },
+          updatedAt: 1,
+        },
+      },
+      {
+        name: "a requested promotion",
+        conversation: {
+          id: "requested-promotion",
+          repository: "octo/project",
+          status: "handoff_pending",
+          promotionState: "requested",
+          updatedAt: 1,
+        },
+      },
+      {
+        name: "an issue-created promotion",
+        conversation: {
+          id: "issue-created-promotion",
+          repository: "octo/project",
+          status: "handoff_pending",
+          promotionState: "issue_created",
+          updatedAt: 1,
+        },
+      },
+      {
+        name: "a promotion awaiting intake",
+        conversation: {
+          id: "awaiting-intake-promotion",
+          repository: "octo/project",
+          status: "handoff_pending",
+          promotionState: "awaiting_intake",
+          updatedAt: 1,
+        },
+      },
+      {
+        name: "an accepted promotion with an active run",
+        conversation: {
+          id: "active-promotion-run",
+          repository: "octo/project",
+          status: "promoted",
+          promotionState: "accepted",
+          promotionRunStatus: "active",
+          updatedAt: 1,
+        },
+      },
+      {
+        name: "an accepted promotion with a waiting run",
+        conversation: {
+          id: "waiting-promotion-run",
+          repository: "octo/project",
+          status: "promoted",
+          promotionState: "accepted",
+          promotionRunStatus: "waiting",
+          updatedAt: 1,
+        },
+      },
+    ];
+
+    for (const { name, conversation } of cases) {
+      const html = renderConversationIndex(
+        [base.repository],
+        [conversation],
+        "octocat",
+      );
+      expect(html, name).toContain('<textarea id="message"');
+      expect(html, name).not.toContain('http-equiv="refresh"');
+    }
+  });
+
   it("selects actionable states in precedence order", () => {
     const cases = [
       [

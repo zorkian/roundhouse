@@ -62,11 +62,9 @@ function page(
   title: string,
   user: HeaderAccount | string,
   body: string,
-  scriptOrRefresh: string | boolean = "",
+  script = "",
 ): string {
-  const refresh = scriptOrRefresh === true;
-  const script = typeof scriptOrRefresh === "string" ? scriptOrRefresh : "";
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">${refresh ? '<meta http-equiv="refresh" content="2">' : ""}<title>${escapeHtml(title)} · Roundhouse</title>${styles}</head><body>${renderSiteHeader(typeof user === "string" ? { githubLogin: user } : user)}<main>${body}</main>${script}</body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(title)} · Roundhouse</title>${styles}</head><body>${renderSiteHeader(typeof user === "string" ? { githubLogin: user } : user)}<main>${body}</main>${script}</body></html>`;
 }
 
 export interface ActionableConversationStatus {
@@ -142,30 +140,6 @@ function conversationStatus(
   });
 }
 
-function conversationNeedsRefresh(
-  conversation: Conversation | ConversationSummary,
-): boolean {
-  const promotion = isConversation(conversation)
-    ? conversation.promotion
-    : undefined;
-  const runStatus = isConversation(conversation)
-    ? promotion?.runStatus
-    : conversation.promotionRunStatus;
-  const promotionState = isConversation(conversation)
-    ? promotion?.state
-    : conversation.promotionState;
-  const activeTurn = conversation.activeTurn;
-  return Boolean(
-    activeTurn ||
-    (promotionState &&
-      ["requested", "issue_created", "awaiting_intake"].includes(
-        promotionState,
-      )) ||
-    (promotionState === "accepted" &&
-      (runStatus === "active" || runStatus === "waiting")),
-  );
-}
-
 function updatedAgo(updatedAt: number): string {
   const elapsedMinutes = Math.floor(
     Math.max(0, Date.now() - updatedAt) / 60_000,
@@ -207,7 +181,6 @@ export function renderConversationIndex(
     "Conversations",
     user,
     `<h1>Start with a conversation</h1><p class="muted">Ask a question, explore an idea, or clarify a change before deciding whether to build it.</p>${error ? `<div class="notice">${escapeHtml(error)}</div>` : ""}<section class="card"><h2>New conversation</h2>${repositories.length ? `<form method="post" action="/conversations"><input type="hidden" name="message_id" value="${escapeHtml(messageId)}"><label for="repository">Public repository</label><select id="repository" name="repository" required>${options}</select><label for="message">What would you like to discuss?</label><textarea id="message" name="message" maxlength="12000" required></textarea><button type="submit">Start conversation</button></form>` : '<p class="muted">You do not currently have access to an enrolled public repository.</p>'}</section><section class="card"><h2>Recent conversations</h2>${recent}</section>`,
-    conversations.some(conversationNeedsRefresh),
   );
 }
 
