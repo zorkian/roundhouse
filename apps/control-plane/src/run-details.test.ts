@@ -1,8 +1,15 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import { JSDOM } from "jsdom";
-import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import { createRequire } from "node:module";
+import os from "node:os";
+import path from "node:path";
+import zlib from "node:zlib";
+import type { Browser } from "puppeteer-core";
+import puppeteer from "puppeteer-core";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { RunDetails } from "./d1-store.js";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
 import { renderRunDetails } from "./run-details.js";
@@ -506,16 +513,6 @@ describe("run details", () => {
   });
 
   describe("rendered layout regression for issue #399", () => {
-    const remPx = 16;
-    const blockDisplays = new Set([
-      "block",
-      "grid",
-      "flex",
-      "list-item",
-      "table",
-      "flow-root",
-    ]);
-
     const layoutFixture = () =>
       renderRunDetails({
         run: {
@@ -547,222 +544,191 @@ describe("run details", () => {
         ],
       });
 
-    // jsdom does not evaluate @media conditions against the window size, so
-    // the harness resolves max-width media blocks for the target viewport
-    // before jsdom applies the real selector cascade.
-    const resolveMediaQueries = (html: string, viewportWidth: number) =>
-      html.replace(/<style>(.*?)<\/style>/s, (block, css: string) => {
-        let out = "";
-        let index = 0;
-        while (index < css.length) {
-          const at = css.indexOf("@media(max-width:", index);
-          if (at === -1) {
-            out += css.slice(index);
-            break;
-          }
-          out += css.slice(index, at);
-          const open = css.indexOf("{", at);
-          let depth = 1;
-          let end = open + 1;
-          while (depth > 0) {
-            if (css[end] === "{") depth += 1;
-            else if (css[end] === "}") depth -= 1;
-            end += 1;
-          }
-          const limit = Number(css.slice(at, open).match(/(\d+)px/)?.[1]);
-          if (viewportWidth <= limit) out += css.slice(open + 1, end - 1);
-          index = end;
-        }
-        return `<style>${out}</style>`;
-      });
-
     interface Measurement {
-      documentRightEdge: number;
-      bodyContentWidth: number;
+      scrollWidth: number;
+      clientWidth: number;
       bodyLeft: number;
+      bodyContentWidth: number;
       tooltipDisplay: string;
       tooltipWhiteSpace: string;
+      tooltipRight: number | null;
     }
 
-    // Purpose-built layout harness: resolves every element's computed style
-    // from the real stylesheet (including the hover-reveal rule mirrored via
-    // an .is-revealed class) and estimates the document's right edge the way
-    // scroll overflow is produced: out-of-flow or non-wrapping content
-    // extends past its container, while display:none contributes nothing.
-    const measure = (
-      html: string,
-      viewportWidth: number,
-      options: { revealTooltips?: boolean; viewportHeight?: number } = {},
-    ): Measurement => {
-      const dom = new JSDOM(resolveMediaQueries(html, viewportWidth), {
-        beforeParse(window) {
-          Object.defineProperty(window, "innerWidth", {
-            value: viewportWidth,
-            configurable: true,
-          });
-          Object.defineProperty(window, "innerHeight", {
-            value: options.viewportHeight ?? 844,
-            configurable: true,
-          });
-        },
-      });
-      const { document } = dom.window;
-      const view = dom.window;
-      if (options.revealTooltips) {
-        const mirror = document.createElement("style");
-        mirror.textContent =
-          ".usage-hint.is-revealed .usage-breakdown{display:block}";
-        document.head.appendChild(mirror);
-        for (const hint of document.querySelectorAll(".usage-hint"))
-          hint.classList.add("is-revealed");
-      }
+    let browser: Browser | undefined;
 
-      const parseLength = (value: string, reference: number): number | null => {
-        if (!value || value === "auto" || value === "none") return null;
-        if (value.endsWith("px")) return Number.parseFloat(value);
-        if (value.endsWith("rem")) return Number.parseFloat(value) * remPx;
-        if (value.endsWith("%"))
-          return (Number.parseFloat(value) / 100) * reference;
-        return null;
-      };
-
-      const textWidth = (el: Element): number => {
-        const fontSize =
-          parseLength(view.getComputedStyle(el).fontSize, remPx) ?? remPx;
-        let chars = 0;
-        const walk = (node: Node) => {
-          if (node.nodeType === 3) {
-            chars += (node.textContent ?? "").length;
-            return;
-          }
-          if (node.nodeType !== 1) return;
-          const style = view.getComputedStyle(node as Element);
-          if (style.display === "none") return;
-          if ((node as Element) !== el && style.position === "absolute") return;
-          for (const child of node.childNodes) walk(child);
-        };
-        walk(el);
-        return chars * fontSize * 0.55;
-      };
-
-      const rightEdge = (
-        el: Element,
-        left: number,
-        containerWidth: number,
-      ): number => {
-        const style = view.getComputedStyle(el);
-        if (style.display === "none") return Number.NEGATIVE_INFINITY;
-        let myLeft = left;
-        let myWidth: number;
-        if (style.position === "absolute") {
-          myLeft = left + (parseLength(style.left, containerWidth) ?? 0);
-          const maxWidth = style.maxWidth.includes("100vw")
-            ? viewportWidth - 2 * remPx
-            : (parseLength(style.maxWidth, containerWidth) ??
-              Number.POSITIVE_INFINITY);
-          const intrinsic = textWidth(el);
-          myWidth =
-            style.whiteSpace === "nowrap"
-              ? intrinsic
-              : Math.min(intrinsic, maxWidth);
-        } else if (blockDisplays.has(style.display)) {
-          const marginLeft = parseLength(style.marginLeft, containerWidth) ?? 0;
-          const marginRight =
-            parseLength(style.marginRight, containerWidth) ?? 0;
-          myLeft = left + marginLeft;
-          myWidth = Math.max(0, containerWidth - marginLeft - marginRight);
-        } else {
-          const intrinsic = textWidth(el);
-          myWidth =
-            style.whiteSpace === "nowrap"
-              ? intrinsic
-              : Math.min(intrinsic, containerWidth);
-        }
-        let right = myLeft + myWidth;
-        let childLeft = myLeft;
-        let childWidth = myWidth;
-        if (blockDisplays.has(style.display)) {
-          const padLeft = parseLength(style.paddingLeft, myWidth) ?? 0;
-          const padRight = parseLength(style.paddingRight, myWidth) ?? 0;
-          childLeft = myLeft + padLeft;
-          childWidth = Math.max(0, myWidth - padLeft - padRight);
-        }
-        for (const child of el.children)
-          right = Math.max(right, rightEdge(child, childLeft, childWidth));
-        return right;
-      };
-
-      const body = document.body;
-      const bodyStyle = view.getComputedStyle(body);
-      const padLeft = parseLength(bodyStyle.paddingLeft, viewportWidth) ?? 0;
-      const padRight = parseLength(bodyStyle.paddingRight, viewportWidth) ?? 0;
-      const borderBox = bodyStyle.boxSizing === "border-box";
-      let boxWidth: number;
-      if (bodyStyle.width === "100%") boxWidth = viewportWidth;
-      else {
-        const maxWidth =
-          parseLength(bodyStyle.maxWidth, viewportWidth) ?? viewportWidth;
-        const margin =
-          parseLength(bodyStyle.marginLeft, viewportWidth) ?? 2 * remPx;
-        boxWidth = Math.min(maxWidth, viewportWidth - 2 * margin);
-        if (!borderBox) boxWidth += padLeft + padRight;
-      }
-      const bodyLeft =
-        bodyStyle.marginLeft === "auto" || bodyStyle.marginRight === "auto"
-          ? Math.max(0, (viewportWidth - boxWidth) / 2)
-          : (parseLength(bodyStyle.marginLeft, viewportWidth) ?? 0);
-      const contentWidth = boxWidth - padLeft - padRight;
-      const documentRightEdge = Math.max(
-        bodyLeft + boxWidth,
-        rightEdge(body, bodyLeft + padLeft, contentWidth),
+    const nssLibraryPath = () => {
+      // Chromium links against NSS, which is not installed in minimal CI
+      // containers. The @achingbrain/nss package ships the shared libraries,
+      // so fall back to them only when the system has none.
+      const require = createRequire(import.meta.url);
+      const nssDir = path.join(
+        path.dirname(require.resolve("@achingbrain/nss/package.json")),
+        "linux",
       );
-      const tooltip = document.querySelector(".usage-breakdown");
-      const tooltipStyle = tooltip ? view.getComputedStyle(tooltip) : null;
-      return {
-        documentRightEdge,
-        bodyContentWidth: contentWidth,
-        bodyLeft,
-        tooltipDisplay: tooltipStyle?.display ?? "",
-        tooltipWhiteSpace: tooltipStyle?.whiteSpace ?? "",
-      };
+      try {
+        const ldconfig = execFileSync("ldconfig", ["-p"], {
+          encoding: "utf8",
+        });
+        if (ldconfig.includes("libnss3.so")) return undefined;
+      } catch {
+        for (const dir of ["/usr/lib", "/lib"]) {
+          try {
+            if (
+              fs
+                .readdirSync(dir, { recursive: true })
+                .some((entry) => String(entry).endsWith("libnss3.so"))
+            )
+              return undefined;
+          } catch {
+            // Keep looking.
+          }
+        }
+      }
+      return nssDir;
     };
 
-    const mobileViewport = 390;
+    const chromiumExecutablePath = () => {
+      // chrome-aws-lambda only inflates its bundled binary on Lambda, so
+      // decompress the brotli-packed Chromium from the package directly.
+      const require = createRequire(import.meta.url);
+      const binDir = path.join(
+        path.dirname(require.resolve("chrome-aws-lambda/package.json")),
+        "bin",
+      );
+      const target = path.join(
+        fs.mkdtempSync(path.join(os.tmpdir(), "run-details-chromium-")),
+        "chromium",
+      );
+      fs.writeFileSync(
+        target,
+        zlib.brotliDecompressSync(
+          fs.readFileSync(path.join(binDir, "chromium.br")),
+        ),
+      );
+      fs.chmodSync(target, 0o755);
+      return target;
+    };
 
-    it("keeps the document inside the iPhone portrait viewport while the usage breakdown is inactive", () => {
-      const measurement = measure(layoutFixture(), mobileViewport);
+    beforeAll(async () => {
+      const libraryPath = nssLibraryPath();
+      browser = await puppeteer.launch({
+        executablePath: chromiumExecutablePath(),
+        args: [
+          "--no-sandbox",
+          "--disable-gpu",
+          "--disable-dev-shm-usage",
+          "--headless",
+        ],
+        env: {
+          ...process.env,
+          ...(libraryPath
+            ? {
+                LD_LIBRARY_PATH: [libraryPath, process.env.LD_LIBRARY_PATH]
+                  .filter(Boolean)
+                  .join(":"),
+              }
+            : {}),
+        },
+      });
+    }, 120_000);
+
+    afterAll(async () => {
+      await browser?.close();
+    });
+
+    const measure = async (
+      html: string,
+      width: number,
+      height: number,
+      revealTooltip: boolean,
+    ): Promise<Measurement> => {
+      const page = await browser!.newPage();
+      try {
+        await page.setViewport({ width, height });
+        await page.setContent(html, { waitUntil: "load" });
+        if (revealTooltip) await page.hover(".usage-hint");
+        return await page.evaluate(() => {
+          // Runs in the browser; the project compiles against WebWorker
+          // libs, so access DOM globals through a structural type.
+          interface Rect {
+            left: number;
+            right: number;
+            width: number;
+          }
+          const win = globalThis as unknown as {
+            document: {
+              documentElement: { scrollWidth: number; clientWidth: number };
+              body: { getBoundingClientRect(): Rect };
+              querySelector(selector: string): {
+                getBoundingClientRect(): Rect;
+              } | null;
+            };
+            getComputedStyle(element: unknown): {
+              display: string;
+              whiteSpace: string;
+              paddingLeft: string;
+              paddingRight: string;
+            };
+          };
+          const root = win.document.documentElement;
+          const bodyStyle = win.getComputedStyle(win.document.body);
+          const bodyRect = win.document.body.getBoundingClientRect();
+          const tooltip = win.document.querySelector(".usage-breakdown");
+          const tooltipStyle = tooltip ? win.getComputedStyle(tooltip) : null;
+          const tooltipRect =
+            tooltip && tooltipStyle?.display !== "none"
+              ? tooltip.getBoundingClientRect()
+              : null;
+          return {
+            scrollWidth: root.scrollWidth,
+            clientWidth: root.clientWidth,
+            bodyLeft: bodyRect.left,
+            bodyContentWidth:
+              bodyRect.width -
+              Number.parseFloat(bodyStyle.paddingLeft) -
+              Number.parseFloat(bodyStyle.paddingRight),
+            tooltipDisplay: tooltipStyle?.display ?? "",
+            tooltipWhiteSpace: tooltipStyle?.whiteSpace ?? "",
+            tooltipRight: tooltipRect ? tooltipRect.right : null,
+          };
+        });
+      } finally {
+        await page.close();
+      }
+    };
+
+    it("keeps the document inside the iPhone portrait viewport while the usage breakdown is inactive", async () => {
+      const measurement = await measure(layoutFixture(), 390, 844, false);
       // The diagnosed issue #399 failure rendered an 848px document at this
       // viewport because the hidden nowrap tooltip stayed in layout.
-      expect(measurement.documentRightEdge).toBeLessThanOrEqual(mobileViewport);
-      expect(measurement.bodyContentWidth).toBe(mobileViewport - 2 * 0.75 * 16);
+      expect(measurement.clientWidth).toBe(390);
+      expect(measurement.scrollWidth).toBe(390);
+      expect(measurement.bodyLeft).toBe(0);
+      expect(measurement.bodyContentWidth).toBe(390 - 2 * 12);
       expect(measurement.tooltipDisplay).toBe("none");
     });
 
-    it("keeps the revealed usage breakdown inside the portrait viewport", () => {
-      const measurement = measure(layoutFixture(), mobileViewport, {
-        revealTooltips: true,
-      });
+    it("keeps the revealed usage breakdown inside the portrait viewport", async () => {
+      const measurement = await measure(layoutFixture(), 390, 844, true);
       expect(measurement.tooltipDisplay).toBe("block");
       expect(measurement.tooltipWhiteSpace).toBe("normal");
-      expect(measurement.documentRightEdge).toBeLessThanOrEqual(mobileViewport);
+      expect(measurement.tooltipRight).not.toBeNull();
+      expect(measurement.tooltipRight!).toBeLessThanOrEqual(390);
+      expect(measurement.scrollWidth).toBe(390);
     });
 
-    it("preserves the centered desktop layout and nowrap hover tooltip", () => {
-      const desktopViewport = 1280;
-      const measurement = measure(layoutFixture(), desktopViewport, {
-        revealTooltips: true,
-      });
+    it("preserves the centered desktop layout and nowrap hover tooltip", async () => {
+      const measurement = await measure(layoutFixture(), 1280, 900, true);
       expect(measurement.bodyContentWidth).toBe(1000);
-      expect(measurement.bodyLeft).toBe((desktopViewport - (1000 + 32)) / 2);
+      expect(measurement.bodyLeft).toBe((1280 - (1000 + 2 * 16)) / 2);
       expect(measurement.tooltipDisplay).toBe("block");
       expect(measurement.tooltipWhiteSpace).toBe("nowrap");
-      expect(measurement.documentRightEdge).toBeLessThanOrEqual(
-        desktopViewport,
-      );
+      expect(measurement.tooltipRight!).toBeLessThanOrEqual(1280);
+      expect(measurement.scrollWidth).toBe(1280);
     });
 
-    it("detects the original failure mode when the hidden tooltip stays in layout", () => {
-      // Guard the harness itself: restoring the pre-fix pattern
+    it("detects the original failure mode when the hidden tooltip stays in layout", async () => {
+      // Guard the regression itself: restoring the pre-fix pattern
       // (visibility:hidden with the element still laid out) must reproduce
       // the horizontal overflow measured in the issue reproduction.
       const regressed = layoutFixture()
@@ -775,9 +741,9 @@ describe("run details", () => {
           ".usage-breakdown{max-width:calc(100vw - 2rem);white-space:normal}",
           "",
         );
-      const measurement = measure(regressed, mobileViewport);
+      const measurement = await measure(regressed, 390, 844, false);
       expect(measurement.tooltipDisplay).not.toBe("none");
-      expect(measurement.documentRightEdge).toBeGreaterThan(mobileViewport);
+      expect(measurement.scrollWidth).toBeGreaterThan(390);
     });
   });
 
