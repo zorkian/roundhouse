@@ -42,8 +42,8 @@ whether `main` has shipped, inspect Worker logs, or query development state.
 
 | Piece                     | Value                                                                                                       |
 | ------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| Public UI / control plane | `https://roundhouse-dev.rm-rf.rip`                                                                          |
-| Control-plane workers.dev | `https://roundhouse-v2-control-plane.default-07f.workers.dev`                                               |
+| Public UI / control plane | `https://roundhouse-dev.rm-rf.rip` (Cloudflare Access — agents cannot sign in)                              |
+| Control-plane workers.dev | `https://roundhouse-v2-control-plane.default-07f.workers.dev` (also Access-gated for UI routes)             |
 | Workers                   | `roundhouse-v2-control-plane`, `roundhouse-v2-runtime-host`, `roundhouse-v2-model-broker`                   |
 | Wrangler configs          | `apps/control-plane/wrangler.jsonc`, `apps/runtime-host/wrangler.jsonc`, `apps/model-broker/wrangler.jsonc` |
 | D1 database               | `roundhouse-v2-development` (id in control-plane wrangler config)                                           |
@@ -142,6 +142,8 @@ pnpm exec wrangler d1 execute roundhouse-v2-development --remote \
 ```
 
 Schema for those tables lives under `apps/control-plane/migrations/`.
+`D1RunRepository.detailsByIssue` in `apps/control-plane/src/d1-store.ts`
+shows how the UI joins the same data.
 
 Cloudflare MCP servers (`Cloudflare-observability`, `Cloudflare-builds`,
 `Cloudflare-bindings`) may be present but often require separate IDE auth.
@@ -149,6 +151,72 @@ When `CLOUDFLARE_API_TOKEN` works, prefer **wrangler** over those MCPs for
 deployments, tails, and D1. `Cloudflare-docs` search is fine for platform
 questions. Repo `gh` access in Cloud agents is **read-only** (list/view runs
 and logs; do not expect `gh` write operations to succeed).
+
+#### Debugging a live issue / run (D1, not the browser)
+
+The run-details links Roundhouse posts on GitHub issues
+(`https://roundhouse-dev.rm-rf.rip/repositories/.../issues/N`) and the same
+paths on workers.dev sit behind **Cloudflare Access**. Agents cannot complete
+Access login and will only ever see the email-code sign-in page. Do **not**
+fetch those URLs, chase mirrors, or try to automate Access codes — use remote
+D1 (and optionally `wrangler tail`) instead.
+
+GitHub issue/PR comments (`gh issue view N --comments`) are useful timeline
+hints (stage reports, PR links, visual-feedback prompts), but **D1 is
+authoritative** for whether a run is active, waiting, leased, or wedged.
+
+**Find the current run for an issue** (replace `491`):
+
+```bash
+pnpm exec wrangler d1 execute roundhouse-v2-development --remote \
+  --config apps/control-plane/wrangler.jsonc \
+  --json --command "SELECT w.issue_number, w.current_run_id, r.status, r.stage,
+    r.current_node_id, r.revision, r.lease_attempt_id, r.lease_expires_at,
+    datetime(r.updated_at/1000, 'unixepoch') AS updated_utc,
+    json_extract(r.document_json, '\$.waitingReason') AS waiting_reason,
+    json_extract(r.document_json, '\$.candidateHead') AS candidate_head
+  FROM work_items w
+  JOIN runs r ON r.id = w.current_run_id
+  WHERE w.issue_number = 491;"
+```
+
+**Attempt history** (failures, outcomes, current dispatch) and **recent
+events** (liveness):
+
+```bash
+# attempts for a run id from the query above
+pnpm exec wrangler d1 execute roundhouse-v2-development --remote \
+  --config apps/control-plane/wrangler.jsonc \
+  --json --command "SELECT id, run_revision, node_id, role, state,
+    datetime(deadline_at/1000, 'unixepoch') AS deadline_utc,
+    datetime(updated_at/1000, 'unixepoch') AS updated_utc,
+    substr(COALESCE(outcome_json, ''), 1, 400) AS outcome,
+    json_extract(result_json, '\$.review.status') AS review_status
+  FROM attempts WHERE run_id = 'run_…' ORDER BY created_at ASC, id ASC;"
+
+pnpm exec wrangler d1 execute roundhouse-v2-development --remote \
+  --config apps/control-plane/wrangler.jsonc \
+  --json --command "SELECT attempt_id, kind, substr(payload_json, 1, 300) AS payload,
+    datetime(created_at/1000, 'unixepoch') AS created_utc
+  FROM events WHERE run_id = 'run_…'
+  ORDER BY created_at DESC, id DESC LIMIT 40;"
+```
+
+**Stuck vs progressing (quick read):**
+
+- Progressing: `status='active'`, current attempt `state` in
+  `created`/`dispatched`/`executed`, `lease_expires_at` still in the future,
+  and recent `events` for that attempt (model/tool progress).
+- Waiting on a human: `waiting_reason` set (e.g. `visual_feedback`) and the
+  stage/node at an approval / human boundary — check GitHub comments for the
+  operator prompt.
+- Likely stuck / needs recovery: lease expired with no new events, attempt
+  left in `dispatched`/`executed` without completion, or repeated
+  `outcome_json` kinds such as `execution_interrupted`, `branch_superseded`,
+  or `checkpoint_rejected`.
+
+Key tables: `work_items`, `runs` (`document_json` snapshot), `attempts`
+(`outcome_json` / `result_json`), `events`, `outbox`.
 
 #### Safety when debugging the shared development environment
 
