@@ -159,7 +159,7 @@ describe("run details", () => {
       html.indexOf(">review</span>"),
     );
     expect(html).toContain("1m 5s");
-    expect(html.match(/<details>/g)).toHaveLength(2);
+    expect(html.match(/<details class="attempt">/g)).toHaveLength(2);
     expect(html).not.toContain("<details open");
   });
 
@@ -366,5 +366,83 @@ describe("run details", () => {
     expect(html).toContain(
       "<dt>Accepted head</dt><dd><code>Unavailable</code></dd>",
     );
+  });
+
+  it("shows outcome before attempts and diagnostics after them", () => {
+    const html = renderRunDetails(
+      detailsFixture({
+        run: { status: "failed", stage: "implement" },
+        attempts: [
+          attemptFixture({
+            id: "failed-attempt",
+            state: "failed",
+            outcome: {
+              kind: "checkpoint_rejected",
+              source: "checkpoint_validator",
+              status: 422,
+              detail: "push rejected",
+            },
+            result: { implementation: { summary: "failed" } },
+          }),
+        ],
+        events: [
+          {
+            attemptId: "failed-attempt",
+            kind: "workflow_review_fanout",
+            payload: { reviewers: ["a"] },
+            createdAt: 2,
+          },
+        ],
+      }),
+    );
+
+    const outcome = html.indexOf("<h2>Outcome</h2>");
+    const history = html.indexOf("<h2>Attempt history</h2>");
+    const diagnostics = html.indexOf("<h2>Diagnostics</h2>");
+    expect(outcome).toBeGreaterThan(-1);
+    expect(outcome).toBeLessThan(history);
+    expect(history).toBeLessThan(diagnostics);
+    expect(html.indexOf("push rejected")).toBeLessThan(history);
+    expect(html).toContain("Executor outcome");
+    // Review fan-out evidence stays available but below the outcome.
+    expect(html.indexOf("Review workflow evidence")).toBeGreaterThan(history);
+    // Run-level commit bookkeeping moved out of the top summary.
+    expect(html.indexOf("Authored candidate head")).toBeGreaterThan(history);
+    expect(html).not.toContain("<details open");
+  });
+
+  it("omits the pull request row when no valid pull request URL exists", () => {
+    const without = renderRunDetails(detailsFixture({}));
+    expect(without).not.toContain("<dt>Pull request</dt>");
+    expect(without).not.toContain("<h2>Outcome</h2>");
+
+    const withPr = renderRunDetails(
+      detailsFixture({
+        attempts: [
+          attemptFixture({
+            result: {
+              implementation: {
+                pullRequest: {
+                  number: 5,
+                  html_url: "https://github.com/zorkian/roundhouse/pull/5",
+                },
+              },
+            },
+          }),
+        ],
+      }),
+    );
+    expect(withPr).toContain("<dt>Pull request</dt>");
+    expect(withPr).toContain("Pull request #5");
+  });
+
+  it("surfaces the waiting reason in the outcome section", () => {
+    const html = renderRunDetails(
+      detailsFixture({
+        run: { status: "waiting", waitingReason: "plan_approval" },
+      }),
+    );
+    expect(html).toContain("<h2>Outcome</h2>");
+    expect(html).toContain("<dt>Waiting on</dt><dd>plan approval</dd>");
   });
 });
