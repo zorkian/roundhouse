@@ -976,6 +976,43 @@ describe("GitHub intake", () => {
     );
   });
 
+  it("does not announce a merge that failed validation", async () => {
+    const api = github();
+    const run = {
+      ...createRun({
+        id: "run_failed_merge",
+        repository: "zorkian/roundhouse",
+        issueNumber: 42,
+        baseCommit: "a".repeat(40),
+        profileVersion: "v2",
+      }),
+      status: "failed",
+      stage: "merge",
+      revision: 8,
+      currentHead: "c".repeat(40),
+    } as const;
+    await new GitHubStageReporter(api).report(run, {
+      id: "run_failed_merge_rev_7",
+      runId: run.id,
+      runRevision: 7,
+      kind: "external",
+      stage: "merge",
+      role: "github-merge",
+      state: "completed",
+      deadlineAt: Date.now() + 1_000,
+      baseCommit: run.baseCommit,
+      expectedHead: run.currentHead,
+      result: {
+        merge: {
+          status: "failed",
+          head: run.currentHead,
+        },
+      },
+    });
+    expect(api.get).not.toHaveBeenCalled();
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
   it("does not open a pull request for a failed implementation", async () => {
     const api = github();
     const run = {

@@ -411,6 +411,7 @@ export class GitHubStageReporter implements AttemptReporter {
     if (attempt.stage === "implement" && run.status === "failed") return;
     if (attempt.stage === "ci") return;
     if (attempt.stage === "merge") {
+      if (run.status !== "succeeded") return;
       const merge = attempt.result?.merge as
         Record<string, unknown> | undefined;
       const pullRequest = merge?.pullRequest as
