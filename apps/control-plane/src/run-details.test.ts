@@ -83,7 +83,7 @@ describe("run details", () => {
     });
   });
 
-  it("renders recorded evidence, commit history, routing, and escaped text", () => {
+  it("renders summary and expandable attempt details without duplicate sections", () => {
     const details: RunDetails = {
       run: {
         schemaVersion: 2,
@@ -210,13 +210,22 @@ describe("run details", () => {
       "https://github.com/zorkian/roundhouse/pull/99/files",
     );
     expect(html).toContain('<a href="https://example.test">test</a>');
-    expect(html).toContain("<section><h2>Qualification</h2>");
-    expect(html).toContain("<section><h2>Implementation and validation</h2>");
-    expect(html).toContain("<section><h2>Review</h2>");
-    expect(html).toContain("<section><h2>CI checks</h2>");
-    expect(html).toContain("<section><h2>Merge</h2>");
-    expect(html).toContain("<section><h2>Commit trace</h2>");
-    expect(html).toContain("<strong>Usage:</strong> 120 tokens");
+    expect(html).toContain("</dl>\n<section><h2>Attempt history</h2>");
+    for (const heading of [
+      "Issue",
+      "Commit trace",
+      "Usage by workflow step",
+      "Qualification",
+      "Reproduction",
+      "Current behavior",
+      "Plan",
+      "Implementation and validation",
+      "Review",
+      "CI checks",
+      "Merge",
+    ]) {
+      expect(html).not.toContain(`<h2>${heading}</h2>`);
+    }
   });
 
   it("renders attempts chronologically as collapsed timeline rows", () => {
@@ -314,13 +323,12 @@ describe("run details", () => {
     expect(html).toContain('<span class="phase">Current behavior</span>');
     expect(html).not.toContain('<span class="phase">reproduce</span>');
     expect(html).toContain("<dt>Current stage</dt><dd>Current behavior</dd>");
-    expect(html).toContain("<dt>Current behavior</dt>");
     expect(html).not.toContain("<dt>reproduce</dt>");
-    expect(html).toContain("<h2>Current behavior</h2>");
+    expect(html).not.toContain("<h2>Current behavior</h2>");
     expect(html).not.toContain("<h2>Reproduction</h2>");
   });
 
-  it("aggregates retries by workflow step and shows unavailable steps", () => {
+  it("shows total and per-attempt usage without workflow usage sections", () => {
     const html = renderRunDetails({
       run: {
         schemaVersion: 2,
@@ -384,11 +392,11 @@ describe("run details", () => {
       ],
     });
 
-    expect(html).toContain("<h2>Usage by workflow step</h2>");
-    expect(html).toContain("<dt>implement</dt><dd>350 tokens");
+    expect(html).toContain("<dt>Total usage</dt><dd>350 tokens");
+    expect(html).toContain("100 tokens");
+    expect(html).toContain("250 tokens");
     expect(html).toContain("$0.030000");
-    expect(html).toContain("<dt>qualify</dt><dd>Usage unavailable</dd>");
-    expect(html).toContain("<dt>merge</dt><dd>Usage unavailable</dd>");
+    expect(html).not.toContain("<h2>Usage by workflow step</h2>");
   });
 
   it("identifies missing optional evidence", () => {
