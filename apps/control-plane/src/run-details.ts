@@ -592,7 +592,10 @@ function competitionPanels(details: RunDetails): string {
       )?.model;
       const score = scoreFor(candidateId);
       const winner = judgement?.selected === candidateId;
-      return `<tr>${winner ? "<td><strong>Selected</strong></td>" : "<td></td>"}<td><code>${escapeHtml(candidateId)}</code></td><td>${escapeHtml(configuredModel ? `${configuredModel.id} (${configuredModel.reasoning})` : "Unavailable")}</td><td>${escapeHtml(attempt?.routing?.model ?? "Unavailable")}</td><td>${escapeHtml(attempt?.state ?? "pending")}</td><td>${escapeHtml(score ? String(score.score) : "Unavailable")}</td><td>${escapeHtml(score?.rationale ?? "Unavailable")}</td><td>${usageDisplay(usage.filter((item) => item.attemptId === attempt?.id))}</td></tr>`;
+      const candidateUsage = usage.filter(
+        (item) => item.attemptId === attempt?.id,
+      );
+      return `<tr>${winner ? "<td><strong>Selected</strong></td>" : "<td></td>"}<td><code>${escapeHtml(candidateId)}</code></td><td>${escapeHtml(configuredModel ? `${configuredModel.id} (${configuredModel.reasoning})` : "Unavailable")}</td><td>${escapeHtml(attempt?.routing?.model ?? "Unavailable")}</td><td>${escapeHtml(attempt?.state ?? "pending")}</td><td>${escapeHtml(score ? String(score.score) : "Unavailable")}</td><td>${escapeHtml(score?.rationale ?? "Unavailable")}</td><td>${usageDisplay(candidateUsage)}${usageTable(candidateUsage)}</td></tr>`;
     });
     const judgeModel = configured?.judge.model;
     const judgeUsage = usage.filter(

@@ -834,9 +834,17 @@ describe("run details competitions", () => {
           {
             callId: "c1",
             attemptId: "candidate-alpha",
+            provider: "openai",
+            configuredModel: "openai/gpt-alpha",
             model: "gpt-alpha-actual",
+            requestedEffort: "medium",
+            resolvedEffort: "low",
+            inputTokens: 60,
+            outputTokens: 40,
             totalTokens: 100,
             costUsd: 0.01,
+            latencyMs: 1_234,
+            toolCallCount: 2,
           },
           {
             callId: "c2",
@@ -866,6 +874,12 @@ describe("run details competitions", () => {
     expect(html).toContain("alpha");
     // Candidate and judge usage stay separate; run total includes all calls.
     expect(html).toContain("100 tokens · $0.01");
+    expect(html).toContain(
+      "40 output</span></span><table><thead><tr><th>Provider</th>",
+    );
+    expect(html).toContain(
+      "<td>openai</td><td>openai/gpt-alpha</td><td>gpt-alpha-actual</td><td>medium</td><td>low</td><td>60 input, unavailable cached input, unavailable cache creation input, unavailable reasoning, 40 output</td><td>$0.010000</td><td>1,234 ms</td><td>2</td>",
+    );
     expect(html).toContain("50 tokens · $0.03");
     expect(html).toContain("350 tokens · $0.06");
   });
