@@ -43,8 +43,12 @@ describe("run details", () => {
                     call_id: "call-1",
                     attempt_id: "first",
                     model: "model-a",
+                    provider: "openai",
+                    configured_model: "model-a",
+                    routing_rule: "qualification-default-v1",
                     input_tokens: null,
                     cached_input_tokens: null,
+                    cache_creation_input_tokens: null,
                     reasoning_tokens: null,
                     output_tokens: null,
                     total_tokens: 10,
@@ -81,7 +85,8 @@ describe("run details", () => {
                   expected_head: "base",
                   accepted_head: null,
                   result_json: '{"qualification":{"summary":"ok"}}',
-                  routing_json: '{"provider":"openai","model":"model-a"}',
+                  routing_json:
+                    '{"provider":"openai","model":"model-a","protocol":"openai-responses","thinkingLevel":"low","rule":"qualification-default-v1"}',
                   created_at: 11,
                   updated_at: 12,
                 },
@@ -109,7 +114,13 @@ describe("run details", () => {
           id: "first",
           createdAt: 11,
           updatedAt: 12,
-          routing: { provider: "openai", model: "model-a" },
+          routing: {
+            provider: "openai",
+            model: "model-a",
+            protocol: "openai-responses",
+            thinkingLevel: "low",
+            rule: "qualification-default-v1",
+          },
         },
       ],
       usage: [{ callId: "call-1", createdAt: 15 }],
@@ -184,7 +195,13 @@ describe("run details", () => {
               },
             },
           },
-          routing: { provider: "openai", model: "test-model" },
+          routing: {
+            provider: "openai",
+            model: "test-model",
+            protocol: "openai-responses",
+            thinkingLevel: "low",
+            rule: "implementation-default-v1",
+          },
           createdAt: 3,
           updatedAt: 4,
         },
@@ -254,7 +271,7 @@ describe("run details", () => {
     expect(html).toContain("<dt>Elapsed</dt><dd>1 ms</dd>");
     expect(html).toContain('tabindex="0"');
     expect(html).toContain(
-      "100 input, 40 cached input, 10 reasoning, 20 output",
+      "100 input, 40 cached input, unavailable cache creation input, 10 reasoning, 20 output",
     );
     expect(html).toContain("npm test");
     expect(html).toContain("&lt;b&gt;bad&lt;/b&gt;");

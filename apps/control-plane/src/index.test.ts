@@ -281,7 +281,7 @@ describe("V2 control plane", () => {
     expect(
       validAttemptProgress({
         phase: "command_output",
-        operation: "codex exec",
+        operation: "pi agent",
         durationMs: 30_000,
         stdoutBytes: 128,
         stderrBytes: 0,
@@ -290,7 +290,7 @@ describe("V2 control plane", () => {
     expect(
       validAttemptProgress({
         phase: "command_output",
-        operation: "codex exec",
+        operation: "pi agent",
         output: "raw command output must not be persisted",
       }),
     ).toBe(false);

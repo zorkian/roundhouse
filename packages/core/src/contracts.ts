@@ -44,15 +44,71 @@ export interface Attempt {
   readonly expectedHead: string;
   readonly acceptedHead?: string;
   readonly result?: Readonly<Record<string, unknown>>;
-  readonly routing?: Readonly<Record<string, unknown>>;
+  readonly routing?: ModelRoute;
+}
+
+export const modelProtocols = [
+  "openai-responses",
+  "openai-completions",
+  "anthropic-messages",
+  "google-generative-ai",
+] as const;
+
+export type ModelProtocol = (typeof modelProtocols)[number];
+
+export const modelThinkingLevels = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+] as const;
+
+export interface ModelRoute {
+  readonly provider: string;
+  readonly model: string;
+  readonly protocol: ModelProtocol;
+  readonly thinkingLevel: (typeof modelThinkingLevels)[number];
+  readonly rule: string;
+}
+
+export function isModelRoute(value: unknown): value is ModelRoute {
+  if (!value || typeof value !== "object") return false;
+  const route = value as Record<string, unknown>;
+  return (
+    typeof route.provider === "string" &&
+    route.provider.length > 0 &&
+    typeof route.model === "string" &&
+    route.model.length > 0 &&
+    modelProtocols.includes(route.protocol as ModelProtocol) &&
+    modelThinkingLevels.includes(
+      route.thinkingLevel as ModelRoute["thinkingLevel"],
+    ) &&
+    typeof route.rule === "string" &&
+    route.rule.length > 0
+  );
+}
+
+export function parseModelRoute(value: string | null | undefined) {
+  if (!value) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isModelRoute(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export interface ModelUsage {
   readonly callId: string;
   readonly attemptId: string;
   readonly model: string;
+  readonly provider?: string;
+  readonly configuredModel?: string;
+  readonly routingRule?: string;
   readonly inputTokens?: number;
   readonly cachedInputTokens?: number;
+  readonly cacheCreationInputTokens?: number;
   readonly reasoningTokens?: number;
   readonly outputTokens?: number;
   readonly totalTokens?: number;
@@ -82,8 +138,8 @@ export const reviewers = [
   {
     role: "review-holistic",
     label: "Holistic design review",
-    provider: "openai",
-    model: "openai/gpt-5.6-sol",
+    provider: "anthropic",
+    model: "anthropic/claude-fable-5",
     blockingSeverities: ["critical", "high", "medium"],
     prompt:
       "Review the change holistically for design and correctness. Do not perform the specialist reviews. Select which of review-security and review-data should run, and give a rationale for each selection.",
@@ -91,8 +147,8 @@ export const reviewers = [
   {
     role: "review-security",
     label: "Security review",
-    provider: "openai",
-    model: "openai/gpt-5.6-sol",
+    provider: "moonshotai",
+    model: "moonshotai/kimi-k3",
     blockingSeverities: ["critical", "high", "medium"],
     prompt:
       "Perform a focused security review, including authorization, authentication, injection, secrets, trust boundaries, and unsafe input handling.",
@@ -100,8 +156,8 @@ export const reviewers = [
   {
     role: "review-data",
     label: "Data consistency review",
-    provider: "openai",
-    model: "openai/gpt-5.6-sol",
+    provider: "moonshotai",
+    model: "moonshotai/kimi-k3",
     blockingSeverities: ["critical", "high", "medium"],
     prompt:
       "Perform a focused review of data consistency, durability, transactions, schemas, migrations, and backward compatibility.",

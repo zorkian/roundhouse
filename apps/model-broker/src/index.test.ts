@@ -2,12 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  brokerRequest,
-  selectRoute,
-  type BrokerEnv,
-  type BrokerRoute,
-} from "./index.js";
+import { brokerRequest, resolveRoute, type BrokerEnv } from "./index.js";
 
 const env = {
   AI: {} as Ai,
@@ -18,204 +13,294 @@ const env = {
 
 afterEach(() => vi.restoreAllMocks());
 
-function request(body: Record<string, unknown> = { model: "untrusted-model" }) {
-  return new Request("https://broker.invalid/responses", {
+function modelRequest(
+  protocol: "openai-responses" | "openai-completions" | "anthropic-messages",
+  role: string,
+  body: Record<string, unknown>,
+) {
+  const route = resolveRoute(
+    {
+      role,
+      taskType: role.startsWith("review") ? "review" : role,
+      complexity: "unknown",
+    },
+    env,
+  );
+  const path = {
+    "openai-responses": "/v1/responses",
+    "openai-completions": "/v1/chat/completions",
+    "anthropic-messages": "/v1/messages",
+  }[protocol];
+  return new Request(`https://broker.invalid${path}`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "x-roundhouse-attempt-id": "run_1_rev_1",
-      "x-roundhouse-role": "qualify",
-      "x-roundhouse-task-type": "validation",
-      "x-roundhouse-complexity": "unknown",
+      "x-roundhouse-attempt-id": "attempt_1",
+      "x-roundhouse-role": role,
+      "x-roundhouse-routing-provider": route.provider,
+      "x-roundhouse-routing-model": route.model,
+      "x-roundhouse-routing-protocol": route.protocol,
+      "x-roundhouse-routing-thinking-level": route.thinkingLevel,
+      "x-roundhouse-routing-rule": route.rule,
     },
     body: JSON.stringify(body),
   });
 }
 
 describe("model broker", () => {
-  it("keeps routing policy behind a semantic envelope", () => {
-    expect(selectRoute(request(), env)).toEqual({
-      model: "openai/gpt-5.6-sol",
-      reasoningEffort: "low",
-      rule: "qualification-default-v1",
-    });
-  });
-
-  it("selects the reproduction policy from the trusted role envelope", () => {
-    const reproduction = request();
-    reproduction.headers.set("x-roundhouse-role", "reproduce");
-    expect(selectRoute(reproduction, env)).toEqual({
-      model: "openai/gpt-5.6-sol",
-      reasoningEffort: "low",
-      rule: "reproduction-default-v1",
-    });
-  });
-
-  it("selects the planning policy from the trusted role envelope", () => {
-    const planning = request();
-    planning.headers.set("x-roundhouse-role", "plan");
-    planning.headers.set("x-roundhouse-task-type", "planning");
-    expect(selectRoute(planning, env)).toEqual({
-      model: "openai/gpt-5.6-sol",
-      reasoningEffort: "low",
-      rule: "planning-default-v1",
-    });
-  });
-
-  it("selects the implementation policy from the trusted role envelope", () => {
-    const implementation = request();
-    implementation.headers.set("x-roundhouse-role", "implement");
-    implementation.headers.set("x-roundhouse-task-type", "implementation");
-    expect(selectRoute(implementation, env)).toEqual({
-      model: "openai/gpt-5.6-sol",
-      reasoningEffort: "low",
-      rule: "implementation-default-v1",
-    });
-  });
-
-  it("selects the review policy from the trusted role envelope", () => {
-    const review = request();
-    review.headers.set("x-roundhouse-role", "review");
-    review.headers.set("x-roundhouse-task-type", "review");
-    expect(selectRoute(review, env)).toEqual({
-      model: "openai/gpt-5.6-sol",
-      reasoningEffort: "low",
-      rule: "review-default-v1",
-    });
-  });
-
   it.each([
-    ["review-holistic", "review-holistic-v1"],
-    ["review-security", "review-security-v1"],
-    ["review-data", "review-data-v1"],
-  ] as const satisfies readonly (readonly [string, BrokerRoute["rule"]])[])(
-    "routes the %s role to the proven Codex-compatible model",
-    (role, rule) => {
-      const review = request();
-      review.headers.set("x-roundhouse-role", role);
-      review.headers.set("x-roundhouse-task-type", "review");
-      expect(selectRoute(review, env)).toEqual({
-        model: "openai/gpt-5.6-sol",
-        reasoningEffort: "low",
+    [
+      "qualify",
+      "openai",
+      "openai/gpt-5.6-sol",
+      "openai-responses",
+      "qualification-default-v1",
+    ],
+    [
+      "reproduce",
+      "openai",
+      "openai/gpt-5.6-sol",
+      "openai-responses",
+      "reproduction-default-v1",
+    ],
+    [
+      "plan",
+      "anthropic",
+      "anthropic/claude-opus-4.8",
+      "anthropic-messages",
+      "planning-default-v1",
+    ],
+    [
+      "implement",
+      "openai",
+      "openai/gpt-5.6-sol",
+      "openai-responses",
+      "implementation-default-v1",
+    ],
+    [
+      "review-holistic",
+      "anthropic",
+      "anthropic/claude-fable-5",
+      "anthropic-messages",
+      "review-holistic-v1",
+    ],
+    [
+      "review-security",
+      "moonshotai",
+      "moonshotai/kimi-k3",
+      "openai-completions",
+      "review-security-v1",
+    ],
+    [
+      "review-data",
+      "moonshotai",
+      "moonshotai/kimi-k3",
+      "openai-completions",
+      "review-data-v1",
+    ],
+  ] as const)(
+    "resolves the native route for %s",
+    (role, provider, model, protocol, rule) => {
+      expect(
+        resolveRoute(
+          { role, taskType: "validation", complexity: "unknown" },
+          env,
+        ),
+      ).toEqual({
+        provider,
+        model,
+        protocol,
+        thinkingLevel: "low",
         rule,
       });
     },
   );
 
-  it("replaces caller routing and uses a raw ZDR AI Gateway response", async () => {
-    const run = vi.fn(async () =>
-      Promise.resolve(
-        new Response("event: done\n\n", {
-          headers: { "content-type": "text/event-stream" },
+  it("serves route resolution before a container is dispatched", async () => {
+    const response = await brokerRequest(
+      new Request("https://broker.invalid/route", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          role: "plan",
+          taskType: "planning",
+          complexity: "unknown",
         }),
-      ),
+      }),
+      env,
     );
-    const response = await brokerRequest(request(), env, { run });
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      provider: "anthropic",
+      protocol: "anthropic-messages",
+    });
+  });
+
+  it("passes native OpenAI Responses input and adds hosted research", async () => {
+    const run = vi.fn(async () => new Response("event: done\n\n"));
+    const body = { model: "untrusted", input: "Research this", stream: true };
+    const response = await brokerRequest(
+      modelRequest("openai-responses", "qualify", body),
+      env,
+      { run },
+    );
     expect(run).toHaveBeenCalledWith(
       "openai/gpt-5.6-sol",
-      expect.objectContaining({
-        model: "openai/gpt-5.6-sol",
-        reasoning: { effort: "low" },
-      }),
       {
-        gateway: {
-          id: "roundhouse-v2-development",
-          collectLog: false,
-          skipCache: true,
-        },
-        extraHeaders: { "cf-aig-zdr": "true" },
-        returnRawResponse: true,
+        ...body,
+        model: "openai/gpt-5.6-sol",
+        tools: [{ type: "web_search_preview" }],
       },
+      expect.objectContaining({ returnRawResponse: true }),
     );
-    expect(response.headers.get("content-type")).toContain("text/event-stream");
-    expect(response.headers.get("x-roundhouse-routing-rule")).toBe(
-      "qualification-default-v1",
+    expect(response.headers.get("x-roundhouse-routing-protocol")).toBe(
+      "openai-responses",
     );
   });
 
-  it("adds hosted web search for a trusted read-stage role", async () => {
+  it("passes native Anthropic input and adds Anthropic hosted research", async () => {
+    const run = vi.fn(async () => Response.json({ id: "msg_1" }));
+    const body = {
+      system: [
+        {
+          type: "text",
+          text: "Review the change",
+          cache_control: { type: "ephemeral" },
+        },
+      ],
+      messages: [{ role: "user", content: "Plan it" }],
+      max_tokens: 100,
+    };
+    await brokerRequest(modelRequest("anthropic-messages", "plan", body), env, {
+      run,
+    });
+    expect(run).toHaveBeenCalledWith(
+      "anthropic/claude-opus-4.8",
+      {
+        ...body,
+        system: "Review the change",
+        model: "anthropic/claude-opus-4.8",
+        tools: [{ type: "web_search_20250305", name: "web_search" }],
+      },
+      expect.anything(),
+    );
+  });
+
+  it("removes caller-supplied OpenAI hosted search outside research roles", async () => {
     const run = vi.fn(async () => new Response("event: done\n\n"));
     await brokerRequest(
-      request({
-        model: "untrusted-model",
-        input: "Look up the current model catalog.",
+      modelRequest("openai-responses", "implement", {
+        input: "Implement it",
+        tools: [
+          { type: "function", name: "submit_result" },
+          { type: "web_search_preview" },
+        ],
       }),
       env,
       { run },
     );
     expect(run).toHaveBeenCalledWith(
       "openai/gpt-5.6-sol",
-      expect.objectContaining({ tools: [{ type: "web_search" }] }),
+      expect.objectContaining({
+        tools: [{ type: "function", name: "submit_result" }],
+      }),
       expect.anything(),
     );
   });
 
-  it("removes hosted web search outside read-only analysis", async () => {
-    const run = vi.fn(async () => new Response("event: done\n\n"));
-    const implementation = request({
-      model: "untrusted-model",
-      tools: [{ type: "web_search" }],
-    });
-    implementation.headers.set("x-roundhouse-role", "implement");
-    await brokerRequest(implementation, env, { run });
+  it("removes caller-supplied Anthropic hosted search outside research roles", async () => {
+    const run = vi.fn(async () => Response.json({ id: "msg_1" }));
+    await brokerRequest(
+      modelRequest("anthropic-messages", "review-holistic", {
+        messages: [{ role: "user", content: "Review it" }],
+        max_tokens: 100,
+        tools: [{ type: "web_search_20250305", name: "web_search" }],
+      }),
+      env,
+      { run },
+    );
     expect(run).toHaveBeenCalledWith(
-      "openai/gpt-5.6-sol",
+      "anthropic/claude-fable-5",
       expect.not.objectContaining({ tools: expect.anything() }),
       expect.anything(),
     );
   });
 
-  it("fails closed without a complete routing envelope", async () => {
-    const invalid = new Request("https://broker.invalid/responses", {
+  it("passes Pi's Moonshot chat payload without synthesizing messages", async () => {
+    let sent: Record<string, unknown> | undefined;
+    const run = vi.fn(
+      async (_model: string, input: Record<string, unknown>) => {
+        sent = input;
+        return new Response("data: [DONE]\n\n");
+      },
+    );
+    const body = {
+      messages: [
+        { role: "system", content: "Review." },
+        { role: "user", content: "Diff" },
+      ],
+      stream: true,
+      stream_options: { include_usage: true },
+    };
+    await brokerRequest(
+      modelRequest("openai-completions", "review-security", body),
+      env,
+      { run },
+    );
+    expect(run).toHaveBeenCalledWith(
+      "moonshotai/kimi-k3",
+      { ...body, model: "moonshotai/kimi-k3" },
+      expect.anything(),
+    );
+    expect(sent?.messages).not.toContainEqual({
+      role: "developer",
+      content: "",
+    });
+  });
+
+  it("rejects a model request whose endpoint does not match its stored route", async () => {
+    const request = modelRequest("anthropic-messages", "plan", {
+      messages: [],
+    });
+    request.headers.set("x-roundhouse-routing-protocol", "openai-responses");
+    expect((await brokerRequest(request, env)).status).toBe(409);
+  });
+
+  it("fails closed without persisted routing headers", async () => {
+    const request = new Request("https://broker.invalid/v1/responses", {
       method: "POST",
       body: "{}",
     });
-    expect((await brokerRequest(invalid, env)).status).toBe(400);
+    expect((await brokerRequest(request, env)).status).toBe(400);
   });
 
-  it("serves an empty local model catalog without an upstream call", async () => {
-    const catalog = new Request("https://broker.invalid/models", {
-      headers: request().headers,
-    });
-    const run = vi.fn();
-    const response = await brokerRequest(catalog, env, { run });
+  it("returns the native upstream response and routing headers", async () => {
+    const response = await brokerRequest(
+      modelRequest("openai-completions", "review-data", { messages: [] }),
+      env,
+      { run: vi.fn(async () => Response.json({ id: "chat_1", choices: [] })) },
+    );
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ models: [] });
-    expect(run).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toEqual({
+      id: "chat_1",
+      choices: [],
+    });
+    expect(response.headers.get("x-roundhouse-routing-model")).toBe(
+      "moonshotai/kimi-k3",
+    );
   });
 
-  it("does not leak binding errors", async () => {
-    const response = await brokerRequest(request(), env, {
-      run: vi.fn(async () => Promise.reject(new Error("credential detail"))),
-    });
+  it("does not leak binding failures", async () => {
+    const response = await brokerRequest(
+      modelRequest("openai-responses", "qualify", { input: "hello" }),
+      env,
+      {
+        run: vi.fn(async () => Promise.reject(new Error("credential detail"))),
+      },
+    );
     expect(response.status).toBe(502);
     await expect(response.json()).resolves.toEqual({
       error: "model_upstream_failed",
     });
-  });
-
-  it("logs an upstream error response without consuming it", async () => {
-    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const response = await brokerRequest(request(), env, {
-      run: vi.fn(
-        async () =>
-          new Response('{"error":{"message":"unsupported model"}}', {
-            status: 400,
-            headers: { "content-type": "application/json" },
-          }),
-      ),
-    });
-
-    expect(response.status).toBe(400);
-    await expect(response.text()).resolves.toContain("unsupported model");
-    const entries = log.mock.calls.map(([entry]) => JSON.parse(String(entry)));
-    expect(entries).toContainEqual(
-      expect.objectContaining({
-        message: "api_response",
-        api: "workers_ai",
-        status: 400,
-        body: { error: { message: "unsupported model" } },
-      }),
-    );
   });
 });

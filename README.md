@@ -69,6 +69,10 @@ unrestricted natural-language clarification, and evidence-backed planning
 through a private model broker. Read-only analysis stages can use hosted web
 search through that broker when public facts are needed, while the Container
 still has no general internet access; the evidence records the sources used.
+The agent runner embeds Pi and speaks each selected provider's native protocol;
+the broker resolves and records the provider, model, protocol, and thinking
+level before dispatch, then keeps credentials and routing authority outside the
+Container.
 Its current slice implements the accepted plan
 in an isolated container, records the actual source commit in Artifacts,
 validates that checkpoint from a clean clone, promotes the validated commit to

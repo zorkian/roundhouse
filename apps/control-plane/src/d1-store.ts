@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import {
+  parseModelRoute,
   resumeRun,
   transitionRun,
   type Attempt,
   type IssueSnapshot,
   type Lease,
   type ModelUsage,
+  type ModelRoute,
   type RunRepository,
   type RunSnapshot,
   type RunStage,
@@ -84,8 +86,12 @@ type UsageRow = {
   call_id: string;
   attempt_id: string;
   model: string;
+  provider: string | null;
+  configured_model: string | null;
+  routing_rule: string | null;
   input_tokens: number | null;
   cached_input_tokens: number | null;
+  cache_creation_input_tokens: number | null;
   reasoning_tokens: number | null;
   output_tokens: number | null;
   total_tokens: number | null;
@@ -98,10 +104,18 @@ const usageFromRow = (
   callId: row.call_id,
   attemptId: row.attempt_id,
   model: row.model,
+  ...(row.provider === null ? {} : { provider: row.provider }),
+  ...(row.configured_model === null
+    ? {}
+    : { configuredModel: row.configured_model }),
+  ...(row.routing_rule === null ? {} : { routingRule: row.routing_rule }),
   ...(row.input_tokens === null ? {} : { inputTokens: row.input_tokens }),
   ...(row.cached_input_tokens === null
     ? {}
     : { cachedInputTokens: row.cached_input_tokens }),
+  ...(row.cache_creation_input_tokens === null
+    ? {}
+    : { cacheCreationInputTokens: row.cache_creation_input_tokens }),
   ...(row.reasoning_tokens === null
     ? {}
     : { reasoningTokens: row.reasoning_tokens }),
@@ -112,6 +126,7 @@ const usageFromRow = (
 });
 
 function attemptFromRow(row: AttemptRow): Attempt {
+  const routing = parseModelRoute(row.routing_json);
   return {
     id: row.id,
     runId: row.run_id,
@@ -127,11 +142,7 @@ function attemptFromRow(row: AttemptRow): Attempt {
     ...(row.result_json
       ? { result: JSON.parse(row.result_json) as Record<string, unknown> }
       : {}),
-    ...(row.routing_json
-      ? {
-          routing: JSON.parse(row.routing_json) as Record<string, unknown>,
-        }
-      : {}),
+    ...(routing ? { routing } : {}),
   };
 }
 
@@ -276,7 +287,7 @@ export class D1RunRepository implements RunRepository {
   ): Promise<readonly (ModelUsage & { readonly createdAt?: number })[]> {
     const result = await this.db
       .prepare(
-        "SELECT u.call_id,u.attempt_id,u.model,u.input_tokens,u.cached_input_tokens,u.reasoning_tokens,u.output_tokens,u.total_tokens,u.cost_usd,u.created_at FROM model_usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.run_id=?1 ORDER BY u.created_at,u.call_id",
+        "SELECT u.call_id,u.attempt_id,u.model,u.provider,u.configured_model,u.routing_rule,u.input_tokens,u.cached_input_tokens,u.cache_creation_input_tokens,u.reasoning_tokens,u.output_tokens,u.total_tokens,u.cost_usd,u.created_at FROM model_usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.run_id=?1 ORDER BY u.created_at,u.call_id",
       )
       .bind(runId)
       .all<UsageRow>();
@@ -286,14 +297,18 @@ export class D1RunRepository implements RunRepository {
   async recordModelUsage(usage: ModelUsage): Promise<"created" | "exists"> {
     const result = await this.db
       .prepare(
-        "INSERT OR IGNORE INTO model_usage (call_id,attempt_id,model,input_tokens,cached_input_tokens,reasoning_tokens,output_tokens,total_tokens,cost_usd,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+        "INSERT OR IGNORE INTO model_usage (call_id,attempt_id,model,provider,configured_model,routing_rule,input_tokens,cached_input_tokens,cache_creation_input_tokens,reasoning_tokens,output_tokens,total_tokens,cost_usd,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
       )
       .bind(
         usage.callId,
         usage.attemptId,
         usage.model,
+        usage.provider ?? "",
+        usage.configuredModel ?? null,
+        usage.routingRule ?? null,
         usage.inputTokens ?? null,
         usage.cachedInputTokens ?? null,
+        usage.cacheCreationInputTokens ?? null,
         usage.reasoningTokens ?? null,
         usage.outputTokens ?? null,
         usage.totalTokens ?? null,
@@ -661,7 +676,7 @@ export class D1RunRepository implements RunRepository {
 
   async recordModelRouting(
     attemptId: string,
-    routing: Readonly<Record<string, unknown>>,
+    routing: ModelRoute,
   ): Promise<void> {
     await this.db
       .prepare("UPDATE attempts SET routing_json=?1,updated_at=?2 WHERE id=?3")

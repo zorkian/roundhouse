@@ -66,6 +66,27 @@ class LocalD1 {
         "utf8",
       ),
     );
+    this.database.exec(
+      readFileSync(
+        new URL("../migrations/0007_model_provider_usage.sql", import.meta.url),
+        "utf8",
+      ),
+    );
+    this.database.exec(
+      readFileSync(
+        new URL(
+          "../migrations/0008_model_usage_provider_identity.sql",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    );
+    this.database.exec(
+      readFileSync(
+        new URL("../migrations/0009_cache_creation_usage.sql", import.meta.url),
+        "utf8",
+      ),
+    );
   }
 
   prepare(sql) {
@@ -246,7 +267,7 @@ it("renews a D1 attempt lease from recorded activity", async () => {
   await expect(
     repository.recordActivity(attempt.id, 700, {
       phase: "command_output",
-      operation: "codex exec",
+      operation: "pi agent",
       durationMs: 30_000,
       stdoutBytes: 100,
       stderrBytes: 0,
@@ -257,7 +278,17 @@ it("renews a D1 attempt lease from recorded activity", async () => {
       callId: "response_1",
       attemptId: attempt.id,
       model: "openai/gpt-5.6-sol",
+      provider: "openai",
       totalTokens: 123,
+    }),
+  ).resolves.toBe("created");
+  await expect(
+    repository.recordModelUsage({
+      callId: "response_1",
+      attemptId: attempt.id,
+      model: "moonshotai/kimi-k3",
+      provider: "moonshotai",
+      totalTokens: 50,
     }),
   ).resolves.toBe("created");
   await expect(
@@ -267,10 +298,10 @@ it("renews a D1 attempt lease from recorded activity", async () => {
     deadlineAt: 700,
     updatedAt: 100,
     modelCalls: 1,
-    completedModelCalls: 1,
+    completedModelCalls: 2,
     lastProgress: {
       phase: "command_output",
-      operation: "codex exec",
+      operation: "pi agent",
       durationMs: 30_000,
       stdoutBytes: 100,
       stderrBytes: 0,

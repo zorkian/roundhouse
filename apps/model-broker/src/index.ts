@@ -1,18 +1,26 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import { reviewerForRole } from "@roundhouse/core";
+import {
+  modelThinkingLevels,
+  modelProtocols,
+  type ModelProtocol,
+  type ModelRoute,
+} from "@roundhouse/core";
 import { observeResponse } from "@roundhouse/response-observer";
 
-const routingHeaders = [
-  "x-roundhouse-attempt-id",
-  "x-roundhouse-role",
-  "x-roundhouse-task-type",
-  "x-roundhouse-complexity",
-] as const;
+const routeHeaders = {
+  provider: "x-roundhouse-routing-provider",
+  model: "x-roundhouse-routing-model",
+  protocol: "x-roundhouse-routing-protocol",
+  thinkingLevel: "x-roundhouse-routing-thinking-level",
+  rule: "x-roundhouse-routing-rule",
+} as const;
 const researchRoles = new Set(["qualify", "reproduce", "plan"]);
 
-export type BrokerEnv = Cloudflare.Env;
+export type BrokerEnv = Omit<Cloudflare.Env, "ROUTING_ROUTES"> & {
+  readonly ROUTING_ROUTES?: string;
+};
 
 interface RawAiBinding {
   run(
@@ -30,71 +38,232 @@ interface RawAiBinding {
   ): Promise<Response>;
 }
 
-export interface BrokerRoute {
-  readonly model: string;
-  readonly reasoningEffort: string;
-  readonly rule:
-    | "qualification-default-v1"
-    | "reproduction-default-v1"
-    | "planning-default-v1"
-    | "implementation-default-v1"
-    | "review-default-v1"
-    | "review-holistic-v1"
-    | "review-security-v1"
-    | "review-data-v1";
+interface RoutingEnvelope {
+  readonly role: string;
+  readonly taskType: string;
+  readonly complexity: string;
 }
 
-export function selectRoute(request: Request, env: BrokerEnv): BrokerRoute {
-  for (const header of routingHeaders)
-    if (!request.headers.get(header)) throw new Error(`missing_${header}`);
-  const role = request.headers.get("x-roundhouse-role")!;
-  const reviewer = reviewerForRole(role);
+const defaultRoutes: Readonly<
+  Record<string, Pick<ModelRoute, "provider" | "model" | "protocol">>
+> = {
+  plan: {
+    provider: "anthropic",
+    model: "anthropic/claude-opus-4.8",
+    protocol: "anthropic-messages",
+  },
+  implement: {
+    provider: "openai",
+    model: "openai/gpt-5.6-sol",
+    protocol: "openai-responses",
+  },
+  "review-holistic": {
+    provider: "anthropic",
+    model: "anthropic/claude-fable-5",
+    protocol: "anthropic-messages",
+  },
+  "review-security": {
+    provider: "moonshotai",
+    model: "moonshotai/kimi-k3",
+    protocol: "openai-completions",
+  },
+  "review-data": {
+    provider: "moonshotai",
+    model: "moonshotai/kimi-k3",
+    protocol: "openai-completions",
+  },
+};
+
+function configuredRoutes(env: BrokerEnv) {
+  if (!env.ROUTING_ROUTES) return defaultRoutes;
+  try {
+    return {
+      ...defaultRoutes,
+      ...(JSON.parse(env.ROUTING_ROUTES) as typeof defaultRoutes),
+    };
+  } catch {
+    throw new Error("invalid_routing_configuration");
+  }
+}
+
+function defaultProtocol(provider: string): ModelProtocol {
+  if (provider === "anthropic") return "anthropic-messages";
+  if (provider === "moonshotai") return "openai-completions";
+  if (provider === "google") return "google-generative-ai";
+  return "openai-responses";
+}
+
+function routingRule(role: string): string {
+  if (role === "review-holistic") return "review-holistic-v1";
+  if (role === "review-security") return "review-security-v1";
+  if (role === "review-data") return "review-data-v1";
+  if (role === "reproduce") return "reproduction-default-v1";
+  if (role === "plan") return "planning-default-v1";
+  if (role === "implement") return "implementation-default-v1";
+  if (role === "review") return "review-default-v1";
+  return "qualification-default-v1";
+}
+
+function validEnvelope(value: unknown): value is RoutingEnvelope {
+  if (!value || typeof value !== "object") return false;
+  const envelope = value as Record<string, unknown>;
+  return [envelope.role, envelope.taskType, envelope.complexity].every(
+    (item) => typeof item === "string" && item.length > 0,
+  );
+}
+
+export function resolveRoute(
+  envelope: RoutingEnvelope,
+  env: BrokerEnv,
+): ModelRoute {
+  const configured = configuredRoutes(env)[envelope.role];
+  const model = configured?.model ?? env.ROUTING_MODEL;
+  const provider = configured?.provider ?? model.split("/", 1)[0] ?? "";
+  const protocol = configured?.protocol ?? defaultProtocol(provider);
+  const thinkingLevel = env.ROUTING_REASONING_EFFORT;
+  if (
+    !provider ||
+    !model ||
+    !modelProtocols.includes(protocol) ||
+    !modelThinkingLevels.includes(thinkingLevel as ModelRoute["thinkingLevel"])
+  )
+    throw new Error("invalid_routing_configuration");
   return {
-    model: reviewer?.model ?? env.ROUTING_MODEL,
-    reasoningEffort: env.ROUTING_REASONING_EFFORT,
-    rule:
-      role === "review-holistic"
-        ? "review-holistic-v1"
-        : role === "review-security"
-          ? "review-security-v1"
-          : role === "review-data"
-            ? "review-data-v1"
-            : role === "reproduce"
-              ? "reproduction-default-v1"
-              : request.headers.get("x-roundhouse-role") === "plan"
-                ? "planning-default-v1"
-                : request.headers.get("x-roundhouse-role") === "implement"
-                  ? "implementation-default-v1"
-                  : request.headers.get("x-roundhouse-role") === "review"
-                    ? "review-default-v1"
-                    : "qualification-default-v1",
+    provider,
+    model,
+    protocol,
+    thinkingLevel: thinkingLevel as ModelRoute["thinkingLevel"],
+    rule: routingRule(envelope.role),
   };
 }
 
-function routingResponseHeaders(response: Response, route: BrokerRoute) {
+function routeFromHeaders(request: Request): ModelRoute {
+  const values = Object.fromEntries(
+    Object.entries(routeHeaders).map(([key, header]) => [
+      key,
+      request.headers.get(header),
+    ]),
+  ) as Record<keyof typeof routeHeaders, string | null>;
+  if (Object.values(values).some((value) => !value))
+    throw new Error("missing_route");
+  if (!modelProtocols.includes(values.protocol as ModelProtocol))
+    throw new Error("invalid_route_protocol");
+  if (
+    !modelThinkingLevels.includes(
+      values.thinkingLevel as ModelRoute["thinkingLevel"],
+    )
+  )
+    throw new Error("invalid_route_thinking_level");
+  return {
+    provider: values.provider!,
+    model: values.model!,
+    protocol: values.protocol as ModelProtocol,
+    thinkingLevel: values.thinkingLevel as ModelRoute["thinkingLevel"],
+    rule: values.rule!,
+  };
+}
+
+function responseHeaders(response: Response, route: ModelRoute): Headers {
   const headers = new Headers(response.headers);
-  headers.set("x-roundhouse-routing-model", route.model);
-  headers.set("x-roundhouse-routing-effort", route.reasoningEffort);
-  headers.set("x-roundhouse-routing-rule", route.rule);
+  for (const [key, header] of Object.entries(routeHeaders))
+    headers.set(header, String(route[key as keyof ModelRoute]));
   return headers;
 }
 
-function applyToolPolicy(body: Record<string, unknown>, role: string): void {
-  const tools = Array.isArray(body.tools)
+function endpointProtocol(pathname: string): ModelProtocol | undefined {
+  if (pathname === "/v1/responses") return "openai-responses";
+  if (pathname === "/v1/chat/completions") return "openai-completions";
+  if (pathname === "/v1/messages") return "anthropic-messages";
+  if (pathname.startsWith("/v1beta/models/")) return "google-generative-ai";
+  return undefined;
+}
+
+function tools(body: Record<string, unknown>): Record<string, unknown>[] {
+  return Array.isArray(body.tools)
     ? body.tools.filter(
         (tool): tool is Record<string, unknown> =>
           Boolean(tool) && typeof tool === "object",
       )
     : [];
-  const withoutWebSearch = tools.filter(
-    (tool) => tool.type !== "web_search" && tool.type !== "web_search_preview",
+}
+
+function applyHostedResearch(
+  body: Record<string, unknown>,
+  route: ModelRoute,
+  role: string,
+): void {
+  const existing = tools(body).filter(
+    (tool) =>
+      !String(tool.type).startsWith("web_search") &&
+      tool.type !== "web_search_20250305",
   );
-  if (researchRoles.has(role)) {
-    body.tools = [...withoutWebSearch, { type: "web_search" }];
-  } else if (withoutWebSearch.length) {
-    body.tools = withoutWebSearch;
-  } else {
-    delete body.tools;
+  if (existing.length > 0) body.tools = existing;
+  else delete body.tools;
+  if (!researchRoles.has(role)) return;
+  if (route.protocol === "openai-responses") {
+    body.tools = [...existing, { type: "web_search_preview" }];
+  } else if (route.protocol === "anthropic-messages") {
+    body.tools = [
+      ...existing,
+      { type: "web_search_20250305", name: "web_search" },
+    ];
+  }
+}
+
+function normalizeAnthropicSystem(
+  body: Record<string, unknown>,
+  protocol: ModelProtocol,
+): void {
+  if (protocol !== "anthropic-messages" || !Array.isArray(body.system)) return;
+  if (
+    !body.system.every(
+      (block) =>
+        typeof block === "string" ||
+        (Boolean(block) &&
+          typeof block === "object" &&
+          "text" in block &&
+          typeof block.text === "string"),
+    )
+  )
+    return;
+  body.system = body.system
+    .map((block) => {
+      if (typeof block === "string") return block;
+      if (
+        block &&
+        typeof block === "object" &&
+        "text" in block &&
+        typeof block.text === "string"
+      )
+        return block.text;
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+async function resolveRouteRequest(
+  request: Request,
+  env: BrokerEnv,
+): Promise<Response> {
+  let value: unknown;
+  try {
+    value = await request.json();
+  } catch {
+    return Response.json({ error: "invalid_json" }, { status: 400 });
+  }
+  if (!validEnvelope(value))
+    return Response.json(
+      { error: "invalid_routing_envelope" },
+      { status: 400 },
+    );
+  try {
+    return Response.json(resolveRoute(value, env));
+  } catch {
+    return Response.json(
+      { error: "invalid_routing_configuration" },
+      { status: 500 },
+    );
   }
 }
 
@@ -104,30 +273,32 @@ export async function brokerRequest(
   ai: RawAiBinding = env.AI as unknown as RawAiBinding,
 ): Promise<Response> {
   const url = new URL(request.url);
-  const responses = request.method === "POST" && url.pathname === "/responses";
-  const models = request.method === "GET" && url.pathname === "/models";
-  if (!responses && !models)
-    return Response.json({ error: "not_found" }, { status: 404 });
+  if (request.method === "POST" && url.pathname === "/route")
+    return resolveRouteRequest(request, env);
+  const protocol =
+    request.method === "POST" ? endpointProtocol(url.pathname) : undefined;
+  if (!protocol) return Response.json({ error: "not_found" }, { status: 404 });
 
-  let route: BrokerRoute;
+  let route: ModelRoute;
   try {
-    route = selectRoute(request, env);
+    route = routeFromHeaders(request);
   } catch {
     return Response.json(
       { error: "invalid_routing_envelope" },
       { status: 400 },
     );
   }
-
-  // Codex already has metadata for the selected built-in model. An empty
-  // catalog keeps its optional refresh endpoint local to the private broker.
-  if (models) return Response.json({ models: [] });
-
+  if (route.protocol !== protocol)
+    return Response.json(
+      { error: "routing_protocol_mismatch" },
+      { status: 409 },
+    );
   if (request.headers.get("content-encoding"))
     return Response.json(
       { error: "compressed_request_not_supported" },
       { status: 415 },
     );
+
   let body: Record<string, unknown>;
   try {
     body = (await request.json()) as Record<string, unknown>;
@@ -135,13 +306,12 @@ export async function brokerRequest(
     return Response.json({ error: "invalid_json" }, { status: 400 });
   }
   body.model = route.model;
-  body.reasoning = {
-    ...(typeof body.reasoning === "object" && body.reasoning
-      ? (body.reasoning as Record<string, unknown>)
-      : {}),
-    effort: route.reasoningEffort,
-  };
-  applyToolPolicy(body, request.headers.get("x-roundhouse-role") ?? "");
+  normalizeAnthropicSystem(body, route.protocol);
+  applyHostedResearch(
+    body,
+    route,
+    request.headers.get("x-roundhouse-role") ?? "",
+  );
 
   let response: Response;
   try {
@@ -178,7 +348,7 @@ export async function brokerRequest(
   return new Response(captured.body, {
     status: captured.status,
     statusText: captured.statusText,
-    headers: routingResponseHeaders(captured, route),
+    headers: responseHeaders(captured, route),
   });
 }
 
