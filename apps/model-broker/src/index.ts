@@ -53,9 +53,9 @@ const defaultRoutes: Readonly<
     protocol: "openai-responses",
   },
   implement: {
-    provider: "moonshotai",
-    model: "moonshotai/kimi-k3",
-    protocol: "openai-completions",
+    provider: "openai",
+    model: "openai/gpt-5.6-sol",
+    protocol: "openai-responses",
   },
   "review-holistic": {
     provider: "openai",

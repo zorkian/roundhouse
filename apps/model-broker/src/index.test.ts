@@ -73,9 +73,9 @@ describe("model broker", () => {
     ],
     [
       "implement",
-      "moonshotai",
-      "moonshotai/kimi-k3",
-      "openai-completions",
+      "openai",
+      "openai/gpt-5.6-sol",
+      "openai-responses",
       "implementation-default-v1",
     ],
     [
@@ -255,6 +255,16 @@ describe("model broker", () => {
   });
 
   it("passes Pi's Moonshot chat payload without synthesizing messages", async () => {
+    const moonshotEnv = {
+      ...env,
+      ROUTING_ROUTES: JSON.stringify({
+        implement: {
+          provider: "moonshotai",
+          model: "moonshotai/kimi-k3",
+          protocol: "openai-completions",
+        },
+      }),
+    };
     let sent: Record<string, unknown> | undefined;
     const run = vi.fn(
       async (_model: string, input: Record<string, unknown>) => {
@@ -271,8 +281,8 @@ describe("model broker", () => {
       stream_options: { include_usage: true },
     };
     await brokerRequest(
-      modelRequest("openai-completions", "implement", body),
-      env,
+      modelRequest("openai-completions", "implement", body, moonshotEnv),
+      moonshotEnv,
       { run },
     );
     expect(run).toHaveBeenCalledWith(

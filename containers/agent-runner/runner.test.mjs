@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   activityRequest,
   agentRuntime,
+  artifactWriteTokenRequest,
   completionRequest,
   checkpointWorkspace,
   implementationPrompt,
@@ -386,6 +387,27 @@ describe("V2 agent runner", () => {
     });
   });
 
+  it("requests a fresh artifact writer with the attempt capability", async () => {
+    const assignment = {
+      id: "attempt_checkpoint",
+      artifact: { tokenId: "initial-token" },
+    };
+    const request = artifactWriteTokenRequest(
+      assignment,
+      "https://v2.invalid/attempts/callback",
+      "attempt-secret",
+    );
+    expect(request.method).toBe("POST");
+    expect(new URL(request.url).pathname).toBe("/attempts/artifact-token");
+    expect(request.headers.get("x-roundhouse-attempt-id")).toBe(assignment.id);
+    expect(request.headers.get("x-roundhouse-attempt-capability")).toBe(
+      "attempt-secret",
+    );
+    await expect(request.json()).resolves.toEqual({
+      artifactTokenId: "initial-token",
+    });
+  });
+
   it("reports activity and can complete after the inactivity lease expires", async () => {
     const assignment = {
       id: "attempt_slow",
@@ -651,6 +673,63 @@ describe("V2 agent runner", () => {
     await expect(repositoryChangedPaths(source, base, head)).resolves.toEqual([
       ".github/workflows/é.yml",
     ]);
+  });
+
+  it("rejects repository paths containing malformed UTF-8", async () => {
+    const source = resolve(testRoot, "invalid-utf8-path");
+    await mkdir(source, { recursive: true });
+    execFileSync("git", ["init", "--initial-branch=main"], { cwd: source });
+    await writeFile(resolve(source, "README.md"), "base\n");
+    execFileSync("git", ["add", "README.md"], { cwd: source });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@invalid",
+        "commit",
+        "-m",
+        "base",
+      ],
+      { cwd: source },
+    );
+    const base = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: source,
+      encoding: "utf8",
+    })
+      .toString()
+      .trim();
+    const invalidPath = Buffer.concat([
+      Buffer.from(`${source}/`),
+      Buffer.from([0xff]),
+      Buffer.from(".txt"),
+    ]);
+    await writeFile(invalidPath, "invalid filename\n");
+    execFileSync("git", ["add", "--all"], { cwd: source });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@invalid",
+        "commit",
+        "-m",
+        "invalid path",
+      ],
+      { cwd: source },
+    );
+    const head = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: source,
+      encoding: "utf8",
+    })
+      .toString()
+      .trim();
+
+    await expect(repositoryChangedPaths(source, base, head)).rejects.toThrow(
+      "invalid_git_path_encoding",
+    );
   });
 
   it("prepares a conflicted base update for the implementation agent", async () => {

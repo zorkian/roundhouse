@@ -577,6 +577,71 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
         ? new Response(null, { status: 204 })
         : json({ error: "stale_attempt" }, 409);
     }
+    if (url.pathname === "/attempts/artifact-token") {
+      if (request.method !== "POST")
+        return json({ error: "method_not_allowed" }, 405, { allow: "POST" });
+      const attemptId = request.headers.get("x-roundhouse-attempt-id") ?? "";
+      const capability =
+        request.headers.get("x-roundhouse-attempt-capability") ?? "";
+      if (
+        !attemptId ||
+        !capability ||
+        !(await verifyCallback(
+          env.CALLBACK_SIGNING_SECRET,
+          attemptId,
+          capability,
+        ))
+      )
+        return json({ error: "unauthorized" }, 401);
+      let artifactTokenId: string;
+      try {
+        const body: unknown = await request.json();
+        artifactTokenId =
+          body &&
+          typeof body === "object" &&
+          "artifactTokenId" in body &&
+          typeof body.artifactTokenId === "string"
+            ? body.artifactTokenId
+            : "";
+      } catch {
+        return json({ error: "invalid_request" }, 400);
+      }
+      if (!artifactTokenId) return json({ error: "invalid_request" }, 400);
+      const repository = new D1RunRepository(env.DB);
+      const attempt = await repository.getAttempt(attemptId);
+      if (
+        !attempt ||
+        attempt.stage !== "implement" ||
+        !["created", "dispatched"].includes(attempt.state) ||
+        attempt.deadlineAt <= Date.now()
+      )
+        return json({ error: "stale_attempt" }, 409);
+      const run = await repository.get(attempt.runId);
+      if (!run) return json({ error: "stale_attempt" }, 409);
+      const artifact = await artifactsNamespace(env).get(workspaceName(run.id));
+      if (!artifact) return json({ error: "artifact_not_found" }, 404);
+      try {
+        await artifact.revokeToken(artifactTokenId);
+      } catch (error) {
+        console.warn(
+          JSON.stringify({
+            message: "expired_artifact_token_revoke_failed",
+            attemptId,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+      }
+      const token = await artifact.createToken("write", 5 * 60);
+      await repository.recordActivity(
+        attemptId,
+        Date.now() + attemptInactivityMilliseconds,
+      );
+      return json(
+        { tokenId: token.id, token: token.plaintext, access: token.access },
+        200,
+        { "cache-control": "no-store" },
+      );
+    }
     if (url.pathname === "/github/webhook" && request.method === "POST") {
       const repository = new D1RunRepository(env.DB);
       const enqueue = async (wakeup: Wakeup) => {

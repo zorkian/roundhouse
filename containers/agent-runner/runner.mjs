@@ -93,6 +93,47 @@ export function activityRequest(
   });
 }
 
+export function artifactWriteTokenRequest(
+  assignment,
+  callbackUrl,
+  attemptSecret,
+) {
+  return new Request(new URL("/attempts/artifact-token", callbackUrl), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-roundhouse-attempt-capability": attemptSecret,
+      "x-roundhouse-attempt-id": assignment.id,
+    },
+    body: JSON.stringify({ artifactTokenId: assignment.artifact.tokenId }),
+    signal: AbortSignal.timeout(30_000),
+  });
+}
+
+async function refreshArtifactWriteToken(
+  assignment,
+  callbackUrl,
+  attemptSecret,
+) {
+  const response = await fetch(
+    artifactWriteTokenRequest(assignment, callbackUrl, attemptSecret),
+  );
+  runnerLog("info", "artifact_write_token_response", {
+    status: response.status,
+  });
+  if (!response.ok)
+    throw new Error(`artifact_write_token_http_${response.status}`);
+  const artifact = await response.json();
+  if (
+    typeof artifact?.tokenId !== "string" ||
+    typeof artifact?.token !== "string" ||
+    artifact.access !== "write"
+  )
+    throw new Error("invalid_artifact_write_token");
+  Object.assign(assignment.artifact, artifact);
+  return assignment.artifact;
+}
+
 async function reportActivity(
   assignment,
   callbackUrl,
@@ -256,8 +297,12 @@ function command(commandName, args, options = {}) {
           stderrBytes,
         });
         await activity;
-        const output = Buffer.concat(stdout).toString();
-        resolveCommand(options.preserveOutput ? output : output.trim());
+        const output = Buffer.concat(stdout);
+        if (options.rawOutput) resolveCommand(output);
+        else {
+          const text = output.toString();
+          resolveCommand(options.preserveOutput ? text : text.trim());
+        }
       } else {
         const detail =
           commandName === "git"
@@ -963,14 +1008,31 @@ export async function repositoryChangedPaths(
   const output = await command(
     "git",
     ["diff", "--name-only", "-z", from, ...(to ? [to] : [])],
-    { ...options, cwd: directory, preserveOutput: true },
+    { ...options, cwd: directory, rawOutput: true },
   );
-  if (!output) return [];
-  if (!output.endsWith("\0")) throw new Error("invalid_git_path_output");
-  return output.slice(0, -1).split("\0");
+  if (!output.length) return [];
+  if (output.at(-1) !== 0) throw new Error("invalid_git_path_output");
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const paths = [];
+  let start = 0;
+  try {
+    for (let index = 0; index < output.length; index++) {
+      if (output[index] !== 0) continue;
+      paths.push(decoder.decode(output.subarray(start, index)));
+      start = index + 1;
+    }
+    return paths;
+  } catch {
+    throw new Error("invalid_git_path_encoding");
+  }
 }
 
-export async function checkpointWorkspace(assignment, directory, onProgress) {
+export async function checkpointWorkspace(
+  assignment,
+  directory,
+  onProgress,
+  refreshWriteToken,
+) {
   if (assignment.artifact.access === "read") {
     return {
       repositoryId: assignment.artifact.repositoryId,
@@ -1020,9 +1082,12 @@ export async function checkpointWorkspace(assignment, directory, onProgress) {
     outputHead,
     commandOptions,
   );
+  const writeArtifact = refreshWriteToken
+    ? await refreshWriteToken()
+    : assignment.artifact;
   await command("git", ["push", "origin", `HEAD:${assignment.artifact.ref}`], {
     cwd: directory,
-    env: gitEnvironment(assignment.artifact.token),
+    env: gitEnvironment(writeArtifact.token),
     onProgress,
   });
   return {
@@ -1215,6 +1280,7 @@ async function completeAssignment(assignment, headers) {
         attemptSecret,
         checkpointProgress,
       ),
+    () => refreshArtifactWriteToken(assignment, callbackUrl, attemptSecret),
   );
   await progress("checkpoint_completed", {
     changedPathCount: checkpoint.changedPaths.length,
