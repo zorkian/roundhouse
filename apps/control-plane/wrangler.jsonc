@@ -74,6 +74,10 @@
         "disk_mb": 20000,
       },
       "max_instances": 10,
+      // Let an active attempt finish naturally before a new container image
+      // rolls over it. Durable Workflow recovery remains authoritative if it
+      // runs longer than this grace period or is interrupted elsewhere.
+      "rollout_active_grace_period": 3600,
     },
   ],
   "durable_objects": {

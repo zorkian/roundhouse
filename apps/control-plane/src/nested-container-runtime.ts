@@ -9,6 +9,12 @@ const dockerBuilder = "roundhouse-host-v1";
 const dockerBuilderImage =
   "moby/buildkit@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec";
 const dockerBuilderConfig = "/etc/roundhouse-buildkitd.toml";
+const dockerBuilderContainer = `buildx_buildkit_${dockerBuilder}0`;
+
+interface BuilderRegistryCaVerification {
+  readonly success: boolean;
+  readonly error: string;
+}
 
 export class NestedContainerRuntime {
   constructor(private readonly host: NestedContainerRuntimeHost) {}
@@ -226,95 +232,7 @@ export class NestedContainerRuntime {
       },
     );
     if (!existing.success) {
-      stepStartedAt = Date.now();
-      const builderContainer = `buildx_buildkit_${dockerBuilder}0`;
-      await this.host.trace(
-        attemptId,
-        "docker_builder_stale_container_inspect_started",
-        undefined,
-        { builder: dockerBuilder, container: builderContainer },
-      );
-      const staleContainer = await this.host.exec(
-        `docker container inspect ${builderContainer}`,
-        { origin: "internal" },
-      );
-      await this.host.trace(
-        attemptId,
-        "docker_builder_stale_container_inspect_completed",
-        stepStartedAt,
-        {
-          builder: dockerBuilder,
-          container: builderContainer,
-          found: staleContainer.success,
-          exitCode: staleContainer.exitCode,
-          detail: staleContainer.stderr.slice(-1_000),
-        },
-      );
-      if (staleContainer.success) {
-        stepStartedAt = Date.now();
-        await this.host.trace(
-          attemptId,
-          "docker_builder_stale_container_remove_started",
-          undefined,
-          { builder: dockerBuilder, container: builderContainer },
-        );
-        const removed = await this.host.exec(
-          `docker rm --force ${builderContainer}`,
-          { origin: "internal" },
-        );
-        await this.host.trace(
-          attemptId,
-          "docker_builder_stale_container_remove_completed",
-          stepStartedAt,
-          {
-            builder: dockerBuilder,
-            container: builderContainer,
-            success: removed.success,
-            exitCode: removed.exitCode,
-            detail: removed.stderr.slice(-1_000),
-          },
-        );
-        if (!removed.success)
-          throw new Error("docker_builder_stale_container_remove_failed");
-      }
-      stepStartedAt = Date.now();
-      await this.host.trace(
-        attemptId,
-        "docker_builder_create_started",
-        undefined,
-        {
-          builder: dockerBuilder,
-          image: dockerBuilderImage,
-          config: dockerBuilderConfig,
-          registryCa: containerCa,
-        },
-      );
-      const created = await this.host.exec(
-        `docker buildx create --name ${dockerBuilder} --driver docker-container --driver-opt network=host --driver-opt image=${dockerBuilderImage} --buildkitd-config ${dockerBuilderConfig} --buildkitd-flags '--oci-worker-net=host' --use --bootstrap`,
-        { origin: "internal", timeout: 180_000 },
-      );
-      await this.host.trace(
-        attemptId,
-        "docker_builder_create_completed",
-        stepStartedAt,
-        {
-          builder: dockerBuilder,
-          success: created.success,
-          exitCode: created.exitCode,
-          detail: created.stderr.slice(-4_000),
-        },
-      );
-      if (!created.success) {
-        await this.host.trace(
-          attemptId,
-          "docker_builder_create_failed",
-          startedAt,
-          { detail: created.stderr.slice(-4_000) },
-        );
-        throw new Error(
-          `docker_builder_create_failed: ${created.stderr.slice(-4_000)}`,
-        );
-      }
+      await this.createBuilder(attemptId);
     } else {
       stepStartedAt = Date.now();
       await this.host.trace(
@@ -369,33 +287,57 @@ export class NestedContainerRuntime {
           `docker_builder_bootstrap_failed: ${bootstrapped.stderr.slice(-4_000)}`,
         );
     }
-    stepStartedAt = Date.now();
-    await this.host.trace(
-      attemptId,
-      "docker_builder_registry_ca_verify_started",
-      undefined,
-      { builder: dockerBuilder, registry: "ghcr.io" },
-    );
-    const caVerified = await this.host.exec(
-      `outer_ca=$(sha256sum ${containerCa} | cut -d ' ' -f 1) && inner_ca=$(docker exec buildx_buildkit_${dockerBuilder}0 sha256sum /etc/buildkit/certs/ghcr.io/cloudflare-containers-ca.crt | cut -d ' ' -f 1) && builder_config=$(docker exec buildx_buildkit_${dockerBuilder}0 cat /etc/buildkit/buildkitd.toml) && printf 'outer_ca=%s\\ninner_ca=%s\\nbuilder_config=%s\\n' "$outer_ca" "$inner_ca" "$builder_config" && test "$outer_ca" = "$inner_ca"`,
-      { origin: "internal", timeout: 5_000 },
-    );
-    await this.host.trace(
-      attemptId,
-      "docker_builder_registry_ca_verify_completed",
-      stepStartedAt,
-      {
-        builder: dockerBuilder,
-        registry: "ghcr.io",
-        success: caVerified.success,
-        exitCode: caVerified.exitCode,
-        detail: caVerified.stdout.slice(-4_000),
-        error: caVerified.stderr.slice(-1_000),
-      },
-    );
-    if (!caVerified.success)
+
+    let caVerification = await this.verifyBuilderRegistryCa(attemptId);
+    if (!caVerification.success && existing.success) {
+      stepStartedAt = Date.now();
+      await this.host.trace(
+        attemptId,
+        "docker_builder_reconciliation_started",
+        undefined,
+        {
+          builder: dockerBuilder,
+          reason: "registry_ca_verification_failed",
+          error: caVerification.error,
+        },
+      );
+      const removed = await this.host.exec(
+        `docker buildx rm --force --keep-state ${dockerBuilder}`,
+        { origin: "internal", timeout: 180_000 },
+      );
+      await this.host.trace(
+        attemptId,
+        "docker_builder_reconciliation_remove_completed",
+        stepStartedAt,
+        {
+          builder: dockerBuilder,
+          success: removed.success,
+          exitCode: removed.exitCode,
+          detail: removed.stdout.slice(-1_000),
+          error: removed.stderr.slice(-1_000),
+        },
+      );
+      if (!removed.success)
+        throw new Error(
+          `docker_builder_reconciliation_remove_failed: ${removed.stderr.slice(-1_000)}`,
+        );
+      await this.createBuilder(attemptId);
+      caVerification = await this.verifyBuilderRegistryCa(attemptId);
+      await this.host.trace(
+        attemptId,
+        "docker_builder_reconciliation_completed",
+        stepStartedAt,
+        {
+          builder: dockerBuilder,
+          success: caVerification.success,
+          error: caVerification.error,
+        },
+      );
+    }
+
+    if (!caVerification.success)
       throw new Error(
-        `docker_builder_registry_ca_missing: ${caVerified.stderr.slice(-1_000)}`,
+        `docker_builder_registry_ca_missing: ${caVerification.error}`,
       );
     await this.host.trace(attemptId, "docker_builder_ready", startedAt, {
       builder: dockerBuilder,
@@ -410,5 +352,171 @@ export class NestedContainerRuntime {
         durationMs: Date.now() - startedAt,
       }),
     );
+  }
+
+  private async createBuilder(attemptId?: string): Promise<void> {
+    let stepStartedAt = Date.now();
+    await this.host.trace(
+      attemptId,
+      "docker_builder_stale_container_inspect_started",
+      undefined,
+      { builder: dockerBuilder, container: dockerBuilderContainer },
+    );
+    const staleContainer = await this.host.exec(
+      `docker container inspect ${dockerBuilderContainer}`,
+      { origin: "internal" },
+    );
+    await this.host.trace(
+      attemptId,
+      "docker_builder_stale_container_inspect_completed",
+      stepStartedAt,
+      {
+        builder: dockerBuilder,
+        container: dockerBuilderContainer,
+        found: staleContainer.success,
+        exitCode: staleContainer.exitCode,
+        detail: staleContainer.stderr.slice(-1_000),
+      },
+    );
+    if (staleContainer.success) {
+      stepStartedAt = Date.now();
+      await this.host.trace(
+        attemptId,
+        "docker_builder_stale_container_remove_started",
+        undefined,
+        { builder: dockerBuilder, container: dockerBuilderContainer },
+      );
+      const removed = await this.host.exec(
+        `docker rm --force ${dockerBuilderContainer}`,
+        { origin: "internal" },
+      );
+      await this.host.trace(
+        attemptId,
+        "docker_builder_stale_container_remove_completed",
+        stepStartedAt,
+        {
+          builder: dockerBuilder,
+          container: dockerBuilderContainer,
+          success: removed.success,
+          exitCode: removed.exitCode,
+          detail: removed.stderr.slice(-1_000),
+        },
+      );
+      if (!removed.success)
+        throw new Error("docker_builder_stale_container_remove_failed");
+    }
+    stepStartedAt = Date.now();
+    await this.host.trace(
+      attemptId,
+      "docker_builder_create_started",
+      undefined,
+      {
+        builder: dockerBuilder,
+        image: dockerBuilderImage,
+        config: dockerBuilderConfig,
+        registryCa: containerCa,
+      },
+    );
+    const created = await this.host.exec(
+      `docker buildx create --name ${dockerBuilder} --driver docker-container --driver-opt network=host --driver-opt image=${dockerBuilderImage} --buildkitd-config ${dockerBuilderConfig} --buildkitd-flags '--oci-worker-net=host' --use --bootstrap`,
+      { origin: "internal", timeout: 180_000 },
+    );
+    await this.host.trace(
+      attemptId,
+      "docker_builder_create_completed",
+      stepStartedAt,
+      {
+        builder: dockerBuilder,
+        success: created.success,
+        exitCode: created.exitCode,
+        detail: created.stderr.slice(-4_000),
+      },
+    );
+    if (!created.success)
+      throw new Error(
+        `docker_builder_create_failed: ${created.stderr.slice(-4_000)}`,
+      );
+  }
+
+  private async verifyBuilderRegistryCa(
+    attemptId?: string,
+  ): Promise<BuilderRegistryCaVerification> {
+    const stepStartedAt = Date.now();
+    await this.host.trace(
+      attemptId,
+      "docker_builder_registry_ca_verify_started",
+      undefined,
+      { builder: dockerBuilder, registry: "ghcr.io" },
+    );
+    const [outerCa, innerCa, builderConfig] = await Promise.all([
+      this.host.exec(`sha256sum ${containerCa}`, {
+        origin: "internal",
+        timeout: 5_000,
+      }),
+      this.host.exec(
+        `docker exec ${dockerBuilderContainer} sha256sum /etc/buildkit/certs/ghcr.io/cloudflare-containers-ca.crt`,
+        { origin: "internal", timeout: 5_000 },
+      ),
+      this.host.exec(
+        `docker exec ${dockerBuilderContainer} cat /etc/buildkit/buildkitd.toml`,
+        { origin: "internal", timeout: 5_000 },
+      ),
+    ]);
+    const outerHash = outerCa.stdout.trim().split(/\s+/, 1)[0] ?? "";
+    const innerHash = innerCa.stdout.trim().split(/\s+/, 1)[0] ?? "";
+    const success =
+      outerCa.success &&
+      innerCa.success &&
+      builderConfig.success &&
+      outerHash.length > 0 &&
+      outerHash === innerHash;
+    const error = [
+      !outerCa.success
+        ? `outer_ca_exit=${outerCa.exitCode}: ${outerCa.stderr.slice(-500)}`
+        : "",
+      !innerCa.success
+        ? `inner_ca_exit=${innerCa.exitCode}: ${innerCa.stderr.slice(-500)}`
+        : "",
+      !builderConfig.success
+        ? `builder_config_exit=${builderConfig.exitCode}: ${builderConfig.stderr.slice(-500)}`
+        : "",
+      outerCa.success && outerHash.length === 0 ? "outer_ca_hash_missing" : "",
+      innerCa.success && innerHash.length === 0 ? "inner_ca_hash_missing" : "",
+      outerCa.success && innerCa.success && outerHash !== innerHash
+        ? `ca_hash_mismatch outer=${outerHash} inner=${innerHash}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join("; ");
+    await this.host.trace(
+      attemptId,
+      "docker_builder_registry_ca_verify_completed",
+      stepStartedAt,
+      {
+        builder: dockerBuilder,
+        registry: "ghcr.io",
+        success,
+        outerCa: {
+          success: outerCa.success,
+          exitCode: outerCa.exitCode,
+          hash: outerHash,
+          error: outerCa.stderr.slice(-500),
+        },
+        innerCa: {
+          success: innerCa.success,
+          exitCode: innerCa.exitCode,
+          hash: innerHash,
+          error: innerCa.stderr.slice(-500),
+        },
+        builderConfig: {
+          success: builderConfig.success,
+          exitCode: builderConfig.exitCode,
+          detail: builderConfig.stdout.slice(-4_000),
+          error: builderConfig.stderr.slice(-500),
+        },
+        error,
+      },
+    );
+    return { success, error };
   }
 }

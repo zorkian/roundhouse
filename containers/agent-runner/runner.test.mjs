@@ -15,6 +15,7 @@ import {
   bootstrapWorkspace,
   commandProgress,
   completionResult,
+  configureAgentToolExecution,
   createAssignmentExecutor,
   createRunnerServer,
   checkpointWorkspace,
@@ -74,6 +75,12 @@ afterEach(async () => {
 });
 
 describe("V2 agent runner", () => {
+  it("serializes tools that share one checkout and process runtime", () => {
+    const session = { agent: { toolExecution: "parallel" } };
+    expect(configureAgentToolExecution(session)).toBe("sequential");
+    expect(session.agent.toolExecution).toBe("sequential");
+  });
+
   it("derives tools from immutable attempt capabilities", () => {
     expect(
       agentToolNames({
