@@ -198,6 +198,166 @@ function repositoryContract(label, createRepository) {
       ).resolves.toBeUndefined();
     });
 
+    it("reopens a concluded no-change qualification with compare-and-set semantics", async () => {
+      const repository = createRepository();
+      const run = createRun({
+        ...input,
+        id: "run_reopen",
+        issue: {
+          title: "Already fixed?",
+          body: "Original report",
+          url: "https://github.com/zorkian/roundhouse/issues/42",
+          actor: "reporter",
+        },
+      });
+      await repository.create(run);
+      const attempt = {
+        id: "run_reopen_rev_1",
+        runId: run.id,
+        runRevision: 1,
+        kind: "agent",
+        stage: "qualify",
+        role: "qualification",
+        state: "created",
+        deadlineAt: 200,
+        baseCommit: run.baseCommit,
+        expectedHead: run.baseCommit,
+      };
+      await repository.createAttempt(attempt);
+      await expect(
+        repository.completeAttempt(attempt.id, 1, run.baseCommit, {
+          qualification: {
+            classification: "already_satisfied",
+            summary: "Looks addressed.",
+          },
+        }),
+      ).resolves.toBe("completed");
+      const concluded = await repository.transition(run.id, 1, {
+        status: "succeeded",
+        stage: "qualify",
+      });
+
+      await expect(
+        repository.resumeClarification(run.id, 1, concluded.issue),
+      ).resolves.toBeUndefined();
+      const reopened = await repository.resumeClarification(
+        run.id,
+        concluded.revision,
+        {
+          ...concluded.issue,
+          clarifications: [
+            {
+              actor: "citizen",
+              body: "Still broken, here is evidence.",
+              url: "https://github.com/zorkian/roundhouse/issues/42#issuecomment-1",
+            },
+          ],
+        },
+      );
+      expect(reopened).toMatchObject({
+        status: "active",
+        stage: "qualify",
+        revision: 3,
+        issue: {
+          clarifications: [
+            {
+              actor: "citizen",
+              body: "Still broken, here is evidence.",
+              url: "https://github.com/zorkian/roundhouse/issues/42#issuecomment-1",
+            },
+          ],
+        },
+      });
+      await expect(repository.get(run.id)).resolves.toEqual(reopened);
+
+      // The same revision cannot be reopened twice, and the reopened
+      // revision can hold a fresh lease for the new qualification attempt.
+      await expect(
+        repository.resumeClarification(
+          run.id,
+          concluded.revision,
+          concluded.issue,
+        ),
+      ).resolves.toBeUndefined();
+      await expect(
+        repository.claimLease(
+          run.id,
+          3,
+          { attemptId: "run_reopen_rev_3", runRevision: 3, expiresAt: 300 },
+          100,
+        ),
+      ).resolves.toBe(true);
+
+      // The prior completed attempt remains queryable behind the new revision.
+      await expect(
+        repository.latestCompletedAttempt(run.id, "qualify", reopened.revision),
+      ).resolves.toMatchObject({ id: attempt.id, runRevision: 1 });
+      await expect(repository.getAttempt(attempt.id)).resolves.toMatchObject({
+        state: "completed",
+      });
+
+      // Reconsideration can conclude no-change and be reopened again.
+      const second = {
+        ...attempt,
+        id: "run_reopen_rev_3",
+        runRevision: 3,
+      };
+      await repository.createAttempt(second);
+      await expect(
+        repository.completeAttempt(second.id, 3, run.baseCommit, {
+          qualification: {
+            classification: "unsupported",
+            summary: "Still cannot take this on.",
+          },
+        }),
+      ).resolves.toBe("completed");
+      const reconcluded = await repository.transition(run.id, 3, {
+        status: "succeeded",
+        stage: "qualify",
+      });
+      await expect(
+        repository.resumeClarification(
+          run.id,
+          reconcluded.revision,
+          reconcluded.issue,
+        ),
+      ).resolves.toMatchObject({
+        status: "active",
+        stage: "qualify",
+        revision: 5,
+      });
+      await expect(
+        repository.latestCompletedAttempt(run.id, "qualify", 5),
+      ).resolves.toMatchObject({ id: second.id, runRevision: 3 });
+    });
+
+    it("refuses to reopen terminal runs beyond qualification", async () => {
+      const repository = createRepository();
+      const run = createRun({
+        ...input,
+        id: "run_closed",
+        issue: {
+          title: "Merged",
+          body: "Original report",
+          url: "https://github.com/zorkian/roundhouse/issues/42",
+          actor: "reporter",
+        },
+      });
+      await repository.create(run);
+      await repository.transition(run.id, 1, {
+        status: "succeeded",
+        stage: "merge",
+      });
+      await expect(
+        repository.resumeClarification(run.id, 2, run.issue),
+      ).rejects.toThrow("run_not_resumable");
+      await expect(repository.get(run.id)).resolves.toMatchObject({
+        status: "succeeded",
+        stage: "merge",
+        revision: 2,
+      });
+    });
+
     it("resumes clarification with the updated issue conversation", async () => {
       const repository = createRepository();
       const run = createRun({

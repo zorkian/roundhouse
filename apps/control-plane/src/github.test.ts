@@ -161,6 +161,35 @@ async function closureDelivery(id: string, action = "closed") {
   });
 }
 
+async function concludeQualification(
+  repository: MemoryRunRepository,
+  classification: string,
+  revision = 1,
+): Promise<string> {
+  const id = "run_123_issue_42";
+  const attemptId = `${id}_rev_${revision}`;
+  await repository.createAttempt({
+    id: attemptId,
+    runId: id,
+    runRevision: revision,
+    kind: "agent",
+    stage: "qualify",
+    role: "qualification",
+    state: "created",
+    deadlineAt: 200,
+    baseCommit: "a".repeat(40),
+    expectedHead: "a".repeat(40),
+  });
+  await repository.completeAttempt(attemptId, revision, "a".repeat(40), {
+    qualification: { classification, summary: "No change needed." },
+  });
+  await repository.transition(id, revision, {
+    status: "succeeded",
+    stage: "qualify",
+  });
+  return id;
+}
+
 describe("GitHub intake", () => {
   it("cancels active work when its GitHub issue closes", async () => {
     const repository = new IntakeRepository();
@@ -740,6 +769,286 @@ describe("GitHub intake", () => {
       { runId: id, expectedRevision: 3 },
       { runId: id, expectedRevision: 5 },
     ]);
+  });
+
+  it.each(["duplicate", "already_satisfied", "unsupported"])(
+    "resumes a concluded %s qualification from ordinary prose",
+    async (classification) => {
+      const repository = new IntakeRepository();
+      const wakeups: Wakeup[] = [];
+      const enqueue = async (wakeup: Wakeup) => {
+        wakeups.push(wakeup);
+      };
+      await acceptGitHubComment(
+        await delivery("delivery-start"),
+        env,
+        repository,
+        enqueue,
+        github(),
+      );
+      const id = await concludeQualification(repository, classification);
+      const noPermissionCheck: GitHubApi = {
+        get: vi.fn(async () => {
+          throw new Error("prose_must_not_require_repository_permission");
+        }),
+        post: vi.fn(async () => ({})) as GitHubApi["post"],
+      };
+      await expect(
+        acceptGitHubComment(
+          await delivery(
+            "delivery-correction",
+            "The conclusion is wrong; the bug is still present.",
+            "random-citizen",
+          ),
+          env,
+          repository,
+          enqueue,
+          noPermissionCheck,
+        ),
+      ).resolves.toBe("accepted");
+      await expect(repository.get(id)).resolves.toMatchObject({
+        status: "active",
+        stage: "qualify",
+        revision: 3,
+        issue: {
+          clarifications: [
+            {
+              actor: "random-citizen",
+              body: "The conclusion is wrong; the bug is still present.",
+              url: "https://github.com/zorkian/roundhouse/issues/42#issuecomment-delivery-correction",
+            },
+          ],
+        },
+      });
+      expect(wakeups).toEqual([
+        { runId: id, expectedRevision: 1 },
+        { runId: id, expectedRevision: 3 },
+      ]);
+      await expect(
+        repository.latestCompletedAttempt(id, "qualify", 3),
+      ).resolves.toMatchObject({ id: `${id}_rev_1`, runRevision: 1 });
+
+      // Reconsideration can conclude no-change and be corrected again.
+      await concludeQualification(repository, classification, 3);
+      await expect(
+        acceptGitHubComment(
+          await delivery(
+            "delivery-correction-2",
+            "Here is another reproduction.",
+            "another-citizen",
+          ),
+          env,
+          repository,
+          enqueue,
+          noPermissionCheck,
+        ),
+      ).resolves.toBe("accepted");
+      await expect(repository.get(id)).resolves.toMatchObject({
+        status: "active",
+        stage: "qualify",
+        revision: 5,
+        issue: {
+          clarifications: [
+            { actor: "random-citizen" },
+            { actor: "another-citizen" },
+          ],
+        },
+      });
+      expect(wakeups).toEqual([
+        { runId: id, expectedRevision: 1 },
+        { runId: id, expectedRevision: 3 },
+        { runId: id, expectedRevision: 5 },
+      ]);
+    },
+  );
+
+  it("does not reopen terminal runs beyond qualification or without a no-change conclusion", async () => {
+    const repository = new IntakeRepository();
+    const wakeups: Wakeup[] = [];
+    const enqueue = async (wakeup: Wakeup) => {
+      wakeups.push(wakeup);
+    };
+    await acceptGitHubComment(
+      await delivery("delivery-start"),
+      env,
+      repository,
+      enqueue,
+      github(),
+    );
+    const id = "run_123_issue_42";
+    await repository.transition(id, 1, {
+      status: "succeeded",
+      stage: "merge",
+    });
+    await expect(
+      acceptGitHubComment(
+        await delivery("delivery-prose", "Please look again.", "citizen"),
+        env,
+        repository,
+        enqueue,
+        github(),
+      ),
+    ).resolves.toBe("ignored");
+    await expect(
+      acceptGitHubComment(
+        await delivery("delivery-restart"),
+        env,
+        repository,
+        enqueue,
+        github(),
+      ),
+    ).resolves.toBe("duplicate");
+    await expect(repository.get(id)).resolves.toMatchObject({
+      status: "succeeded",
+      stage: "merge",
+      revision: 2,
+    });
+    expect(wakeups).toHaveLength(1);
+
+    // A succeeded qualification with no completed no-change attempt stays closed.
+    const bare = new IntakeRepository();
+    await acceptGitHubComment(
+      await delivery("delivery-start-2"),
+      env,
+      bare,
+      enqueue,
+      github(),
+    );
+    await bare.transition(id, 1, { status: "succeeded", stage: "qualify" });
+    await expect(
+      acceptGitHubComment(
+        await delivery("delivery-prose-2", "Please look again.", "citizen"),
+        env,
+        bare,
+        enqueue,
+        github(),
+      ),
+    ).resolves.toBe("ignored");
+    await expect(bare.get(id)).resolves.toMatchObject({
+      status: "succeeded",
+      revision: 2,
+    });
+  });
+
+  it("resumes a concluded no-change qualification from an authorized start command", async () => {
+    const repository = new IntakeRepository();
+    const wakeups: Wakeup[] = [];
+    const enqueue = async (wakeup: Wakeup) => {
+      wakeups.push(wakeup);
+    };
+    const api = github();
+    await acceptGitHubComment(
+      await delivery("delivery-start"),
+      env,
+      repository,
+      enqueue,
+      api,
+    );
+    const id = await concludeQualification(repository, "duplicate");
+
+    // An actor without write permission cannot restart the concluded run.
+    await expect(
+      acceptGitHubComment(
+        await delivery("delivery-restart-denied"),
+        env,
+        repository,
+        enqueue,
+        github("read"),
+      ),
+    ).resolves.toBe("unauthorized");
+    await expect(repository.get(id)).resolves.toMatchObject({
+      status: "succeeded",
+      revision: 2,
+    });
+
+    await expect(
+      acceptGitHubComment(
+        await delivery("delivery-restart"),
+        env,
+        repository,
+        enqueue,
+        api,
+      ),
+    ).resolves.toBe("accepted");
+    const resumed = await repository.get(id);
+    expect(resumed).toMatchObject({
+      status: "active",
+      stage: "qualify",
+      revision: 3,
+    });
+    // The command itself is not added as issue evidence.
+    expect(resumed?.issue?.clarifications ?? []).toHaveLength(0);
+
+    // A repeated start command while the run is active stays idempotent.
+    await expect(
+      acceptGitHubComment(
+        await delivery("delivery-restart-again"),
+        env,
+        repository,
+        enqueue,
+        api,
+      ),
+    ).resolves.toBe("duplicate");
+    await expect(repository.get(id)).resolves.toMatchObject({
+      status: "active",
+      revision: 3,
+    });
+    expect(api.post).toHaveBeenCalledTimes(1);
+    expect(wakeups).toEqual([
+      { runId: id, expectedRevision: 1 },
+      { runId: id, expectedRevision: 3 },
+    ]);
+    await expect(
+      repository.latestCompletedAttempt(id, "qualify", 3),
+    ).resolves.toMatchObject({ id: `${id}_rev_1`, runRevision: 1 });
+  });
+
+  it("ignores bot and marker replies on a concluded qualification", async () => {
+    const repository = new IntakeRepository();
+    const wakeups: Wakeup[] = [];
+    const enqueue = async (wakeup: Wakeup) => {
+      wakeups.push(wakeup);
+    };
+    await acceptGitHubComment(
+      await delivery("delivery-start"),
+      env,
+      repository,
+      enqueue,
+      github(),
+    );
+    const id = await concludeQualification(repository, "unsupported");
+    await expect(
+      acceptGitHubComment(
+        await delivery(
+          "delivery-bot",
+          "This is still broken.",
+          "dependabot[bot]",
+          "Bot",
+        ),
+        env,
+        repository,
+        enqueue,
+        github(),
+      ),
+    ).resolves.toBe("ignored");
+    await expect(
+      acceptGitHubComment(
+        await delivery(
+          "delivery-marker",
+          `<!-- roundhouse:v2:qualification:${id}_rev_1 -->\nThis is still broken.`,
+          "maintainer",
+        ),
+        env,
+        repository,
+        enqueue,
+        github(),
+      ),
+    ).resolves.toBe("ignored");
+    await expect(repository.get(id)).resolves.toMatchObject({
+      status: "succeeded",
+      revision: 2,
+    });
+    expect(wakeups).toHaveLength(1);
   });
 
   it("does not treat Roundhouse's own question as a clarification answer", async () => {
