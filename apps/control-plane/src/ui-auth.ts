@@ -323,6 +323,9 @@ export async function handleGitHubCallback(
         repositoryIds.push(id);
     }
     const sessionToken = randomToken();
+    // One expiration timestamp feeds both the persisted session and the
+    // cookie so the browser and server deadlines stay aligned.
+    const expiresAt = Date.now() + uiSessionLifetimeMs;
     await env.DB.prepare(
       "INSERT INTO ui_sessions (session_hash, github_user_id, github_login, repository_ids_json, expires_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
     )
@@ -331,7 +334,7 @@ export async function handleGitHubCallback(
         user.id,
         user.login,
         JSON.stringify(repositoryIds),
-        Date.now() + uiSessionLifetimeMs,
+        expiresAt,
         Date.now(),
       )
       .run();
@@ -344,10 +347,7 @@ export async function handleGitHubCallback(
       durationMs: Date.now() - startedAt,
     });
     const success = redirect("/", {
-      "set-cookie": sessionCookieHeader(
-        sessionToken,
-        Date.now() + uiSessionLifetimeMs,
-      ),
+      "set-cookie": sessionCookieHeader(sessionToken, expiresAt),
     });
     return clearStateCookie(success);
   } catch (error) {
@@ -400,12 +400,7 @@ export async function validateUiSession(
     });
     return undefined;
   }
-  // The session caches the repository access resolved at GitHub sign-in, so
-  // its total age is bounded: renewal never extends a session beyond one
-  // lifetime from sign-in. After that the user signs in again and repository
-  // access is re-resolved against GitHub.
-  const authorizationEndsAt = row.created_at + uiSessionLifetimeMs;
-  if (row.expires_at <= startedAt || authorizationEndsAt <= startedAt) {
+  if (row.expires_at <= startedAt) {
     await env.DB.prepare("DELETE FROM ui_sessions WHERE expires_at <= ?1")
       .bind(startedAt)
       .run();
@@ -429,12 +424,15 @@ export async function validateUiSession(
   // signed in. The session token itself is unchanged.
   const renewalStartedAt = Date.now();
   const previousExpiresAt = row.expires_at;
-  const renewedExpiresAt = Math.min(
+  // Renewal is monotonic: if a later-started request already wrote a newer
+  // expiration, keep the later value so concurrent activity never moves the
+  // persisted deadline backward or out of sync with an issued cookie.
+  const renewedExpiresAt = Math.max(
+    previousExpiresAt,
     startedAt + uiSessionLifetimeMs,
-    authorizationEndsAt,
   );
   await env.DB.prepare(
-    "UPDATE ui_sessions SET expires_at = ?1 WHERE session_hash = ?2",
+    "UPDATE ui_sessions SET expires_at = MAX(expires_at, ?1) WHERE session_hash = ?2",
   )
     .bind(renewedExpiresAt, await sha256Hex(token))
     .run();
@@ -443,7 +441,6 @@ export async function validateUiSession(
     githubUserId: row.github_user_id,
     previousExpiresAt,
     expiresAt: renewedExpiresAt,
-    authorizationEndsAt,
     durationMs: Date.now() - renewalStartedAt,
   });
   return {
