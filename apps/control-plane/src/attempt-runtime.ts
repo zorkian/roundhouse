@@ -194,14 +194,16 @@ export function workspaceRef(runId: string): string {
   return `refs/heads/roundhouse/${runId}`;
 }
 
-// Candidates publish checkpoints to candidate-specific refs inside the run's
+// Candidates publish checkpoints to attempt-specific refs inside their own
 // artifact repository; the canonical run ref is only written when the judged
-// winner is promoted.
+// winner is promoted. Refs are keyed by the deterministic attempt ID because
+// candidate IDs are unique only within one competition: two reviewers in one
+// review node may both define a candidate with the same ID.
 export function attemptWorkspaceRef(
   attempt: Pick<Attempt, "id" | "runId" | "competition">,
 ): string {
   if (attempt.competition?.purpose === "candidate")
-    return `${workspaceRef(attempt.runId)}-candidate-${attempt.competition.candidateId}`;
+    return `refs/heads/roundhouse/${attempt.id}`;
   return workspaceRef(attempt.runId);
 }
 
@@ -212,10 +214,10 @@ export function attemptWorkspaceRef(
 // fetch, or modify a competitor's state. Token revocation is likewise scoped
 // to the issuing attempt's repository.
 export function artifactRepositoryName(
-  attempt: Pick<Attempt, "runId" | "competition">,
+  attempt: Pick<Attempt, "id" | "runId" | "competition">,
 ): string {
   return attempt.competition?.purpose === "candidate"
-    ? `${workspaceName(attempt.runId)}-candidate-${attempt.competition.candidateId}`
+    ? attempt.id
     : workspaceName(attempt.runId);
 }
 
