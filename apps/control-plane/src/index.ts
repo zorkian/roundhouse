@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import {
+  immutableAttemptId,
   runSchemaVersion,
   type Attempt,
   type RunSnapshot,
@@ -12,10 +13,15 @@ import {
   validateCheckpointIdentity,
   validateReadOnlyCheckpoint,
 } from "./artifacts.js";
-import { coordinate, type AttemptDispatcher } from "./coordinator.js";
+import {
+  attemptInactivityMilliseconds,
+  coordinate,
+  type AttemptDispatcher,
+} from "./coordinator.js";
 import {
   acceptCallback,
   signCallback,
+  verifyCallback,
   type AttemptCallback,
   type CheckpointValidator,
 } from "./callback.js";
@@ -68,11 +74,24 @@ export function successorWakeup(
 }
 
 interface AttemptStub {
+  destroy(): Promise<void>;
   fetch(request: Request): Promise<Response>;
 }
 interface AttemptNamespace {
   idFromName(name: string): unknown;
   get(id: unknown): AttemptStub;
+}
+
+export async function recoverExpiredAttempts(
+  containers: AttemptNamespace,
+  wakeups: readonly Wakeup[],
+  enqueue: (wakeup: Wakeup) => Promise<void>,
+): Promise<void> {
+  for (const wakeup of wakeups) {
+    const attemptId = immutableAttemptId(wakeup.runId, wakeup.expectedRevision);
+    await containers.get(containers.idFromName(attemptId)).destroy();
+    await enqueue(wakeup);
+  }
 }
 type RuntimeEnv = Cloudflare.Env & {
   DB: D1Like;
@@ -158,11 +177,16 @@ class ContainerDispatcher implements AttemptDispatcher {
       attempt.stage === "implement"
         ? await this.runs.latestCompletedAttempt(run.id, "review", run.revision)
         : undefined;
+    const ciAttempt =
+      attempt.stage === "implement"
+        ? await this.runs.latestCompletedAttempt(run.id, "ci", run.revision)
+        : undefined;
     const qualification = qualificationAttempt?.result?.qualification;
     const reproduction = reproductionAttempt?.result?.reproduction;
     const plan = planAttempt?.result?.plan;
     const implementation = implementationAttempt?.result?.implementation;
     const review = reviewAttempt?.result?.review;
+    const ci = ciAttempt?.result?.ci;
     if (attempt.stage === "reproduce" && !qualification)
       throw new Error("reproduction_qualification_missing");
     if (attempt.stage === "plan" && !reproduction)
@@ -196,13 +220,14 @@ class ContainerDispatcher implements AttemptDispatcher {
       issue: run.issue,
       issueNumber: run.issueNumber,
       context:
-        qualification || reproduction || plan || implementation || review
+        qualification || reproduction || plan || implementation || review || ci
           ? {
               ...(qualification ? { qualification } : {}),
               ...(reproduction ? { reproduction } : {}),
               ...(plan ? { plan } : {}),
               ...(implementation ? { implementation } : {}),
               ...(review ? { review } : {}),
+              ...(ci ? { ci } : {}),
             }
           : undefined,
       routing: {
@@ -221,6 +246,16 @@ class ContainerDispatcher implements AttemptDispatcher {
         access: token.access,
         ref: workspaceRef(attempt.runId),
       },
+      ...(attempt.stage === "implement" &&
+      (ci as Record<string, unknown> | undefined)?.reason === "base_conflict"
+        ? {
+            upstream: {
+              remote: `https://github.com/${run.repository}.git`,
+              hostname: "github.com",
+              branch: "main",
+            },
+          }
+        : {}),
     };
     try {
       const response = await this.containers.get(id).fetch(
@@ -349,6 +384,30 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
         },
       });
     }
+    if (url.pathname === "/attempts/activity") {
+      if (request.method !== "POST")
+        return json({ error: "method_not_allowed" }, 405, { allow: "POST" });
+      const attemptId = request.headers.get("x-roundhouse-attempt-id") ?? "";
+      const capability =
+        request.headers.get("x-roundhouse-attempt-capability") ?? "";
+      if (
+        !attemptId ||
+        !capability ||
+        !(await verifyCallback(
+          env.CALLBACK_SIGNING_SECRET,
+          attemptId,
+          capability,
+        ))
+      )
+        return json({ error: "unauthorized" }, 401);
+      const recorded = await new D1RunRepository(env.DB).recordActivity(
+        attemptId,
+        Date.now() + attemptInactivityMilliseconds,
+      );
+      return recorded
+        ? new Response(null, { status: 204 })
+        : json({ error: "stale_attempt" }, 409);
+    }
     if (url.pathname === "/github/webhook" && request.method === "POST") {
       const repository = new D1RunRepository(env.DB);
       const enqueue = async (wakeup: Wakeup) => {
@@ -441,8 +500,13 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
   },
   async scheduled(_controller, env) {
     const repository = new D1RunRepository(env.DB);
-    for (const wakeup of await repository.expiredLeases(Date.now()))
-      await env.RUN_WAKEUPS.send(wakeup);
+    await recoverExpiredAttempts(
+      env.ATTEMPT_CONTAINERS,
+      await repository.expiredLeases(Date.now()),
+      async (wakeup) => {
+        await env.RUN_WAKEUPS.send(wakeup);
+      },
+    );
   },
 };
 

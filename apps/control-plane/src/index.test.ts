@@ -2,10 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from "vitest";
-import { RoundhouseAttemptContainer } from "./attempt-container.js";
+import {
+  attemptAllowedHosts,
+  RoundhouseAttemptContainer,
+} from "./attempt-container.js";
 import {
   controlPlaneService,
   handleRequest,
+  recoverExpiredAttempts,
   successorWakeup,
 } from "./index.js";
 import worker from "./index.js";
@@ -165,5 +169,47 @@ describe("V2 control plane", () => {
     expect(
       RoundhouseAttemptContainer.outboundByHost?.["model.roundhouse.internal"],
     ).toBeTypeOf("function");
+  });
+
+  it("allows only required attempt services and the package registry", () => {
+    expect(
+      attemptAllowedHosts(
+        {
+          artifact: {
+            remote: "https://artifacts.test/repository.git",
+            hostname: "artifacts.test",
+          },
+          publish: { hostname: "github.com" },
+        },
+        "https://control.test/attempts/callback",
+      ),
+    ).toEqual([
+      "model.roundhouse.internal",
+      "registry.npmjs.org",
+      "artifacts.test",
+      "github.com",
+      "control.test",
+    ]);
+  });
+
+  it("destroys an inactive sandbox before redispatching its stage", async () => {
+    const events: string[] = [];
+    const wakeup = { runId: "run_1", expectedRevision: 3 };
+    await recoverExpiredAttempts(
+      {
+        idFromName: (name: string) => name,
+        get: (id: unknown) => ({
+          destroy: async () => {
+            events.push(`destroy:${String(id)}`);
+          },
+          fetch: async () => new Response(),
+        }),
+      },
+      [wakeup],
+      async (next) => {
+        events.push(`enqueue:${next.runId}:${next.expectedRevision}`);
+      },
+    );
+    expect(events).toEqual(["destroy:run_1_rev_3", "enqueue:run_1:3"]);
   });
 });

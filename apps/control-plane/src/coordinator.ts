@@ -17,6 +17,8 @@ export interface AttemptReporter {
   report(run: RunSnapshot, attempt: Attempt): Promise<void>;
 }
 
+export const attemptInactivityMilliseconds = 10 * 60_000;
+
 export function qualificationTransition(attempt: Attempt) {
   const outcome = attempt.result?.qualification;
   if (!outcome || typeof outcome !== "object")
@@ -96,11 +98,14 @@ export function reviewTransition(attempt: Attempt) {
 export function ciTransition(attempt: Attempt) {
   const outcome = attempt.result?.ci as Record<string, unknown> | undefined;
   if (
-    outcome?.status !== "success" ||
-    outcome.head !== attempt.expectedHead ||
+    outcome?.head !== attempt.expectedHead ||
     !attempt.acceptedHead ||
     attempt.acceptedHead !== attempt.expectedHead
   )
+    return { status: "failed", stage: "ci" } as const;
+  if (outcome.status === "failure")
+    return { status: "active", stage: "implement" } as const;
+  if (outcome.status !== "success")
     return { status: "failed", stage: "ci" } as const;
   return {
     status: "active",
@@ -141,7 +146,7 @@ export async function coordinate(
   dispatcher: AttemptDispatcher,
   wakeup: Wakeup,
   now: number,
-  leaseMilliseconds = 30 * 60_000,
+  leaseMilliseconds = attemptInactivityMilliseconds,
   reporter?: AttemptReporter,
 ): Promise<"dispatched" | "duplicate" | "stale"> {
   const run = await repository.get(wakeup.runId);
@@ -194,7 +199,12 @@ export async function coordinate(
   const durable = await repository.getAttempt(attemptId);
   if (created === "exists" && durable?.state === "completed")
     return "duplicate";
-  await dispatcher.submit(attempt, run);
+  try {
+    await dispatcher.submit(attempt, run);
+  } catch (error) {
+    await repository.releaseLease(run.id, run.revision, attempt.id);
+    throw error;
+  }
   await repository.markDispatched(attemptId);
   return "dispatched";
 }

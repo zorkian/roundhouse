@@ -6,8 +6,10 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  activityRequest,
   completionRequest,
   checkpointWorkspace,
+  implementationPrompt,
   implementationSchema,
   planSchema,
   prepareWorkspace,
@@ -88,6 +90,20 @@ describe("V2 agent runner", () => {
     expect(
       implementationSchema.properties.validation.items.properties.output,
     ).not.toHaveProperty("maxLength");
+  });
+
+  it("lets implementation install declared dependencies for validation", () => {
+    const prompt = implementationPrompt({
+      issue: { title: "Format the change", body: "", url: "" },
+      context: {
+        ci: {
+          status: "failure",
+          checks: [{ name: "Check", conclusion: "failure" }],
+        },
+      },
+    });
+    expect(prompt).toContain("install repository-declared dependencies");
+    expect(prompt).toContain('"conclusion":"failure"');
   });
 
   it("returns concrete review findings without arbitrary caps", () => {
@@ -198,6 +214,45 @@ describe("V2 agent runner", () => {
     });
   });
 
+  it("reports activity and can complete after the inactivity lease expires", async () => {
+    const assignment = {
+      id: "attempt_slow",
+      runId: "run_1",
+      runRevision: 3,
+      deadlineAt: Date.now() - 1,
+      baseCommit: "a".repeat(40),
+      expectedHead: "a".repeat(40),
+      artifact: { tokenId: "token-id", access: "write" },
+    };
+    const activity = activityRequest(
+      assignment,
+      "https://v2.invalid/attempts/callback",
+      "attempt-secret",
+    );
+    expect(new URL(activity.url).pathname).toBe("/attempts/activity");
+    expect(activity.headers.get("x-roundhouse-attempt-id")).toBe(assignment.id);
+    expect(activity.headers.get("x-roundhouse-attempt-capability")).toBe(
+      "attempt-secret",
+    );
+
+    const completion = completionRequest(
+      assignment,
+      {
+        repositoryId: "repo-id",
+        repository: "v2-run-1",
+        baseCommit: assignment.baseCommit,
+        inputHead: assignment.expectedHead,
+        outputHead: "b".repeat(40),
+        ref: "refs/heads/roundhouse/run_1",
+        changedPaths: ["src/fix.ts"],
+      },
+      "https://v2.invalid/attempts/callback",
+      "attempt-secret",
+    );
+    await new Promise((resolveWait) => setTimeout(resolveWait, 5));
+    expect(completion.signal.aborted).toBe(false);
+  });
+
   it("checkpoints the implementation and promotes it from a clean clone", async () => {
     process.env.ROUNDHOUSE_WORKSPACE_ROOT = resolve(testRoot, "runner");
     const source = resolve(testRoot, "fake-github"),
@@ -292,5 +347,127 @@ describe("V2 agent runner", () => {
         { encoding: "utf8" },
       ).trim(),
     ).toBe(first.outputHead);
+  });
+
+  it("prepares a conflicted base update for the implementation agent", async () => {
+    process.env.ROUNDHOUSE_WORKSPACE_ROOT = resolve(testRoot, "runner");
+    const source = resolve(testRoot, "source");
+    const artifact = resolve(testRoot, "artifact.git");
+    await mkdir(source, { recursive: true });
+    execFileSync("git", ["init", "--initial-branch=main"], { cwd: source });
+    await writeFile(
+      resolve(source, "route.ts"),
+      "export const route = 'base';\n",
+    );
+    execFileSync("git", ["add", "route.ts"], { cwd: source });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@invalid",
+        "commit",
+        "-m",
+        "base",
+      ],
+      { cwd: source },
+    );
+    const baseCommit = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: source,
+      encoding: "utf8",
+    }).trim();
+    execFileSync("git", ["clone", "--bare", source, artifact]);
+
+    await writeFile(
+      resolve(source, "route.ts"),
+      "export const route = 'main';\n",
+    );
+    execFileSync("git", ["add", "route.ts"], { cwd: source });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@invalid",
+        "commit",
+        "-m",
+        "main change",
+      ],
+      { cwd: source },
+    );
+    const mainHead = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: source,
+      encoding: "utf8",
+    }).trim();
+
+    execFileSync("git", ["checkout", "--detach", baseCommit], { cwd: source });
+    await writeFile(
+      resolve(source, "route.ts"),
+      "export const route = 'feature';\n",
+    );
+    execFileSync("git", ["add", "route.ts"], { cwd: source });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@invalid",
+        "commit",
+        "-m",
+        "feature change",
+      ],
+      { cwd: source },
+    );
+    const featureHead = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: source,
+      encoding: "utf8",
+    }).trim();
+    execFileSync("git", ["push", artifact, `HEAD:refs/heads/feature`], {
+      cwd: source,
+    });
+
+    const assignment = {
+      id: "run_conflict_rev_1",
+      runId: "run_conflict",
+      runRevision: 1,
+      issueNumber: 42,
+      deadlineAt: Date.now() + 60_000,
+      baseCommit,
+      expectedHead: featureHead,
+      context: { ci: { status: "failure", reason: "base_conflict" } },
+      upstream: { remote: source, hostname: "github.test", branch: "main" },
+      artifact: {
+        repositoryId: "artifact-repo-id",
+        repository: "v2-run-conflict",
+        remote: artifact,
+        tokenId: "write-token-id",
+        token: "ephemeral-write-token",
+        access: "write",
+        ref: "refs/heads/feature",
+      },
+    };
+    const directory = await prepareWorkspace(assignment);
+    expect(
+      execFileSync("git", ["diff", "--name-only", "--diff-filter=U"], {
+        cwd: directory,
+        encoding: "utf8",
+      }).trim(),
+    ).toBe("route.ts");
+    await writeFile(
+      resolve(directory, "route.ts"),
+      "export const route = 'main-and-feature';\n",
+    );
+    const checkpoint = await checkpointWorkspace(assignment, directory);
+    const parents = execFileSync(
+      "git",
+      ["show", "--format=%P", "--no-patch", checkpoint.outputHead],
+      { cwd: directory, encoding: "utf8" },
+    )
+      .trim()
+      .split(" ");
+    expect(parents).toEqual([featureHead, mainHead]);
   });
 });

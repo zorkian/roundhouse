@@ -4,6 +4,7 @@
 import { Container } from "@cloudflare/containers";
 import type { Attempt } from "@roundhouse/core";
 import { verifyCallback } from "./callback.js";
+import { attemptInactivityMilliseconds } from "./coordinator.js";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
 
 interface AttemptAssignment extends Attempt {
@@ -13,6 +14,7 @@ interface AttemptAssignment extends Attempt {
   };
   readonly issue?: unknown;
   readonly publish?: { readonly hostname: string };
+  readonly upstream?: { readonly hostname: string };
 }
 
 type AttemptContainerEnv = Cloudflare.Env & {
@@ -22,7 +24,22 @@ type AttemptContainerEnv = Cloudflare.Env & {
 };
 
 const modelHost = "model.roundhouse.internal";
+const packageRegistryHost = "registry.npmjs.org";
 const containerCa = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
+
+export function attemptAllowedHosts(
+  attempt: Pick<AttemptAssignment, "artifact" | "publish" | "upstream">,
+  callbackUrl?: string | null,
+): string[] {
+  return [
+    modelHost,
+    packageRegistryHost,
+    attempt.artifact.hostname,
+    attempt.publish?.hostname ?? "",
+    attempt.upstream?.hostname ?? "",
+    callbackUrl ? new URL(callbackUrl).hostname : "",
+  ].filter(Boolean);
+}
 
 async function modelEgress(request: Request, env: Cloudflare.Env) {
   const runtime = env as AttemptContainerEnv;
@@ -68,7 +85,11 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
     );
     return new Response("stale_attempt", { status: 409 });
   }
-  await repository.recordModelCall(attemptId);
+  const recorded = await repository.recordModelCall(
+    attemptId,
+    Date.now() + attemptInactivityMilliseconds,
+  );
+  if (!recorded) return new Response("stale_attempt", { status: 409 });
   const headers = new Headers(request.headers);
   headers.delete("authorization");
   headers.delete("x-roundhouse-attempt-capability");
@@ -120,14 +141,10 @@ export class RoundhouseAttemptContainer extends Container<Cloudflare.Env> {
       return new Response("attempt_deadline_expired", { status: 409 });
 
     await this.setAllowedHosts(
-      [
-        modelHost,
-        attempt.artifact.hostname,
-        attempt.publish?.hostname ?? "",
-        request.headers.get("x-roundhouse-callback-url")
-          ? new URL(request.headers.get("x-roundhouse-callback-url")!).hostname
-          : "",
-      ].filter(Boolean),
+      attemptAllowedHosts(
+        attempt,
+        request.headers.get("x-roundhouse-callback-url"),
+      ),
     );
     await this.startAndWaitForPorts({
       ports: this.defaultPort,
