@@ -210,7 +210,13 @@ describe("run details", () => {
       "https://github.com/zorkian/roundhouse/pull/99/files",
     );
     expect(html).toContain('<a href="https://example.test">test</a>');
-    expect(html).not.toContain("<section><h2>Qualification</h2>");
+    expect(html).toContain("<section><h2>Qualification</h2>");
+    expect(html).toContain("<section><h2>Implementation and validation</h2>");
+    expect(html).toContain("<section><h2>Review</h2>");
+    expect(html).toContain("<section><h2>CI checks</h2>");
+    expect(html).toContain("<section><h2>Merge</h2>");
+    expect(html).toContain("<section><h2>Commit trace</h2>");
+    expect(html).toContain("<strong>Usage:</strong> 120 tokens");
   });
 
   it("renders attempts chronologically as collapsed timeline rows", () => {
