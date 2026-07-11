@@ -1,5 +1,7 @@
 # Roundhouse
 
+![Roundhouse orchestration hub: coding-agent engines routed through a human-controlled software delivery workflow](docs/assets/roundhouse-banner.png)
+
 > [!CAUTION]
 > Roundhouse is completely untested, pre-release alpha software. It is under active design and may be incomplete, insecure, destructive, or simply wrong. Do not use it with production repositories, valuable data, or credentials you cannot revoke.
 
