@@ -1,0 +1,27 @@
+version: 1
+runtime:
+  image: roundhouse/runner:dev
+  workspace: /workspace
+bootstrap:
+  command: pnpm
+  args: [install, --frozen-lockfile]
+validation:
+  format:
+    command: pnpm
+    args: [format:check]
+  compile:
+    command: pnpm
+    args: [typecheck]
+  targeted:
+    command: pnpm
+    args: [test]
+  timeoutMinutes: 15
+network:
+  default: deny
+  capabilities: []
+protectedPaths:
+  - .github/workflows/**
+  - containers/**
+artifacts:
+  include:
+    - .roundhouse/artifacts/**

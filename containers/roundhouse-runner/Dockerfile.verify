@@ -1,0 +1,8 @@
+FROM roundhouse/runner:dev
+
+USER root
+COPY --chown=runner:runner . /workspace
+USER runner
+
+RUN pnpm install --frozen-lockfile
+RUN pnpm check
