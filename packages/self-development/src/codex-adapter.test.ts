@@ -68,6 +68,9 @@ console.log(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 12, 
     expect(invocation.argv).toContain(
       "sandbox_workspace_write.network_access=false",
     );
+    expect(invocation.argv).toContain(
+      'shell_environment_policy.inherit="none"',
+    );
     expect(invocation.env).toContain("CODEX_HOME");
     expect(invocation.env).not.toContain("GH_TOKEN");
     expect(invocation.env).not.toContain("CLOUDFLARE_API_TOKEN");

@@ -37,14 +37,19 @@ type CodexJsonEvent = {
 };
 
 function environment(home: string, codexHome: string): NodeJS.ProcessEnv {
-  const allowed = ["PATH", "TMPDIR", "TEMP", "TMP", "SYSTEMROOT", "WINDIR"];
-  const env: NodeJS.ProcessEnv = {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const name of Object.keys(env)) {
+    if (
+      /(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL)/i.test(name) ||
+      /^(GH|GITHUB|CLOUDFLARE)_/i.test(name)
+    )
+      delete env[name];
+  }
+  Object.assign(env, {
     HOME: home,
     USERPROFILE: home,
     CODEX_HOME: codexHome,
-  };
-  for (const name of allowed)
-    if (process.env[name]) env[name] = process.env[name];
+  });
   return env;
 }
 
@@ -132,6 +137,8 @@ export class CodexExecAdapter implements AgentAdapter {
       "workspace-write",
       "-c",
       "sandbox_workspace_write.network_access=false",
+      "-c",
+      'shell_environment_policy.inherit="none"',
       "--json",
       "-C",
       input.workspace,
