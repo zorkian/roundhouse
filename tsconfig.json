@@ -1,6 +1,7 @@
 {
   "files": [],
   "references": [
+    { "path": "./apps/control-plane-spike" },
     { "path": "./packages/domain" },
     { "path": "./packages/repository-profile" },
     { "path": "./packages/execution" }

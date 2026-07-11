@@ -5,6 +5,7 @@ const ulidPattern = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 const generateUlid = monotonicFactory();
 
 export const idKinds = [
+  "approval",
   "artifact",
   "attempt",
   "correlation",

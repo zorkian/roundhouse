@@ -1,0 +1,33 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "roundhouse-control-plane-spike",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-11",
+  "observability": {
+    "enabled": true,
+  },
+  "secrets": {
+    "required": ["SPIKE_API_TOKEN"],
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "roundhouse-spike",
+      "database_id": "60998989-e203-4d64-b341-bfdf6597a101",
+      "migrations_dir": "migrations",
+    },
+  ],
+  "r2_buckets": [
+    {
+      "binding": "ARTIFACTS",
+      "bucket_name": "roundhouse-spike-artifacts",
+    },
+  ],
+  "workflows": [
+    {
+      "binding": "APPROVAL_WORKFLOW",
+      "name": "roundhouse-approval-spike",
+      "class_name": "ApprovalWorkflow",
+    },
+  ],
+}
