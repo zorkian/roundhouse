@@ -84,6 +84,15 @@ importers:
         specifier: 'catalog:'
         version: 4.4.3
 
+  packages/self-development:
+    dependencies:
+      '@roundhouse/domain':
+        specifier: workspace:*
+        version: link:../domain
+      zod:
+        specifier: 'catalog:'
+        version: 4.4.3
+
 packages:
 
   '@cloudflare/containers@0.3.7':
