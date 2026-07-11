@@ -65,4 +65,20 @@ describe("self-development CLI", () => {
       ]),
     ).toThrow("Duplicate option: --run-id");
   });
+
+  it("requires a commit message for approved publication", () => {
+    expect(
+      parseSelfDevelopmentInvocation([
+        "commit",
+        "--run-id",
+        "run_test",
+        "--message",
+        "Apply approved patch",
+      ]),
+    ).toMatchObject({
+      command: "commit",
+      runId: "run_test",
+      message: "Apply approved patch",
+    });
+  });
 });

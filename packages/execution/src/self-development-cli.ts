@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 
 import { loadRepositoryProfile } from "@roundhouse/repository-profile";
 
+import { publishApprovedPatch } from "./approved-publication.js";
 import { LocalExecutionBackend } from "./local-execution-backend.js";
 import { runSupervisedValidation } from "./supervised-validation.js";
 import {
@@ -40,8 +41,16 @@ type VerifyInvocation = {
   artifactRoot: string;
 };
 
+type CommitInvocation = {
+  command: "commit";
+  runId: string;
+  message: string;
+  repositoryPath: string;
+  artifactRoot: string;
+};
+
 export type SelfDevelopmentInvocation =
-  PrepareInvocation | ApproveInvocation | VerifyInvocation;
+  PrepareInvocation | ApproveInvocation | VerifyInvocation | CommitInvocation;
 
 const commitPattern = /^[a-f0-9]{40}$/;
 const hashPattern = /^[a-f0-9]{64}$/;
@@ -97,8 +106,8 @@ export function parseSelfDevelopmentInvocation(
   argv: string[],
 ): SelfDevelopmentInvocation {
   const [command, ...rawOptions] = argv;
-  if (!command || !["prepare", "approve", "verify"].includes(command))
-    throw new Error("Command must be prepare, approve, or verify");
+  if (!command || !["prepare", "approve", "verify", "commit"].includes(command))
+    throw new Error("Command must be prepare, approve, verify, or commit");
   const values = options(rawOptions);
   const shared = common(values);
 
@@ -134,6 +143,17 @@ export function parseSelfDevelopmentInvocation(
       actorId: take(values, "--actor"),
       baseCommit,
       patchSha256,
+    };
+    finish(values);
+    return invocation;
+  }
+
+  if (command === "commit") {
+    const invocation: CommitInvocation = {
+      command,
+      ...shared,
+      message: take(values, "--message"),
+      repositoryPath: take(values, "--repository", process.cwd()),
     };
     finish(values);
     return invocation;
@@ -190,6 +210,18 @@ export async function runSelfDevelopmentCli(argv: string[]): Promise<unknown> {
     };
     await recordValidationApproval(invocation.artifactRoot, approval);
     return { state: "approved", approval };
+  }
+
+  if (invocation.command === "commit") {
+    return {
+      state: "committed",
+      publication: await publishApprovedPatch({
+        repositoryPath: invocation.repositoryPath,
+        artifactRoot: invocation.artifactRoot,
+        runId: invocation.runId,
+        message: invocation.message,
+      }),
+    };
   }
 
   const verified = await verifyPublicationApproval(

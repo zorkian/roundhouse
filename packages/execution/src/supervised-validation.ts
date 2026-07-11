@@ -3,10 +3,14 @@
 
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type { RepositoryProfile } from "@roundhouse/repository-profile";
 
 import { inventoryChangedFiles } from "./changed-files.js";
+import type { ChangedFile } from "./changed-files.js";
 import type {
   CommandExecution,
   ExecutionBackend,
@@ -71,6 +75,7 @@ function git(
   repositoryPath: string,
   args: string[],
   acceptedExitCodes: number[] = [0],
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
@@ -80,6 +85,7 @@ function git(
         cwd: repositoryPath,
         encoding: "utf8",
         maxBuffer: maxPatchBytes,
+        env,
       },
       (error, stdout) => {
         const exitCode =
@@ -96,31 +102,40 @@ function git(
   });
 }
 
-async function capturePatch(
+export async function captureRepositoryPatch(
   repositoryPath: string,
   baseCommit: string,
-  untrackedPaths: string[],
+  changedFiles: ChangedFile[],
 ): Promise<string> {
-  const tracked = await git(repositoryPath, [
-    "diff",
-    "--binary",
-    "--no-ext-diff",
-    baseCommit,
-    "--",
-  ]);
-  const untracked = await Promise.all(
-    untrackedPaths.map((path) =>
-      git(
-        repositoryPath,
-        ["diff", "--no-index", "--binary", "--", "/dev/null", path],
-        [0, 1],
+  if (changedFiles.length === 0) return "";
+  const temporaryDirectory = await mkdtemp(
+    join(tmpdir(), "roundhouse-git-index-"),
+  );
+  const env = {
+    ...process.env,
+    GIT_INDEX_FILE: join(temporaryDirectory, "index"),
+  };
+  const paths = [
+    ...new Set(
+      changedFiles.flatMap((change) =>
+        change.previousPath
+          ? [change.previousPath, change.path]
+          : [change.path],
       ),
     ),
-  );
-  const patch = [tracked, ...untracked].filter(Boolean).join("\n");
-  if (Buffer.byteLength(patch) > maxPatchBytes)
-    throw new Error("Captured patch exceeds 20 MiB");
-  return patch;
+  ];
+  try {
+    await git(repositoryPath, ["read-tree", baseCommit], [0], env);
+    await git(repositoryPath, ["add", "--all", "--", ...paths], [0], env);
+    return await git(
+      repositoryPath,
+      ["diff", "--cached", "--binary", "--no-ext-diff", baseCommit, "--"],
+      [0],
+      env,
+    );
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  }
 }
 
 function commandEvidence(
@@ -172,12 +187,10 @@ export async function runSupervisedValidation(
     }
   }
 
-  const patch = await capturePatch(
+  const patch = await captureRepositoryPatch(
     input.repositoryPath,
     input.baseCommit,
-    changedFiles
-      .filter((change) => change.status === "untracked")
-      .map((change) => change.path),
+    changedFiles,
   );
   const succeeded = failedCommand === undefined;
   return {

@@ -14,6 +14,7 @@
     "format:check": "prettier --check .",
     "license:check": "node scripts/check-license-headers.mjs",
     "self:approve": "pnpm build && node packages/execution/dist/self-development-cli.js approve",
+    "self:commit": "pnpm build && node packages/execution/dist/self-development-cli.js commit",
     "self:prepare": "pnpm build && node packages/execution/dist/self-development-cli.js prepare",
     "self:verify": "pnpm build && node packages/execution/dist/self-development-cli.js verify",
     "test": "vitest run",
