@@ -13,6 +13,9 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "license:check": "node scripts/check-license-headers.mjs",
+    "self:approve": "pnpm build && node packages/execution/dist/self-development-cli.js approve",
+    "self:prepare": "pnpm build && node packages/execution/dist/self-development-cli.js prepare",
+    "self:verify": "pnpm build && node packages/execution/dist/self-development-cli.js verify",
     "test": "vitest run",
     "typecheck": "tsc -b --pretty false"
   },
