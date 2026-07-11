@@ -11,6 +11,13 @@ const commandSchema = z.object({
   args: z.array(z.string()).default([]),
 });
 
+const quickValidationSchema = z.object({
+  format: commandSchema.extend({
+    include: z.array(z.string().min(1)).min(1),
+  }),
+  fullWhenChanged: z.array(z.string().min(1)).default([]),
+});
+
 export const repositoryProfileSchema = z.object({
   version: z.literal(1),
   runtime: z.object({
@@ -22,6 +29,7 @@ export const repositoryProfileSchema = z.object({
     format: commandSchema,
     compile: commandSchema,
     targeted: commandSchema,
+    quick: quickValidationSchema.optional(),
     timeoutMinutes: z.number().int().positive().max(120),
   }),
   network: z.object({

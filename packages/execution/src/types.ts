@@ -3,6 +3,16 @@
 
 import type { ProfileCommand } from "@roundhouse/repository-profile";
 
+import type { ChangedFile } from "./changed-files.js";
+
+export type ValidationLevel = "quick" | "full" | "release";
+
+export type ValidationRequest = {
+  baseCommit: string;
+  changedFiles: ChangedFile[];
+  level: ValidationLevel;
+};
+
 export type ExecutionLimits = {
   timeoutMs: number;
   maxOutputBytes: number;
