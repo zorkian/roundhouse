@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+
 import { describe, expect, it } from "vitest";
 
 import { parseRepositoryProfile } from "./index.js";
@@ -37,4 +39,13 @@ describe("repository profiles", () => {
       ),
     ).toThrow();
   });
+
+  it.each(["profiles/roundhouse.v1.yaml", "profiles/dreamwidth.v1.yaml"])(
+    "validates the checked-in profile %s",
+    async (path) => {
+      const profile = parseRepositoryProfile(await readFile(path, "utf8"));
+      expect(profile.version).toBe(1);
+      expect(profile.network.default).toBe("deny");
+    },
+  );
 });
