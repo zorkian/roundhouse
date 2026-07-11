@@ -20,6 +20,15 @@ const task: SelfDevelopmentTask = {
   baseCommit: "a".repeat(40),
   validationLevel: "quick",
   allowedPaths: ["packages/**"],
+  publication: {
+    remote: "origin",
+    remoteUrl: "https://github.com/example/roundhouse.git",
+    branch: "roundhouse/test",
+    expectedRemoteHead: null,
+    commitMessage: "Apply test change",
+    authorName: "Roundhouse",
+    authorEmail: "roundhouse@example.invalid",
+  },
 };
 
 async function root(): Promise<string> {

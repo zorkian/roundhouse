@@ -12,6 +12,25 @@ export const selfDevelopmentTaskSchema = z.object({
   baseCommit: z.string().regex(/^[a-f0-9]{40}$/),
   validationLevel: z.enum(["quick", "full"]).default("quick"),
   allowedPaths: z.array(z.string().min(1)).min(1),
+  publication: z.object({
+    remote: z
+      .string()
+      .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/)
+      .default("origin"),
+    remoteUrl: z.string().min(1),
+    branch: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,199}$/),
+    expectedRemoteHead: z
+      .string()
+      .regex(/^[a-f0-9]{40}$/)
+      .nullable(),
+    commitMessage: z
+      .string()
+      .min(1)
+      .max(200)
+      .refine((value) => !value.includes("\n")),
+    authorName: z.string().min(1).max(200),
+    authorEmail: z.string().email(),
+  }),
 });
 
 export type SelfDevelopmentTask = z.infer<typeof selfDevelopmentTaskSchema>;

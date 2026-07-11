@@ -92,6 +92,9 @@ importers:
       '@roundhouse/execution':
         specifier: workspace:*
         version: link:../execution
+      '@roundhouse/repository-profile':
+        specifier: workspace:*
+        version: link:../repository-profile
       zod:
         specifier: 'catalog:'
         version: 4.4.3

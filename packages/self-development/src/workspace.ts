@@ -22,6 +22,9 @@ export async function createIsolatedWorkspace(input: {
   baseCommit: string;
   workspaceRoot: string;
   runId: string;
+  remoteUrl?: string;
+  authorName?: string;
+  authorEmail?: string;
 }): Promise<string> {
   if (!/^[a-f0-9]{40}$/.test(input.baseCommit))
     throw new Error("Base must be a full lowercase commit SHA");
@@ -39,6 +42,12 @@ export async function createIsolatedWorkspace(input: {
   ]);
   await git(["cat-file", "-e", `${input.baseCommit}^{commit}`], workspace);
   await git(["checkout", "--detach", input.baseCommit], workspace);
+  if (input.remoteUrl)
+    await git(["remote", "set-url", "origin", input.remoteUrl], workspace);
+  if (input.authorName)
+    await git(["config", "user.name", input.authorName], workspace);
+  if (input.authorEmail)
+    await git(["config", "user.email", input.authorEmail], workspace);
   if ((await git(["rev-parse", "HEAD"], workspace)) !== input.baseCommit)
     throw new Error("Workspace HEAD does not match requested base commit");
   return workspace;

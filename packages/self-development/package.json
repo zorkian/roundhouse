@@ -8,6 +8,7 @@
   "dependencies": {
     "@roundhouse/domain": "workspace:*",
     "@roundhouse/execution": "workspace:*",
+    "@roundhouse/repository-profile": "workspace:*",
     "zod": "catalog:"
   }
 }

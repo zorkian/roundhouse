@@ -148,7 +148,7 @@ export class CodexExecAdapter implements AgentAdapter {
       signal: NodeJS.Signals | null;
     }>((resolve, reject) => {
       child.once("error", reject);
-      child.once("exit", (code, signal) => resolve({ code, signal }));
+      child.once("close", (code, signal) => resolve({ code, signal }));
     });
     this.children.set(input.attemptId, child);
     let stderr = "";
