@@ -1,6 +1,6 @@
 # Dreamwidth container spike resource review
 
-Status: **proposed; not approved or deployed**
+Status: **approved, deployed, and verified on 2026-07-11**
 
 This review is the deployment gate required by
 [ADR 0004](../decisions/0004-cloudflare-resource-governance.md). Preparing and
@@ -42,6 +42,8 @@ start slower than a typical Cloudflare Container.
 - Every instance endpoint requires the new bearer secret.
 - Container internet access is disabled by default; only `github.com` is
   allowlisted so the container can fetch an exact public Dreamwidth commit.
+- HTTPS interception is enabled for hostname enforcement, and Git trusts the
+  Cloudflare Containers CA mounted at runtime.
 - Inputs are restricted to a short instance identifier and a full lowercase
   40-character commit SHA.
 - The container exposes only health and a fixed verification action. There is
@@ -100,3 +102,44 @@ Approval of this document authorizes only the resources and one bounded test
 described above. Any domain, route, DNS, extra egress, additional instance,
 larger instance type, persistent storage, or integration with the retained
 approval spike requires another explicit review.
+
+## Deployment outcome
+
+The approved spike was deployed without creating a custom domain, route, DNS
+record, database, bucket, queue, or workflow.
+
+- Worker URL:
+  `https://roundhouse-dev-dreamwidth-container-spike.default-07f.workers.dev`
+- Container application ID: `a0359545-a26c-4f4c-985e-88ff8e2abb90`
+- Durable Object namespace ID: `37f90e7816aa4ce18cbf2d338c6e3741`
+- Verified Worker version: `675aa371-d654-4a70-9e81-a653a9bfb4e9`
+- Verified image digest:
+  `sha256:b59f03297b7fe97788bdb6803737eeb45a9260d464ee0c75b5b216132da5b784`
+- Public health returned HTTP 200, and an unauthenticated instance request
+  returned HTTP 401.
+- The fixed verification succeeded for Dreamwidth commit
+  `371d8ac2917effea518e0c04bcc786cfcac2c422`.
+- A subsequent authenticated health request returned HTTP 200 in 262 ms,
+  demonstrating warm-instance reuse.
+- Five superseded managed-image tags created while correcting the spike were
+  deleted; only active tag `675aa371` was retained.
+
+Successful verification stage timings on `standard-1`:
+
+| Stage                 |  Duration |
+| --------------------- | --------: |
+| Git initialization    |     26 ms |
+| Exact commit fetch    |   2.888 s |
+| Checkout              |    759 ms |
+| Database bootstrap    |  25.323 s |
+| Full formatting check | 249.593 s |
+| Compile test          |  70.539 s |
+| Curated test suite    | 230.266 s |
+| Total fixed action    | 579.394 s |
+
+The deployment exposed two important runtime requirements. Cloudflare hostname
+filtering needs HTTPS interception, and Git must trust the Cloudflare
+Containers CA mounted at runtime. The half-vCPU instance also performs much
+better when the formatting check uses one job instead of the ten-job local
+profile. Generous per-stage ceilings are retained because checkout and disk
+timings varied substantially between attempts.

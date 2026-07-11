@@ -22,6 +22,7 @@ export class DreamwidthContainer extends Container<Env> {
   override requiredPorts = [8080];
   override sleepAfter = "5m";
   override enableInternet = false;
+  override interceptHttps = true;
   override allowedHosts = ["github.com"];
 }
 

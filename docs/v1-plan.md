@@ -863,8 +863,17 @@ V1 is complete when, for the target monorepo:
 
 ## 23. Immediate next actions
 
-1. Inventory the target monorepo and write its execution profile.
-2. Select three historical issues for the first replay set: clear bug, unclear bug, and risky change.
-3. Register a development GitHub App against a sandbox repository or fork.
-4. Implement the Phase 1 spikes as disposable vertical experiments.
-5. Record spike decisions before scaffolding the production application.
+1. Build a supervised self-development run for Roundhouse: exact base commit,
+   isolated checkout, bounded agent change, diff-aware local validation, patch
+   evidence, human approval, and authorized publication.
+2. Extend the execution contract with the base commit, changed-file inventory,
+   validation level, selected commands, and optional cache metadata described
+   in ADR 0005.
+3. Spike the Codex implementation adapter against the Roundhouse repository and
+   normalize its events without granting ambient GitHub or Cloudflare
+   credentials.
+4. Register a development GitHub App against the Roundhouse sandbox repository
+   and connect the minimum webhook/status path needed for the walking skeleton.
+5. Resume Dreamwidth-specific work only when it blocks the general execution
+   path or after Roundhouse dogfooding can drive the next legacy-repository
+   task.

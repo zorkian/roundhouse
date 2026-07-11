@@ -93,7 +93,7 @@ async function verify(commit) {
       "git-checkout",
       "git",
       ["-C", workspace, "checkout", "--detach", "FETCH_HEAD"],
-      30_000,
+      180_000,
       "/",
     ],
     [
@@ -105,7 +105,7 @@ async function verify(commit) {
           '{ ln -ns "$LJHOME/.devcontainer/config/etc/dw-etc" "$LJHOME/ext/local/etc" 2>/dev/null || true; } && ' +
           'ln -snf /opt/dreamwidth-static "$LJHOME/build/static" && service mysql start && t/bin/initialize-db',
       ],
-      120_000,
+      300_000,
     ],
     [
       "format",
@@ -115,11 +115,11 @@ async function verify(commit) {
         "--check-only",
         "--all",
         "--jobs",
-        "10",
+        "1",
       ],
-      120_000,
+      600_000,
     ],
-    ["compile", "prove", ["-v", "t/00-compile.t"], 180_000],
+    ["compile", "prove", ["-v", "t/00-compile.t"], 600_000],
     [
       "targeted",
       "/bin/bash",
@@ -130,7 +130,7 @@ async function verify(commit) {
           "t/comment-create.t t/entrycomment-create.t t/talkpost-*.t t/privs.t t/caps.t " +
           "t/media-security.t t/captcha-request.t t/settings.t",
       ],
-      300_000,
+      900_000,
     ],
   ];
 

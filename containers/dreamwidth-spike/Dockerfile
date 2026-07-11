@@ -6,6 +6,7 @@ FROM ghcr.io/dreamwidth/devcontainer@sha256:19365e4d012402b280b20a18187f882feac6
 COPY runner.mjs /opt/roundhouse/runner.mjs
 
 WORKDIR /opt/roundhouse
+ENV GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt
 EXPOSE 8080
 
-CMD ["node", "/opt/roundhouse/runner.mjs"]
+CMD ["/bin/bash", "-lc", "if [[ -f /etc/cloudflare/certs/cloudflare-containers-ca.crt ]]; then cat /etc/cloudflare/certs/cloudflare-containers-ca.crt >> /etc/ssl/certs/ca-certificates.crt; fi; exec node /opt/roundhouse/runner.mjs"]
