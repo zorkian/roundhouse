@@ -89,6 +89,9 @@ importers:
       '@roundhouse/domain':
         specifier: workspace:*
         version: link:../domain
+      '@roundhouse/execution':
+        specifier: workspace:*
+        version: link:../execution
       zod:
         specifier: 'catalog:'
         version: 4.4.3
