@@ -1,5 +1,5 @@
 {
-  "name": "@roundhouse/control-plane-spike",
+  "name": "@roundhouse/dreamwidth-container-spike",
   "version": "0.0.0",
   "license": "Apache-2.0",
   "private": true,
@@ -7,12 +7,10 @@
   "scripts": {
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
-    "migrate:local": "wrangler d1 migrations apply roundhouse-spike --local",
-    "migrate:remote": "wrangler d1 migrations apply roundhouse-spike --remote",
     "types": "wrangler types worker-configuration.d.ts"
   },
   "dependencies": {
-    "@roundhouse/domain": "workspace:*",
+    "@cloudflare/containers": "catalog:",
     "zod": "catalog:"
   }
 }

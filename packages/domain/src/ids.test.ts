@@ -1,3 +1,6 @@
+// Copyright 2026 Mark Smith
+// SPDX-License-Identifier: Apache-2.0
+
 import { describe, expect, it } from "vitest";
 
 import { idSchema, newId } from "./ids.js";

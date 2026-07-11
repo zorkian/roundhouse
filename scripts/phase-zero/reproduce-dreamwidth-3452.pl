@@ -1,4 +1,7 @@
 #!/usr/bin/env perl
+# Copyright 2026 Mark Smith
+# SPDX-License-Identifier: Apache-2.0
+
 
 use strict;
 use warnings;

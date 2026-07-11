@@ -1,3 +1,6 @@
+// Copyright 2026 Mark Smith
+// SPDX-License-Identifier: Apache-2.0
+
 import type { ProfileCommand } from "@roundhouse/repository-profile";
 
 export type ExecutionLimits = {

@@ -1,3 +1,6 @@
+// Copyright 2026 Mark Smith
+// SPDX-License-Identifier: Apache-2.0
+
 export async function sha256(
   value: Uint8Array,
 ): Promise<{ bytes: ArrayBuffer; hex: string }> {

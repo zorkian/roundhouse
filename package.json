@@ -1,6 +1,7 @@
 {
   "name": "roundhouse",
   "version": "0.0.0",
+  "license": "Apache-2.0",
   "private": true,
   "packageManager": "pnpm@10.13.1",
   "engines": {
@@ -8,9 +9,10 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "check": "pnpm format:check && pnpm typecheck && pnpm test",
+    "check": "pnpm format:check && pnpm license:check && pnpm typecheck && pnpm test",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "license:check": "node scripts/check-license-headers.mjs",
     "test": "vitest run",
     "typecheck": "tsc -b --pretty false"
   },

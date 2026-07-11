@@ -1,3 +1,6 @@
+# Copyright 2026 Mark Smith
+# SPDX-License-Identifier: Apache-2.0
+
 FROM node:24.4.1-bookworm-slim
 
 ENV COREPACK_HOME=/opt/corepack
