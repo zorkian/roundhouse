@@ -64,7 +64,9 @@ export class LocalExecutionBackend implements ExecutionBackend {
     let exitCode: number | null = null;
     let signal: NodeJS.Signals | null = null;
     try {
-      [exitCode, signal] = (await once(child, "exit")) as [
+      // `close` fires after the stdio streams have closed, so the recorded
+      // evidence cannot omit output that was still buffered at process exit.
+      [exitCode, signal] = (await once(child, "close")) as [
         number | null,
         NodeJS.Signals | null,
       ];

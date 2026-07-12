@@ -1,5 +1,5 @@
 {
-  "name": "@roundhouse/repository-profile",
+  "name": "@roundhouse/self-development",
   "version": "0.0.0",
   "license": "Apache-2.0",
   "private": true,
@@ -9,7 +9,9 @@
     "default": "./dist/index.js"
   },
   "dependencies": {
-    "yaml": "catalog:",
+    "@roundhouse/domain": "workspace:*",
+    "@roundhouse/execution": "workspace:*",
+    "@roundhouse/repository-profile": "workspace:*",
     "zod": "catalog:"
   }
 }

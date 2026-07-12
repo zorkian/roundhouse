@@ -5,6 +5,7 @@
     { "path": "./apps/dreamwidth-container-spike" },
     { "path": "./packages/domain" },
     { "path": "./packages/repository-profile" },
-    { "path": "./packages/execution" }
+    { "path": "./packages/execution" },
+    { "path": "./packages/self-development" }
   ]
 }

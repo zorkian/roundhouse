@@ -182,7 +182,7 @@ export async function persistValidationArtifacts(
         { mode: 0o600 },
       ),
     ]);
-    await mkdir(join(runsDirectory, runId), { mode: 0o700 });
+    await mkdir(join(runsDirectory, runId), { recursive: true, mode: 0o700 });
     await rename(temporaryDirectory, validationDirectory(root, runId));
   } catch (error) {
     await rm(temporaryDirectory, { recursive: true, force: true });

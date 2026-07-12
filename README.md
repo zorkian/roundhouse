@@ -23,6 +23,10 @@ The project currently consists primarily of its proposed V1 product and technica
 
 See [docs/v1-plan.md](docs/v1-plan.md) for the proposed product scope, architecture, workflows, safety model, and implementation phases.
 
+The [self-development walking skeleton](docs/self-development-walking-skeleton.md)
+documents the durable local task-to-approved-publication path and its current
+V1 boundaries.
+
 ## License
 
 Roundhouse is licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution information.
