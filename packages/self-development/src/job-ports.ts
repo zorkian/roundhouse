@@ -39,7 +39,7 @@ export interface JobStore {
     now: Date,
     leaseMs: number,
   ): Promise<void>;
-  release(runId: string, token: string): Promise<void>;
+  release(runId: string, token: string, now: Date): Promise<void>;
   startAttempt(
     runId: string,
     token: string,

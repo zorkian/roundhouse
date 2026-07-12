@@ -65,7 +65,7 @@ export class ResumableCoordinator {
     if (!claim) return null;
     const stage = stageFor(claim.run);
     if (!stage) {
-      await this.store.release(claim.run.runId, claim.token);
+      await this.store.release(claim.run.runId, claim.token, this.clock.now());
       return claim.run;
     }
     const started = await this.store.startAttempt(
@@ -88,7 +88,7 @@ export class ResumableCoordinator {
         result.updates ?? {},
         this.clock.now(),
       );
-      await this.store.release(started.runId, claim.token);
+      await this.store.release(started.runId, claim.token, this.clock.now());
       return completed;
     } catch (error) {
       const failure =
@@ -114,7 +114,7 @@ export class ResumableCoordinator {
         terminal,
         this.clock.now(),
       );
-      await this.store.release(started.runId, claim.token);
+      await this.store.release(started.runId, claim.token, this.clock.now());
       return failed;
     }
   }

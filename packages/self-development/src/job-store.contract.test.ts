@@ -1,7 +1,7 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -80,5 +80,42 @@ describe("FileRunStore JobStore contract", () => {
       retryable: true,
       classification: "lease_expired",
     });
+  });
+
+  it("reclaims a stale local mutex left by a crashed process", async () => {
+    const path = await root();
+    const store = new FileRunStore(path);
+    const now = new Date("2026-07-12T00:01:00Z");
+    await store.submit("run_contract", task, new Date("2026-07-12T00:00:00Z"));
+    const mutex = join(path, "runs", "run_contract", ".mutex");
+    await mkdir(mutex);
+    const stale = new Date(Date.now() - 60_000);
+    await utimes(mutex, stale, stale);
+
+    const claim = await store.claimNext("worker-recovery", now, 1_000);
+    expect(claim?.run.lease?.workerId).toBe("worker-recovery");
+  });
+
+  it("validates renewals and timestamps claim, renew, and release mutations", async () => {
+    const path = await root();
+    const store = new FileRunStore(path);
+    const submittedAt = new Date("2026-07-12T00:00:00Z");
+    const claimedAt = new Date("2026-07-12T00:00:01Z");
+    const renewedAt = new Date("2026-07-12T00:00:02Z");
+    const releasedAt = new Date("2026-07-12T00:00:03Z");
+    await store.submit("run_contract", task, submittedAt);
+    const claim = await store.claimNext("worker-a", claimedAt, 10_000);
+    expect(claim?.run.updatedAt).toBe(claimedAt.toISOString());
+    await expect(
+      store.renew("run_contract", claim!.token, renewedAt, 0),
+    ).rejects.toThrow("Lease duration must be a positive integer");
+    await store.renew("run_contract", claim!.token, renewedAt, 10_000);
+    expect((await store.read("run_contract")).updatedAt).toBe(
+      renewedAt.toISOString(),
+    );
+    await store.release("run_contract", claim!.token, releasedAt);
+    const released = await store.read("run_contract");
+    expect(released.updatedAt).toBe(releasedAt.toISOString());
+    expect(released.lease).toBeUndefined();
   });
 });

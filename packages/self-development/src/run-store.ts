@@ -8,6 +8,7 @@ import {
   readdir,
   rename,
   rm,
+  stat,
   writeFile,
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -61,6 +62,7 @@ const recoveryState: Record<JobStage, SelfDevelopmentRunState> = {
   push: "committed",
   complete: "pushed",
 };
+const staleMutexMs = 30_000;
 
 export class FileRunStore implements JobStore {
   constructor(private readonly root: string) {}
@@ -91,9 +93,21 @@ export class FileRunStore implements JobStore {
     try {
       await mkdir(lock, { mode: 0o700 });
     } catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "EEXIST")
+      if (
+        !(error instanceof Error) ||
+        !("code" in error) ||
+        error.code !== "EEXIST"
+      )
+        throw error;
+      const lockStat = await stat(lock);
+      if (Date.now() - lockStat.mtimeMs <= staleMutexMs)
         throw new Error(`Run is concurrently modified: ${runId}`);
-      throw error;
+      await rm(lock, { recursive: true, force: true });
+      try {
+        await mkdir(lock, { mode: 0o700 });
+      } catch {
+        throw new Error(`Run is concurrently modified: ${runId}`);
+      }
     }
     try {
       return await operation();
@@ -170,28 +184,30 @@ export class FileRunStore implements JobStore {
     updates: RunUpdates = {},
     now = new Date().toISOString(),
   ): Promise<SelfDevelopmentRun> {
-    const current = await this.read(runId);
-    if (!(transitions[current.state] ?? []).includes(state))
-      throw new Error(`Invalid run transition: ${current.state} -> ${state}`);
-    const run = selfDevelopmentRunSchema.parse({
-      ...current,
-      ...updates,
-      revision: current.revision + 1,
-      state,
-      updatedAt: now,
-      events: [
-        ...current.events,
-        {
-          sequence: current.events.length + 1,
-          type,
-          state,
-          occurredAt: now,
-          detail,
-        },
-      ],
+    return this.locked(runId, async () => {
+      const current = await this.read(runId);
+      if (!(transitions[current.state] ?? []).includes(state))
+        throw new Error(`Invalid run transition: ${current.state} -> ${state}`);
+      const run = selfDevelopmentRunSchema.parse({
+        ...current,
+        ...updates,
+        revision: current.revision + 1,
+        state,
+        updatedAt: now,
+        events: [
+          ...current.events,
+          {
+            sequence: current.events.length + 1,
+            type,
+            state,
+            occurredAt: now,
+            detail,
+          },
+        ],
+      });
+      await this.write(run);
+      return run;
     });
-    await this.write(run);
-    return run;
   }
 
   async claimNext(
@@ -235,6 +251,7 @@ export class FileRunStore implements JobStore {
           const updated = await this.replace({
             ...run,
             attempts,
+            updatedAt: now.toISOString(),
             lease: {
               token,
               workerId,
@@ -274,11 +291,14 @@ export class FileRunStore implements JobStore {
     now: Date,
     leaseMs: number,
   ): Promise<void> {
+    if (!Number.isSafeInteger(leaseMs) || leaseMs <= 0)
+      throw new Error("Lease duration must be a positive integer");
     await this.locked(runId, async () => {
       const run = await this.read(runId);
       this.assertLease(run, token, now);
       await this.replace({
         ...run,
+        updatedAt: now.toISOString(),
         lease: {
           ...run.lease!,
           expiresAt: new Date(now.getTime() + leaseMs).toISOString(),
@@ -287,12 +307,15 @@ export class FileRunStore implements JobStore {
     });
   }
 
-  async release(runId: string, token: string): Promise<void> {
+  async release(runId: string, token: string, now: Date): Promise<void> {
     await this.locked(runId, async () => {
       const run = await this.read(runId);
       this.assertLease(run, token);
       const { lease: _lease, ...withoutLease } = run;
-      await this.replace(withoutLease as SelfDevelopmentRun);
+      await this.replace({
+        ...(withoutLease as SelfDevelopmentRun),
+        updatedAt: now.toISOString(),
+      });
     });
   }
 
