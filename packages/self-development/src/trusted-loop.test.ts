@@ -1,0 +1,100 @@
+// Copyright 2026 Mark Smith
+// SPDX-License-Identifier: Apache-2.0
+
+import { describe, expect, it } from "vitest";
+
+import {
+  approvalMatches,
+  exactApprovalSchema,
+  publicationRequestSchema,
+  trustedImplementationRequestSchema,
+} from "./trusted-loop.js";
+
+const binding = {
+  evidenceId: "evidence_run_trusted_contract-implement-1",
+  objectKey: "runs/run_trusted_contract/attempts/implement-1/result.json",
+  sha256: "b".repeat(64),
+  size: 123,
+};
+
+const approval = exactApprovalSchema.parse({
+  schemaVersion: 1,
+  runId: "run_trusted_contract",
+  baseCommit: "a".repeat(40),
+  patchSha256: "c".repeat(64),
+  evidence: [binding],
+  approver: "mark-smith-delegated-trusted-loop-dogfood",
+  approvedAt: "2026-07-12T00:00:00.000Z",
+});
+
+describe("trusted self-development contracts", () => {
+  it("rejects traversal, absolute paths, and oversized execution envelopes", () => {
+    const request = {
+      schemaVersion: 1,
+      runId: "run_trusted_contract",
+      attemptId: "run_trusted_contract-implement-1",
+      attemptNumber: 1,
+      expectedRevision: 3,
+      repositoryUrl: "https://github.com/zorkian/roundhouse.git",
+      baseCommit: "a".repeat(40),
+      subject: "Document the trusted loop",
+      instructions: "Change only the predeclared dogfood document.",
+      allowedPaths: ["docs/dogfood/trusted-self-development-loop.md"],
+      validationLevel: "full",
+      agentTimeoutMs: 1_200_000,
+      validationTimeoutMs: 900_000,
+      maxPatchBytes: 512 * 1024,
+      maxChangedFiles: 50,
+      maxOutputBytes: 5 * 1024 * 1024,
+      scenario: "success",
+    };
+    expect(trustedImplementationRequestSchema.parse(request)).toMatchObject({
+      allowedPaths: ["docs/dogfood/trusted-self-development-loop.md"],
+    });
+    for (const path of ["../secret", "/etc/passwd", "docs\\file.md"])
+      expect(() =>
+        trustedImplementationRequestSchema.parse({
+          ...request,
+          allowedPaths: [path],
+        }),
+      ).toThrow();
+  });
+
+  it("binds approval to the exact run, base, patch, and ordered evidence", () => {
+    const expected = {
+      runId: approval.runId,
+      baseCommit: approval.baseCommit,
+      patchSha256: approval.patchSha256,
+      evidence: approval.evidence,
+    };
+    expect(approvalMatches(approval, expected)).toBe(true);
+    expect(
+      approvalMatches({ ...approval, patchSha256: "d".repeat(64) }, expected),
+    ).toBe(false);
+    expect(
+      approvalMatches(
+        { ...approval, evidence: [{ ...binding, size: 124 }] },
+        expected,
+      ),
+    ).toBe(false);
+  });
+
+  it("allows publication only to a bounded dogfood branch", () => {
+    const request = {
+      schemaVersion: 1,
+      runId: approval.runId,
+      expectedRevision: 5,
+      approval,
+      repositoryUrl: "https://github.com/zorkian/roundhouse.git",
+      baseCommit: approval.baseCommit,
+      branch: "codex/dogfood-trusted-loop-01",
+      commitMessage: "Record trusted self-development dogfood",
+    };
+    expect(publicationRequestSchema.parse(request).branch).toBe(
+      "codex/dogfood-trusted-loop-01",
+    );
+    expect(() =>
+      publicationRequestSchema.parse({ ...request, branch: "main" }),
+    ).toThrow();
+  });
+});
