@@ -129,6 +129,14 @@ async function remoteHead(
   return head;
 }
 
+async function restoreBase(
+  repositoryPath: string,
+  baseCommit: string,
+): Promise<void> {
+  await git(repositoryPath, ["reset", "--hard", baseCommit]);
+  await git(repositoryPath, ["clean", "-fd"]);
+}
+
 export async function publishTrustedImplementation(
   input: TrustedPublicationInput,
   dependencies: TrustedPublicationDependencies = {},
@@ -240,12 +248,7 @@ export async function publishTrustedImplementation(
     if (sha256(stagedPatch) !== patchSha256)
       throw new Error("Staged patch does not match exact approval");
   } catch (error) {
-    await git(input.repositoryPath, [
-      "reset",
-      "--hard",
-      result.baseCommit,
-    ]).catch(() => undefined);
-    await git(input.repositoryPath, ["clean", "-fd"]).catch(() => undefined);
+    await restoreBase(input.repositoryPath, result.baseCommit);
     throw error;
   }
   await git(input.repositoryPath, [
@@ -273,16 +276,30 @@ export async function publishTrustedImplementation(
     ],
     true,
   );
-  if (sha256(committedPatch) !== patchSha256)
+  if (sha256(committedPatch) !== patchSha256) {
+    await restoreBase(input.repositoryPath, result.baseCommit);
     throw new Error("Committed patch does not match exact approval");
-  await (dependencies.push ?? pushVerifiedCommit)({
-    repositoryPath: input.repositoryPath,
-    remote,
-    expectedRemoteUrl: publication.repositoryUrl,
-    branch: publication.branch,
-    expectedRemoteHead: null,
-    commit,
-  });
+  }
+  try {
+    await (dependencies.push ?? pushVerifiedCommit)({
+      repositoryPath: input.repositoryPath,
+      remote,
+      expectedRemoteUrl: publication.repositoryUrl,
+      branch: publication.branch,
+      expectedRemoteHead: null,
+      commit,
+    });
+  } catch (error) {
+    const publishedHead = await (dependencies.remoteHead ?? remoteHead)(
+      input.repositoryPath,
+      remote,
+      publication.branch,
+    ).catch(() => null);
+    if (publishedHead !== commit) {
+      await restoreBase(input.repositoryPath, result.baseCommit);
+      throw error;
+    }
+  }
   return {
     runId: result.runId,
     baseCommit: result.baseCommit,

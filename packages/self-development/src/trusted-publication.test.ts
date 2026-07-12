@@ -231,6 +231,43 @@ describe("publishTrustedImplementation", () => {
     ).toContain("# Trusted loop dogfood");
   });
 
+  it("restores the exact base after a verified push failure", async () => {
+    const value = await fixture();
+    await expect(
+      publishTrustedImplementation(
+        {
+          repositoryPath: value.publication,
+          evidence: [
+            { json: value.evidenceJson, binding: value.evidenceBinding },
+            {
+              json: value.validationEvidenceJson,
+              binding: value.validationEvidenceBinding,
+            },
+          ],
+          implementationEvidenceId: value.evidenceBinding.evidenceId,
+          runRevision: value.publicationRequest.expectedRevision,
+          approval: value.approval,
+          publication: value.publicationRequest,
+          authorName: "Roundhouse",
+          authorEmail: "roundhouse@example.test",
+        },
+        {
+          remoteHead: async (_repositoryPath, _remote, branch) =>
+            branch === "main" ? value.result.baseCommit : null,
+          push: async () => {
+            throw new Error("simulated verified push failure");
+          },
+        },
+      ),
+    ).rejects.toThrow("simulated verified push failure");
+    expect((await git(value.publication, ["rev-parse", "HEAD"])).trim()).toBe(
+      value.result.baseCommit,
+    );
+    expect(
+      (await git(value.publication, ["status", "--porcelain"])).trim(),
+    ).toBe("");
+  });
+
   it("rejects tampered evidence before modifying the checkout", async () => {
     const value = await fixture();
     await expect(
