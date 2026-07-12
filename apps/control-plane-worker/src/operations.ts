@@ -102,14 +102,9 @@ export async function idempotentMutation<T>(
       throw new MutationPendingError();
     return { value: JSON.parse(row.response_json) as T, replayed: true };
   }
+  let value: T;
   try {
-    const value = await mutate();
-    await env.DB.prepare(
-      "UPDATE operator_mutations SET status = 'completed', response_json = ?, completed_at = ? WHERE idempotency_key = ? AND status = 'pending'",
-    )
-      .bind(JSON.stringify(value), new Date().toISOString(), input.key)
-      .run();
-    return { value, replayed: false };
+    value = await mutate();
   } catch (error) {
     await env.DB.prepare(
       "DELETE FROM operator_mutations WHERE idempotency_key = ? AND status = 'pending'",
@@ -118,6 +113,12 @@ export async function idempotentMutation<T>(
       .run();
     throw error;
   }
+  await env.DB.prepare(
+    "UPDATE operator_mutations SET status = 'completed', response_json = ?, completed_at = ? WHERE idempotency_key = ? AND status = 'pending'",
+  )
+    .bind(JSON.stringify(value), new Date().toISOString(), input.key)
+    .run();
+  return { value, replayed: false };
 }
 
 export async function recordAlert(

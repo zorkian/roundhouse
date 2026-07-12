@@ -495,8 +495,31 @@ async function route(
   if (request.method === "GET" && url.pathname === "/v1/operations/alerts") {
     const rows = await env.DB.prepare(
       "SELECT alert_key, kind, severity, run_id, detail_json, first_seen_at, last_seen_at, occurrences, resolved_at FROM operational_alerts ORDER BY last_seen_at DESC LIMIT 100",
-    ).all<Record<string, unknown>>();
-    return json({ schemaVersion: 1, alerts: rows.results });
+    ).all<{
+      alert_key: string;
+      kind: string;
+      severity: string;
+      run_id: string | null;
+      detail_json: string;
+      first_seen_at: string;
+      last_seen_at: string;
+      occurrences: number;
+      resolved_at: string | null;
+    }>();
+    return json({
+      schemaVersion: 1,
+      alerts: rows.results.map((row) => ({
+        alertKey: row.alert_key,
+        kind: row.kind,
+        severity: row.severity,
+        runId: row.run_id ?? undefined,
+        detail: JSON.parse(row.detail_json) as unknown,
+        firstSeenAt: row.first_seen_at,
+        lastSeenAt: row.last_seen_at,
+        occurrences: row.occurrences,
+        resolvedAt: row.resolved_at ?? undefined,
+      })),
+    });
   }
   if (request.method === "GET" && url.pathname === "/v1/operations/retention")
     return json(await retentionReport(env));
