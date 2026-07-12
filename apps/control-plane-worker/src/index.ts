@@ -83,8 +83,16 @@ async function submit(
   const jobs = new D1JobStore(env.DB);
   const now = new Date();
   const reservation = await reserveSubmission(env.DB, key, input.task, now);
-  if (reservation.created)
+  try {
+    await jobs.read(reservation.row.run_id);
+  } catch (error) {
+    if (
+      !(error instanceof Error) ||
+      !error.message.startsWith("Run not found:")
+    )
+      throw error;
     await jobs.submit(reservation.row.run_id, input.task, now);
+  }
   if (reservation.row.delivery_state === "pending") {
     const run = await jobs.read(reservation.row.run_id);
     await env.RUN_QUEUE.send({

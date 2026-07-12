@@ -12,7 +12,10 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type { ControlPlaneEnv } from "./environment.js";
 import { createControlPlaneHandler } from "./index.js";
-import { controlPlaneSubmissionMigration } from "./submissions.js";
+import {
+  controlPlaneSubmissionMigration,
+  reserveSubmission,
+} from "./submissions.js";
 
 const instances: Miniflare[] = [];
 const token = "local-test-token";
@@ -168,6 +171,22 @@ describe("local control-plane Worker", () => {
         )
       ).status,
     ).toBe(400);
+    expect(
+      (
+        await handler.fetch!(
+          request("/v1/runs", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "idempotency-key": "oversized-body-01",
+            },
+            body: JSON.stringify("x".repeat(65_537)),
+          }),
+          env,
+          {} as ExecutionContext,
+        )
+      ).status,
+    ).toBe(413);
     const unenrolled = structuredClone(task);
     unenrolled.repositoryPath = "/arbitrary/repository";
     expect(
@@ -231,9 +250,32 @@ describe("local control-plane Worker", () => {
     const text = await inspected.text();
     expect(inspected.status).toBe(200);
     expect(text).not.toContain(task.instructions);
+    expect(text).not.toContain(task.subject);
     expect(text).not.toContain(task.repositoryPath);
     expect(text).not.toContain("lease");
     expect(text).not.toContain("workspacePath");
+  });
+
+  it("repairs interruption between submission reservation and run creation", async () => {
+    const { env, queued } = await runtime();
+    const key = "reservation-recovery-01";
+    const reserved = await reserveSubmission(env.DB, key, task, new Date());
+    expect(reserved.created).toBe(true);
+    await expect(
+      new D1JobStore(env.DB).read(reserved.row.run_id),
+    ).rejects.toThrow("Run not found");
+
+    const handler = createControlPlaneHandler();
+    const response = await handler.fetch!(
+      submission(key),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(response.status).toBe(200);
+    expect((await new D1JobStore(env.DB).read(reserved.row.run_id)).state).toBe(
+      "created",
+    );
+    expect(queued.messages).toHaveLength(1);
   });
 
   it("rejects conflicting idempotency reuse", async () => {
