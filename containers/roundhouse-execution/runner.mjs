@@ -122,7 +122,11 @@ export async function command(executable, args, options = {}) {
 
 async function prepare(value) {
   const request = validate(value);
-  if (prepared?.attemptId === request.attemptId) return prepared;
+  if (prepared?.attemptId === request.attemptId) {
+    if (prepared.baseCommit !== request.baseCommit)
+      throw new Error("checkout_binding_mismatch");
+    return prepared;
+  }
   await rm(workspace, { recursive: true, force: true });
   const init = await command("git", ["init", "--quiet", workspace], {
     cwd: "/home/runner",
@@ -184,15 +188,16 @@ async function deniedHttpProbe() {
 async function deniedTcpProbe() {
   return new Promise((resolve) => {
     const socket = connect({ host: "1.1.1.1", port: 53, timeout: 2_000 });
-    socket.once("connect", () => {
+    let settled = false;
+    const finish = (denied) => {
+      if (settled) return;
+      settled = true;
       socket.destroy();
-      resolve(false);
-    });
-    socket.once("error", () => resolve(true));
-    socket.once("timeout", () => {
-      socket.destroy();
-      resolve(true);
-    });
+      resolve(denied);
+    };
+    socket.once("connect", () => finish(false));
+    socket.once("error", () => finish(true));
+    socket.once("timeout", () => finish(true));
   });
 }
 
