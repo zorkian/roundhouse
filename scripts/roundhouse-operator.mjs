@@ -46,6 +46,10 @@ if (route.method === "GET" && inputPath) {
   console.error(`${command} does not accept an input file`);
   process.exit(2);
 }
+if (route.method === "POST" && command !== "recover" && !inputPath) {
+  console.error(`${command} requires an input JSON file`);
+  process.exit(2);
+}
 const body = inputPath
   ? await readFile(inputPath, "utf8")
   : command === "recover"
@@ -55,7 +59,7 @@ const response = await fetch(new URL(route.path, origin), {
   method: route.method,
   headers: {
     authorization: `Bearer ${token}`,
-    ...(body ? { "content-type": "application/json" } : {}),
+    ...(body !== undefined ? { "content-type": "application/json" } : {}),
     ...(route.method === "POST"
       ? {
           "idempotency-key":

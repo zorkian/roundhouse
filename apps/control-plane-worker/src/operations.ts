@@ -266,7 +266,21 @@ export async function runRecoveryCycle(
     "SELECT run_id, revision, payload FROM self_development_runs WHERE state NOT IN ('completed', 'cancelled', 'failed', 'awaiting_approval', 'awaiting_publication') LIMIT 100",
   ).all<{ run_id: string; revision: number; payload: string }>();
   for (const row of rows.results) {
-    const run = selfDevelopmentRunSchema.parse(JSON.parse(row.payload));
+    let run: SelfDevelopmentRun;
+    try {
+      run = selfDevelopmentRunSchema.parse(JSON.parse(row.payload));
+    } catch {
+      await recordAlert(env, {
+        key: `malformed_run_payload:${row.run_id}`,
+        kind: "malformed_run_payload",
+        severity: "error",
+        runId: row.run_id,
+        detail: { revision: row.revision },
+        now,
+      });
+      alertsRecorded += 1;
+      continue;
+    }
     if (!run.lease || new Date(run.lease.expiresAt) > now) continue;
     await env.RUN_QUEUE.send({
       schemaVersion: 1,

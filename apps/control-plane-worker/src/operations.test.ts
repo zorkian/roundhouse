@@ -153,11 +153,16 @@ describe("cloud operator persistence", () => {
       start,
     );
     await jobs.claim("run_expired", "worker", start, 1_000, 1);
+    await env.DB.prepare(
+      "INSERT INTO self_development_runs(run_id, revision, state, updated_at, payload) VALUES ('run_malformed', 1, 'created', ?, '{')",
+    )
+      .bind(start.toISOString())
+      .run();
     const cycle = await runRecoveryCycle(
       env,
       new Date(start.getTime() + 1_001),
     );
-    expect(cycle).toMatchObject({ requeuedRuns: 1, alertsRecorded: 1 });
+    expect(cycle).toMatchObject({ requeuedRuns: 1, alertsRecorded: 2 });
     expect(env.queued).toHaveLength(1);
   });
 
