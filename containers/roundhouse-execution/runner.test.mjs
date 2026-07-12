@@ -65,8 +65,13 @@ describe("trusted agent output boundary", () => {
           access_token: "actual-access-token",
           refresh_token: "actual-refresh-token",
         },
+        credentials: { value: "nested-credential-value" },
       }),
-    ).toEqual(["actual-access-token", "actual-refresh-token"]);
+    ).toEqual([
+      "actual-access-token",
+      "actual-refresh-token",
+      "nested-credential-value",
+    ]);
   });
 
   it("rejects control characters in repository paths", () => {

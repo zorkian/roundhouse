@@ -280,7 +280,7 @@ export function secretStrings(value) {
       current.forEach((item) => visit(item, sensitive));
     else if (current && typeof current === "object")
       Object.entries(current).forEach(([key, item]) =>
-        visit(item, secretKey(key)),
+        visit(item, sensitive || secretKey(key)),
       );
   };
   visit(value);
