@@ -3,7 +3,7 @@
 
 # Roundhouse authenticated cloud-operations manifest
 
-Status: verified against the live development deployment and unapplied.
+Status: applied 2026-07-12.
 
 Verified 2026-07-12 against Worker version
 `210ea8b2-8ae7-46ae-b018-72e3e9089f5d`: the only pending migration is
@@ -47,3 +47,9 @@ future reviewed manifest. The additive tables remain. No destructive rollback
 or data deletion is authorized.
 
 Estimated incremental Cloudflare usage remains below USD 10.
+
+Applied Worker version: `fe09e61b-10c9-458e-8d95-e1c8ccc55410`.
+Applied Container image digest:
+`sha256:6b2e052e1f8beaca517bbf4bd4b3da08e893ab2aa3b8eff0510c09a021b87e58`.
+Migration `0004_cloud_operations.sql` is recorded as applied and the cron trigger
+is active at `*/5 * * * *`.

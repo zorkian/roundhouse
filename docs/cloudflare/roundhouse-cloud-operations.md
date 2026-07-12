@@ -51,3 +51,8 @@ This is a development operator surface. It uses the existing human Access
 boundary and the previously accepted temporary Codex credential exception.
 There is no external machine Access credential, destructive retention, private
 repository support, notification delivery, or multi-Container concurrency.
+
+The retained local `cloudflare-access-api-token` is a Cloudflare management API
+token, not an Access application JWT. It cannot authenticate operator requests.
+The remote authenticated transcript therefore requires a fresh human Access
+session; creating a service token is intentionally outside this milestone.
