@@ -66,6 +66,24 @@ describe("AccessJwtAuthorizer", () => {
     });
   });
 
+  it("accepts a service-token common name as the actor", async () => {
+    const value = await fixture();
+    await expect(
+      value.authorizer.authorize(
+        request(
+          await token(value.privateKey, {
+            email: undefined,
+            common_name: "roundhouse-dev-smoke.access",
+          }),
+        ),
+        value.env,
+      ),
+    ).resolves.toEqual({
+      authorized: true,
+      actorId: "roundhouse-dev-smoke.access",
+    });
+  });
+
   it("rejects missing, wrong-audience, and non-application tokens", async () => {
     const value = await fixture();
     await expect(

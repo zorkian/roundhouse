@@ -49,6 +49,7 @@ export class AccessJwtAuthorizer implements RequestAuthorizer {
         new URL(`${issuer}/cdn-cgi/access/certs`),
       );
       const verified = await jwtVerify(token, this.keys ?? this.remoteKeys, {
+        algorithms: ["RS256"],
         issuer,
         audience,
       });
