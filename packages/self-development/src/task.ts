@@ -5,6 +5,8 @@ import { z } from "zod";
 
 import {
   exactApprovalSchema,
+  publicationAuthorEmailSchema,
+  publicationAuthorNameSchema,
   repositoryRelativePathSchema,
 } from "./trusted-loop.js";
 
@@ -33,16 +35,8 @@ export const selfDevelopmentTaskSchema = z.object({
       .min(1)
       .max(200)
       .refine((value) => !/[\u0000-\u001f\u007f]/.test(value)),
-    authorName: z
-      .string()
-      .min(1)
-      .max(200)
-      .refine((value) => !/[\u0000-\u001f\u007f]/.test(value)),
-    authorEmail: z
-      .string()
-      .email()
-      .max(320)
-      .refine((value) => !/[\u0000-\u001f\u007f]/.test(value)),
+    authorName: publicationAuthorNameSchema,
+    authorEmail: publicationAuthorEmailSchema,
   }),
 });
 

@@ -9,6 +9,16 @@ const boundedIdentity = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,199}$/);
 const runIdentity = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/);
 const commit = z.string().regex(/^[a-f0-9]{40}$/);
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
+export const publicationAuthorNameSchema = z
+  .string()
+  .min(1)
+  .max(200)
+  .refine((value) => !/[\u0000-\u001f\u007f]/.test(value));
+export const publicationAuthorEmailSchema = z
+  .string()
+  .email()
+  .max(320)
+  .refine((value) => !/[\u0000-\u001f\u007f]/.test(value));
 export const repositoryRelativePathSchema = z
   .string()
   .min(1)

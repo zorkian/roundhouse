@@ -18,8 +18,8 @@ expected revision. The platform-neutral coordinator grants one lease and sends
 an exact public commit, instructions, validation level, and exact file allowlist
 to a deterministic Container identity. Checkout can reach only audited
 `github.com` HTTPS requests. The Worker then switches the Container to audited
-`chatgpt.com` model transport, injects the dedicated subscription credential at
-runtime, and starts Codex with tool network disabled.
+`chatgpt.com` and `auth.openai.com` model transport, injects the dedicated
+subscription credential at runtime, and starts Codex with tool network disabled.
 
 The credential is never an image layer or Container environment variable. It
 is written to an owner-readable temporary Codex home, removed in `finally`
@@ -123,9 +123,9 @@ authorized USD 10 ceiling. Subscription-backed Codex use is bounded by the
 recorded attempts and is not API-billed per request.
 
 This remains a development boundary. The Worker temporarily handles the
-subscription credential, model transport is limited to the measured
-`chatgpt.com` host, and administrative D1/Queue injection was used because no
-temporary Access service policy was authorized. Production needs a managed
+subscription credential, model transport is limited to the explicitly
+allowlisted `chatgpt.com` and `auth.openai.com` hosts, and administrative
+D1/Queue injection was used because no temporary Access service policy was authorized. Production needs a managed
 credential broker, first-class authenticated automation identity, automated
 retention/alerts, typed directory scopes, and a publication CLI/API that writes
 approval and publication audit rows without administrative SQL.

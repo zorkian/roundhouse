@@ -8,6 +8,8 @@ import { promisify } from "node:util";
 import {
   approvalMatches,
   exactApprovalSchema,
+  publicationAuthorEmailSchema,
+  publicationAuthorNameSchema,
   publicationRequestSchema,
   trustedImplementationResultSchema,
   type ExactApproval,
@@ -144,12 +146,8 @@ export async function publishTrustedImplementation(
   const approval = exactApprovalSchema.parse(input.approval);
   const publication = publicationRequestSchema.parse(input.publication);
   if (
-    !input.authorName ||
-    input.authorName.length > 200 ||
-    /[\u0000-\u001f\u007f]/.test(input.authorName) ||
-    !input.authorEmail ||
-    input.authorEmail.length > 320 ||
-    /[\u0000-\u001f\u007f]/.test(input.authorEmail)
+    !publicationAuthorNameSchema.safeParse(input.authorName).success ||
+    !publicationAuthorEmailSchema.safeParse(input.authorEmail).success
   )
     throw new Error("Publication author identity is invalid");
   if (input.runRevision !== publication.expectedRevision)
