@@ -722,9 +722,11 @@ describe("local control-plane Worker", () => {
     await jobs.startAttempt(runId, claim!.token, "prepare", now);
     const running = await jobs.read(runId);
     env.EXECUTION_MODE = "cloudflare-container";
+    let destroyAttempts = 0;
     env.EXECUTION_CONTAINERS = {
       getByName: () => ({
         destroy: async () => {
+          destroyAttempts += 1;
           throw new Error("teardown failed at /sensitive/local/path");
         },
       }),
@@ -743,6 +745,22 @@ describe("local control-plane Worker", () => {
       {} as ExecutionContext,
     );
     expect(cancelled.status).toBe(200);
+    const cancelledBody = (await cancelled.json()) as { revision: number };
+    expect(destroyAttempts).toBe(1);
+    const repeated = await handler.fetch!(
+      request(`/v1/runs/${runId}/cancel`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          schemaVersion: 1,
+          expectedRevision: cancelledBody.revision,
+        }),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(repeated.status).toBe(200);
+    expect(destroyAttempts).toBe(1);
     const alerts = await handler.fetch!(
       request("/v1/operations/alerts"),
       env,
@@ -756,6 +774,7 @@ describe("local control-plane Worker", () => {
       kind: "container_cleanup_failed",
       severity: "error",
       runId,
+      occurrences: 1,
     });
     expect(JSON.stringify(body)).not.toContain("/sensitive/local/path");
   });

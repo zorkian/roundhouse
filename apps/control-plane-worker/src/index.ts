@@ -206,6 +206,7 @@ async function cancelRun(
   }
   const active = cancelled.attempts.at(-1);
   if (
+    cancelled.revision === expectedRevision + 1 &&
     ["cloudflare-container", "cloudflare-trusted-codex"].includes(
       env.EXECUTION_MODE,
     ) &&
