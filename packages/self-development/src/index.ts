@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 export * from "./codex-adapter.js";
+export * from "./github-integration.js";
 export * from "./orchestrator.js";
 export * from "./job-ports.js";
 export * from "./cloudflare-job-store.js";

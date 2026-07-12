@@ -37,6 +37,36 @@ export const repositoryRelativePathSchema = z
     "Path must be a normalized repository-relative path",
   );
 
+export const publicationFileSchema = z.discriminatedUnion("operation", [
+  z.object({
+    path: repositoryRelativePathSchema,
+    operation: z.literal("upsert"),
+    contentBase64: z.string().max(700_000),
+    size: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(512 * 1024),
+    sha256,
+  }),
+  z.object({
+    path: repositoryRelativePathSchema,
+    operation: z.literal("delete"),
+  }),
+]);
+
+export const trustedPublicationManifestSchema = z.object({
+  schemaVersion: z.literal(1),
+  baseCommit: commit,
+  patchSha256: sha256,
+  files: z.array(publicationFileSchema).min(1).max(50),
+  sha256,
+});
+
+export type TrustedPublicationManifest = z.infer<
+  typeof trustedPublicationManifestSchema
+>;
+
 export const trustedImplementationRequestSchema = z.object({
   schemaVersion: z.literal(1),
   runId: runIdentity,
@@ -113,6 +143,7 @@ export const trustedImplementationResultSchema = z.object({
     .positive()
     .max(512 * 1024),
   changedFiles: z.array(repositoryRelativePathSchema).min(1).max(50),
+  publicationManifest: trustedPublicationManifestSchema.optional(),
   startedAt: z.iso.datetime(),
   completedAt: z.iso.datetime(),
   startupDurationMs: z.number().int().nonnegative().default(0),

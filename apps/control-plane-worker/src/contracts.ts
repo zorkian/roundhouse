@@ -49,3 +49,12 @@ export const revisionMutationSchema = z.object({
 export const recoveryRequestSchema = z.object({
   schemaVersion: z.literal(1),
 });
+
+export const submitGitHubIssueSchema = z.object({
+  schemaVersion: z.literal(1),
+});
+
+export const publishGitHubRunSchema = z.object({
+  schemaVersion: z.literal(1),
+  expectedRevision: z.number().int().positive(),
+});

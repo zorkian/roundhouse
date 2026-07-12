@@ -18,6 +18,7 @@ import {
   reserveSubmission,
 } from "./submissions.js";
 import { cloudOperationsMigration } from "./operations.js";
+import { githubPocMigration } from "./github-operations.js";
 
 const instances: Miniflare[] = [];
 const token = "local-test-token";
@@ -176,7 +177,7 @@ async function runtime(): Promise<{
   });
   instances.push(mf);
   const db = await mf.getD1Database("DB");
-  for (const statement of `${d1JobStoreMigration}\n${controlPlaneSubmissionMigration}\n${cloudOperationsMigration}`
+  for (const statement of `${d1JobStoreMigration}\n${controlPlaneSubmissionMigration}\n${cloudOperationsMigration}\n${githubPocMigration}`
     .split(";")
     .map((value) => value.trim())
     .filter(Boolean))
