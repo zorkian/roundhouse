@@ -63,6 +63,27 @@ export class ResumableCoordinator {
       leaseMs,
     );
     if (!claim) return null;
+    return this.workClaim(claim);
+  }
+
+  async workRun(
+    runId: string,
+    expectedRevision?: number,
+  ): Promise<SelfDevelopmentRun | null> {
+    const claim = await this.store.claim(
+      runId,
+      this.options.workerId,
+      this.clock.now(),
+      this.options.leaseMs ?? 30_000,
+      expectedRevision,
+    );
+    if (!claim) return null;
+    return this.workClaim(claim);
+  }
+
+  private async workClaim(
+    claim: import("./job-ports.js").JobClaim,
+  ): Promise<SelfDevelopmentRun> {
     const stage = stageFor(claim.run);
     if (!stage) {
       await this.store.release(claim.run.runId, claim.token, this.clock.now());
