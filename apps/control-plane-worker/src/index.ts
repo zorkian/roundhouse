@@ -271,7 +271,12 @@ async function implementationEvidence(
     .join("");
   if (hash !== reference.sha256 || bytes.byteLength !== reference.size)
     throw new HttpError(409, "Evidence object binding does not match");
-  const result = trustedImplementationResultSchema.parse(JSON.parse(text));
+  let result;
+  try {
+    result = trustedImplementationResultSchema.parse(JSON.parse(text));
+  } catch {
+    throw new HttpError(409, "Implementation evidence is invalid");
+  }
   if (
     result.runId !== runId ||
     result.baseCommit !== run.task.baseCommit ||

@@ -64,7 +64,14 @@ async function validateTrustedResult(
   request: TrustedImplementationRequest,
   value: unknown,
 ): Promise<TrustedImplementationResult> {
-  const result = trustedImplementationResultSchema.parse(value);
+  const parsed = trustedImplementationResultSchema.safeParse(value);
+  if (!parsed.success)
+    throw new StageFailure(
+      "Trusted implementation result failed schema validation",
+      "implementation_binding_mismatch",
+      false,
+    );
+  const result = parsed.data;
   const patchHash = bytesToHex(
     await crypto.subtle.digest("SHA-256", encoder.encode(result.patch)),
   );
@@ -87,6 +94,23 @@ async function validateTrustedResult(
   return result;
 }
 
+async function parseTrustedEvidence(
+  request: TrustedImplementationRequest,
+  text: string,
+): Promise<TrustedImplementationResult> {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    throw new StageFailure(
+      "Trusted implementation evidence is not valid JSON",
+      "implementation_binding_mismatch",
+      false,
+    );
+  }
+  return validateTrustedResult(request, value);
+}
+
 export class CloudflareTrustedImplementationBackend implements TrustedImplementationBackend {
   constructor(
     private readonly containers: ExecutionContainerNamespacePort,
@@ -100,10 +124,7 @@ export class CloudflareTrustedImplementationBackend implements TrustedImplementa
     const existing = await this.evidence.get(key);
     if (existing) {
       try {
-        result = await validateTrustedResult(
-          request,
-          JSON.parse(await existing.text()),
-        );
+        result = await parseTrustedEvidence(request, await existing.text());
       } catch (error) {
         if (error instanceof StageFailure) throw error;
         throw new StageFailure(
@@ -159,10 +180,7 @@ export class CloudflareTrustedImplementationBackend implements TrustedImplementa
             true,
           );
         try {
-          result = await validateTrustedResult(
-            request,
-            JSON.parse(await raced.text()),
-          );
+          result = await parseTrustedEvidence(request, await raced.text());
         } catch (error) {
           if (error instanceof StageFailure) throw error;
           throw new StageFailure(

@@ -604,8 +604,8 @@ async function validateImplementation(value) {
   return result;
 }
 
-async function prepare(value) {
-  const request = value?.profile ? validate(value) : validateTrusted(value);
+async function prepare(value, mode) {
+  const request = mode === "trusted" ? validateTrusted(value) : validate(value);
   if (prepared?.attemptId === request.attemptId) {
     if (prepared.baseCommit !== request.baseCommit)
       throw new Error("checkout_binding_mismatch");
@@ -758,11 +758,19 @@ if (import.meta.main)
       if (request.method === "GET" && request.url === "/ping")
         return json(response, 200, { ok: true });
       if (request.method === "POST" && request.url === "/prepare")
-        return json(response, 200, await prepare(await body(request)));
+        return json(
+          response,
+          200,
+          await prepare(await body(request), "legacy"),
+        );
       if (request.method === "POST" && request.url === "/execute")
         return json(response, 200, await execute(await body(request)));
       if (request.method === "POST" && request.url === "/trusted/prepare")
-        return json(response, 200, await prepare(await body(request)));
+        return json(
+          response,
+          200,
+          await prepare(await body(request), "trusted"),
+        );
       if (request.method === "POST" && request.url === "/trusted/credential")
         return json(
           response,

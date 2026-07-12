@@ -221,6 +221,28 @@ describe("CloudflareTrustedImplementationBackend", () => {
     });
   });
 
+  it("classifies unparsable existing evidence as non-retryable integrity failure", async () => {
+    const evidence = new MemoryEvidence();
+    evidence.objects.set(
+      `runs/${trustedRequest.runId}/attempts/${trustedRequest.attemptId}/trusted-implementation.json`,
+      new TextEncoder().encode("{"),
+    );
+    const backend = new CloudflareTrustedImplementationBackend(
+      {
+        getByName: () => ({
+          runJob: async () => result(),
+          destroy: async () => undefined,
+        }),
+      },
+      evidence,
+      "unused",
+    );
+    await expect(backend.execute(trustedRequest)).rejects.toMatchObject({
+      classification: "implementation_binding_mismatch",
+      retryable: false,
+    });
+  });
+
   it("preserves integrity classification for corrupt raced evidence", async () => {
     const invalid = new TextEncoder().encode(
       JSON.stringify({ ...trustedResult(), runId: "run_wrong" }),
