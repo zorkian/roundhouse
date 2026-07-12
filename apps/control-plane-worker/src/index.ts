@@ -196,7 +196,10 @@ async function cancelRun(
   try {
     cancelled = await jobs.cancel(runId, new Date(), expectedRevision);
   } catch (error) {
-    if (error instanceof Error && error.message.includes("revision"))
+    if (
+      error instanceof Error &&
+      error.message === "Cancellation revision does not match"
+    )
       throw new HttpError(409, error.message);
     throw error;
   }
@@ -232,12 +235,12 @@ async function mutationResponse(
   actorId: string,
   action: string,
   runId: string,
+  requestValue: unknown,
   mutate: () => Promise<Response>,
 ): Promise<Response> {
   const key = idempotencyKeySchema.parse(
     request.headers.get("idempotency-key"),
   );
-  const requestValue = await requestBody(request.clone());
   const result = await idempotentMutation(
     env,
     { key, action, runId, actorId, request: requestValue, now: new Date() },
@@ -251,11 +254,10 @@ async function mutationResponse(
 
 async function approveRun(
   runId: string,
-  request: Request,
+  input: z.infer<typeof approveRunSchema>,
   env: ControlPlaneEnv,
   actorId: string,
 ): Promise<Response> {
-  const input = approveRunSchema.parse(await requestBody(request));
   const jobs = new D1JobStore(env.DB);
   const run = await jobs.read(runId);
   const delegated = input.approver === delegatedApprover;
@@ -345,11 +347,10 @@ async function implementationEvidence(
 
 async function recordPublication(
   runId: string,
-  request: Request,
+  input: z.infer<typeof recordPublicationSchema>,
   env: ControlPlaneEnv,
   actorId: string,
 ): Promise<Response> {
-  const input = recordPublicationSchema.parse(await requestBody(request));
   const jobs = new D1JobStore(env.DB);
   const run = await jobs.read(runId);
   if (
@@ -426,28 +427,34 @@ async function route(
     /^\/v1\/runs\/([a-zA-Z0-9][a-zA-Z0-9_-]{0,127})\/approval$/.exec(
       url.pathname,
     );
-  if (request.method === "POST" && approvalMatch?.[1])
+  if (request.method === "POST" && approvalMatch?.[1]) {
+    const input = approveRunSchema.parse(await requestBody(request));
     return mutationResponse(
       request,
       env,
       actorId,
       "approve",
       approvalMatch[1],
-      () => approveRun(approvalMatch[1]!, request, env, actorId),
+      input,
+      () => approveRun(approvalMatch[1]!, input, env, actorId),
     );
+  }
   const publicationMatch =
     /^\/v1\/runs\/([a-zA-Z0-9][a-zA-Z0-9_-]{0,127})\/publication$/.exec(
       url.pathname,
     );
-  if (request.method === "POST" && publicationMatch?.[1])
+  if (request.method === "POST" && publicationMatch?.[1]) {
+    const input = recordPublicationSchema.parse(await requestBody(request));
     return mutationResponse(
       request,
       env,
       actorId,
       "publish",
       publicationMatch[1],
-      () => recordPublication(publicationMatch[1]!, request, env, actorId),
+      input,
+      () => recordPublication(publicationMatch[1]!, input, env, actorId),
     );
+  }
   const cancelMatch =
     /^\/v1\/runs\/([a-zA-Z0-9][a-zA-Z0-9_-]{0,127})\/cancel$/.exec(
       url.pathname,
@@ -463,6 +470,7 @@ async function route(
         actorId,
         "cancel",
         cancelMatch[1],
+        input,
         () => cancelRun(cancelMatch[1]!, input.expectedRevision, env),
       );
     } catch (error) {
@@ -483,6 +491,7 @@ async function route(
       actorId,
       "retry",
       retryMatch[1],
+      input,
       async () => {
         const run = await retryFailedRun(
           env,
@@ -532,13 +541,14 @@ async function route(
   if (request.method === "GET" && url.pathname === "/v1/operations/retention")
     return json(await retentionReport(env));
   if (request.method === "POST" && url.pathname === "/v1/operations/recover") {
-    recoveryRequestSchema.parse(await requestBody(request.clone()));
+    const input = recoveryRequestSchema.parse(await requestBody(request));
     return mutationResponse(
       request,
       env,
       actorId,
       "recover",
       "operations",
+      input,
       async () => json(await runRecoveryCycle(env, new Date())),
     );
   }
