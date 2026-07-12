@@ -4,7 +4,7 @@
 import { exportPKCS8, generateKeyPair } from "jose";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { GitHubAppGateway } from "./github-gateway.js";
+import { GitHubAppGateway, GitHubAppGatewayError } from "./github-gateway.js";
 
 let privateKey: string;
 
@@ -21,6 +21,25 @@ function json(value: unknown, status = 200): Response {
 }
 
 describe("GitHub App gateway", () => {
+  it("classifies signing failure without exposing key material", async () => {
+    const gateway = new GitHubAppGateway(
+      { appId: "1", installationId: "2", privateKey: "private-key-material" },
+      async () => {
+        throw new Error("fetch must not run");
+      },
+    );
+    const failure = await gateway
+      .mainHead()
+      .then(() => undefined)
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(GitHubAppGatewayError);
+    expect(failure).toMatchObject({
+      code: "signing_failed",
+      message: "GitHub App signing failed",
+    });
+    expect(String(failure)).not.toContain("private-key-material");
+  });
+
   it("captures an immutable enrolled issue snapshot", async () => {
     const fetcher: typeof fetch = async (input) => {
       const url = new URL(String(input));

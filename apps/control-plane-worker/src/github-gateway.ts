@@ -21,6 +21,15 @@ type GatewayConfig = {
 
 type GitHubResponse<T> = { status: number; value: T };
 
+export class GitHubAppGatewayError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 function hex(bytes: ArrayBuffer): string {
   return [...new Uint8Array(bytes)]
     .map((byte) => byte.toString(16).padStart(2, "0"))
@@ -35,8 +44,11 @@ async function sha256(value: string | Uint8Array): Promise<string> {
   return hex(await crypto.subtle.digest("SHA-256", owned));
 }
 
-function safeGitHubError(status: number): Error {
-  return new Error(`GitHub API request failed with status ${status}`);
+function safeGitHubError(status: number): GitHubAppGatewayError {
+  return new GitHubAppGatewayError(
+    `api_status_${status}`,
+    `GitHub API request failed with status ${status}`,
+  );
 }
 
 export class GitHubAppGateway {
@@ -49,14 +61,21 @@ export class GitHubAppGateway {
   ) {}
 
   private async appJwt(): Promise<string> {
-    const now = Math.floor(this.now().getTime() / 1_000);
-    const key = await importPKCS8(this.config.privateKey, "RS256");
-    return new SignJWT({})
-      .setProtectedHeader({ alg: "RS256" })
-      .setIssuer(this.config.appId)
-      .setIssuedAt(now - 30)
-      .setExpirationTime(now + 540)
-      .sign(key);
+    try {
+      const now = Math.floor(this.now().getTime() / 1_000);
+      const key = await importPKCS8(this.config.privateKey, "RS256");
+      return await new SignJWT({})
+        .setProtectedHeader({ alg: "RS256" })
+        .setIssuer(this.config.appId)
+        .setIssuedAt(now - 30)
+        .setExpirationTime(now + 540)
+        .sign(key);
+    } catch {
+      throw new GitHubAppGatewayError(
+        "signing_failed",
+        "GitHub App signing failed",
+      );
+    }
   }
 
   private async installationToken(): Promise<string> {
@@ -81,18 +100,35 @@ export class GitHubAppGateway {
     body?: unknown,
     token?: string,
   ): Promise<GitHubResponse<T>> {
-    const response = await this.fetcher(`https://api.github.com${path}`, {
-      method,
-      headers: {
-        accept: "application/vnd.github+json",
-        authorization: `Bearer ${token ?? (await this.installationToken())}`,
-        "content-type": "application/json",
-        "user-agent": "roundhouse-dev-control-plane",
-        "x-github-api-version": "2022-11-28",
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    const value = (await response.json()) as T;
+    let response: Response;
+    try {
+      response = await this.fetcher(`https://api.github.com${path}`, {
+        method,
+        headers: {
+          accept: "application/vnd.github+json",
+          authorization: `Bearer ${token ?? (await this.installationToken())}`,
+          "content-type": "application/json",
+          "user-agent": "roundhouse-dev-control-plane",
+          "x-github-api-version": "2022-11-28",
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+    } catch (error) {
+      if (error instanceof GitHubAppGatewayError) throw error;
+      throw new GitHubAppGatewayError(
+        "transport_failed",
+        "GitHub API transport failed",
+      );
+    }
+    let value: T;
+    try {
+      value = (await response.json()) as T;
+    } catch {
+      throw new GitHubAppGatewayError(
+        "invalid_response",
+        "GitHub API response was invalid",
+      );
+    }
     if (!response.ok) throw safeGitHubError(response.status);
     return { status: response.status, value };
   }
@@ -116,25 +152,32 @@ export class GitHubAppGateway {
     ).value;
     if (issue.pull_request) throw new Error("GitHub reference is not an issue");
     const body = issue.body ?? "";
-    return githubIssueSnapshotSchema.parse({
-      schemaVersion: 1,
-      owner: reference.owner,
-      repository: reference.repository,
-      number: issue.number,
-      nodeId: issue.node_id,
-      url: issue.html_url,
-      title: issue.title,
-      body,
-      updatedAt: new Date(issue.updated_at).toISOString(),
-      fetchedAt: this.now().toISOString(),
-      contentSha256: await sha256(
-        JSON.stringify({
-          title: issue.title,
-          body,
-          updatedAt: new Date(issue.updated_at).toISOString(),
-        }),
-      ),
-    });
+    try {
+      return githubIssueSnapshotSchema.parse({
+        schemaVersion: 1,
+        owner: reference.owner,
+        repository: reference.repository,
+        number: issue.number,
+        nodeId: issue.node_id,
+        url: issue.html_url,
+        title: issue.title,
+        body,
+        updatedAt: new Date(issue.updated_at).toISOString(),
+        fetchedAt: this.now().toISOString(),
+        contentSha256: await sha256(
+          JSON.stringify({
+            title: issue.title,
+            body,
+            updatedAt: new Date(issue.updated_at).toISOString(),
+          }),
+        ),
+      });
+    } catch {
+      throw new GitHubAppGatewayError(
+        "invalid_response",
+        "GitHub issue response was invalid",
+      );
+    }
   }
 
   async mainHead(): Promise<string> {

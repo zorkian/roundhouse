@@ -32,7 +32,7 @@ import {
 } from "./contracts.js";
 import type { ControlPlaneEnv } from "./environment.js";
 import { inspectRun } from "./inspection.js";
-import { GitHubAppGateway } from "./github-gateway.js";
+import { GitHubAppGateway, GitHubAppGatewayError } from "./github-gateway.js";
 import {
   durableGitHubPublication,
   GitHubPublicationPendingError,
@@ -825,6 +825,17 @@ export function createControlPlaneHandler(
             { error: { code: "mutation_pending", message: error.message } },
             409,
           );
+        if (error instanceof GitHubAppGatewayError)
+          return json(
+            {
+              error: {
+                code: "github_gateway_error",
+                message: error.message,
+                gatewayCode: error.code,
+              },
+            },
+            502,
+          );
         if (error instanceof z.ZodError)
           return json(
             {
@@ -836,15 +847,12 @@ export function createControlPlaneHandler(
             },
             400,
           );
-        const reason = redactedReason(error);
-        console.error("Control-plane request failed", { reason });
+        console.error("Control-plane request failed", {
+          reason: redactedReason(error),
+        });
         return json(
           {
-            error: {
-              code: "internal_error",
-              message: "Internal server error",
-              detail: reason,
-            },
+            error: { code: "internal_error", message: "Internal server error" },
           },
           500,
         );
