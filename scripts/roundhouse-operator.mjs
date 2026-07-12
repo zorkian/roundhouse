@@ -4,7 +4,9 @@
 
 import { readFile } from "node:fs/promises";
 
-const [command, target, inputPath] = process.argv.slice(2);
+const [command, firstArgument, secondArgument] = process.argv.slice(2);
+const target = command === "submit" ? undefined : firstArgument;
+const inputPath = command === "submit" ? firstArgument : secondArgument;
 const origin = process.env.ROUNDHOUSE_ORIGIN;
 const token = process.env.ROUNDHOUSE_ACCESS_TOKEN;
 if (!origin || !token) {
