@@ -418,6 +418,7 @@ export class FileRunStore implements JobStore {
       const run = await this.read(runId);
       this.assertLease(run, token, now);
       const state = terminal ? "failed" : recoveryState[stage];
+      const { evidence, ...attemptFailure } = failure;
       const attempts = run.attempts.map((attempt, index) =>
         index === run.attempts.length - 1 &&
         attempt.stage === stage &&
@@ -426,7 +427,7 @@ export class FileRunStore implements JobStore {
               ...attempt,
               status: "failed" as const,
               completedAt: now.toISOString(),
-              ...failure,
+              ...attemptFailure,
             }
           : attempt,
       );
@@ -435,6 +436,7 @@ export class FileRunStore implements JobStore {
         state,
         updatedAt: now.toISOString(),
         attempts,
+        evidence: evidence ?? run.evidence,
         events: [
           ...run.events,
           {
@@ -442,7 +444,7 @@ export class FileRunStore implements JobStore {
             type: `${stage}.failed`,
             state,
             occurredAt: now.toISOString(),
-            detail: failure,
+            detail: attemptFailure,
           },
         ],
       });

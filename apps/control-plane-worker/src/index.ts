@@ -10,6 +10,12 @@ import {
 import { z } from "zod";
 
 import { ConfiguredAuthorizer, type RequestAuthorizer } from "./auth.js";
+import {
+  CloudflareExecutionDispatcher,
+  CloudflareRepositoryExecutionBackend,
+  type EvidenceBucketPort,
+  type ExecutionContainerNamespacePort,
+} from "./cloudflare-execution.js";
 import { idempotencyKeySchema, submitRunSchema } from "./contracts.js";
 import type { ControlPlaneEnv } from "./environment.js";
 import { inspectRun } from "./inspection.js";
@@ -57,13 +63,30 @@ async function requestBody(request: Request): Promise<unknown> {
 }
 
 function coordinator(env: ControlPlaneEnv): ResumableCoordinator {
+  if (
+    env.EXECUTION_MODE === "cloudflare-container" &&
+    (!env.EXECUTION_CONTAINERS || !env.EXECUTION_EVIDENCE)
+  )
+    throw new Error("Cloudflare execution bindings are not configured");
+  const dispatcher =
+    env.EXECUTION_MODE === "cloudflare-container"
+      ? new CloudflareExecutionDispatcher(
+          new CloudflareRepositoryExecutionBackend(
+            env.EXECUTION_CONTAINERS! as unknown as ExecutionContainerNamespacePort,
+            env.EXECUTION_EVIDENCE! as unknown as EvidenceBucketPort,
+          ),
+          env.EXECUTION_SCENARIO ?? "success",
+        )
+      : new DeterministicLocalDispatcher(env.EXECUTION_MODE);
   return new ResumableCoordinator(
     new D1JobStore(env.DB),
-    new DispatchingStageExecutor(
-      new DeterministicLocalDispatcher(env.EXECUTION_MODE),
-    ),
+    new DispatchingStageExecutor(dispatcher),
     { now: () => new Date() },
-    { workerId: "local-control-plane-queue", maxAttemptsPerStage: 3 },
+    {
+      workerId: "roundhouse-dev-control-plane-queue",
+      leaseMs: 300_000,
+      maxAttemptsPerStage: 3,
+    },
   );
 }
 

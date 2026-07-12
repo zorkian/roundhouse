@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type {
+  ExecutionEvidence,
   JobStage,
   SelfDevelopmentRun,
   SelfDevelopmentRunState,
@@ -19,10 +20,14 @@ export type AttemptFailure = {
   retryable: boolean;
   classification: string;
   error: string;
+  evidence?: ExecutionEvidence[];
 };
 
 export type RunUpdates = Partial<
-  Pick<SelfDevelopmentRun, "workspaceRef" | "workspacePath" | "commit">
+  Pick<
+    SelfDevelopmentRun,
+    "workspaceRef" | "workspacePath" | "commit" | "evidence"
+  >
 >;
 
 export interface JobStore {

@@ -89,6 +89,19 @@ export const runLeaseSchema = z.object({
   expiresAt: z.iso.datetime(),
 });
 
+export const executionEvidenceSchema = z.object({
+  schemaVersion: z.literal(1),
+  evidenceId: z.string().min(1),
+  attemptId: z.string().min(1),
+  objectKey: z.string().min(1),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  size: z.number().int().nonnegative(),
+  mediaType: z.literal("application/json"),
+  createdAt: z.iso.datetime(),
+});
+
+export type ExecutionEvidence = z.infer<typeof executionEvidenceSchema>;
+
 export const selfDevelopmentRunSchema = z.object({
   schemaVersion: z.literal(1),
   runId: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/),
@@ -105,6 +118,7 @@ export const selfDevelopmentRunSchema = z.object({
     .optional(),
   lease: runLeaseSchema.optional(),
   attempts: z.array(runAttemptSchema).default([]),
+  evidence: z.array(executionEvidenceSchema).default([]),
   events: z.array(runEventSchema).min(1),
 });
 

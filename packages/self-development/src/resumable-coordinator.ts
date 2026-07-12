@@ -9,6 +9,7 @@ export class StageFailure extends Error {
     message: string,
     readonly classification: string,
     readonly retryable: boolean,
+    readonly evidence?: SelfDevelopmentRun["evidence"],
   ) {
     super(message);
   }
@@ -131,6 +132,7 @@ export class ResumableCoordinator {
           retryable: failure.retryable,
           classification: failure.classification,
           error: failure.message,
+          evidence: failure.evidence,
         },
         terminal,
         this.clock.now(),

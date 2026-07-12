@@ -349,6 +349,7 @@ export class D1JobStore implements JobStore {
     return (await this.mutate(runId, (run) => {
       this.assertLease(run, token, now);
       const state = terminal ? "failed" : recovery[stage];
+      const { evidence, ...attemptFailure } = failure;
       const attempts = run.attempts.map((value, index) =>
         index === run.attempts.length - 1 &&
         value.stage === stage &&
@@ -357,7 +358,7 @@ export class D1JobStore implements JobStore {
               ...value,
               status: "failed" as const,
               completedAt: now.toISOString(),
-              ...failure,
+              ...attemptFailure,
             }
           : value,
       );
@@ -366,6 +367,7 @@ export class D1JobStore implements JobStore {
         state,
         updatedAt: now.toISOString(),
         attempts,
+        evidence: evidence ?? run.evidence,
         events: [
           ...run.events,
           {
@@ -373,7 +375,7 @@ export class D1JobStore implements JobStore {
             type: `${stage}.failed`,
             state,
             occurredAt: now.toISOString(),
-            detail: failure,
+            detail: attemptFailure,
           },
         ],
       };
