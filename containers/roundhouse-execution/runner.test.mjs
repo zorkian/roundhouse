@@ -59,8 +59,12 @@ describe("trusted agent output boundary", () => {
       "docs/my file.md",
       "docs/café.md",
     ]);
-    expect(changedPaths("R  docs/new name.md\0docs/old name.md\0")).toEqual([
+    expect(changedPaths("R  docs/old name.md\0docs/new name.md\0")).toEqual([
+      "docs/old name.md",
       "docs/new name.md",
+    ]);
+    expect(changedPaths("C  docs/source.md\0docs/copy.md\0")).toEqual([
+      "docs/copy.md",
     ]);
   });
 });

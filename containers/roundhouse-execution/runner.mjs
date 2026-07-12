@@ -200,11 +200,16 @@ export function changedPaths(output) {
   const paths = [];
   for (let index = 0; index < entries.length; index += 1) {
     const entry = entries[index];
-    paths.push(entry.slice(3));
-    if (["R", "C"].includes(entry[0]) || ["R", "C"].includes(entry[1]))
+    const status = entry.slice(0, 2);
+    if (status.includes("R")) {
+      paths.push(entry.slice(3), entries[index + 1]);
       index += 1;
+    } else if (status.includes("C")) {
+      paths.push(entries[index + 1]);
+      index += 1;
+    } else paths.push(entry.slice(3));
   }
-  return paths;
+  return paths.filter(Boolean);
 }
 
 function promptFor(request) {
