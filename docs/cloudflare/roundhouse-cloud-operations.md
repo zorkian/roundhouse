@@ -33,6 +33,7 @@ export ROUNDHOUSE_ACCESS_TOKEN='...'
 node scripts/roundhouse-operator.mjs inspect RUN_ID
 node scripts/roundhouse-operator.mjs evidence RUN_ID
 node scripts/roundhouse-operator.mjs alerts
+node scripts/roundhouse-operator.mjs recovery
 node scripts/roundhouse-operator.mjs retention
 ```
 

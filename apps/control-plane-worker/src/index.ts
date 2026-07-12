@@ -41,6 +41,7 @@ import {
   MutationConflictError,
   MutationPendingError,
   recordAlert,
+  recoveryHistory,
   retentionReport,
   retryFailedRun,
   runRecoveryCycle,
@@ -540,6 +541,11 @@ async function route(
   }
   if (request.method === "GET" && url.pathname === "/v1/operations/retention")
     return json(await retentionReport(env));
+  if (
+    request.method === "GET" &&
+    url.pathname === "/v1/operations/recovery-cycles"
+  )
+    return json(await recoveryHistory(env));
   if (request.method === "POST" && url.pathname === "/v1/operations/recover") {
     const input = recoveryRequestSchema.parse(await requestBody(request));
     return mutationResponse(

@@ -802,6 +802,15 @@ describe("local control-plane Worker", () => {
       dryRun: true,
       deletions: [],
     });
+    const emptyHistory = await handler.fetch!(
+      request("/v1/operations/recovery-cycles"),
+      env,
+      {} as ExecutionContext,
+    );
+    await expect(emptyHistory.json()).resolves.toEqual({
+      schemaVersion: 1,
+      cycles: [],
+    });
     const recoveryRequest = () =>
       request("/v1/operations/recover", {
         method: "POST",
@@ -823,6 +832,21 @@ describe("local control-plane Worker", () => {
     );
     expect(first.status).toBe(200);
     expect(await replay.json()).toEqual(await first.json());
+    const history = await handler.fetch!(
+      request("/v1/operations/recovery-cycles"),
+      env,
+      {} as ExecutionContext,
+    );
+    const historyBody = (await history.json()) as {
+      cycles: Array<Record<string, unknown>>;
+    };
+    expect(historyBody.cycles).toHaveLength(1);
+    expect(historyBody.cycles[0]).toMatchObject({
+      actorId: "roundhouse:scheduler",
+      repairedSubmissions: 0,
+      requeuedRuns: 0,
+      alertsRecorded: 0,
+    });
     const invalidRecovery = await handler.fetch!(
       request("/v1/operations/recover", {
         method: "POST",

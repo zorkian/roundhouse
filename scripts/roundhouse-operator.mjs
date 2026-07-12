@@ -32,6 +32,7 @@ const routes = {
   inspect: { method: "GET", path: `/v1/runs/${target}` },
   evidence: { method: "GET", path: `/v1/runs/${target}/implementation` },
   alerts: { method: "GET", path: "/v1/operations/alerts" },
+  recovery: { method: "GET", path: "/v1/operations/recovery-cycles" },
   retention: { method: "GET", path: "/v1/operations/retention" },
   submit: { method: "POST", path: "/v1/runs" },
   cancel: { method: "POST", path: `/v1/runs/${target}/cancel` },

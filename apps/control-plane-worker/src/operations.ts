@@ -354,3 +354,33 @@ export async function retentionReport(env: ControlPlaneEnv) {
     deletions: [],
   };
 }
+
+export async function recoveryHistory(env: ControlPlaneEnv) {
+  const cycles = await env.DB.prepare(
+    `SELECT cycle_id, actor_id, started_at, completed_at,
+            repaired_submissions, requeued_runs, alerts_recorded
+       FROM recovery_cycles
+      ORDER BY started_at DESC
+      LIMIT 100`,
+  ).all<{
+    cycle_id: string;
+    actor_id: string;
+    started_at: string;
+    completed_at: string;
+    repaired_submissions: number;
+    requeued_runs: number;
+    alerts_recorded: number;
+  }>();
+  return {
+    schemaVersion: 1,
+    cycles: cycles.results.map((cycle) => ({
+      cycleId: cycle.cycle_id,
+      actorId: cycle.actor_id,
+      startedAt: cycle.started_at,
+      completedAt: cycle.completed_at,
+      repairedSubmissions: cycle.repaired_submissions,
+      requeuedRuns: cycle.requeued_runs,
+      alertsRecorded: cycle.alerts_recorded,
+    })),
+  };
+}
