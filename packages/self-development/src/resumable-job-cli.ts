@@ -69,7 +69,7 @@ export async function runResumableJobCli(argv: string[]): Promise<unknown> {
     clock,
     {
       workerId: values.get("worker") ?? `worker-${process.pid}`,
-      leaseMs: positiveInteger(values.get("lease-ms"), 900_000),
+      leaseMs: positiveInteger(values.get("lease-ms"), 1_800_000),
       maxAttemptsPerStage: positiveInteger(values.get("max-attempts"), 3),
     },
   );
