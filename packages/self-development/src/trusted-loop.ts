@@ -102,12 +102,15 @@ export const trustedImplementationResultSchema = z.object({
   attemptId: boundedIdentity,
   baseCommit: commit,
   checkoutCommit: commit,
-  patch: z.string().max(512 * 1024),
+  patch: z
+    .string()
+    .min(1)
+    .max(512 * 1024),
   patchSha256: sha256,
   patchBytes: z
     .number()
     .int()
-    .nonnegative()
+    .positive()
     .max(512 * 1024),
   changedFiles: z.array(repositoryRelativePathSchema).min(1).max(50),
   startedAt: z.iso.datetime(),

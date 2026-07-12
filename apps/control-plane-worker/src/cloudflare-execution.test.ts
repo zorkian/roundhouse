@@ -140,6 +140,30 @@ describe("CloudflareTrustedImplementationBackend", () => {
     });
   });
 
+  it("rejects an empty trusted implementation patch", async () => {
+    const backend = new CloudflareTrustedImplementationBackend(
+      {
+        getByName: () => ({
+          runJob: async () => result(),
+          runTrustedJob: async () => ({
+            ...trustedResult(),
+            patch: "",
+            patchSha256:
+              "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            patchBytes: 0,
+          }),
+          destroy: async () => undefined,
+        }),
+      },
+      new MemoryEvidence(),
+      "unused",
+    );
+    await expect(backend.execute(trustedRequest)).rejects.toMatchObject({
+      classification: "implementation_binding_mismatch",
+      retryable: false,
+    });
+  });
+
   it("rejects descendants of an exact file allowlist entry", async () => {
     const backend = new CloudflareTrustedImplementationBackend(
       {

@@ -72,8 +72,9 @@ async function validateTrustedResult(
       false,
     );
   const result = parsed.data;
+  const patchBytes = encoder.encode(result.patch);
   const patchHash = bytesToHex(
-    await crypto.subtle.digest("SHA-256", encoder.encode(result.patch)),
+    await crypto.subtle.digest("SHA-256", patchBytes),
   );
   if (
     result.runId !== request.runId ||
@@ -81,7 +82,7 @@ async function validateTrustedResult(
     result.baseCommit !== request.baseCommit ||
     result.checkoutCommit !== request.baseCommit ||
     result.patchSha256 !== patchHash ||
-    result.patchBytes !== new TextEncoder().encode(result.patch).byteLength ||
+    result.patchBytes !== patchBytes.byteLength ||
     result.patchBytes > request.maxPatchBytes ||
     result.changedFiles.length > request.maxChangedFiles ||
     !result.changedFiles.every((path) => request.allowedPaths.includes(path))

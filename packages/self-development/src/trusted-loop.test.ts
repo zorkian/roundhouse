@@ -81,6 +81,12 @@ describe("trusted self-development contracts", () => {
         .success,
     ).toBe(false);
     expect(
+      trustedImplementationResultSchema.shape.patch.safeParse("").success,
+    ).toBe(false);
+    expect(
+      trustedImplementationResultSchema.shape.patchBytes.safeParse(0).success,
+    ).toBe(false);
+    expect(
       selfDevelopmentRunSchema.shape.implementation
         .unwrap()
         .shape.changedFiles.safeParse([]).success,
