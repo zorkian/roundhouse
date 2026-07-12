@@ -25,7 +25,7 @@ afterEach(async () => {
   contractRoot = undefined;
 });
 
-describe("FileRunStore JobStore contract", () => {
+describe("FileRunStore mutex recovery", () => {
   it("reclaims a stale local mutex left by a crashed process", async () => {
     const path = await root();
     const store = new FileRunStore(path);

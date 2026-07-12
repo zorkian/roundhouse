@@ -4,7 +4,11 @@
 import { Miniflare } from "miniflare";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { D1JobStore, d1JobStoreMigration } from "./cloudflare-job-store.js";
+import {
+  D1JobStore,
+  d1JobStoreMigration,
+  type D1DatabasePort,
+} from "./cloudflare-job-store.js";
 import { jobStoreContract } from "./job-store-contract.shared.js";
 import {
   consumeRunDelivery,
@@ -36,7 +40,7 @@ const task: SelfDevelopmentTask = {
   },
 };
 
-async function store(): Promise<D1JobStore> {
+async function database(): Promise<D1DatabasePort> {
   const mf = new Miniflare({
     modules: true,
     script: "export default { fetch() { return new Response('ok') } }",
@@ -49,12 +53,16 @@ async function store(): Promise<D1JobStore> {
     .map((value) => value.trim())
     .filter(Boolean))
     await db.prepare(statement).run();
-  return new D1JobStore(db);
+  return db;
+}
+
+async function store(): Promise<D1JobStore> {
+  return new D1JobStore(await database());
 }
 
 afterEach(async () => {
   await Promise.all(instances.splice(0).map((value) => value.dispose()));
-  contractStore = undefined;
+  contractDatabase = undefined;
 });
 
 describe("local Cloudflare coordination", () => {
@@ -120,10 +128,37 @@ describe("local Cloudflare coordination", () => {
     expect(outcomes).toEqual(["ack", "ack"]);
     expect((await jobs.read("run_delivery")).state).toBe("workspace_ready");
   });
+
+  it("acks an invalid queue delivery without executing or retrying it", async () => {
+    const jobs = await store();
+    let executions = 0;
+    const coordinator = new ResumableCoordinator(
+      jobs,
+      {
+        execute: async () => {
+          executions += 1;
+          throw new Error("must not execute");
+        },
+      },
+      { now: () => new Date("2026-07-12T00:00:01Z") },
+      { workerId: "queue-worker" },
+    );
+    const outcomes: string[] = [];
+    await consumeRunDelivery(
+      {
+        body: { schemaVersion: 1, runId: "run_delivery" },
+        ack: () => outcomes.push("ack"),
+        retry: () => outcomes.push("retry"),
+      },
+      coordinator,
+    );
+    expect(executions).toBe(0);
+    expect(outcomes).toEqual(["ack"]);
+  });
 });
 
-let contractStore: D1JobStore | undefined;
+let contractDatabase: D1DatabasePort | undefined;
 jobStoreContract("D1JobStore (Miniflare)", async () => {
-  contractStore ??= await store();
-  return contractStore;
+  contractDatabase ??= await database();
+  return new D1JobStore(contractDatabase);
 });
