@@ -1,7 +1,10 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import type { RepositoryExecutionRequest } from "@roundhouse/self-development/cloudflare";
+import {
+  repositoryExecutionRequestSchema,
+  type RepositoryExecutionRequest,
+} from "@roundhouse/self-development/cloudflare";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -24,6 +27,20 @@ const request: RepositoryExecutionRequest = {
   timeoutMs: 120_000,
   maxOutputBytes: 262_144,
 };
+
+describe("repository execution request", () => {
+  it("shares the runner attempt identity boundary", () => {
+    expect(() =>
+      repositoryExecutionRequestSchema.parse({ ...request, attemptId: "" }),
+    ).toThrow();
+    expect(() =>
+      repositoryExecutionRequestSchema.parse({
+        ...request,
+        attemptId: `attempt-${"x".repeat(200)}`,
+      }),
+    ).toThrow();
+  });
+});
 
 function result(exitCode = 0, timedOut = false) {
   return {

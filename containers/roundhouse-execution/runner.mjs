@@ -206,7 +206,11 @@ async function resourceUsage() {
 
 async function execute(value) {
   const request = validate(value);
-  if (!prepared || prepared.attemptId !== request.attemptId)
+  if (
+    !prepared ||
+    prepared.attemptId !== request.attemptId ||
+    prepared.baseCommit !== request.baseCommit
+  )
     throw new Error("checkout_not_prepared");
   const deniedProbe = (await deniedHttpProbe()) && (await deniedTcpProbe());
   if (!deniedProbe) throw new Error("execution_network_not_denied");

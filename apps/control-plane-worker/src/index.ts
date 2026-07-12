@@ -13,8 +13,6 @@ import { ConfiguredAuthorizer, type RequestAuthorizer } from "./auth.js";
 import {
   CloudflareExecutionDispatcher,
   CloudflareRepositoryExecutionBackend,
-  type EvidenceBucketPort,
-  type ExecutionContainerNamespacePort,
 } from "./cloudflare-execution.js";
 import { idempotencyKeySchema, submitRunSchema } from "./contracts.js";
 import type { ControlPlaneEnv } from "./environment.js";
@@ -72,8 +70,8 @@ function coordinator(env: ControlPlaneEnv): ResumableCoordinator {
     env.EXECUTION_MODE === "cloudflare-container"
       ? new CloudflareExecutionDispatcher(
           new CloudflareRepositoryExecutionBackend(
-            env.EXECUTION_CONTAINERS! as unknown as ExecutionContainerNamespacePort,
-            env.EXECUTION_EVIDENCE! as unknown as EvidenceBucketPort,
+            env.EXECUTION_CONTAINERS!,
+            env.EXECUTION_EVIDENCE!,
           ),
           env.EXECUTION_SCENARIO ?? "success",
         )
@@ -150,10 +148,7 @@ async function cancelRun(
     active?.status === "running" &&
     env.EXECUTION_CONTAINERS
   )
-    await (
-      env.EXECUTION_CONTAINERS as unknown as ExecutionContainerNamespacePort
-    )
-      .getByName(active.attemptId)
+    await env.EXECUTION_CONTAINERS.getByName(active.attemptId)
       .destroy()
       .catch(() => undefined);
   return json(inspectRun(await jobs.cancel(runId, new Date())));

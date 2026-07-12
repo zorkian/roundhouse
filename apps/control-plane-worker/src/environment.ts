@@ -1,11 +1,16 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
+import type {
+  EvidenceBucketPort,
+  ExecutionContainerNamespacePort,
+} from "./cloudflare-execution.js";
+
 export type ControlPlaneEnv = {
   DB: D1Database;
   RUN_QUEUE: Queue<unknown>;
-  EXECUTION_CONTAINERS?: DurableObjectNamespace;
-  EXECUTION_EVIDENCE?: R2Bucket;
+  EXECUTION_CONTAINERS?: ExecutionContainerNamespacePort;
+  EXECUTION_EVIDENCE?: EvidenceBucketPort;
   AUTH_MODE?: "local" | "access";
   LOCAL_API_TOKEN?: string;
   ACCESS_TEAM_DOMAIN?: string;

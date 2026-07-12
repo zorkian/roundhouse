@@ -9,7 +9,7 @@ import type { JobStage, SelfDevelopmentRun } from "./task.js";
 export const repositoryExecutionRequestSchema = z.object({
   schemaVersion: z.literal(1),
   runId: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/),
-  attemptId: z.string().min(1),
+  attemptId: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,199}$/),
   attemptNumber: z.number().int().positive(),
   expectedRevision: z.number().int().positive(),
   repositoryUrl: z.literal("https://github.com/zorkian/roundhouse.git"),
