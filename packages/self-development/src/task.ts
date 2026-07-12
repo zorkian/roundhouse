@@ -42,7 +42,7 @@ export const selfDevelopmentTaskSchema = z.object({
       .string()
       .email()
       .max(320)
-      .refine((value) => !/[\r\n]/.test(value)),
+      .refine((value) => !/[\u0000-\u001f\u007f]/.test(value)),
   }),
 });
 

@@ -182,7 +182,7 @@ export const publicationRequestSchema = z.object({
     .string()
     .min(1)
     .max(200)
-    .refine((value) => !/[\r\n]/.test(value)),
+    .refine((value) => !/[\u0000-\u001f\u007f]/.test(value)),
 });
 
 export type PublicationRequest = z.infer<typeof publicationRequestSchema>;

@@ -130,6 +130,12 @@ describe("trusted self-development contracts", () => {
         commitMessage: "first\rsecond",
       }),
     ).toThrow();
+    expect(() =>
+      publicationRequestSchema.parse({
+        ...request,
+        commitMessage: "first\tsecond",
+      }),
+    ).toThrow();
   });
 
   it("aligns task publication identity with the Git boundary", () => {
@@ -150,6 +156,10 @@ describe("trusted self-development contracts", () => {
     ).toBe(false);
     expect(
       schema.safeParse({ ...publication, authorName: "Roundhouse\tInjected" })
+        .success,
+    ).toBe(false);
+    expect(
+      schema.safeParse({ ...publication, commitMessage: "Record\tdogfood" })
         .success,
     ).toBe(false);
     expect(
