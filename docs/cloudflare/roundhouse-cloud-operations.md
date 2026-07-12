@@ -86,7 +86,7 @@ routes for normal operations. It retained the following public-safe bindings:
   with an empty deletion list.
 
 Worker versions `951b4e30-1558-4b06-b519-460b7ad65be3` and final reviewed
-version `1e7e035d-75e0-406c-9e0a-cd831934a9bb` were deployed after the
+version `1aa0e78f-1438-4a7d-b250-6da69ce9e9b0` were deployed after the
 interruption. Authenticated inspection after both redeployments returned the
 same runs, evidence bindings, and approval, demonstrating durable survival.
 
