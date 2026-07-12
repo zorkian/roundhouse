@@ -76,6 +76,56 @@ async function validateTrustedResult(
   const patchHash = bytesToHex(
     await crypto.subtle.digest("SHA-256", patchBytes),
   );
+  const publicationManifest = result.publicationManifest;
+  let manifestBindingValid = true;
+  let publicationBytes = 0;
+  if (publicationManifest) {
+    const manifestValue = {
+      schemaVersion: publicationManifest.schemaVersion,
+      baseCommit: publicationManifest.baseCommit,
+      patchSha256: publicationManifest.patchSha256,
+      files: publicationManifest.files,
+    };
+    const manifestBytes = encoder.encode(JSON.stringify(manifestValue));
+    const manifestHash = bytesToHex(
+      await crypto.subtle.digest("SHA-256", manifestBytes),
+    );
+    const manifestPaths = publicationManifest.files.map((file) => file.path);
+    manifestBindingValid =
+      publicationManifest.baseCommit === request.baseCommit &&
+      publicationManifest.patchSha256 === result.patchSha256 &&
+      publicationManifest.sha256 === manifestHash &&
+      new Set(manifestPaths).size === manifestPaths.length &&
+      [...manifestPaths].sort().join("\0") ===
+        [...result.changedFiles].sort().join("\0");
+    for (const file of publicationManifest.files) {
+      if (file.operation !== "upsert") continue;
+      let content: Uint8Array;
+      try {
+        content = Uint8Array.from(atob(file.contentBase64), (value) =>
+          value.charCodeAt(0),
+        );
+      } catch {
+        throw new StageFailure(
+          "Trusted publication content was not valid base64",
+          "implementation_binding_mismatch",
+          false,
+        );
+      }
+      publicationBytes += content.byteLength;
+      const ownedContent = new Uint8Array(new ArrayBuffer(content.byteLength));
+      ownedContent.set(content);
+      const contentHash = bytesToHex(
+        await crypto.subtle.digest("SHA-256", ownedContent),
+      );
+      if (content.byteLength !== file.size || contentHash !== file.sha256)
+        throw new StageFailure(
+          "Trusted publication content binding did not match",
+          "implementation_binding_mismatch",
+          false,
+        );
+    }
+  }
   if (
     result.runId !== request.runId ||
     result.attemptId !== request.attemptId ||
@@ -84,6 +134,8 @@ async function validateTrustedResult(
     result.patchSha256 !== patchHash ||
     result.patchBytes !== patchBytes.byteLength ||
     result.patchBytes > request.maxPatchBytes ||
+    !manifestBindingValid ||
+    publicationBytes > request.maxPatchBytes ||
     result.changedFiles.length > request.maxChangedFiles ||
     !result.changedFiles.every((path) => request.allowedPaths.includes(path))
   )

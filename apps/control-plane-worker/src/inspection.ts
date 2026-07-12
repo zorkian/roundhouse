@@ -8,6 +8,7 @@ export function inspectRun(run: SelfDevelopmentRun): Record<string, unknown> {
     schemaVersion: 1,
     runId: run.runId,
     taskId: run.task.taskId,
+    source: run.task.source,
     state: run.state,
     revision: run.revision,
     createdAt: run.createdAt,

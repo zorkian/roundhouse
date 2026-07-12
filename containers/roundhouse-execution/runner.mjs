@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { connect } from "node:net";
-import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 
 const workspace = "/home/runner/workspace";
@@ -568,6 +568,11 @@ async function validateImplementation(value) {
   )
     throw new Error("validation_failed");
   const usage = await resourceUsage();
+  const publicationManifest = await createPublicationManifest(
+    trusted.changedFiles,
+    request.baseCommit,
+    trusted.patchSha256,
+  );
   const result = {
     schemaVersion: 1,
     runId: request.runId,
@@ -578,6 +583,7 @@ async function validateImplementation(value) {
     patchSha256: trusted.patchSha256,
     patchBytes: trusted.patchBytes,
     changedFiles: trusted.changedFiles,
+    publicationManifest,
     startedAt: trusted.startedAt,
     completedAt: new Date().toISOString(),
     checkoutDurationMs: prepared.checkoutDurationMs,
@@ -610,6 +616,42 @@ async function validateImplementation(value) {
   };
   trusted.result = result;
   return result;
+}
+
+export async function createPublicationManifest(
+  paths,
+  baseCommit,
+  patchSha256,
+  root = workspace,
+) {
+  const files = [];
+  let totalBytes = 0;
+  for (const path of [...paths].sort()) {
+    const absolute = `${root}/${path}`;
+    if (!existsSync(absolute)) {
+      files.push({ path, operation: "delete" });
+      continue;
+    }
+    const stat = await lstat(absolute);
+    if (!stat.isFile() || stat.isSymbolicLink())
+      throw new Error("publication_file_type_not_allowed");
+    const content = await readFile(absolute);
+    totalBytes += content.byteLength;
+    if (content.byteLength > 512 * 1024 || totalBytes > 512 * 1024)
+      throw new Error("publication_content_limit_exceeded");
+    files.push({
+      path,
+      operation: "upsert",
+      contentBase64: content.toString("base64"),
+      size: content.byteLength,
+      sha256: createHash("sha256").update(content).digest("hex"),
+    });
+  }
+  const value = { schemaVersion: 1, baseCommit, patchSha256, files };
+  return {
+    ...value,
+    sha256: createHash("sha256").update(JSON.stringify(value)).digest("hex"),
+  };
 }
 
 async function prepare(value, mode) {

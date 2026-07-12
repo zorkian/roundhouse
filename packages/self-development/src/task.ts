@@ -19,6 +19,22 @@ export const selfDevelopmentTaskSchema = z.object({
   baseCommit: z.string().regex(/^[a-f0-9]{40}$/),
   validationLevel: z.enum(["quick", "full"]).default("quick"),
   allowedPaths: z.array(z.string().min(1)).min(1),
+  source: z
+    .object({
+      kind: z.literal("github_issue"),
+      owner: z.literal("zorkian"),
+      repository: z.literal("roundhouse"),
+      issueNumber: z.number().int().positive(),
+      issueUrl: z
+        .string()
+        .regex(
+          /^https:\/\/github\.com\/zorkian\/roundhouse\/issues\/[1-9][0-9]*$/,
+        ),
+      nodeId: z.string().min(1).max(200),
+      contentSha256: z.string().regex(/^[a-f0-9]{64}$/),
+      updatedAt: z.iso.datetime(),
+    })
+    .optional(),
   publication: z.object({
     remote: z
       .string()

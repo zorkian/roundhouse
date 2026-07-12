@@ -26,6 +26,10 @@ export type ControlPlaneEnv = {
     | "credential-cleanup-failure";
   SUBMISSION_SCENARIO?: "success" | "interrupt-before-delivery";
   ROUNDHOUSE_CODEX_AUTH_JSON?: string;
+  ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY?: string;
+  GITHUB_APP_ID?: string;
+  GITHUB_INSTALLATION_ID?: string;
+  GITHUB_API_FETCHER?: typeof fetch;
   ALLOWED_REPOSITORY_PATH: string;
   ALLOWED_REMOTE_URL: string;
 };

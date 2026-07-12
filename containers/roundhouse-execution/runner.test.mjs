@@ -7,6 +7,7 @@ import {
   assertCompleteAgentOutput,
   boundedAgentFailure,
   changedPaths,
+  createPublicationManifest,
   command,
   pathAllowed,
   secretStrings,
@@ -15,6 +16,9 @@ import {
   validRuntimeCredentialSize,
   withoutRuntimeCredential,
 } from "./runner.mjs";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 describe("execution runner command", () => {
   it("rejects promptly when spawning the executable fails", async () => {
@@ -115,6 +119,27 @@ describe("trusted agent output boundary", () => {
     const allowed = ["docs/dogfood/trusted-self-development-loop.md"];
     expect(pathAllowed(allowed[0], allowed)).toBe(true);
     expect(pathAllowed(`${allowed[0]}/extra.md`, allowed)).toBe(false);
+  });
+
+  it("captures bounded publication file snapshots", async () => {
+    const root = await mkdtemp(join(tmpdir(), "roundhouse-publication-"));
+    try {
+      await mkdir(join(root, "docs"));
+      await writeFile(join(root, "docs", "changed.md"), "changed\n");
+      const manifest = await createPublicationManifest(
+        ["docs/changed.md", "docs/deleted.md"],
+        "a".repeat(40),
+        "b".repeat(64),
+        root,
+      );
+      expect(manifest.files).toMatchObject([
+        { path: "docs/changed.md", operation: "upsert", size: 8 },
+        { path: "docs/deleted.md", operation: "delete" },
+      ]);
+      expect(manifest.sha256).toMatch(/^[a-f0-9]{64}$/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("parses NUL-delimited status paths without quoting ambiguity", () => {
