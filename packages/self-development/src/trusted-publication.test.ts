@@ -281,6 +281,25 @@ describe("publishTrustedImplementation", () => {
           },
         ],
         implementationEvidenceId: value.evidenceBinding.evidenceId,
+        runRevision: value.publicationRequest.expectedRevision,
+        approval: value.approval,
+        publication: value.publicationRequest,
+        remote: "--upload-pack=malicious",
+        authorName: "Roundhouse",
+        authorEmail: "roundhouse@example.test",
+      }),
+    ).rejects.toThrow("Publication remote name is invalid");
+    await expect(
+      publishTrustedImplementation({
+        repositoryPath: value.publication,
+        evidence: [
+          { json: value.evidenceJson, binding: value.evidenceBinding },
+          {
+            json: value.validationEvidenceJson,
+            binding: value.validationEvidenceBinding,
+          },
+        ],
+        implementationEvidenceId: value.evidenceBinding.evidenceId,
         runRevision: value.publicationRequest.expectedRevision + 1,
         approval: value.approval,
         publication: value.publicationRequest,

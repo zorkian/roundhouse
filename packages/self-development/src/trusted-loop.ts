@@ -187,6 +187,20 @@ export const publicationRequestSchema = z.object({
 
 export type PublicationRequest = z.infer<typeof publicationRequestSchema>;
 
+export function pullRequestMatchesRemote(
+  pullRequestUrl: string | undefined,
+  remoteUrl: string,
+): boolean {
+  if (pullRequestUrl === undefined) return true;
+  if (!/^https:\/\/github\.com\/[^/?#]+\/[^/?#]+\.git$/.test(remoteUrl))
+    return false;
+  const prefix = `${remoteUrl.slice(0, -4)}/pull/`;
+  return (
+    pullRequestUrl.startsWith(prefix) &&
+    /^[1-9][0-9]*$/.test(pullRequestUrl.slice(prefix.length))
+  );
+}
+
 export function approvalMatches(
   approvalValue: unknown,
   expected: Pick<ExactApproval, "runId" | "baseCommit" | "patchSha256"> & {

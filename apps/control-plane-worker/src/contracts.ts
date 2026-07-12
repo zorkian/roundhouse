@@ -35,5 +35,8 @@ export const recordPublicationSchema = z.object({
   branch: dogfoodPublicationBranchSchema,
   commit: z.string().regex(/^[a-f0-9]{40}$/),
   remoteUrl: z.literal("https://github.com/zorkian/roundhouse.git"),
-  pullRequestUrl: z.string().url().optional(),
+  pullRequestUrl: z
+    .string()
+    .regex(/^https:\/\/github\.com\/zorkian\/roundhouse\/pull\/[1-9][0-9]*$/)
+    .optional(),
 });

@@ -396,6 +396,11 @@ export function jobStoreContract(
           branch: contractTask.publication.branch,
           remoteUrl: "https://example.test/different.git",
         },
+        {
+          branch: contractTask.publication.branch,
+          remoteUrl: contractTask.publication.remoteUrl,
+          pullRequestUrl: "https://github.com/attacker/repository/pull/1",
+        },
       ])
         await expect(
           store.recordPublication(

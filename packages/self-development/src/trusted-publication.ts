@@ -206,6 +206,8 @@ export async function publishTrustedImplementation(
   )
     throw new Error("Exact approval does not match publication inputs");
   const remote = input.remote ?? "origin";
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/.test(remote))
+    throw new Error("Publication remote name is invalid");
   if (
     (await git(input.repositoryPath, ["rev-parse", "HEAD"])) !==
     result.baseCommit

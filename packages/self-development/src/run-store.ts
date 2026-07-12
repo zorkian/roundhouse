@@ -26,7 +26,11 @@ import type {
   RunUpdates,
 } from "./job-ports.js";
 import type { JobStage } from "./task.js";
-import { approvalMatches, type ExactApproval } from "./trusted-loop.js";
+import {
+  approvalMatches,
+  pullRequestMatchesRemote,
+  type ExactApproval,
+} from "./trusted-loop.js";
 
 const transitions: Record<
   SelfDevelopmentRunState,
@@ -280,7 +284,11 @@ export class FileRunStore implements JobStore {
         throw new Error("Run does not have a valid approval");
       if (
         publication.branch !== run.task.publication.branch ||
-        publication.remoteUrl !== run.task.publication.remoteUrl
+        publication.remoteUrl !== run.task.publication.remoteUrl ||
+        !pullRequestMatchesRemote(
+          publication.pullRequestUrl,
+          run.task.publication.remoteUrl,
+        )
       )
         throw new Error("Publication target does not match the task");
       return this.replace({

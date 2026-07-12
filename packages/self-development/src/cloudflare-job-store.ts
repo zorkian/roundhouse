@@ -14,7 +14,11 @@ import type {
   JobStore,
   RunUpdates,
 } from "./job-ports.js";
-import { approvalMatches, type ExactApproval } from "./trusted-loop.js";
+import {
+  approvalMatches,
+  pullRequestMatchesRemote,
+  type ExactApproval,
+} from "./trusted-loop.js";
 
 const claimable = new Set<SelfDevelopmentRunState>([
   "created",
@@ -253,7 +257,11 @@ export class D1JobStore implements JobStore {
         throw new Error("Run does not have a valid approval");
       if (
         publication.branch !== run.task.publication.branch ||
-        publication.remoteUrl !== run.task.publication.remoteUrl
+        publication.remoteUrl !== run.task.publication.remoteUrl ||
+        !pullRequestMatchesRemote(
+          publication.pullRequestUrl,
+          run.task.publication.remoteUrl,
+        )
       )
         throw new Error("Publication target does not match the task");
       const next = {
