@@ -259,14 +259,29 @@ function parseCodexEvents(stdout, maximum) {
   return { sessionId, inputTokens, outputTokens, summary, outcome, eventBytes };
 }
 
-function secretStrings(value) {
+export function secretStrings(value) {
   const found = [];
-  const visit = (current) => {
-    if (typeof current === "string" && current.length >= 12)
-      found.push(current);
-    else if (Array.isArray(current)) current.forEach(visit);
+  const secretKey = (key) => {
+    const normalized = key.toLowerCase().replace(/[^a-z]/g, "");
+    return (
+      normalized.includes("token") ||
+      normalized.includes("secret") ||
+      normalized.includes("password") ||
+      normalized.includes("apikey") ||
+      normalized.includes("credential") ||
+      normalized === "key" ||
+      normalized.includes("privatekey")
+    );
+  };
+  const visit = (current, sensitive = false) => {
+    if (typeof current === "string") {
+      if (sensitive && current.length >= 8) found.push(current);
+    } else if (Array.isArray(current))
+      current.forEach((item) => visit(item, sensitive));
     else if (current && typeof current === "object")
-      Object.values(current).forEach(visit);
+      Object.entries(current).forEach(([key, item]) =>
+        visit(item, secretKey(key)),
+      );
   };
   visit(value);
   return found;

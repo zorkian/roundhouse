@@ -7,6 +7,7 @@ import {
   assertCompleteAgentOutput,
   changedPaths,
   command,
+  secretStrings,
   validRepositoryPath,
   validRuntimeCredentialSize,
   withoutRuntimeCredential,
@@ -52,6 +53,19 @@ describe("trusted agent output boundary", () => {
   it("keeps the credential field within the HTTP envelope", () => {
     expect(validRuntimeCredentialSize("x".repeat(24 * 1024))).toBe(true);
     expect(validRuntimeCredentialSize("x".repeat(24 * 1024 + 1))).toBe(false);
+  });
+
+  it("extracts credential values without treating metadata as secret", () => {
+    expect(
+      secretStrings({
+        issuer: "https://auth.openai.com",
+        client_id: "public-client-identifier",
+        tokens: {
+          access_token: "actual-access-token",
+          refresh_token: "actual-refresh-token",
+        },
+      }),
+    ).toEqual(["actual-access-token", "actual-refresh-token"]);
   });
 
   it("rejects control characters in repository paths", () => {
