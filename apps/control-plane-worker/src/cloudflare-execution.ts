@@ -75,6 +75,8 @@ async function validateTrustedResult(
     result.checkoutCommit !== request.baseCommit ||
     result.patchSha256 !== patchHash ||
     result.patchBytes !== new TextEncoder().encode(result.patch).byteLength ||
+    result.patchBytes > request.maxPatchBytes ||
+    result.changedFiles.length > request.maxChangedFiles ||
     !result.changedFiles.every((path) => request.allowedPaths.includes(path))
   )
     throw new StageFailure(

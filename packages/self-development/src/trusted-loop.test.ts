@@ -104,6 +104,7 @@ describe("trusted self-development contracts", () => {
         expected,
       ),
     ).toBe(false);
+    expect(approvalMatches({ schemaVersion: 1 }, expected)).toBe(false);
   });
 
   it("allows publication only to a bounded dogfood branch", () => {

@@ -193,7 +193,9 @@ export function approvalMatches(
     evidence: ExactApproval["evidence"];
   },
 ): boolean {
-  const approval = exactApprovalSchema.parse(approvalValue);
+  const parsed = exactApprovalSchema.safeParse(approvalValue);
+  if (!parsed.success) return false;
+  const approval = parsed.data;
   if (
     approval.runId !== expected.runId ||
     approval.baseCommit !== expected.baseCommit ||

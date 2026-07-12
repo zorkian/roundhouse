@@ -120,6 +120,26 @@ function trustedResult() {
 }
 
 describe("CloudflareTrustedImplementationBackend", () => {
+  it("rejects results exceeding request-scoped limits", async () => {
+    const backend = new CloudflareTrustedImplementationBackend(
+      {
+        getByName: () => ({
+          runJob: async () => result(),
+          runTrustedJob: async () => trustedResult(),
+          destroy: async () => undefined,
+        }),
+      },
+      new MemoryEvidence(),
+      "unused",
+    );
+    await expect(
+      backend.execute({ ...trustedRequest, maxPatchBytes: 1 }),
+    ).rejects.toMatchObject({
+      classification: "implementation_binding_mismatch",
+      retryable: false,
+    });
+  });
+
   it("rejects descendants of an exact file allowlist entry", async () => {
     const backend = new CloudflareTrustedImplementationBackend(
       {
