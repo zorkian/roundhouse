@@ -23,6 +23,7 @@ import {
   approveRunSchema,
   idempotencyKeySchema,
   recordPublicationSchema,
+  revisionMutationSchema,
   submitRunSchema,
 } from "./contracts.js";
 import type { ControlPlaneEnv } from "./environment.js";
@@ -33,6 +34,16 @@ import {
   markDelivered,
   reserveSubmission,
 } from "./submissions.js";
+import {
+  idempotentMutation,
+  internalRecoveryActor,
+  MutationConflictError,
+  MutationPendingError,
+  recordAlert,
+  retentionReport,
+  retryFailedRun,
+  runRecoveryCycle,
+} from "./operations.js";
 
 const maxBodyBytes = 64 * 1024;
 const jsonHeaders = { "content-type": "application/json; charset=utf-8" };
@@ -172,10 +183,13 @@ async function submit(
 
 async function cancelRun(
   runId: string,
+  expectedRevision: number,
   env: ControlPlaneEnv,
 ): Promise<Response> {
   const jobs = new D1JobStore(env.DB);
   const current = await jobs.read(runId);
+  if (current.revision !== expectedRevision)
+    throw new HttpError(409, "Cancellation revision does not match");
   const active = current.attempts.at(-1);
   if (
     ["cloudflare-container", "cloudflare-trusted-codex"].includes(
@@ -199,6 +213,32 @@ async function cancelRun(
         });
       });
   return json(inspectRun(await jobs.cancel(runId, new Date())));
+}
+
+async function mutationResponse(
+  request: Request,
+  env: ControlPlaneEnv,
+  actorId: string,
+  action: string,
+  runId: string,
+  mutate: () => Promise<Response>,
+): Promise<Response> {
+  const key = idempotencyKeySchema.parse(
+    request.headers.get("idempotency-key"),
+  );
+  const requestValue = await request
+    .clone()
+    .json()
+    .catch(() => null);
+  const result = await idempotentMutation(
+    env,
+    { key, action, runId, actorId, request: requestValue, now: new Date() },
+    async () => {
+      const response = await mutate();
+      return response.json();
+    },
+  );
+  return json(result.value, 200);
 }
 
 async function approveRun(
@@ -379,22 +419,92 @@ async function route(
       url.pathname,
     );
   if (request.method === "POST" && approvalMatch?.[1])
-    return approveRun(approvalMatch[1], request, env, actorId);
+    return mutationResponse(
+      request,
+      env,
+      actorId,
+      "approve",
+      approvalMatch[1],
+      () => approveRun(approvalMatch[1]!, request, env, actorId),
+    );
   const publicationMatch =
     /^\/v1\/runs\/([a-zA-Z0-9][a-zA-Z0-9_-]{0,127})\/publication$/.exec(
       url.pathname,
     );
   if (request.method === "POST" && publicationMatch?.[1])
-    return recordPublication(publicationMatch[1], request, env, actorId);
-  if (request.method === "DELETE" && match?.[1]) {
+    return mutationResponse(
+      request,
+      env,
+      actorId,
+      "publish",
+      publicationMatch[1],
+      () => recordPublication(publicationMatch[1]!, request, env, actorId),
+    );
+  const cancelMatch =
+    /^\/v1\/runs\/([a-zA-Z0-9][a-zA-Z0-9_-]{0,127})\/cancel$/.exec(
+      url.pathname,
+    );
+  if (request.method === "POST" && cancelMatch?.[1]) {
     try {
-      return await cancelRun(match[1], env);
+      const input = revisionMutationSchema.parse(await request.clone().json());
+      return await mutationResponse(
+        request,
+        env,
+        actorId,
+        "cancel",
+        cancelMatch[1],
+        () => cancelRun(cancelMatch[1]!, input.expectedRevision, env),
+      );
     } catch (error) {
       if (error instanceof Error && error.message.startsWith("Run not found:"))
         throw new HttpError(404, "Run not found");
       throw error;
     }
   }
+  const retryMatch =
+    /^\/v1\/runs\/([a-zA-Z0-9][a-zA-Z0-9_-]{0,127})\/retry$/.exec(url.pathname);
+  if (request.method === "POST" && retryMatch?.[1]) {
+    const input = revisionMutationSchema.parse(await request.clone().json());
+    return mutationResponse(
+      request,
+      env,
+      actorId,
+      "retry",
+      retryMatch[1],
+      async () => {
+        const run = await retryFailedRun(
+          env,
+          retryMatch[1]!,
+          input.expectedRevision,
+          new Date(),
+        );
+        await env.RUN_QUEUE.send({
+          schemaVersion: 1,
+          runId: run.runId,
+          deliveryId: `operator_retry_${run.runId}_${run.revision}`,
+          expectedRevision: run.revision,
+        });
+        return json(inspectRun(run));
+      },
+    );
+  }
+  if (request.method === "GET" && url.pathname === "/v1/operations/alerts") {
+    const rows = await env.DB.prepare(
+      "SELECT alert_key, kind, severity, run_id, detail_json, first_seen_at, last_seen_at, occurrences, resolved_at FROM operational_alerts ORDER BY last_seen_at DESC LIMIT 100",
+    ).all<Record<string, unknown>>();
+    return json({ schemaVersion: 1, alerts: rows.results });
+  }
+  if (request.method === "GET" && url.pathname === "/v1/operations/retention")
+    return json(await retentionReport(env));
+  if (request.method === "POST" && url.pathname === "/v1/operations/recover")
+    return mutationResponse(
+      request,
+      env,
+      actorId,
+      "recover",
+      "operations",
+      async () => json(await runRecoveryCycle(env, new Date())),
+    );
   throw new HttpError(404, "Not found");
 }
 
@@ -430,6 +540,16 @@ export function createControlPlaneHandler(
                 message: "Idempotency key was used for a different request",
               },
             },
+            409,
+          );
+        if (error instanceof MutationConflictError)
+          return json(
+            { error: { code: "idempotency_conflict", message: error.message } },
+            409,
+          );
+        if (error instanceof MutationPendingError)
+          return json(
+            { error: { code: "mutation_pending", message: error.message } },
             409,
           );
         if (error instanceof z.ZodError)
@@ -489,6 +609,24 @@ export function createControlPlaneHandler(
               });
           },
         );
+      }
+    },
+    async scheduled(_controller, env): Promise<void> {
+      try {
+        await runRecoveryCycle(env, new Date());
+      } catch (error) {
+        await recordAlert(env, {
+          key: "scheduled_recovery_failed",
+          kind: "scheduled_recovery_failed",
+          severity: "error",
+          detail: {
+            actorId: internalRecoveryActor,
+            reason:
+              error instanceof Error ? error.message.slice(0, 160) : "unknown",
+          },
+          now: new Date(),
+        });
+        throw error;
       }
     },
   };

@@ -17,6 +17,7 @@ import {
   controlPlaneSubmissionMigration,
   reserveSubmission,
 } from "./submissions.js";
+import { cloudOperationsMigration } from "./operations.js";
 
 const instances: Miniflare[] = [];
 const token = "local-test-token";
@@ -175,7 +176,7 @@ async function runtime(): Promise<{
   });
   instances.push(mf);
   const db = await mf.getD1Database("DB");
-  for (const statement of `${d1JobStoreMigration}\n${controlPlaneSubmissionMigration}`
+  for (const statement of `${d1JobStoreMigration}\n${controlPlaneSubmissionMigration}\n${cloudOperationsMigration}`
     .split(";")
     .map((value) => value.trim())
     .filter(Boolean))
@@ -211,6 +212,12 @@ function request(
 ): Request<unknown, IncomingRequestCfProperties> {
   const headers = new Headers(init.headers);
   if (authenticated) headers.set("authorization", `Bearer ${token}`);
+  if (
+    init.method === "POST" &&
+    path !== "/v1/runs" &&
+    !headers.has("idempotency-key")
+  )
+    headers.set("idempotency-key", `test-${crypto.randomUUID()}`);
   return new Request(`http://roundhouse.local${path}`, {
     ...init,
     headers,
@@ -643,9 +650,17 @@ describe("local control-plane Worker", () => {
       {} as ExecutionContext,
     );
     const { runId } = (await submitted.json()) as { runId: string };
+    const current = await new D1JobStore(env.DB).read(runId);
 
     const cancelled = await handler.fetch!(
-      request(`/v1/runs/${runId}`, { method: "DELETE" }),
+      request(`/v1/runs/${runId}/cancel`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          schemaVersion: 1,
+          expectedRevision: current.revision,
+        }),
+      }),
       env,
       {} as ExecutionContext,
     );
