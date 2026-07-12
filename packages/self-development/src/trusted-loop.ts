@@ -182,7 +182,7 @@ export const publicationRequestSchema = z.object({
     .string()
     .min(1)
     .max(200)
-    .refine((value) => !value.includes("\n")),
+    .refine((value) => !/[\r\n]/.test(value)),
 });
 
 export type PublicationRequest = z.infer<typeof publicationRequestSchema>;

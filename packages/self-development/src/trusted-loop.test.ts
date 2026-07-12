@@ -123,5 +123,11 @@ describe("trusted self-development contracts", () => {
     expect(() =>
       publicationRequestSchema.parse({ ...request, branch: "main" }),
     ).toThrow();
+    expect(() =>
+      publicationRequestSchema.parse({
+        ...request,
+        commitMessage: "first\rsecond",
+      }),
+    ).toThrow();
   });
 });

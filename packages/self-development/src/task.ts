@@ -32,7 +32,7 @@ export const selfDevelopmentTaskSchema = z.object({
       .string()
       .min(1)
       .max(200)
-      .refine((value) => !value.includes("\n")),
+      .refine((value) => !/[\r\n]/.test(value)),
     authorName: z.string().min(1).max(200),
     authorEmail: z.string().email(),
   }),
