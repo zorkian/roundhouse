@@ -239,6 +239,26 @@ describe("GitHub-native operator webhook", () => {
     });
   });
 
+  it("stops reading a webhook after the bounded body limit", async () => {
+    const env = await runtime();
+    const request = new Request(
+      "https://roundhouse-dev.rm-rf.rip/v1/github/webhook",
+      {
+        method: "POST",
+        headers: {
+          "x-github-delivery": "12345678-abcd-4321-abcd-1234567890ab",
+          "x-github-event": "issue_comment",
+          "x-hub-signature-256": `sha256=${"a".repeat(64)}`,
+        },
+        body: new Uint8Array(1024 * 1024 + 1),
+      },
+    );
+    await expect(verifyWebhookRequest(request, env)).rejects.toMatchObject({
+      status: 413,
+      code: "payload_too_large",
+    });
+  });
+
   it("reports checks only for the exact Roundhouse-published head", async () => {
     const env = await runtime();
     const runId = "run_exact_head";

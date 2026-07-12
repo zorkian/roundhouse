@@ -204,9 +204,7 @@ export async function verifyWebhookRequest(
     ].includes(eventName)
   )
     throw new GitHubWebhookError(400, "unsupported_event");
-  const bytes = new Uint8Array(await request.arrayBuffer());
-  if (bytes.byteLength > 1024 * 1024)
-    throw new GitHubWebhookError(413, "payload_too_large");
+  const bytes = await readLimitedBody(request, 1024 * 1024);
   if (
     !(await verifyGitHubSignature(
       bytes,
@@ -242,6 +240,36 @@ export class GitHubWebhookError extends Error {
   ) {
     super(code);
   }
+}
+
+async function readLimitedBody(
+  request: Request,
+  maxBytes: number,
+): Promise<Uint8Array> {
+  const declared = Number(request.headers.get("content-length") ?? 0);
+  if (Number.isFinite(declared) && declared > maxBytes)
+    throw new GitHubWebhookError(413, "payload_too_large");
+  if (!request.body) return new Uint8Array();
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  while (true) {
+    const next = await reader.read();
+    if (next.done) break;
+    size += next.value.byteLength;
+    if (size > maxBytes) {
+      await reader.cancel("payload_too_large");
+      throw new GitHubWebhookError(413, "payload_too_large");
+    }
+    chunks.push(next.value);
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
 }
 
 export function issueCommand(value: VerifiedWebhook): {
