@@ -1,0 +1,11 @@
+{
+  "name": "@roundhouse/control-plane-worker",
+  "version": "0.0.0",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@roundhouse/self-development": "workspace:*",
+    "zod": "catalog:"
+  }
+}

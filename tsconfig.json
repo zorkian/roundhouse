@@ -1,6 +1,7 @@
 {
   "files": [],
   "references": [
+    { "path": "./apps/control-plane-worker" },
     { "path": "./apps/control-plane-spike" },
     { "path": "./apps/dreamwidth-container-spike" },
     { "path": "./packages/domain" },

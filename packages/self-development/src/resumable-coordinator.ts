@@ -87,7 +87,7 @@ export class ResumableCoordinator {
     const stage = stageFor(claim.run);
     if (!stage) {
       await this.store.release(claim.run.runId, claim.token, this.clock.now());
-      return claim.run;
+      return this.store.read(claim.run.runId);
     }
     const started = await this.store.startAttempt(
       claim.run.runId,
@@ -110,7 +110,7 @@ export class ResumableCoordinator {
         this.clock.now(),
       );
       await this.store.release(started.runId, claim.token, this.clock.now());
-      return completed;
+      return this.store.read(completed.runId);
     } catch (error) {
       const failure =
         error instanceof StageFailure
@@ -136,7 +136,7 @@ export class ResumableCoordinator {
         this.clock.now(),
       );
       await this.store.release(started.runId, claim.token, this.clock.now());
-      return failed;
+      return this.store.read(failed.runId);
     }
   }
 }

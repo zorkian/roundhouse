@@ -7,12 +7,14 @@ SPDX-License-Identifier: Apache-2.0
 
 Status: **proposal only; unapplied**.
 
-| Resource          | Proposed development name     | Purpose                                               |
-| ----------------- | ----------------------------- | ----------------------------------------------------- |
-| Worker            | `roundhouse-coordinator-dev`  | Queue consumer and coordination API                   |
-| D1 database       | `roundhouse-coordination-dev` | Authoritative run, revision, lease, and attempt state |
-| Queue             | `roundhouse-runs-dev`         | At-least-once run-targeted delivery                   |
-| Dead-letter queue | `roundhouse-runs-dlq-dev`     | Exhausted delivery inspection                         |
+| Resource          | Proposed development name      | Purpose                                       |
+| ----------------- | ------------------------------ | --------------------------------------------- |
+| Worker            | `roundhouse-dev-control-plane` | HTTP API and Queue consumer                   |
+| D1 database       | `roundhouse-dev-coordination`  | Runs, leases, attempts, and submission outbox |
+| Queue             | `roundhouse-dev-runs`          | At-least-once revision-targeted delivery      |
+| Dead-letter queue | `roundhouse-dev-runs-dlq`      | Exhausted infrastructure-delivery inspection  |
 
 No resource ID, account binding, route, domain, secret, or remote migration is
 assigned by this milestone. Any provisioning requires a separate approval.
+The all-zero D1 ID in local Wrangler configuration is deliberately invalid for
+remote use and is not a resource assignment.

@@ -35,6 +35,10 @@ The [local-first Cloudflare coordination adapters](docs/cloudflare-coordination-
 document run-targeted Queue delivery, D1 compare-and-set lease ownership, and
 the unapplied development resource proposal.
 
+The [local control-plane Worker](docs/local-control-plane-worker.md) documents
+the authenticated task API, durable submission outbox, safe run inspection,
+bounded execution dispatch, and local restart/replay procedure.
+
 ## License
 
 Roundhouse is licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution information.

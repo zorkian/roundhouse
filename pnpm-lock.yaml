@@ -54,6 +54,15 @@ importers:
         specifier: 'catalog:'
         version: 4.4.3
 
+  apps/control-plane-worker:
+    dependencies:
+      '@roundhouse/self-development':
+        specifier: workspace:*
+        version: link:../../packages/self-development
+      zod:
+        specifier: 'catalog:'
+        version: 4.4.3
+
   apps/dreamwidth-container-spike:
     dependencies:
       '@cloudflare/containers':
