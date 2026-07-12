@@ -191,6 +191,16 @@ export async function verifyWebhookRequest(
     throw new GitHubWebhookError(400, "invalid_delivery");
   if (!/^[a-z_]{2,40}$/.test(eventName))
     throw new GitHubWebhookError(400, "invalid_event");
+  if (
+    ![
+      "issues",
+      "issue_comment",
+      "pull_request",
+      "check_run",
+      "check_suite",
+    ].includes(eventName)
+  )
+    throw new GitHubWebhookError(400, "unsupported_event");
   const bytes = new Uint8Array(await request.arrayBuffer());
   if (bytes.byteLength > 1024 * 1024)
     throw new GitHubWebhookError(413, "payload_too_large");
@@ -330,10 +340,17 @@ export async function bindIssueRun(
 ): Promise<void> {
   const now = new Date().toISOString();
   await env.DB.prepare(
-    "INSERT INTO github_issue_runs(issue_number, run_id, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(issue_number) DO UPDATE SET run_id = excluded.run_id, updated_at = excluded.updated_at",
+    "INSERT OR IGNORE INTO github_issue_runs(issue_number, run_id, created_at, updated_at) VALUES (?, ?, ?, ?)",
   )
     .bind(issueNumber, runIdValue, now, now)
     .run();
+  const row = await env.DB.prepare(
+    "SELECT run_id FROM github_issue_runs WHERE issue_number = ?",
+  )
+    .bind(issueNumber)
+    .first<{ run_id: string }>();
+  if (!row || row.run_id !== runIdValue)
+    throw new GitHubWebhookError(409, "issue_already_bound");
 }
 
 export async function issueRun(
@@ -354,11 +371,23 @@ export async function enqueueComment(
   issueNumber: number,
   body: string,
 ): Promise<void> {
+  const bodySha256 = await sha256(body);
   await env.DB.prepare(
     "INSERT OR IGNORE INTO github_comment_outbox(comment_key, issue_number, body, body_sha256, status, created_at) VALUES (?, ?, ?, ?, 'pending', ?)",
   )
-    .bind(key, issueNumber, body, await sha256(body), new Date().toISOString())
+    .bind(key, issueNumber, body, bodySha256, new Date().toISOString())
     .run();
+  const row = await env.DB.prepare(
+    "SELECT issue_number, body_sha256 FROM github_comment_outbox WHERE comment_key = ?",
+  )
+    .bind(key)
+    .first<{ issue_number: number; body_sha256: string }>();
+  if (
+    !row ||
+    row.issue_number !== issueNumber ||
+    row.body_sha256 !== bodySha256
+  )
+    throw new GitHubWebhookError(409, "comment_intent_conflict");
 }
 
 export async function pendingComments(env: ControlPlaneEnv): Promise<

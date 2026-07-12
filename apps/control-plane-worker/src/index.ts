@@ -312,13 +312,19 @@ async function flushGitHubComments(env: ControlPlaneEnv): Promise<void> {
   const comments = await pendingComments(env);
   if (comments.length === 0) return;
   const github = githubGateway(env);
+  let firstError: unknown;
   for (const comment of comments) {
-    const result = await github.createIssueComment(
-      comment.issueNumber,
-      comment.body,
-    );
-    await markCommentSent(env, comment.key, result);
+    try {
+      const result = await github.createIssueComment(
+        comment.issueNumber,
+        comment.body,
+      );
+      await markCommentSent(env, comment.key, result);
+    } catch (error) {
+      firstError ??= error;
+    }
   }
+  if (firstError) throw firstError;
 }
 
 async function runComment(
@@ -416,7 +422,7 @@ async function executeGitHubCommand(
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "idempotency-key": `github-webhook:${deliveryId}`,
+          "idempotency-key": `github-issue:${issueNumber}`,
         },
         body: JSON.stringify({ schemaVersion: 1 }),
       },
@@ -1062,8 +1068,13 @@ export function createControlPlaneHandler(
         if (url.pathname === "/v1/github/webhook") {
           if (request.method !== "POST")
             return json(
-              { error: { code: "method_not_allowed", message: "Not found" } },
-              404,
+              {
+                error: {
+                  code: "method_not_allowed",
+                  message: "Method not allowed",
+                },
+              },
+              405,
             );
           return await githubWebhook(request, env);
         }

@@ -149,11 +149,42 @@ describe("GitHub-native operator webhook", () => {
     await bindIssueRun(env, 19, "run_19");
     await bindIssueRun(env, 19, "run_19");
     await expect(issueRun(env, 19)).resolves.toBe("run_19");
+    await expect(bindIssueRun(env, 19, "run_other")).rejects.toMatchObject({
+      code: "issue_already_bound",
+    });
     await enqueueComment(env, "run_19:1", 19, "status");
     await enqueueComment(env, "run_19:1", 19, "status");
+    await expect(
+      enqueueComment(env, "run_19:1", 19, "different status"),
+    ).rejects.toMatchObject({ code: "comment_intent_conflict" });
     await expect(pendingComments(env)).resolves.toEqual([
       { key: "run_19:1", issueNumber: 19, body: "status" },
     ]);
+  });
+
+  it("rejects a correctly signed but unsubscribed event", async () => {
+    const env = await runtime();
+    const body = JSON.stringify({
+      installation: { id: 146147681 },
+      repository: { full_name: "zorkian/roundhouse" },
+      sender: { login: "zorkian" },
+    });
+    const request = new Request(
+      "https://roundhouse-dev.rm-rf.rip/v1/github/webhook",
+      {
+        method: "POST",
+        headers: {
+          "x-github-delivery": "12345678-abcd-4321-abcd-1234567890ab",
+          "x-github-event": "push",
+          "x-hub-signature-256": await signature(body, "webhook-test-secret"),
+        },
+        body,
+      },
+    );
+    await expect(verifyWebhookRequest(request, env)).rejects.toMatchObject({
+      status: 400,
+      code: "unsupported_event",
+    });
   });
 
   it("reports checks only for the exact Roundhouse-published head", async () => {

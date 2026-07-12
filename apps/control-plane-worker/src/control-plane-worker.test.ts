@@ -363,12 +363,12 @@ describe("local control-plane Worker", () => {
     const signature = `sha256=${[...new Uint8Array(mac)]
       .map((byte) => byte.toString(16).padStart(2, "0"))
       .join("")}`;
-    const webhook = () =>
+    const webhook = (delivery = "12345678-abcd-4321-abcd-1234567890ab") =>
       new Request("http://roundhouse.local/v1/github/webhook", {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "x-github-delivery": "12345678-abcd-4321-abcd-1234567890ab",
+          "x-github-delivery": delivery,
           "x-github-event": "issue_comment",
           "x-hub-signature-256": signature,
         },
@@ -383,6 +383,18 @@ describe("local control-plane Worker", () => {
     expect(accepted.status).toBe(202);
     const result = (await accepted.json()) as { runId: string };
     expect(result.runId).toMatch(/^run_[a-f0-9]{40}$/);
+    expect(queued.messages).toHaveLength(1);
+    expect(comments).toBe(1);
+
+    const repeatedStart = await handler.fetch!(
+      webhook("87654321-abcd-4321-abcd-1234567890ab"),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(repeatedStart.status).toBe(202);
+    await expect(repeatedStart.json()).resolves.toMatchObject({
+      runId: result.runId,
+    });
     expect(queued.messages).toHaveLength(1);
     expect(comments).toBe(1);
 
