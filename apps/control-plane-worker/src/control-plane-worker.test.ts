@@ -387,6 +387,32 @@ describe("local control-plane Worker", () => {
       {} as ExecutionContext,
     );
     expect(rejectedPublication.status).toBe(409);
+    const otherActor = createControlPlaneHandler({
+      authorize: async () => ({
+        authorized: true as const,
+        actorId: "different-operator",
+      }),
+    });
+    expect(
+      (
+        await otherActor.fetch!(
+          request(`/v1/runs/${value.runId}/publication`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              schemaVersion: 1,
+              expectedRevision: approved.revision,
+              branch: "codex/dogfood-trusted-routes",
+              commit: "e".repeat(40),
+              remoteUrl,
+              verifiedAt: "2026-07-12T00:00:01.000Z",
+            }),
+          }),
+          env,
+          {} as ExecutionContext,
+        )
+      ).status,
+    ).toBe(403);
     const published = await handler.fetch!(
       request(`/v1/runs/${value.runId}/publication`, {
         method: "POST",

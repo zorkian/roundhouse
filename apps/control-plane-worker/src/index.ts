@@ -36,6 +36,7 @@ import {
 
 const maxBodyBytes = 64 * 1024;
 const jsonHeaders = { "content-type": "application/json; charset=utf-8" };
+const delegatedApprover = "mark-smith-delegated-trusted-loop-dogfood";
 
 function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), { status, headers: jsonHeaders });
@@ -209,8 +210,7 @@ async function approveRun(
   const input = approveRunSchema.parse(await requestBody(request));
   const jobs = new D1JobStore(env.DB);
   const run = await jobs.read(runId);
-  const delegated =
-    input.approver === "mark-smith-delegated-trusted-loop-dogfood";
+  const delegated = input.approver === delegatedApprover;
   if (delegated) {
     if (
       actorId !== "zorkian@fastmail.fm" ||
@@ -293,10 +293,20 @@ async function recordPublication(
   runId: string,
   request: Request,
   env: ControlPlaneEnv,
+  actorId: string,
 ): Promise<Response> {
   const input = recordPublicationSchema.parse(await requestBody(request));
   const jobs = new D1JobStore(env.DB);
   const run = await jobs.read(runId);
+  if (
+    !run.approval ||
+    (run.approval.approver !== actorId &&
+      !(
+        run.approval.approver === delegatedApprover &&
+        actorId === "zorkian@fastmail.fm"
+      ))
+  )
+    throw new HttpError(403, "Authenticated actor cannot publish this run");
   if (
     input.branch !== run.task.publication.branch ||
     input.remoteUrl !== run.task.publication.remoteUrl
@@ -368,7 +378,7 @@ async function route(
       url.pathname,
     );
   if (request.method === "POST" && publicationMatch?.[1])
-    return recordPublication(publicationMatch[1], request, env);
+    return recordPublication(publicationMatch[1], request, env, actorId);
   if (request.method === "DELETE" && match?.[1]) {
     try {
       return await cancelRun(match[1], env);
