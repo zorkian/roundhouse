@@ -17,6 +17,7 @@ export const repositoryRelativePathSchema = z
     (value) =>
       !value.startsWith("/") &&
       !value.includes("\\") &&
+      !/[?*[\]{}!]/.test(value) &&
       !value.split("/").includes("..") &&
       !value.includes("\0"),
     "Path must be a normalized repository-relative path",

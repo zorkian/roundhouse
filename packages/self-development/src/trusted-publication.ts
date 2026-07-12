@@ -54,6 +54,23 @@ function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
+function approvalsEqual(left: ExactApproval, right: ExactApproval): boolean {
+  return (
+    left.schemaVersion === right.schemaVersion &&
+    left.runId === right.runId &&
+    left.baseCommit === right.baseCommit &&
+    left.patchSha256 === right.patchSha256 &&
+    left.approver === right.approver &&
+    left.approvedAt === right.approvedAt &&
+    approvalMatches(left, {
+      runId: right.runId,
+      baseCommit: right.baseCommit,
+      patchSha256: right.patchSha256,
+      evidence: right.evidence,
+    })
+  );
+}
+
 async function git(
   cwd: string,
   args: string[],
@@ -117,7 +134,7 @@ export async function publishTrustedImplementation(
   const result = trustedImplementationResultSchema.parse(input.result);
   const approval = exactApprovalSchema.parse(input.approval);
   const publication = publicationRequestSchema.parse(input.publication);
-  if (JSON.stringify(publication.approval) !== JSON.stringify(approval))
+  if (!approvalsEqual(publication.approval, approval))
     throw new Error("Publication embeds a different approval");
   if (publication.runId !== result.runId || approval.runId !== result.runId)
     throw new Error("Publication run binding does not match");

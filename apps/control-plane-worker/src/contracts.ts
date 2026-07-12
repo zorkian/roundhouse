@@ -35,5 +35,5 @@ export const recordPublicationSchema = z.object({
   commit: z.string().regex(/^[a-f0-9]{40}$/),
   remoteUrl: z.literal("https://github.com/zorkian/roundhouse.git"),
   verifiedAt: z.iso.datetime(),
-  pullRequestUrl: z.url().optional(),
+  pullRequestUrl: z.string().url().optional(),
 });

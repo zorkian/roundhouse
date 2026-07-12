@@ -140,11 +140,11 @@ export const selfDevelopmentRunSchema = z.object({
   approval: exactApprovalSchema.optional(),
   publication: z
     .object({
-      branch: z.string().min(1),
+      branch: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,199}$/),
       commit: z.string().regex(/^[a-f0-9]{40}$/),
       remoteUrl: z.string().min(1),
       verifiedAt: z.iso.datetime(),
-      pullRequestUrl: z.url().optional(),
+      pullRequestUrl: z.string().url().optional(),
     })
     .optional(),
   events: z.array(runEventSchema).min(1),

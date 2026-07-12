@@ -68,6 +68,7 @@ describe("trusted self-development contracts", () => {
     expect(() =>
       repositoryRelativePathSchema.parse("docs/../secret"),
     ).toThrow();
+    expect(() => repositoryRelativePathSchema.parse("docs/**")).toThrow();
   });
 
   it("binds approval to the exact run, base, patch, and ordered evidence", () => {

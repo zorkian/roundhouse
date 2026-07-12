@@ -554,7 +554,7 @@ async function validateImplementation(value) {
 }
 
 async function prepare(value) {
-  const request = value?.subject ? validateTrusted(value) : validate(value);
+  const request = value?.profile ? validate(value) : validateTrusted(value);
   if (prepared?.attemptId === request.attemptId) {
     if (prepared.baseCommit !== request.baseCommit)
       throw new Error("checkout_binding_mismatch");
