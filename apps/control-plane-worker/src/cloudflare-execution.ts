@@ -121,10 +121,13 @@ export class CloudflareTrustedImplementationBackend implements TrustedImplementa
   async execute(request: TrustedImplementationRequest): Promise<StageResult> {
     const key = trustedEvidenceKey(request);
     let result: TrustedImplementationResult;
+    let evidenceBytes: Uint8Array<ArrayBuffer>;
     const existing = await this.evidence.get(key);
     if (existing) {
       try {
-        result = await parseTrustedEvidence(request, await existing.text());
+        const text = await existing.text();
+        evidenceBytes = encoder.encode(text);
+        result = await parseTrustedEvidence(request, text);
       } catch (error) {
         if (error instanceof StageFailure) throw error;
         throw new StageFailure(
@@ -156,6 +159,7 @@ export class CloudflareTrustedImplementationBackend implements TrustedImplementa
         );
       }
       const bytes = encoder.encode(JSON.stringify(result));
+      evidenceBytes = bytes;
       const digest = new Uint8Array(
         await crypto.subtle.digest("SHA-256", bytes),
       );
@@ -180,7 +184,9 @@ export class CloudflareTrustedImplementationBackend implements TrustedImplementa
             true,
           );
         try {
-          result = await parseTrustedEvidence(request, await raced.text());
+          const text = await raced.text();
+          evidenceBytes = encoder.encode(text);
+          result = await parseTrustedEvidence(request, text);
         } catch (error) {
           if (error instanceof StageFailure) throw error;
           throw new StageFailure(
@@ -191,15 +197,14 @@ export class CloudflareTrustedImplementationBackend implements TrustedImplementa
         }
       }
     }
-    const bytes = encoder.encode(JSON.stringify(result));
-    const hash = await crypto.subtle.digest("SHA-256", bytes);
+    const hash = await crypto.subtle.digest("SHA-256", evidenceBytes);
     const evidence = {
       schemaVersion: 1 as const,
       evidenceId: `evidence_${request.attemptId}`,
       attemptId: request.attemptId,
       objectKey: key,
       sha256: bytesToHex(hash),
-      size: bytes.byteLength,
+      size: evidenceBytes.byteLength,
       mediaType: "application/json" as const,
       createdAt: result.completedAt,
     };

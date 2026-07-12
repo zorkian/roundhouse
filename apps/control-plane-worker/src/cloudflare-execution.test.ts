@@ -197,6 +197,36 @@ describe("CloudflareTrustedImplementationBackend", () => {
     expect(stored).not.toContain("credential-must-not-survive");
   });
 
+  it("binds replay evidence to the exact retained object bytes", async () => {
+    const evidence = new MemoryEvidence();
+    const text = `${JSON.stringify(trustedResult(), null, 2)}\n`;
+    const bytes = new TextEncoder().encode(text);
+    evidence.objects.set(
+      `runs/${trustedRequest.runId}/attempts/${trustedRequest.attemptId}/trusted-implementation.json`,
+      bytes,
+    );
+    const backend = new CloudflareTrustedImplementationBackend(
+      {
+        getByName: () => ({
+          runJob: async () => result(),
+          destroy: async () => undefined,
+        }),
+      },
+      evidence,
+      "unused",
+    );
+    const stage = await backend.execute(trustedRequest);
+    const digest = Array.from(
+      new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
+    )
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+    expect(stage.updates?.evidence?.[0]).toMatchObject({
+      sha256: digest,
+      size: bytes.byteLength,
+    });
+  });
+
   it("preserves integrity classification for corrupt existing evidence", async () => {
     const evidence = new MemoryEvidence();
     evidence.objects.set(
