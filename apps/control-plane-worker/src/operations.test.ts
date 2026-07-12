@@ -162,25 +162,49 @@ describe("cloud operator persistence", () => {
       env,
       new Date(start.getTime() + 1_001),
     );
-    expect(cycle).toMatchObject({ requeuedRuns: 1, alertsRecorded: 2 });
-    expect(env.queued).toHaveLength(1);
+    expect(cycle).toMatchObject({ requeuedRuns: 2, alertsRecorded: 3 });
+    expect(env.queued).toHaveLength(2);
   });
 
   it("deduplicates alerts and keeps retention destructive work empty", async () => {
     const env = await runtime();
     const now = new Date("2026-07-12T00:00:00Z");
-    for (let index = 0; index < 2; index += 1)
-      await recordAlert(env, {
-        key: "alert:test",
-        kind: "test",
-        severity: "warning",
-        detail: { index },
-        now,
-      });
+    await recordAlert(env, {
+      key: "alert:test",
+      kind: "initial",
+      severity: "warning",
+      detail: { index: 0 },
+      now,
+    });
+    await env.DB.prepare(
+      "UPDATE operational_alerts SET resolved_at = ? WHERE alert_key = 'alert:test'",
+    )
+      .bind(now.toISOString())
+      .run();
+    await recordAlert(env, {
+      key: "alert:test",
+      kind: "updated",
+      severity: "error",
+      runId: "run_updated",
+      detail: { index: 1 },
+      now,
+    });
     const alert = await env.DB.prepare(
-      "SELECT occurrences FROM operational_alerts WHERE alert_key = 'alert:test'",
-    ).first<{ occurrences: number }>();
-    expect(alert?.occurrences).toBe(2);
+      "SELECT occurrences, kind, severity, run_id, resolved_at FROM operational_alerts WHERE alert_key = 'alert:test'",
+    ).first<{
+      occurrences: number;
+      kind: string;
+      severity: string;
+      run_id: string | null;
+      resolved_at: string | null;
+    }>();
+    expect(alert).toMatchObject({
+      occurrences: 2,
+      kind: "updated",
+      severity: "error",
+      run_id: "run_updated",
+      resolved_at: null,
+    });
     await expect(retentionReport(env)).resolves.toMatchObject({
       dryRun: true,
       activeAlerts: 1,

@@ -136,9 +136,13 @@ export async function recordAlert(
     `INSERT INTO operational_alerts(alert_key, kind, severity, run_id, detail_json, first_seen_at, last_seen_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(alert_key) DO UPDATE SET
+       kind = excluded.kind,
+       severity = excluded.severity,
+       run_id = excluded.run_id,
        last_seen_at = excluded.last_seen_at,
        occurrences = operational_alerts.occurrences + 1,
-       detail_json = excluded.detail_json`,
+       detail_json = excluded.detail_json,
+       resolved_at = NULL`,
   )
     .bind(
       input.key,
@@ -282,7 +286,10 @@ export async function runRecoveryCycle(
       alertsRecorded += 1;
       continue;
     }
-    if (!run.lease || new Date(run.lease.expiresAt) > now) continue;
+    if (run.lease && new Date(run.lease.expiresAt) > now) continue;
+    const recoveryKind = run.lease
+      ? "expired_lease_requeued"
+      : "lease_less_run_requeued";
     await env.RUN_QUEUE.send({
       schemaVersion: 1,
       runId: run.runId,
@@ -290,11 +297,11 @@ export async function runRecoveryCycle(
       expectedRevision: run.revision,
     });
     await recordAlert(env, {
-      key: `expired_lease:${run.runId}:${run.revision}`,
-      kind: "expired_lease_requeued",
+      key: `${recoveryKind}:${run.runId}:${run.revision}`,
+      kind: recoveryKind,
       severity: "warning",
       runId: run.runId,
-      detail: { revision: run.revision },
+      detail: { revision: run.revision, hadLease: Boolean(run.lease) },
       now,
     });
     requeuedRuns += 1;
