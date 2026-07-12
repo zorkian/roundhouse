@@ -64,6 +64,13 @@ class HttpError extends Error {
   }
 }
 
+function redactedReason(error: unknown): string {
+  return (error instanceof Error ? error.message : "unknown error")
+    .replace(/https?:\/\/\S+/g, "[url]")
+    .replace(/\/(?:[^\s/:]+\/)+[^\s:]+/g, "[path]")
+    .slice(0, 160);
+}
+
 async function requestBody(
   request: Pick<Request, "headers" | "text">,
 ): Promise<unknown> {
@@ -217,10 +224,7 @@ async function cancelRun(
     try {
       await env.EXECUTION_CONTAINERS.getByName(active.attemptId).destroy();
     } catch (error) {
-      const reason = (error instanceof Error ? error.message : "unknown error")
-        .replace(/https?:\/\/\S+/g, "[url]")
-        .replace(/\/(?:[^\s/:]+\/)+[^\s:]+/g, "[path]")
-        .slice(0, 160);
+      const reason = redactedReason(error);
       console.warn("Cloudflare Container cancellation teardown failed", {
         attemptId: active.attemptId,
         reason,
@@ -237,10 +241,7 @@ async function cancelRun(
       } catch (alertError) {
         console.warn("Container cleanup alert persistence failed", {
           runId,
-          reason:
-            alertError instanceof Error
-              ? alertError.message.slice(0, 160)
-              : "unknown error",
+          reason: redactedReason(alertError),
         });
       }
     }
@@ -523,12 +524,7 @@ async function route(
               expectedRevision: run.revision,
             });
           } catch (error) {
-            const reason = (
-              error instanceof Error ? error.message : "unknown error"
-            )
-              .replace(/https?:\/\/\S+/g, "[url]")
-              .replace(/\/(?:[^\s/:]+\/)+[^\s:]+/g, "[path]")
-              .slice(0, 160);
+            const reason = redactedReason(error);
             try {
               await recordAlert(env, {
                 key: `retry_dispatch_failed:${run.runId}:${run.revision}`,
@@ -541,10 +537,7 @@ async function route(
             } catch (alertError) {
               console.warn("Retry dispatch alert persistence failed", {
                 runId: run.runId,
-                reason:
-                  alertError instanceof Error
-                    ? alertError.message.slice(0, 160)
-                    : "unknown error",
+                reason: redactedReason(alertError),
               });
             }
           }
@@ -727,8 +720,7 @@ export function createControlPlaneHandler(
           severity: "error",
           detail: {
             actorId: internalRecoveryActor,
-            reason:
-              error instanceof Error ? error.message.slice(0, 160) : "unknown",
+            reason: redactedReason(error),
           },
           now: new Date(),
         });

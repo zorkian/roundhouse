@@ -1084,4 +1084,40 @@ describe("local control-plane Worker", () => {
       ]),
     );
   });
+
+  it("redacts scheduled recovery failures in durable alerts", async () => {
+    const { env } = await runtime();
+    const handler = createControlPlaneHandler();
+    await handler.fetch!(
+      submission("scheduled-recovery-redaction-01"),
+      env,
+      {} as ExecutionContext,
+    );
+    env.RUN_QUEUE = {
+      send: async () => {
+        throw new Error(
+          "recovery failed at https://internal.example.invalid/token and /private/workspace/path",
+        );
+      },
+    } as unknown as Queue<unknown>;
+
+    await expect(
+      handler.scheduled!(
+        {} as ScheduledController,
+        env,
+        {} as ExecutionContext,
+      ),
+    ).rejects.toThrow("recovery failed");
+    const alerts = await handler.fetch!(
+      request("/v1/operations/alerts"),
+      env,
+      {} as ExecutionContext,
+    );
+    const text = await alerts.text();
+    expect(text).toContain("scheduled_recovery_failed");
+    expect(text).toContain("[url]");
+    expect(text).toContain("[path]");
+    expect(text).not.toContain("internal.example.invalid");
+    expect(text).not.toContain("/private/workspace/path");
+  });
 });
