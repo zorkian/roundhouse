@@ -244,7 +244,7 @@ export class FileRunStore implements JobStore {
         throw new Error("Approval binding does not match the run");
       return this.replace({
         ...run,
-        state: "approved",
+        state: "awaiting_approval",
         approval,
         updatedAt: now.toISOString(),
         events: [
@@ -252,7 +252,7 @@ export class FileRunStore implements JobStore {
           {
             sequence: run.events.length + 1,
             type: "run.approved",
-            state: "approved",
+            state: "awaiting_approval",
             occurredAt: now.toISOString(),
             detail: {
               approver: approval.approver,
@@ -274,7 +274,7 @@ export class FileRunStore implements JobStore {
       const run = await this.read(runId);
       if (run.revision !== expectedRevision)
         throw new Error("Publication revision does not match");
-      if (run.state !== "approved" || !run.approval)
+      if (run.state !== "awaiting_approval" || !run.approval)
         throw new Error("Run does not have a valid approval");
       return this.replace({
         ...run,

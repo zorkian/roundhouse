@@ -211,7 +211,7 @@ export class D1JobStore implements JobStore {
         throw new Error("Approval binding does not match the run");
       const next = {
         ...run,
-        state: "approved" as const,
+        state: "awaiting_approval" as const,
         approval,
         updatedAt: now.toISOString(),
         events: [
@@ -219,7 +219,7 @@ export class D1JobStore implements JobStore {
           {
             sequence: run.events.length + 1,
             type: "run.approved",
-            state: "approved" as const,
+            state: "awaiting_approval" as const,
             occurredAt: now.toISOString(),
             detail: {
               approver: approval.approver,
@@ -248,7 +248,7 @@ export class D1JobStore implements JobStore {
     const recorded = await this.mutate(runId, (run) => {
       if (run.revision !== expectedRevision)
         throw new Error("Publication revision does not match");
-      if (run.state !== "approved" || !run.approval)
+      if (run.state !== "awaiting_approval" || !run.approval)
         throw new Error("Run does not have a valid approval");
       const next = {
         ...run,

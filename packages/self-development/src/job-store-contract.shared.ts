@@ -353,7 +353,16 @@ export function jobStoreContract(
         released.revision,
         new Date(start.getTime() + 3),
       );
-      expect(approved).toMatchObject({ state: "approved", approval });
+      expect(approved).toMatchObject({ state: "awaiting_approval", approval });
+      expect(
+        await store.claim(
+          runId,
+          "worker-b",
+          new Date(start.getTime() + 4),
+          10_000,
+          1,
+        ),
+      ).toBeNull();
       await expect(
         store.recordPublication(
           runId,
