@@ -190,15 +190,21 @@ async function cancelRun(
   env: ControlPlaneEnv,
 ): Promise<Response> {
   const jobs = new D1JobStore(env.DB);
-  const current = await jobs.read(runId);
-  if (current.revision !== expectedRevision)
-    throw new HttpError(409, "Cancellation revision does not match");
-  const active = current.attempts.at(-1);
+  let cancelled;
+  try {
+    cancelled = await jobs.cancel(runId, new Date(), expectedRevision);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("revision"))
+      throw new HttpError(409, error.message);
+    throw error;
+  }
+  const active = cancelled.attempts.at(-1);
   if (
     ["cloudflare-container", "cloudflare-trusted-codex"].includes(
       env.EXECUTION_MODE,
     ) &&
-    active?.status === "running" &&
+    active?.status === "failed" &&
+    active.classification === "cancelled" &&
     env.EXECUTION_CONTAINERS
   )
     await env.EXECUTION_CONTAINERS.getByName(active.attemptId)
@@ -215,7 +221,7 @@ async function cancelRun(
           reason,
         });
       });
-  return json(inspectRun(await jobs.cancel(runId, new Date())));
+  return json(inspectRun(cancelled));
 }
 
 async function mutationResponse(
