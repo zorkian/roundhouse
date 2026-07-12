@@ -4,10 +4,26 @@
 
 import { readFile } from "node:fs/promises";
 
-const [command, firstArgument, secondArgument] = process.argv.slice(2);
-const bodyOnlyCommand = command === "submit" || command === "recover";
-const target = bodyOnlyCommand ? undefined : firstArgument;
-const inputPath = bodyOnlyCommand ? firstArgument : secondArgument;
+const [command, ...arguments_] = process.argv.slice(2);
+const bodyOnlyCommands = new Set(["submit", "recover"]);
+const noArgumentCommands = new Set(["alerts", "recovery", "retention"]);
+const bodyOnlyCommand = command !== undefined && bodyOnlyCommands.has(command);
+const noArgumentCommand =
+  command !== undefined && noArgumentCommands.has(command);
+if (noArgumentCommand && arguments_.length !== 0) {
+  console.error(`${command} does not accept positional arguments`);
+  process.exit(2);
+}
+if (bodyOnlyCommand && arguments_.length > 1) {
+  console.error(`${command} accepts at most one input JSON file`);
+  process.exit(2);
+}
+if (!bodyOnlyCommand && !noArgumentCommand && arguments_.length > 2) {
+  console.error(`${command ?? "command"} accepts at most two arguments`);
+  process.exit(2);
+}
+const target = bodyOnlyCommand || noArgumentCommand ? undefined : arguments_[0];
+const inputPath = bodyOnlyCommand ? arguments_[0] : arguments_[1];
 const origin = process.env.ROUNDHOUSE_ORIGIN;
 const token = process.env.ROUNDHOUSE_ACCESS_TOKEN;
 if (!origin || !token) {

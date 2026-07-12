@@ -462,9 +462,7 @@ async function route(
     );
   if (request.method === "POST" && cancelMatch?.[1]) {
     try {
-      const input = revisionMutationSchema.parse(
-        await requestBody(request.clone()),
-      );
+      const input = revisionMutationSchema.parse(await requestBody(request));
       return await mutationResponse(
         request,
         env,
@@ -483,9 +481,7 @@ async function route(
   const retryMatch =
     /^\/v1\/runs\/([a-zA-Z0-9][a-zA-Z0-9_-]{0,127})\/retry$/.exec(url.pathname);
   if (request.method === "POST" && retryMatch?.[1]) {
-    const input = revisionMutationSchema.parse(
-      await requestBody(request.clone()),
-    );
+    const input = revisionMutationSchema.parse(await requestBody(request));
     return mutationResponse(
       request,
       env,
