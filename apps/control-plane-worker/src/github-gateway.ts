@@ -102,7 +102,8 @@ export class GitHubAppGateway {
   ): Promise<GitHubResponse<T>> {
     let response: Response;
     try {
-      response = await this.fetcher(`https://api.github.com${path}`, {
+      const fetcher = this.fetcher;
+      response = await fetcher(`https://api.github.com${path}`, {
         method,
         headers: {
           accept: "application/vnd.github+json",
@@ -190,7 +191,8 @@ export class GitHubAppGateway {
   }
 
   private async existingRef(branch: string): Promise<string | null> {
-    const response = await this.fetcher(
+    const fetcher = this.fetcher;
+    const response = await fetcher(
       `https://api.github.com/repos/zorkian/roundhouse/git/ref/heads/${encodeURIComponent(branch)}`,
       {
         headers: {

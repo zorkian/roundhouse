@@ -21,6 +21,30 @@ function json(value: unknown, status = 200): Response {
 }
 
 describe("GitHub App gateway", () => {
+  it("invokes a native-style fetcher without rebinding its receiver", async () => {
+    const fetcher = async function (
+      this: unknown,
+      input: string | URL | globalThis.Request,
+    ): Promise<Response> {
+      expect(this).toBeUndefined();
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/access_tokens"))
+        return json({
+          token: "installation-token",
+          expires_at: "2026-07-12T02:00:00Z",
+        });
+      if (url.pathname.endsWith("/git/ref/heads/main"))
+        return json({ object: { sha: "a".repeat(40) } });
+      return json({}, 404);
+    } as typeof fetch;
+    const gateway = new GitHubAppGateway(
+      { appId: "1", installationId: "2", privateKey },
+      fetcher,
+      () => new Date("2026-07-12T01:00:00Z"),
+    );
+    await expect(gateway.mainHead()).resolves.toBe("a".repeat(40));
+  });
+
   it("classifies signing failure without exposing key material", async () => {
     const gateway = new GitHubAppGateway(
       { appId: "1", installationId: "2", privateKey: "private-key-material" },
