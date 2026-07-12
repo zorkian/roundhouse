@@ -401,4 +401,35 @@ describe("local control-plane Worker", () => {
       ),
     ).toBe(true);
   });
+
+  it("repairs retry enqueue failure before acknowledging the delivery", async () => {
+    const { env, queued } = await runtime();
+    const handler = createControlPlaneHandler();
+    const submitted = await handler.fetch!(
+      submission("retry-outbox-repair-01"),
+      env,
+      {} as ExecutionContext,
+    );
+    const { runId } = (await submitted.json()) as { runId: string };
+    const original = queued.messages[0];
+    env.EXECUTION_MODE = "retryable-local";
+    queued.failNext = true;
+
+    expect(await deliver(handler, env, [original])).toEqual(["retry:0"]);
+    expect(queued.messages).toHaveLength(1);
+    const durable = await new D1JobStore(env.DB).read(runId);
+    expect(durable.state).toBe("created");
+    expect(durable.attempts[0]).toMatchObject({
+      status: "failed",
+      retryable: true,
+      classification: "dispatch_unavailable",
+    });
+
+    expect(await deliver(handler, env, [original])).toEqual(["ack:0"]);
+    expect(queued.messages).toHaveLength(2);
+    expect(queued.messages[1]).toMatchObject({
+      runId,
+      expectedRevision: durable.revision,
+    });
+  });
 });

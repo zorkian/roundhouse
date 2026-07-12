@@ -22,6 +22,10 @@ export interface DeliveryMessage {
 export async function consumeRunDelivery(
   message: DeliveryMessage,
   coordinator: ResumableCoordinator,
+  beforeAck?: (
+    delivery: RunDelivery,
+    run: SelfDevelopmentRun | null,
+  ) => Promise<void>,
 ): Promise<SelfDevelopmentRun | null> {
   const parsed = runDeliverySchema.safeParse(message.body);
   if (!parsed.success) {
@@ -33,6 +37,7 @@ export async function consumeRunDelivery(
       parsed.data.runId,
       parsed.data.expectedRevision,
     );
+    await beforeAck?.(parsed.data, run);
     message.ack();
     return run;
   } catch {

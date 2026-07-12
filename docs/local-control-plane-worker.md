@@ -42,6 +42,12 @@ Malformed messages are also acknowledged so they cannot form an unbounded
 poison-message loop. Infrastructure exceptions use Queue retry and the proposed
 dead-letter queue.
 
+The Queue helper schedules a required follow-up delivery before acknowledging
+the current message. If that enqueue fails, the original delivery is retried.
+Its now-stale revision cannot re-execute the stage, but the Worker reads the
+durable retryable state and repairs the missing revision-bound follow-up before
+acknowledging. Repeated repair sends are harmless under the same revision guard.
+
 ## API
 
 | Method | Path               | Authentication | Behavior                    |

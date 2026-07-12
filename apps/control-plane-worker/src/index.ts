@@ -83,8 +83,9 @@ async function submit(
   const jobs = new D1JobStore(env.DB);
   const now = new Date();
   const reservation = await reserveSubmission(env.DB, key, input.task, now);
+  let run;
   try {
-    await jobs.read(reservation.row.run_id);
+    run = await jobs.read(reservation.row.run_id);
   } catch (error) {
     if (
       !(error instanceof Error) ||
@@ -92,9 +93,9 @@ async function submit(
     )
       throw error;
     await jobs.submit(reservation.row.run_id, input.task, now);
+    run = await jobs.read(reservation.row.run_id);
   }
   if (reservation.row.delivery_state === "pending") {
-    const run = await jobs.read(reservation.row.run_id);
     await env.RUN_QUEUE.send({
       schemaVersion: 1,
       runId: run.runId,
@@ -195,28 +196,42 @@ export function createControlPlaneHandler(
     },
     async queue(batch, env): Promise<void> {
       const worker = coordinator(env);
+      const jobs = new D1JobStore(env.DB);
       for (const message of batch.messages) {
-        const run = await consumeRunDelivery(
+        await consumeRunDelivery(
           {
             body: message.body,
             ack: () => message.ack(),
             retry: () => message.retry(),
           },
           worker,
+          async (delivery, processed) => {
+            let run = processed;
+            if (!run)
+              try {
+                run = await jobs.read(delivery.runId);
+              } catch (error) {
+                if (
+                  error instanceof Error &&
+                  error.message.startsWith("Run not found:")
+                )
+                  return;
+                throw error;
+              }
+            const latest = run.attempts.at(-1);
+            if (
+              run.state !== "failed" &&
+              latest?.status === "failed" &&
+              latest.retryable
+            )
+              await env.RUN_QUEUE.send({
+                schemaVersion: 1,
+                runId: run.runId,
+                deliveryId: `retry_${run.runId}_${run.revision}`,
+                expectedRevision: run.revision,
+              });
+          },
         );
-        const latest = run?.attempts.at(-1);
-        if (
-          run &&
-          run.state !== "failed" &&
-          latest?.status === "failed" &&
-          latest.retryable
-        )
-          await env.RUN_QUEUE.send({
-            schemaVersion: 1,
-            runId: run.runId,
-            deliveryId: `retry_${run.runId}_${run.revision}`,
-            expectedRevision: run.revision,
-          });
       }
     },
   };
