@@ -3,6 +3,8 @@
 
 export * from "./codex-adapter.js";
 export * from "./orchestrator.js";
+export * from "./job-ports.js";
+export * from "./resumable-coordinator.js";
 export * from "./run-store.js";
 export * from "./task.js";
 export * from "./workspace.js";
