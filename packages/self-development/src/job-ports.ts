@@ -33,6 +33,7 @@ export type RunUpdates = Partial<
 export interface JobStore {
   submit(runId: string, task: SelfDevelopmentTask, now: Date): Promise<void>;
   read(runId: string): Promise<SelfDevelopmentRun>;
+  cancel(runId: string, now: Date): Promise<SelfDevelopmentRun>;
   claim(
     runId: string,
     workerId: string,

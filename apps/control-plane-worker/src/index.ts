@@ -138,6 +138,27 @@ async function submit(
   );
 }
 
+async function cancelRun(
+  runId: string,
+  env: ControlPlaneEnv,
+): Promise<Response> {
+  const jobs = new D1JobStore(env.DB);
+  const current = await jobs.read(runId);
+  const active = current.attempts.at(-1);
+  if (
+    env.EXECUTION_MODE === "cloudflare-container" &&
+    active?.status === "running" &&
+    env.EXECUTION_CONTAINERS
+  )
+    await (
+      env.EXECUTION_CONTAINERS as unknown as ExecutionContainerNamespacePort
+    )
+      .getByName(active.attemptId)
+      .destroy()
+      .catch(() => undefined);
+  return json(inspectRun(await jobs.cancel(runId, new Date())));
+}
+
 async function route(
   request: Request,
   env: ControlPlaneEnv,
@@ -157,6 +178,15 @@ async function route(
   if (request.method === "GET" && match?.[1]) {
     try {
       return json(inspectRun(await new D1JobStore(env.DB).read(match[1])));
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("Run not found:"))
+        throw new HttpError(404, "Run not found");
+      throw error;
+    }
+  }
+  if (request.method === "DELETE" && match?.[1]) {
+    try {
+      return await cancelRun(match[1], env);
     } catch (error) {
       if (error instanceof Error && error.message.startsWith("Run not found:"))
         throw new HttpError(404, "Run not found");

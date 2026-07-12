@@ -333,6 +333,35 @@ describe("local control-plane Worker", () => {
     ]);
   });
 
+  it("cancels an authenticated run durably before queued execution", async () => {
+    const { env, queued } = await runtime();
+    const handler = createControlPlaneHandler();
+    const submitted = await handler.fetch!(
+      submission("cancel-run-01"),
+      env,
+      {} as ExecutionContext,
+    );
+    const { runId } = (await submitted.json()) as { runId: string };
+
+    const cancelled = await handler.fetch!(
+      request(`/v1/runs/${runId}`, { method: "DELETE" }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(cancelled.status).toBe(200);
+    expect(await cancelled.json()).toMatchObject({
+      runId,
+      state: "cancelled",
+    });
+    expect(await deliver(handler, env, [queued.messages[0]])).toEqual([
+      "ack:0",
+    ]);
+    const durable = await new D1JobStore(env.DB).read(runId);
+    expect(durable.state).toBe("cancelled");
+    expect(durable.attempts).toHaveLength(0);
+    expect(durable.events.at(-1)?.type).toBe("run.cancelled");
+  });
+
   it("acks malformed messages and durably records terminal dispatch failure", async () => {
     const { env, queued } = await runtime();
     const handler = createControlPlaneHandler();

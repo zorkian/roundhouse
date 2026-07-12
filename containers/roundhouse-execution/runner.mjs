@@ -34,7 +34,11 @@ function validate(value) {
   if (
     value?.schemaVersion !== 1 ||
     !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(value.runId) ||
-    typeof value.attemptId !== "string" ||
+    !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,199}$/.test(value.attemptId) ||
+    !Number.isInteger(value.attemptNumber) ||
+    value.attemptNumber <= 0 ||
+    !Number.isInteger(value.expectedRevision) ||
+    value.expectedRevision <= 0 ||
     value.repositoryUrl !== repositoryUrl ||
     !/^[a-f0-9]{40}$/.test(value.baseCommit) ||
     value.profile !== "roundhouse.v1" ||

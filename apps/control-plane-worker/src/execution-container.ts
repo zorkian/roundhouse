@@ -55,8 +55,27 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(request),
     });
-    const value: unknown = await response.json();
-    if (!response.ok) throw new Error("Container runner phase failed");
+    const text = await response.text();
+    let value: unknown;
+    try {
+      value = JSON.parse(text);
+    } catch {
+      throw new Error(
+        `Container runner ${path} returned non-JSON HTTP ${response.status}`,
+      );
+    }
+    if (!response.ok) {
+      const detail =
+        typeof value === "object" &&
+        value !== null &&
+        "error" in value &&
+        typeof value.error === "string"
+          ? value.error.slice(0, 160)
+          : "unknown runner error";
+      throw new Error(
+        `Container runner ${path} failed with HTTP ${response.status}: ${detail}`,
+      );
+    }
     return value;
   }
 

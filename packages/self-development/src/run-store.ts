@@ -176,6 +176,42 @@ export class FileRunStore implements JobStore {
     );
   }
 
+  async cancel(runId: string, now: Date): Promise<SelfDevelopmentRun> {
+    return this.locked(runId, async () => {
+      const run = await this.read(runId);
+      if (["cancelled", "completed", "failed"].includes(run.state)) return run;
+      const attempts = run.attempts.map((attempt) =>
+        attempt.status === "running"
+          ? {
+              ...attempt,
+              status: "failed" as const,
+              completedAt: now.toISOString(),
+              retryable: false,
+              classification: "cancelled",
+              error: "Run was cancelled",
+            }
+          : attempt,
+      );
+      const { lease: _lease, ...rest } = run;
+      return this.replace({
+        ...rest,
+        state: "cancelled",
+        updatedAt: now.toISOString(),
+        attempts,
+        events: [
+          ...run.events,
+          {
+            sequence: run.events.length + 1,
+            type: "run.cancelled",
+            state: "cancelled",
+            occurredAt: now.toISOString(),
+            detail: {},
+          },
+        ],
+      });
+    });
+  }
+
   async transition(
     runId: string,
     state: SelfDevelopmentRunState,
@@ -436,7 +472,7 @@ export class FileRunStore implements JobStore {
         state,
         updatedAt: now.toISOString(),
         attempts,
-        evidence: evidence ?? run.evidence,
+        evidence: evidence ? [...run.evidence, ...evidence] : run.evidence,
         events: [
           ...run.events,
           {

@@ -128,6 +128,11 @@ instances`, `wrangler queues info`, `wrangler d1 execute`, and `wrangler r2
 object get --remote --pipe`. Never print credential environment variables or
 attach them to a Container.
 
+An authenticated `DELETE /v1/runs/<run-id>` destroys a currently running
+deterministic Container, removes the lease, closes any running attempt as
+`cancelled`, and records a durable `run.cancelled` event. Repeated cancellation
+and later Queue delivery are harmless.
+
 ## Cost and retention
 
 The account already had the Workers Paid plan required by Containers; this
@@ -146,8 +151,7 @@ instances are inactive after each run.
 - The only executable profile command is the fixed license check.
 - Only the public Roundhouse repository and exact commits are accepted.
 - There is no coding agent, private-repository capability, patch capture,
-  approval, publication, cancellation API, UI, alerting, or automatic evidence
-  retention policy.
+  approval, publication, UI, alerting, or automatic evidence retention policy.
 - Resource observations are runner measurements, not platform peak telemetry.
 - Administrative smoke injection is development tooling, not a product ingress
   path.

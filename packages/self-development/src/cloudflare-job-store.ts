@@ -137,6 +137,49 @@ export class D1JobStore implements JobStore {
     return selfDevelopmentRunSchema.parse(JSON.parse(row.payload));
   }
 
+  async cancel(runId: string, now: Date): Promise<SelfDevelopmentRun> {
+    const cancelled = await this.mutate(runId, (run) => {
+      if (["cancelled", "completed", "failed"].includes(run.state)) return null;
+      const attempts = run.attempts.map((attempt) =>
+        attempt.status === "running"
+          ? {
+              ...attempt,
+              status: "failed" as const,
+              completedAt: now.toISOString(),
+              retryable: false,
+              classification: "cancelled",
+              error: "Run was cancelled",
+            }
+          : attempt,
+      );
+      const { lease: _lease, ...rest } = run;
+      const next = {
+        ...rest,
+        state: "cancelled" as const,
+        updatedAt: now.toISOString(),
+        attempts,
+        events: [
+          ...run.events,
+          {
+            sequence: run.events.length + 1,
+            type: "run.cancelled",
+            state: "cancelled" as const,
+            occurredAt: now.toISOString(),
+            detail: {},
+          },
+        ],
+      };
+      return {
+        run: next,
+        result: selfDevelopmentRunSchema.parse({
+          ...next,
+          revision: run.revision + 1,
+        }),
+      };
+    });
+    return cancelled ?? this.read(runId);
+  }
+
   async claimNext(
     workerId: string,
     now: Date,
@@ -367,7 +410,7 @@ export class D1JobStore implements JobStore {
         state,
         updatedAt: now.toISOString(),
         attempts,
-        evidence: evidence ?? run.evidence,
+        evidence: evidence ? [...run.evidence, ...evidence] : run.evidence,
         events: [
           ...run.events,
           {
