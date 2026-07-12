@@ -467,14 +467,14 @@ export function boundedAgentFailure(stderr, secrets) {
   return (value || "no stderr").slice(-1_000);
 }
 
-function skippedValidation(name, commandName) {
+export function skippedValidation(name, commandName, reason) {
   return {
     name,
     command: commandName,
     exitCode: 0,
     timedOut: false,
     durationMs: 0,
-    stdout: "Not applicable for a documentation-only patch",
+    stdout: reason,
     stderr: "",
     outputTruncated: false,
   };
@@ -531,7 +531,11 @@ async function validateImplementation(value) {
           ["--check", "--", ...formattable],
           request,
         )
-      : skippedValidation("format", "not-applicable"),
+      : skippedValidation(
+          "format",
+          "not-applicable",
+          "Skipped because no changed file uses a supported formatter",
+        ),
   );
   validation.push(
     await validationCommand(
@@ -550,8 +554,11 @@ async function validateImplementation(value) {
     );
     validation.push(await validationCommand("test", "pnpm", ["test"], request));
   } else {
-    validation.push(skippedValidation("typecheck", "not-applicable"));
-    validation.push(skippedValidation("test", "not-applicable"));
+    const reason = codeChanged
+      ? "Skipped because the submitted validation level is quick"
+      : "Skipped because the patch changes no JavaScript or TypeScript file";
+    validation.push(skippedValidation("typecheck", "not-applicable", reason));
+    validation.push(skippedValidation("test", "not-applicable", reason));
   }
   if (
     validation.some(

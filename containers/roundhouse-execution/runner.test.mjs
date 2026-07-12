@@ -10,6 +10,7 @@ import {
   command,
   pathAllowed,
   secretStrings,
+  skippedValidation,
   validRepositoryPath,
   validRuntimeCredentialSize,
   withoutRuntimeCredential,
@@ -86,6 +87,16 @@ describe("trusted agent output boundary", () => {
         "actual-access-token",
       ]),
     ).toBe("credential=[redacted]");
+  });
+
+  it("records the actual reason a validation check was skipped", () => {
+    expect(
+      skippedValidation(
+        "test",
+        "not-applicable",
+        "Skipped because validation is quick",
+      ).stdout,
+    ).toBe("Skipped because validation is quick");
   });
 
   it("rejects control characters in repository paths", () => {
