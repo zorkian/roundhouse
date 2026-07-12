@@ -13,6 +13,18 @@ export function inspectRun(run: SelfDevelopmentRun): Record<string, unknown> {
     createdAt: run.createdAt,
     updatedAt: run.updatedAt,
     commit: run.commit,
+    implementation: run.implementation,
+    approval: run.approval
+      ? {
+          runId: run.approval.runId,
+          baseCommit: run.approval.baseCommit,
+          patchSha256: run.approval.patchSha256,
+          evidence: run.approval.evidence,
+          approver: run.approval.approver,
+          approvedAt: run.approval.approvedAt,
+        }
+      : undefined,
+    publication: run.publication,
     attempts: run.attempts.map((attempt) => ({
       stage: attempt.stage,
       number: attempt.number,

@@ -17,6 +17,13 @@ export type ControlPlaneEnv = {
   ACCESS_POLICY_AUD?: string;
   EXECUTION_MODE: string;
   EXECUTION_SCENARIO?: "success" | "nonzero" | "timeout" | "interrupt-once";
+  TRUSTED_EXECUTION_SCENARIO?:
+    | "success"
+    | "agent-failure"
+    | "timeout"
+    | "interrupt-once"
+    | "credential-cleanup-failure";
+  ROUNDHOUSE_CODEX_AUTH_JSON?: string;
   ALLOWED_REPOSITORY_PATH: string;
   ALLOWED_REMOTE_URL: string;
 };

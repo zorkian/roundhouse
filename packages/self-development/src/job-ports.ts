@@ -8,6 +8,7 @@ import type {
   SelfDevelopmentRunState,
   SelfDevelopmentTask,
 } from "./task.js";
+import type { ExactApproval } from "./trusted-loop.js";
 
 export type Clock = { now(): Date };
 
@@ -26,7 +27,13 @@ export type AttemptFailure = {
 export type RunUpdates = Partial<
   Pick<
     SelfDevelopmentRun,
-    "workspaceRef" | "workspacePath" | "commit" | "evidence"
+    | "workspaceRef"
+    | "workspacePath"
+    | "commit"
+    | "evidence"
+    | "implementation"
+    | "approval"
+    | "publication"
   >
 >;
 
@@ -34,6 +41,18 @@ export interface JobStore {
   submit(runId: string, task: SelfDevelopmentTask, now: Date): Promise<void>;
   read(runId: string): Promise<SelfDevelopmentRun>;
   cancel(runId: string, now: Date): Promise<SelfDevelopmentRun>;
+  approve(
+    runId: string,
+    approval: ExactApproval,
+    expectedRevision: number,
+    now: Date,
+  ): Promise<SelfDevelopmentRun>;
+  recordPublication(
+    runId: string,
+    publication: NonNullable<SelfDevelopmentRun["publication"]>,
+    expectedRevision: number,
+    now: Date,
+  ): Promise<SelfDevelopmentRun>;
   claim(
     runId: string,
     workerId: string,

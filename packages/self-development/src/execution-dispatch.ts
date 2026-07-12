@@ -71,6 +71,9 @@ export type ExecutionDispatchRequest = {
   attemptNumber: number;
   expectedRevision: number;
   taskId: string;
+  subject: string;
+  instructions: string;
+  allowedPaths: string[];
   baseCommit: string;
   validationLevel: "quick" | "full";
 };
@@ -93,6 +96,9 @@ export class DispatchingStageExecutor implements JobStageExecutor {
       attemptNumber: attempt.number,
       expectedRevision: run.revision,
       taskId: run.task.taskId,
+      subject: run.task.subject,
+      instructions: run.task.instructions,
+      allowedPaths: run.task.allowedPaths,
       baseCommit: run.task.baseCommit,
       validationLevel: run.task.validationLevel,
     });

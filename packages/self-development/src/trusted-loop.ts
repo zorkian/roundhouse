@@ -3,6 +3,8 @@
 
 import { z } from "zod";
 
+import type { StageResult } from "./job-ports.js";
+
 const boundedIdentity = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,199}$/);
 const commit = z.string().regex(/^[a-f0-9]{40}$/);
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
@@ -134,6 +136,10 @@ export const trustedImplementationResultSchema = z.object({
 export type TrustedImplementationResult = z.infer<
   typeof trustedImplementationResultSchema
 >;
+
+export interface TrustedImplementationBackend {
+  execute(request: TrustedImplementationRequest): Promise<StageResult>;
+}
 
 export const approvalEvidenceBindingSchema = z.object({
   evidenceId: boundedIdentity,

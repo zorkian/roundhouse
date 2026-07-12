@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import {
+  trustedImplementationResultSchema,
   consumeRunDelivery,
   D1JobStore,
   DispatchingStageExecutor,
@@ -13,8 +14,15 @@ import { ConfiguredAuthorizer, type RequestAuthorizer } from "./auth.js";
 import {
   CloudflareExecutionDispatcher,
   CloudflareRepositoryExecutionBackend,
+  CloudflareTrustedExecutionDispatcher,
+  CloudflareTrustedImplementationBackend,
 } from "./cloudflare-execution.js";
-import { idempotencyKeySchema, submitRunSchema } from "./contracts.js";
+import {
+  approveRunSchema,
+  idempotencyKeySchema,
+  recordPublicationSchema,
+  submitRunSchema,
+} from "./contracts.js";
 import type { ControlPlaneEnv } from "./environment.js";
 import { inspectRun } from "./inspection.js";
 import { DeterministicLocalDispatcher } from "./local-dispatch.js";
@@ -62,20 +70,36 @@ async function requestBody(request: Request): Promise<unknown> {
 
 function coordinator(env: ControlPlaneEnv): ResumableCoordinator {
   if (
-    env.EXECUTION_MODE === "cloudflare-container" &&
+    ["cloudflare-container", "cloudflare-trusted-codex"].includes(
+      env.EXECUTION_MODE,
+    ) &&
     (!env.EXECUTION_CONTAINERS || !env.EXECUTION_EVIDENCE)
   )
     throw new Error("Cloudflare execution bindings are not configured");
+  if (
+    env.EXECUTION_MODE === "cloudflare-trusted-codex" &&
+    !env.ROUNDHOUSE_CODEX_AUTH_JSON
+  )
+    throw new Error("Trusted Codex credential is not configured");
   const dispatcher =
-    env.EXECUTION_MODE === "cloudflare-container"
-      ? new CloudflareExecutionDispatcher(
-          new CloudflareRepositoryExecutionBackend(
+    env.EXECUTION_MODE === "cloudflare-trusted-codex"
+      ? new CloudflareTrustedExecutionDispatcher(
+          new CloudflareTrustedImplementationBackend(
             env.EXECUTION_CONTAINERS!,
             env.EXECUTION_EVIDENCE!,
+            env.ROUNDHOUSE_CODEX_AUTH_JSON!,
           ),
-          env.EXECUTION_SCENARIO ?? "success",
+          env.TRUSTED_EXECUTION_SCENARIO ?? "success",
         )
-      : new DeterministicLocalDispatcher(env.EXECUTION_MODE);
+      : env.EXECUTION_MODE === "cloudflare-container"
+        ? new CloudflareExecutionDispatcher(
+            new CloudflareRepositoryExecutionBackend(
+              env.EXECUTION_CONTAINERS!,
+              env.EXECUTION_EVIDENCE!,
+            ),
+            env.EXECUTION_SCENARIO ?? "success",
+          )
+        : new DeterministicLocalDispatcher(env.EXECUTION_MODE);
   return new ResumableCoordinator(
     new D1JobStore(env.DB),
     new DispatchingStageExecutor(dispatcher),
@@ -165,9 +189,117 @@ async function cancelRun(
   return json(inspectRun(await jobs.cancel(runId, new Date())));
 }
 
+async function approveRun(
+  runId: string,
+  request: Request,
+  env: ControlPlaneEnv,
+  actorId: string,
+): Promise<Response> {
+  const input = approveRunSchema.parse(await requestBody(request));
+  const jobs = new D1JobStore(env.DB);
+  const run = await jobs.read(runId);
+  const delegated =
+    input.approver === "mark-smith-delegated-trusted-loop-dogfood";
+  if (delegated) {
+    if (
+      run.task.allowedPaths.length !== 1 ||
+      run.task.allowedPaths[0] !==
+        "docs/dogfood/trusted-self-development-loop.md" ||
+      run.implementation?.changedFiles.length !== 1 ||
+      run.implementation.changedFiles[0] !==
+        "docs/dogfood/trusted-self-development-loop.md"
+    )
+      throw new HttpError(403, "Delegated approval scope does not match");
+  } else if (input.approver !== actorId) {
+    throw new HttpError(403, "Approver identity does not match");
+  }
+  const approved = await jobs.approve(
+    runId,
+    {
+      schemaVersion: 1,
+      runId,
+      baseCommit: run.task.baseCommit,
+      patchSha256: input.patchSha256,
+      evidence: input.evidence,
+      approver: input.approver,
+      approvedAt: new Date().toISOString(),
+    },
+    input.expectedRevision,
+    new Date(),
+  );
+  return json(inspectRun(approved));
+}
+
+async function implementationEvidence(
+  runId: string,
+  env: ControlPlaneEnv,
+): Promise<Response> {
+  const run = await new D1JobStore(env.DB).read(runId);
+  if (!run.implementation || !env.EXECUTION_EVIDENCE)
+    throw new HttpError(404, "Implementation evidence not found");
+  const reference = run.evidence.find(
+    (value) => value.evidenceId === run.implementation!.evidenceId,
+  );
+  if (!reference) throw new HttpError(409, "Evidence binding is missing");
+  const object = await env.EXECUTION_EVIDENCE.get(reference.objectKey);
+  if (!object) throw new HttpError(409, "Evidence object is missing");
+  const text = await object.text();
+  const bytes = new TextEncoder().encode(text);
+  const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("");
+  if (hash !== reference.sha256 || bytes.byteLength !== reference.size)
+    throw new HttpError(409, "Evidence object binding does not match");
+  const result = trustedImplementationResultSchema.parse(JSON.parse(text));
+  if (
+    result.runId !== runId ||
+    result.baseCommit !== run.task.baseCommit ||
+    result.patchSha256 !== run.implementation.patchSha256
+  )
+    throw new HttpError(409, "Implementation binding does not match");
+  return json({
+    schemaVersion: 1,
+    runId,
+    baseCommit: result.baseCommit,
+    patch: result.patch,
+    patchSha256: result.patchSha256,
+    changedFiles: result.changedFiles,
+    evidence: reference,
+  });
+}
+
+async function recordPublication(
+  runId: string,
+  request: Request,
+  env: ControlPlaneEnv,
+): Promise<Response> {
+  const input = recordPublicationSchema.parse(await requestBody(request));
+  const jobs = new D1JobStore(env.DB);
+  const run = await jobs.read(runId);
+  if (
+    input.branch !== run.task.publication.branch ||
+    input.remoteUrl !== run.task.publication.remoteUrl
+  )
+    throw new HttpError(409, "Publication target does not match the task");
+  const completed = await jobs.recordPublication(
+    runId,
+    {
+      branch: input.branch,
+      commit: input.commit,
+      remoteUrl: input.remoteUrl,
+      verifiedAt: input.verifiedAt,
+      pullRequestUrl: input.pullRequestUrl,
+    },
+    input.expectedRevision,
+    new Date(),
+  );
+  return json(inspectRun(completed));
+}
+
 async function route(
   request: Request,
   env: ControlPlaneEnv,
+  actorId: string,
 ): Promise<Response> {
   const url = new URL(request.url);
   if (request.method === "GET" && url.pathname === "/health")
@@ -190,6 +322,24 @@ async function route(
       throw error;
     }
   }
+  const implementationMatch =
+    /^\/v1\/runs\/([a-zA-Z0-9][a-zA-Z0-9_-]{0,127})\/implementation$/.exec(
+      url.pathname,
+    );
+  if (request.method === "GET" && implementationMatch?.[1])
+    return implementationEvidence(implementationMatch[1], env);
+  const approvalMatch =
+    /^\/v1\/runs\/([a-zA-Z0-9][a-zA-Z0-9_-]{0,127})\/approval$/.exec(
+      url.pathname,
+    );
+  if (request.method === "POST" && approvalMatch?.[1])
+    return approveRun(approvalMatch[1], request, env, actorId);
+  const publicationMatch =
+    /^\/v1\/runs\/([a-zA-Z0-9][a-zA-Z0-9_-]{0,127})\/publication$/.exec(
+      url.pathname,
+    );
+  if (request.method === "POST" && publicationMatch?.[1])
+    return recordPublication(publicationMatch[1], request, env);
   if (request.method === "DELETE" && match?.[1]) {
     try {
       return await cancelRun(match[1], env);
@@ -209,6 +359,7 @@ export function createControlPlaneHandler(
     async fetch(request, env): Promise<Response> {
       try {
         const url = new URL(request.url);
+        let actorId = "unauthenticated-health";
         if (url.pathname !== "/health") {
           const decision = await authorizer.authorize(request, env);
           if (!decision.authorized)
@@ -216,8 +367,9 @@ export function createControlPlaneHandler(
               { error: { code: "unauthorized", message: "Unauthorized" } },
               401,
             );
+          actorId = decision.actorId;
         }
-        return await route(request, env);
+        return await route(request, env, actorId);
       } catch (error) {
         if (error instanceof HttpError)
           return json(

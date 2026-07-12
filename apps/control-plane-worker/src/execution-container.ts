@@ -5,8 +5,12 @@ import { Container, ContainerProxy } from "@cloudflare/containers";
 import {
   repositoryExecutionRequestSchema,
   repositoryExecutionResultSchema,
+  trustedImplementationRequestSchema,
+  trustedImplementationResultSchema,
   type RepositoryExecutionRequest,
   type RepositoryExecutionResult,
+  type TrustedImplementationRequest,
+  type TrustedImplementationResult,
 } from "@roundhouse/self-development/cloudflare";
 
 import type { ControlPlaneEnv } from "./environment.js";
@@ -14,6 +18,8 @@ import {
   allowedCheckoutHosts,
   isCheckoutRequestAllowed,
 } from "./execution-egress.js";
+
+const modelHosts = ["chatgpt.com", "auth.openai.com"];
 
 export { ContainerProxy };
 
@@ -44,6 +50,33 @@ async function auditedCheckout(
   return fetch(request, { redirect: "manual" });
 }
 
+async function auditedModelTransport(
+  request: Request,
+  env: ControlPlaneEnv,
+  context: { containerId: string; params?: unknown },
+): Promise<Response> {
+  const url = new URL(request.url);
+  if (url.protocol !== "https:" || !modelHosts.includes(url.hostname))
+    return new Response("Forbidden", { status: 403 });
+  const params = context.params as { attemptId?: unknown } | undefined;
+  const attemptId = params?.attemptId;
+  if (typeof attemptId !== "string")
+    return new Response("Forbidden", { status: 403 });
+  await env.DB.prepare(
+    "INSERT INTO execution_egress_events(event_id, attempt_id, container_id, hostname, method, occurred_at) VALUES (?, ?, ?, ?, ?, ?)",
+  )
+    .bind(
+      crypto.randomUUID(),
+      attemptId,
+      context.containerId,
+      url.hostname,
+      request.method,
+      new Date().toISOString(),
+    )
+    .run();
+  return fetch(request, { redirect: "manual" });
+}
+
 export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
   override defaultPort = 8080;
   override sleepAfter = "1m";
@@ -51,7 +84,7 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
   override interceptHttps = true;
   override allowedHosts: string[] = [];
 
-  private async post(path: string, request: RepositoryExecutionRequest) {
+  private async post(path: string, request: unknown) {
     const response = await this.containerFetch(`http://container${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -132,6 +165,79 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
         });
     }
   }
+
+  async runTrustedJob(
+    input: TrustedImplementationRequest,
+    codexAuthJson: string,
+  ): Promise<TrustedImplementationResult> {
+    const request = trustedImplementationRequestSchema.parse(input);
+    const startupStarted = Date.now();
+    try {
+      await this.setAllowedHosts(allowedCheckoutHosts);
+      await this.setOutboundByHosts({
+        "github.com": {
+          method: "auditedCheckout",
+          params: { attemptId: request.attemptId },
+        },
+      });
+      await this.startAndWaitForPorts({
+        ports: 8080,
+        startOptions: {
+          enableInternet: false,
+          envVars: {},
+          labels: { attemptId: request.attemptId, mode: "trusted-agent" },
+        },
+        cancellationOptions: {
+          instanceGetTimeoutMS: 30_000,
+          portReadyTimeoutMS: 60_000,
+          waitInterval: 250,
+        },
+      });
+      const startupDurationMs = Date.now() - startupStarted;
+      const prepared = (await this.post("/trusted/prepare", request)) as {
+        checkoutDurationMs?: unknown;
+      };
+      await this.setAllowedHosts(modelHosts);
+      await this.setOutboundByHosts(
+        Object.fromEntries(
+          modelHosts.map((host) => [
+            host,
+            {
+              method: "auditedModelTransport",
+              params: { attemptId: request.attemptId },
+            },
+          ]),
+        ),
+      );
+      await this.post("/trusted/credential", {
+        request,
+        authJson: codexAuthJson,
+      });
+      await this.post("/trusted/implement", request);
+      await this.setOutboundByHosts({});
+      await this.setAllowedHosts([]);
+      return trustedImplementationResultSchema.parse({
+        ...((await this.post("/trusted/validate", request)) as object),
+        startupDurationMs,
+        checkoutDurationMs: prepared.checkoutDurationMs,
+      });
+    } finally {
+      const cleanup = await Promise.allSettled([
+        this.setOutboundByHosts({}),
+        this.setAllowedHosts([]),
+        this.destroy(),
+      ]);
+      const failures = cleanup.filter((result) => result.status === "rejected");
+      if (failures.length > 0)
+        console.warn("Trusted Container cleanup was incomplete", {
+          attemptId: request.attemptId,
+          failures: failures.length,
+        });
+    }
+  }
 }
 
-RoundhouseExecutionContainer.outboundHandlers = { auditedCheckout };
+RoundhouseExecutionContainer.outboundHandlers = {
+  auditedCheckout,
+  auditedModelTransport,
+};

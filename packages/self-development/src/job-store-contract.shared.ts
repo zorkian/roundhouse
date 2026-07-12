@@ -285,5 +285,104 @@ export function jobStoreContract(
         (await store.read("run_contract_mixed_evidence")).evidence,
       ).toEqual([evidence(1), evidence(2)]);
     });
+
+    it("binds approval and publication to exact durable revisions", async () => {
+      const store = await createStore();
+      const start = new Date("2026-07-12T00:00:00Z");
+      const runId = "run_contract_exact_approval";
+      await store.submit(runId, contractTask, start);
+      const claim = await store.claim(runId, "worker-a", start, 10_000, 1);
+      await store.startAttempt(runId, claim!.token, "prepare", start);
+      const evidence = {
+        schemaVersion: 1 as const,
+        evidenceId: "evidence_exact_approval",
+        attemptId: `${runId}-prepare-1`,
+        objectKey: `runs/${runId}/attempts/prepare-1/result.json`,
+        sha256: "b".repeat(64),
+        size: 123,
+        mediaType: "application/json" as const,
+        createdAt: start.toISOString(),
+      };
+      const awaiting = await store.completeAttempt(
+        runId,
+        claim!.token,
+        "prepare",
+        "awaiting_approval",
+        {},
+        {
+          evidence: [evidence],
+          implementation: {
+            patchSha256: "c".repeat(64),
+            patchBytes: 100,
+            changedFiles: ["docs/dogfood/trusted-self-development-loop.md"],
+            evidenceId: evidence.evidenceId,
+            objectKey: evidence.objectKey,
+          },
+        },
+        new Date(start.getTime() + 1),
+      );
+      await store.release(runId, claim!.token, new Date(start.getTime() + 2));
+      const approval = {
+        schemaVersion: 1 as const,
+        runId,
+        baseCommit: contractTask.baseCommit,
+        patchSha256: "c".repeat(64),
+        evidence: [
+          {
+            evidenceId: evidence.evidenceId,
+            objectKey: evidence.objectKey,
+            sha256: evidence.sha256,
+            size: evidence.size,
+          },
+        ],
+        approver: "mark-smith-delegated-trusted-loop-dogfood",
+        approvedAt: new Date(start.getTime() + 3).toISOString(),
+      };
+      await expect(
+        store.approve(
+          runId,
+          { ...approval, patchSha256: "d".repeat(64) },
+          awaiting.revision + 1,
+          new Date(start.getTime() + 3),
+        ),
+      ).rejects.toThrow("Approval binding does not match");
+      const released = await store.read(runId);
+      const approved = await store.approve(
+        runId,
+        approval,
+        released.revision,
+        new Date(start.getTime() + 3),
+      );
+      expect(approved).toMatchObject({ state: "approved", approval });
+      await expect(
+        store.recordPublication(
+          runId,
+          {
+            branch: "codex/dogfood-trusted-loop-01",
+            commit: "d".repeat(40),
+            remoteUrl: contractTask.publication.remoteUrl,
+            verifiedAt: new Date(start.getTime() + 4).toISOString(),
+          },
+          approved.revision - 1,
+          new Date(start.getTime() + 4),
+        ),
+      ).rejects.toThrow("Publication revision does not match");
+      const completed = await store.recordPublication(
+        runId,
+        {
+          branch: "codex/dogfood-trusted-loop-01",
+          commit: "d".repeat(40),
+          remoteUrl: contractTask.publication.remoteUrl,
+          verifiedAt: new Date(start.getTime() + 4).toISOString(),
+        },
+        approved.revision,
+        new Date(start.getTime() + 4),
+      );
+      expect(completed).toMatchObject({
+        state: "completed",
+        commit: "d".repeat(40),
+        publication: { branch: "codex/dogfood-trusted-loop-01" },
+      });
+    });
   });
 }

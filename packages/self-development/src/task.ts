@@ -3,6 +3,8 @@
 
 import { z } from "zod";
 
+import { exactApprovalSchema } from "./trusted-loop.js";
+
 export const selfDevelopmentTaskSchema = z.object({
   schemaVersion: z.literal(1),
   taskId: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/),
@@ -119,6 +121,29 @@ export const selfDevelopmentRunSchema = z.object({
   lease: runLeaseSchema.optional(),
   attempts: z.array(runAttemptSchema).default([]),
   evidence: z.array(executionEvidenceSchema).default([]),
+  implementation: z
+    .object({
+      patchSha256: z.string().regex(/^[a-f0-9]{64}$/),
+      patchBytes: z
+        .number()
+        .int()
+        .nonnegative()
+        .max(512 * 1024),
+      changedFiles: z.array(z.string().min(1)).max(50),
+      evidenceId: z.string().min(1),
+      objectKey: z.string().min(1),
+    })
+    .optional(),
+  approval: exactApprovalSchema.optional(),
+  publication: z
+    .object({
+      branch: z.string().min(1),
+      commit: z.string().regex(/^[a-f0-9]{40}$/),
+      remoteUrl: z.string().min(1),
+      verifiedAt: z.iso.datetime(),
+      pullRequestUrl: z.url().optional(),
+    })
+    .optional(),
   events: z.array(runEventSchema).min(1),
 });
 
