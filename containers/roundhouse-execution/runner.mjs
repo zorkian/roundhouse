@@ -227,6 +227,7 @@ async function execute(value) {
     timedOut: result.timedOut,
     startedAt: startedAt.toISOString(),
     completedAt: completedAt.toISOString(),
+    checkoutDurationMs: prepared.checkoutDurationMs,
     durationMs: completedAt.getTime() - startedAt.getTime(),
     stdout: result.stdout,
     stderr: result.stderr,

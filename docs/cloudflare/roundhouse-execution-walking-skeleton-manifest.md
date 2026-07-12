@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Cloudflare execution walking-skeleton manifest
 
-Status: **preauthorized; verified configuration required before mutation**
+Status: **preauthorized, verified, and applied 2026-07-12**
 
 This manifest is bounded by the maintainer's explicit authorization for the
 Cloudflare execution walking-skeleton milestone. Everything not listed here is
@@ -31,6 +31,14 @@ otherwise administered by this milestone.
 | Container image          | `roundhouse-dev-execution`, built for `linux/amd64` from the checked-in Dockerfile  |
 | Container Durable Object | class `RoundhouseExecutionContainer`, SQLite migration tag `execution-container-v1` |
 | Container capacity       | `standard-1`, `max_instances: 1`, immediate 100% development rollout                |
+
+Applied identities:
+
+- Container application `a030958f-41f0-4ae6-9a68-a33d0876ea72`;
+- Container Durable Object namespace `bb8e22de4a1a4125a7e344ebbd5cc6df`;
+- retained image digest
+  `sha256:ff95d9fd28c6aaa6f547b3f27c5aca088964c4435d24059926e94b5f681de369`;
+- final Worker version `f1a8cb66-8994-4509-86d3-e7fd3cf696d5`.
 
 The image uses the digest-pinned `node:24.4.1-bookworm-slim` base, bakes pnpm
 `10.13.1` at build time, runs as UID 10001, and accepts no mounted secret or

@@ -37,6 +37,8 @@ function result(exitCode = 0, timedOut = false) {
     timedOut,
     startedAt: "2026-07-12T00:00:00.000Z",
     completedAt: "2026-07-12T00:00:01.000Z",
+    startupDurationMs: 250,
+    checkoutDurationMs: 500,
     durationMs: 1_000,
     stdout: "license headers valid\n",
     stderr: "",
@@ -156,5 +158,26 @@ describe("CloudflareRepositoryExecutionBackend", () => {
       ],
     });
     expect(evidence.objects.size).toBe(1);
+  });
+
+  it("classifies an interrupted evidence upload as retryable", async () => {
+    const evidence = new MemoryEvidence();
+    evidence.put = async () => {
+      throw new Error("simulated R2 interruption");
+    };
+    const backend = new CloudflareRepositoryExecutionBackend(
+      {
+        getByName: () => ({
+          runJob: async () => result(),
+          destroy: async () => undefined,
+        }),
+      },
+      evidence,
+    );
+
+    await expect(backend.execute(request)).rejects.toMatchObject({
+      classification: "evidence_unavailable",
+      retryable: true,
+    });
   });
 });

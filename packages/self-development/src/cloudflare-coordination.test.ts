@@ -155,6 +155,60 @@ describe("local Cloudflare coordination", () => {
     expect(executions).toBe(0);
     expect(outcomes).toEqual(["ack"]);
   });
+
+  it("reclaims an expired running attempt from its original revision-bound delivery", async () => {
+    const jobs = await store();
+    const start = new Date("2026-07-12T00:00:00Z");
+    await jobs.submit("run_delivery_recovery", task, start);
+    const abandoned = await jobs.claim(
+      "run_delivery_recovery",
+      "crashed-worker",
+      start,
+      1_000,
+      1,
+    );
+    await jobs.startAttempt(
+      "run_delivery_recovery",
+      abandoned!.token,
+      "prepare",
+      start,
+    );
+    let executions = 0;
+    const coordinator = new ResumableCoordinator(
+      jobs,
+      {
+        execute: async () => {
+          executions += 1;
+          return { state: "workspace_ready" };
+        },
+      },
+      { now: () => new Date("2026-07-12T00:00:02Z") },
+      { workerId: "recovery-worker", leaseMs: 1_000 },
+    );
+    const outcomes: string[] = [];
+
+    await consumeRunDelivery(
+      {
+        body: {
+          schemaVersion: 1,
+          runId: "run_delivery_recovery",
+          deliveryId: "original-delivery",
+          expectedRevision: 1,
+        },
+        ack: () => outcomes.push("ack"),
+        retry: () => outcomes.push("retry"),
+      },
+      coordinator,
+    );
+
+    const recovered = await jobs.read("run_delivery_recovery");
+    expect(outcomes).toEqual(["ack"]);
+    expect(executions).toBe(1);
+    expect(recovered.attempts).toMatchObject([
+      { status: "failed", classification: "lease_expired" },
+      { status: "succeeded" },
+    ]);
+  });
 });
 
 let contractDatabase: D1DatabasePort | undefined;

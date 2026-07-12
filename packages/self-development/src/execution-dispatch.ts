@@ -38,6 +38,8 @@ export const repositoryExecutionResultSchema = z.object({
   timedOut: z.boolean(),
   startedAt: z.iso.datetime(),
   completedAt: z.iso.datetime(),
+  startupDurationMs: z.number().int().nonnegative().default(0),
+  checkoutDurationMs: z.number().int().nonnegative().default(0),
   durationMs: z.number().int().nonnegative(),
   stdout: z.string(),
   stderr: z.string(),

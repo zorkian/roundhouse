@@ -66,6 +66,15 @@ function evidenceKey(request: RepositoryExecutionRequest): string {
   return `runs/${request.runId}/attempts/${request.attemptId}/execution.json`;
 }
 
+function boundedInfrastructureReason(error: unknown): string {
+  const raw =
+    error instanceof Error ? `${error.name}: ${error.message}` : "UnknownError";
+  return raw
+    .replace(/https?:\/\/\S+/g, "[url]")
+    .replace(/\/(?:[^\s/:]+\/)+[^\s:]+/g, "[path]")
+    .slice(0, 200);
+}
+
 async function evidenceReference(
   request: RepositoryExecutionRequest,
   result: RepositoryExecutionResult,
@@ -123,25 +132,39 @@ export class CloudflareRepositoryExecutionBackend implements RepositoryExecution
       try {
         result = validateResult(request, await container.runJob(request));
       } catch (error) {
+        const reason = boundedInfrastructureReason(error);
+        console.error("Cloudflare Container execution failed", {
+          reason,
+          attemptId: request.attemptId,
+        });
         await container.destroy().catch(() => undefined);
         if (error instanceof StageFailure) throw error;
         throw new StageFailure(
-          "Cloudflare Container execution was interrupted",
+          `Cloudflare Container execution was interrupted: ${reason}`,
           "container_interrupted",
           true,
         );
       }
       const encoded = await encodeEvidence(result);
-      const stored = await this.evidence.put(key, encoded.bytes, {
-        onlyIf: { etagDoesNotMatch: "*" },
-        httpMetadata: { contentType: "application/json" },
-        customMetadata: {
-          runId: request.runId,
-          attemptId: request.attemptId,
-          sha256: encoded.sha256,
-        },
-        sha256: encoded.digest,
-      });
+      let stored;
+      try {
+        stored = await this.evidence.put(key, encoded.bytes, {
+          onlyIf: { etagDoesNotMatch: "*" },
+          httpMetadata: { contentType: "application/json" },
+          customMetadata: {
+            runId: request.runId,
+            attemptId: request.attemptId,
+            sha256: encoded.sha256,
+          },
+          sha256: encoded.digest,
+        });
+      } catch {
+        throw new StageFailure(
+          "Execution evidence upload was interrupted",
+          "evidence_unavailable",
+          true,
+        );
+      }
       if (!stored) {
         const raced = await this.evidence.get(key);
         if (!raced)

@@ -15,41 +15,39 @@ const checkoutHosts = ["github.com"];
 
 export { ContainerProxy };
 
+async function auditedCheckout(
+  request: Request,
+  env: ControlPlaneEnv,
+  context: { containerId: string; params?: unknown },
+): Promise<Response> {
+  const url = new URL(request.url);
+  if (!checkoutHosts.includes(url.hostname))
+    return new Response("Forbidden", { status: 403 });
+  const params = context.params as { attemptId?: unknown } | undefined;
+  const attemptId = params?.attemptId;
+  if (typeof attemptId !== "string")
+    return new Response("Forbidden", { status: 403 });
+  await env.DB.prepare(
+    "INSERT INTO execution_egress_events(event_id, attempt_id, container_id, hostname, method, occurred_at) VALUES (?, ?, ?, ?, ?, ?)",
+  )
+    .bind(
+      crypto.randomUUID(),
+      attemptId,
+      context.containerId,
+      url.hostname,
+      request.method,
+      new Date().toISOString(),
+    )
+    .run();
+  return fetch(request);
+}
+
 export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
   override defaultPort = 8080;
   override sleepAfter = "1m";
   override enableInternet = false;
   override interceptHttps = true;
   override allowedHosts: string[] = [];
-
-  static override outboundHandlers = {
-    auditedCheckout: async (
-      request: Request,
-      env: ControlPlaneEnv,
-      context: { containerId: string; params?: unknown },
-    ): Promise<Response> => {
-      const url = new URL(request.url);
-      if (!checkoutHosts.includes(url.hostname))
-        return new Response("Forbidden", { status: 403 });
-      const params = context.params as { attemptId?: unknown } | undefined;
-      const attemptId = params?.attemptId;
-      if (typeof attemptId !== "string")
-        return new Response("Forbidden", { status: 403 });
-      await env.DB.prepare(
-        "INSERT INTO execution_egress_events(event_id, attempt_id, container_id, hostname, method, occurred_at) VALUES (?, ?, ?, ?, ?, ?)",
-      )
-        .bind(
-          crypto.randomUUID(),
-          attemptId,
-          context.containerId,
-          url.hostname,
-          request.method,
-          new Date().toISOString(),
-        )
-        .run();
-      return fetch(request);
-    },
-  };
 
   private async post(path: string, request: RepositoryExecutionRequest) {
     const response = await this.containerFetch(`http://container${path}`, {
@@ -66,6 +64,7 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
     input: RepositoryExecutionRequest,
   ): Promise<RepositoryExecutionResult> {
     const request = repositoryExecutionRequestSchema.parse(input);
+    const startupStarted = Date.now();
     await this.setAllowedHosts(checkoutHosts);
     await this.setOutboundByHosts({
       "github.com": {
@@ -86,17 +85,24 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
         waitInterval: 250,
       },
     });
+    const startupDurationMs = Date.now() - startupStarted;
     try {
-      await this.post("/prepare", request);
+      const prepared = (await this.post("/prepare", request)) as {
+        checkoutDurationMs?: unknown;
+      };
       await this.setOutboundByHosts({});
       await this.setAllowedHosts([]);
-      return repositoryExecutionResultSchema.parse(
-        await this.post("/execute", request),
-      );
+      return repositoryExecutionResultSchema.parse({
+        ...((await this.post("/execute", request)) as object),
+        startupDurationMs,
+        checkoutDurationMs: prepared.checkoutDurationMs,
+      });
     } finally {
       await this.setOutboundByHosts({});
       await this.setAllowedHosts([]);
-      await this.stop().catch(() => undefined);
+      await this.destroy().catch(() => undefined);
     }
   }
 }
+
+RoundhouseExecutionContainer.outboundHandlers = { auditedCheckout };
