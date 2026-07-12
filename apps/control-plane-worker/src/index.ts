@@ -481,30 +481,42 @@ async function route(
   const retryMatch =
     /^\/v1\/runs\/([a-zA-Z0-9][a-zA-Z0-9_-]{0,127})\/retry$/.exec(url.pathname);
   if (request.method === "POST" && retryMatch?.[1]) {
-    const input = revisionMutationSchema.parse(await requestBody(request));
-    return mutationResponse(
-      request,
-      env,
-      actorId,
-      "retry",
-      retryMatch[1],
-      input,
-      async () => {
-        const run = await retryFailedRun(
-          env,
-          retryMatch[1]!,
-          input.expectedRevision,
-          new Date(),
-        );
-        await env.RUN_QUEUE.send({
-          schemaVersion: 1,
-          runId: run.runId,
-          deliveryId: `operator_retry_${run.runId}_${run.revision}`,
-          expectedRevision: run.revision,
-        });
-        return json(inspectRun(run));
-      },
-    );
+    try {
+      const input = revisionMutationSchema.parse(await requestBody(request));
+      return await mutationResponse(
+        request,
+        env,
+        actorId,
+        "retry",
+        retryMatch[1],
+        input,
+        async () => {
+          const run = await retryFailedRun(
+            env,
+            retryMatch[1]!,
+            input.expectedRevision,
+            new Date(),
+          );
+          await env.RUN_QUEUE.send({
+            schemaVersion: 1,
+            runId: run.runId,
+            deliveryId: `operator_retry_${run.runId}_${run.revision}`,
+            expectedRevision: run.revision,
+          });
+          return json(inspectRun(run));
+        },
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("Run not found:"))
+        throw new HttpError(404, "Run not found");
+      if (
+        error instanceof Error &&
+        (error.message === "Run is not eligible for retry at this revision" ||
+          error.message === "Retry revision changed concurrently")
+      )
+        throw new HttpError(409, error.message);
+      throw error;
+    }
   }
   if (request.method === "GET" && url.pathname === "/v1/operations/alerts") {
     const rows = await env.DB.prepare(

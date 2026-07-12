@@ -870,6 +870,38 @@ describe("local control-plane Worker", () => {
       {} as ExecutionContext,
     );
     expect(invalidRetry.status).toBe(415);
+    const missingRetry = await handler.fetch!(
+      request("/v1/runs/run_missing/retry", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "missing-retry-route-01",
+        },
+        body: JSON.stringify({ schemaVersion: 1, expectedRevision: 1 }),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(missingRetry.status).toBe(404);
+    const submitted = await handler.fetch!(
+      submission("ineligible-retry-route-01"),
+      env,
+      {} as ExecutionContext,
+    );
+    const { runId } = (await submitted.json()) as { runId: string };
+    const ineligibleRetry = await handler.fetch!(
+      request(`/v1/runs/${runId}/retry`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "ineligible-retry-route-01",
+        },
+        body: JSON.stringify({ schemaVersion: 1, expectedRevision: 1 }),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(ineligibleRetry.status).toBe(409);
   });
 
   it("repairs retry enqueue failure before acknowledging the delivery", async () => {
