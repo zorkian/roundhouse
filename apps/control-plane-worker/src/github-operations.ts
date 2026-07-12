@@ -5,6 +5,15 @@ import type { GitHubPublicationResult } from "@roundhouse/self-development/cloud
 
 import type { ControlPlaneEnv } from "./environment.js";
 
+const unclaimedAt = "1970-01-01T00:00:00.000Z";
+const publicationLeaseMs = 60_000;
+
+export class GitHubPublicationPendingError extends Error {
+  constructor() {
+    super("GitHub publication is already in progress");
+  }
+}
+
 export const githubPocMigration = `
 CREATE TABLE IF NOT EXISTS github_issue_snapshots (
   snapshot_id TEXT PRIMARY KEY, issue_number INTEGER NOT NULL,
@@ -71,7 +80,7 @@ export async function durableGitHubPublication(
   await env.DB.prepare(
     "INSERT OR IGNORE INTO github_publications(run_id, request_hash, status, created_at, updated_at) VALUES (?, ?, 'planning', ?, ?)",
   )
-    .bind(runId, hash, now, now)
+    .bind(runId, hash, now, unclaimedAt)
     .run();
   const row = await env.DB.prepare(
     "SELECT request_hash, status, result_json FROM github_publications WHERE run_id = ?",
@@ -86,11 +95,44 @@ export async function durableGitHubPublication(
     throw new Error("GitHub publication request conflicts with durable intent");
   if (row.status === "published" && row.result_json)
     return JSON.parse(row.result_json) as GitHubPublicationResult;
-  const result = await publish();
-  const updated = await env.DB.prepare(
-    "UPDATE github_publications SET status = 'published', result_json = ?, updated_at = ? WHERE run_id = ? AND request_hash = ? AND status = 'planning'",
+  const claimedAt = new Date().toISOString();
+  const staleBefore = new Date(Date.now() - publicationLeaseMs).toISOString();
+  const claimed = await env.DB.prepare(
+    "UPDATE github_publications SET updated_at = ? WHERE run_id = ? AND request_hash = ? AND status = 'planning' AND updated_at <= ?",
   )
-    .bind(JSON.stringify(result), new Date().toISOString(), runId, hash)
+    .bind(claimedAt, runId, hash, staleBefore)
+    .run();
+  if ((claimed.meta.changes ?? 0) !== 1) {
+    const completed = await env.DB.prepare(
+      "SELECT status, result_json FROM github_publications WHERE run_id = ? AND request_hash = ?",
+    )
+      .bind(runId, hash)
+      .first<{ status: string; result_json: string | null }>();
+    if (completed?.status === "published" && completed.result_json)
+      return JSON.parse(completed.result_json) as GitHubPublicationResult;
+    throw new GitHubPublicationPendingError();
+  }
+  let result: GitHubPublicationResult;
+  try {
+    result = await publish();
+  } catch (error) {
+    await env.DB.prepare(
+      "UPDATE github_publications SET updated_at = ? WHERE run_id = ? AND request_hash = ? AND status = 'planning' AND updated_at = ?",
+    )
+      .bind(unclaimedAt, runId, hash, claimedAt)
+      .run();
+    throw error;
+  }
+  const updated = await env.DB.prepare(
+    "UPDATE github_publications SET status = 'published', result_json = ?, updated_at = ? WHERE run_id = ? AND request_hash = ? AND status = 'planning' AND updated_at = ?",
+  )
+    .bind(
+      JSON.stringify(result),
+      new Date().toISOString(),
+      runId,
+      hash,
+      claimedAt,
+    )
     .run();
   if ((updated.meta.changes ?? 0) !== 1) {
     const raced = await env.DB.prepare(

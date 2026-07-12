@@ -35,6 +35,7 @@ import { inspectRun } from "./inspection.js";
 import { GitHubAppGateway } from "./github-gateway.js";
 import {
   durableGitHubPublication,
+  GitHubPublicationPendingError,
   saveIssueSnapshot,
 } from "./github-operations.js";
 import { publishApprovedGitHubRun } from "./github-publication.js";
@@ -815,6 +816,11 @@ export function createControlPlaneHandler(
             409,
           );
         if (error instanceof MutationPendingError)
+          return json(
+            { error: { code: "mutation_pending", message: error.message } },
+            409,
+          );
+        if (error instanceof GitHubPublicationPendingError)
           return json(
             { error: { code: "mutation_pending", message: error.message } },
             409,

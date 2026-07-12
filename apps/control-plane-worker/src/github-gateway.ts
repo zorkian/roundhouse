@@ -173,10 +173,6 @@ export class GitHubAppGateway {
     approvedAt: string;
   }): Promise<GitHubPublicationResult> {
     const manifest = trustedPublicationManifestSchema.parse(input.manifest);
-    const base = await this.mainHead();
-    if (base !== manifest.baseCommit)
-      throw new Error("GitHub base moved after approval");
-
     const baseCommit = (
       await this.api<{ tree: { sha: string } }>(
         "GET",

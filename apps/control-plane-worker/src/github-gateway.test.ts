@@ -73,8 +73,6 @@ describe("GitHub App gateway", () => {
           token: "installation-token",
           expires_at: "2026-07-12T02:00:00Z",
         });
-      if (url.pathname.endsWith("/git/ref/heads/main"))
-        return json({ object: { sha: base } });
       if (url.pathname.endsWith(`/git/commits/${base}`))
         return json({ tree: { sha: "b".repeat(40) } });
       if (url.pathname.endsWith("/git/blobs") && method === "POST")
