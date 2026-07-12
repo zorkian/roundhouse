@@ -830,6 +830,9 @@ export function createControlPlaneHandler(
             },
             400,
           );
+        console.error("Control-plane request failed", {
+          reason: redactedReason(error),
+        });
         return json(
           {
             error: { code: "internal_error", message: "Internal server error" },
