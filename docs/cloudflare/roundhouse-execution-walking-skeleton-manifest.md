@@ -37,8 +37,8 @@ Applied identities:
 - Container application `a030958f-41f0-4ae6-9a68-a33d0876ea72`;
 - Container Durable Object namespace `bb8e22de4a1a4125a7e344ebbd5cc6df`;
 - retained image digest
-  `sha256:ff95d9fd28c6aaa6f547b3f27c5aca088964c4435d24059926e94b5f681de369`;
-- final Worker version `f1a8cb66-8994-4509-86d3-e7fd3cf696d5`.
+  `sha256:5603ea8df02d20de809b7e46d21fc369a5ea7aa90a7b92fe78ce1e5578e259ad`;
+- final Worker version `411a4119-de5c-45c6-a263-b8beea9e0a05`.
 
 The image uses the digest-pinned `node:24.4.1-bookworm-slim` base, bakes pnpm
 `10.13.1` at build time, runs as UID 10001, and accepts no mounted secret or
