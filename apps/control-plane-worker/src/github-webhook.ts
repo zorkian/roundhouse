@@ -11,7 +11,8 @@ CREATE TABLE IF NOT EXISTS github_webhook_deliveries (
   payload_sha256 TEXT NOT NULL, installation_id TEXT NOT NULL,
   repository_full_name TEXT NOT NULL, sender_login TEXT,
   status TEXT NOT NULL CHECK (status IN ('received', 'completed', 'ignored', 'failed')),
-  result_json TEXT, received_at TEXT NOT NULL, completed_at TEXT
+  result_json TEXT, claim_id TEXT, claim_expires_at TEXT,
+  received_at TEXT NOT NULL, completed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS github_webhook_deliveries_status
   ON github_webhook_deliveries(status, received_at);
@@ -22,9 +23,9 @@ CREATE TABLE IF NOT EXISTS github_issue_runs (
 CREATE TABLE IF NOT EXISTS github_comment_outbox (
   comment_key TEXT PRIMARY KEY, issue_number INTEGER NOT NULL,
   body TEXT NOT NULL, body_sha256 TEXT NOT NULL,
-  status TEXT NOT NULL CHECK (status IN ('pending', 'sent')),
+  status TEXT NOT NULL CHECK (status IN ('pending', 'sending', 'sent')),
   github_comment_id INTEGER, github_comment_url TEXT,
-  created_at TEXT NOT NULL, sent_at TEXT
+  claim_id TEXT, claim_expires_at TEXT, created_at TEXT NOT NULL, sent_at TEXT
 );
 CREATE INDEX IF NOT EXISTS github_comment_outbox_pending
   ON github_comment_outbox(status, created_at);
@@ -284,9 +285,10 @@ export function checkObservation(value: VerifiedWebhook): Array<{
 export async function reserveWebhookDelivery(
   env: ControlPlaneEnv,
   value: VerifiedWebhook,
-): Promise<"new" | "replay"> {
-  const now = new Date().toISOString();
-  const inserted = await env.DB.prepare(
+): Promise<{ kind: "new"; claimId: string } | { kind: "replay" }> {
+  const nowValue = new Date();
+  const now = nowValue.toISOString();
+  await env.DB.prepare(
     "INSERT OR IGNORE INTO github_webhook_deliveries(delivery_id, event_name, payload_sha256, installation_id, repository_full_name, sender_login, status, received_at) VALUES (?, ?, ?, ?, ?, ?, 'received', ?)",
   )
     .bind(
@@ -299,7 +301,6 @@ export async function reserveWebhookDelivery(
       now,
     )
     .run();
-  if ((inserted.meta.changes ?? 0) === 1) return "new";
   const row = await env.DB.prepare(
     "SELECT event_name, payload_sha256, status FROM github_webhook_deliveries WHERE delivery_id = ?",
   )
@@ -311,28 +312,39 @@ export async function reserveWebhookDelivery(
     row.payload_sha256 !== value.payloadSha256
   )
     throw new GitHubWebhookError(409, "delivery_conflict");
-  if (row.status === "failed") {
-    const reclaimed = await env.DB.prepare(
-      "UPDATE github_webhook_deliveries SET status = 'received', result_json = NULL, completed_at = NULL WHERE delivery_id = ? AND status = 'failed'",
-    )
-      .bind(value.deliveryId)
-      .run();
-    return (reclaimed.meta.changes ?? 0) === 1 ? "new" : "replay";
-  }
-  return "replay";
+  if (["completed", "ignored"].includes(row.status)) return { kind: "replay" };
+  const claimId = crypto.randomUUID();
+  const claimExpiresAt = new Date(nowValue.getTime() + 60_000).toISOString();
+  const claimed = await env.DB.prepare(
+    "UPDATE github_webhook_deliveries SET status = 'received', result_json = NULL, completed_at = NULL, claim_id = ?, claim_expires_at = ? WHERE delivery_id = ? AND (status = 'failed' OR claim_id IS NULL OR claim_expires_at <= ?)",
+  )
+    .bind(claimId, claimExpiresAt, value.deliveryId, now)
+    .run();
+  return (claimed.meta.changes ?? 0) === 1
+    ? { kind: "new", claimId }
+    : { kind: "replay" };
 }
 
 export async function completeWebhookDelivery(
   env: ControlPlaneEnv,
   deliveryId: string,
+  claimId: string,
   status: "completed" | "ignored" | "failed",
   result: unknown,
 ): Promise<void> {
-  await env.DB.prepare(
-    "UPDATE github_webhook_deliveries SET status = ?, result_json = ?, completed_at = ? WHERE delivery_id = ?",
+  const completed = await env.DB.prepare(
+    "UPDATE github_webhook_deliveries SET status = ?, result_json = ?, claim_id = NULL, claim_expires_at = NULL, completed_at = ? WHERE delivery_id = ? AND status = 'received' AND claim_id = ?",
   )
-    .bind(status, JSON.stringify(result), new Date().toISOString(), deliveryId)
+    .bind(
+      status,
+      JSON.stringify(result),
+      new Date().toISOString(),
+      deliveryId,
+      claimId,
+    )
     .run();
+  if ((completed.meta.changes ?? 0) !== 1)
+    throw new GitHubWebhookError(409, "delivery_claim_lost");
 }
 
 export async function bindIssueRun(
@@ -392,32 +404,70 @@ export async function enqueueComment(
     throw new GitHubWebhookError(409, "comment_intent_conflict");
 }
 
-export async function pendingComments(env: ControlPlaneEnv): Promise<
+export async function claimPendingComments(env: ControlPlaneEnv): Promise<
   Array<{
     key: string;
     issueNumber: number;
     body: string;
+    claimId: string;
   }>
 > {
+  const nowValue = new Date();
+  const now = nowValue.toISOString();
   const rows = await env.DB.prepare(
-    "SELECT comment_key, issue_number, body FROM github_comment_outbox WHERE status = 'pending' ORDER BY created_at ASC LIMIT 20",
-  ).all<{ comment_key: string; issue_number: number; body: string }>();
-  return rows.results.map((row) => ({
-    key: row.comment_key,
-    issueNumber: row.issue_number,
-    body: row.body,
-  }));
+    "SELECT comment_key, issue_number, body FROM github_comment_outbox WHERE status = 'pending' OR (status = 'sending' AND claim_expires_at <= ?) ORDER BY created_at ASC LIMIT 20",
+  )
+    .bind(now)
+    .all<{ comment_key: string; issue_number: number; body: string }>();
+  const claimed: Array<{
+    key: string;
+    issueNumber: number;
+    body: string;
+    claimId: string;
+  }> = [];
+  for (const row of rows.results) {
+    const claimId = crypto.randomUUID();
+    const claimExpiresAt = new Date(nowValue.getTime() + 60_000).toISOString();
+    const result = await env.DB.prepare(
+      "UPDATE github_comment_outbox SET status = 'sending', claim_id = ?, claim_expires_at = ? WHERE comment_key = ? AND (status = 'pending' OR (status = 'sending' AND claim_expires_at <= ?))",
+    )
+      .bind(claimId, claimExpiresAt, row.comment_key, now)
+      .run();
+    if ((result.meta.changes ?? 0) === 1)
+      claimed.push({
+        key: row.comment_key,
+        issueNumber: row.issue_number,
+        body: row.body,
+        claimId,
+      });
+  }
+  return claimed;
 }
 
 export async function markCommentSent(
   env: ControlPlaneEnv,
   key: string,
+  claimId: string,
   result: { id: number; url: string },
 ): Promise<void> {
-  await env.DB.prepare(
-    "UPDATE github_comment_outbox SET status = 'sent', github_comment_id = ?, github_comment_url = ?, sent_at = ? WHERE comment_key = ? AND status = 'pending'",
+  const sent = await env.DB.prepare(
+    "UPDATE github_comment_outbox SET status = 'sent', github_comment_id = ?, github_comment_url = ?, claim_id = NULL, claim_expires_at = NULL, sent_at = ? WHERE comment_key = ? AND status = 'sending' AND claim_id = ?",
   )
-    .bind(result.id, result.url, new Date().toISOString(), key)
+    .bind(result.id, result.url, new Date().toISOString(), key, claimId)
+    .run();
+  if ((sent.meta.changes ?? 0) !== 1)
+    throw new GitHubWebhookError(409, "comment_claim_lost");
+}
+
+export async function releaseCommentClaim(
+  env: ControlPlaneEnv,
+  key: string,
+  claimId: string,
+): Promise<void> {
+  await env.DB.prepare(
+    "UPDATE github_comment_outbox SET status = 'pending', claim_id = NULL, claim_expires_at = NULL WHERE comment_key = ? AND status = 'sending' AND claim_id = ?",
+  )
+    .bind(key, claimId)
     .run();
 }
 
@@ -454,9 +504,20 @@ export async function exactPublishedCheckTargets(
     conclusion?: string;
   }>
 > {
+  if (observations.length === 0) return [];
+  const clauses = observations.map(
+    () =>
+      "(json_extract(publications.result_json, '$.pullRequestNumber') = ? AND json_extract(publications.result_json, '$.commit') = ?)",
+  );
+  const queryBindings = observations.flatMap((value) => [
+    value.pullRequestNumber,
+    value.headSha,
+  ]);
   const publications = await env.DB.prepare(
-    "SELECT publications.run_id, publications.result_json, bindings.issue_number FROM github_publications AS publications INNER JOIN github_issue_runs AS bindings ON bindings.run_id = publications.run_id WHERE publications.status = 'published' AND publications.result_json IS NOT NULL",
-  ).all<{ run_id: string; result_json: string; issue_number: number }>();
+    `SELECT publications.run_id, publications.result_json, issue_runs.issue_number FROM github_publications AS publications INNER JOIN github_issue_runs AS issue_runs ON issue_runs.run_id = publications.run_id WHERE publications.status = 'published' AND publications.result_json IS NOT NULL AND (${clauses.join(" OR ")})`,
+  )
+    .bind(...queryBindings)
+    .all<{ run_id: string; result_json: string; issue_number: number }>();
   const result: Array<{
     runId: string;
     issueNumber: number;

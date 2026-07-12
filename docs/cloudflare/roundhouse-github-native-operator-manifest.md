@@ -49,11 +49,17 @@ migration, and new versions of the existing Worker and execution image when
 needed. Retain existing schedules, resources, audit records, and evidence.
 Incremental Cloudflare usage is bounded to USD 10.
 
-The existing hostname remains Access protected except for an exact bypass of
-`/v1/github/webhook`. That route accepts only `POST`; all other methods fail.
-The Worker verifies the GitHub HMAC-SHA-256 signature over the exact request
-bytes before parsing, then verifies event, delivery, installation, repository,
-and actor policy. No second hostname or broader public route is created.
+Add one self-hosted Access application named `Roundhouse GitHub webhook` with
+destination `roundhouse-dev.rm-rf.rip/v1/github/webhook` and one policy that
+bypasses everyone. Cloudflare's most-specific-path matching applies this
+application only to that route. The existing `Roundhouse development control
+plane` Access application remains unchanged and protects every other path on
+the hostname.
+
+The bypassed route accepts only `POST`; all other methods fail. The Worker
+verifies the GitHub HMAC-SHA-256 signature over the exact request bytes before
+parsing, then verifies event, delivery, installation, repository, and actor
+policy. No second hostname, DNS record, or broader public route is created.
 
 ## Data and rollback
 

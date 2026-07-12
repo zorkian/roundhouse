@@ -41,6 +41,7 @@ import {
 import {
   bindIssueRun,
   checkObservation,
+  claimPendingComments,
   completeWebhookDelivery,
   enqueueComment,
   exactPublishedCheckTargets,
@@ -48,8 +49,8 @@ import {
   issueCommand,
   issueRun,
   markCommentSent,
-  pendingComments,
   recordCheckObservations,
+  releaseCommentClaim,
   reserveWebhookDelivery,
   sha256,
   verifyWebhookRequest,
@@ -309,7 +310,7 @@ async function submitGitHubIssue(
 }
 
 async function flushGitHubComments(env: ControlPlaneEnv): Promise<void> {
-  const comments = await pendingComments(env);
+  const comments = await claimPendingComments(env);
   if (comments.length === 0) return;
   const github = githubGateway(env);
   let firstError: unknown;
@@ -319,9 +320,10 @@ async function flushGitHubComments(env: ControlPlaneEnv): Promise<void> {
         comment.issueNumber,
         comment.body,
       );
-      await markCommentSent(env, comment.key, result);
+      await markCommentSent(env, comment.key, comment.claimId, result);
     } catch (error) {
       firstError ??= error;
+      await releaseCommentClaim(env, comment.key, comment.claimId);
     }
   }
   if (firstError) throw firstError;
@@ -506,7 +508,7 @@ async function githubWebhook(
 ): Promise<Response> {
   const webhook = await verifyWebhookRequest(request, env);
   const reservation = await reserveWebhookDelivery(env, webhook);
-  if (reservation === "replay")
+  if (reservation.kind === "replay")
     return json({ schemaVersion: 1, accepted: true, replayed: true });
   try {
     const observations = checkObservation(webhook);
@@ -523,10 +525,16 @@ async function githubWebhook(
             `Check \`${target.key}\`: **${target.status}**${target.conclusion ? ` / **${target.conclusion}**` : ""}.`,
           ].join("\n\n"),
         );
-      await completeWebhookDelivery(env, webhook.deliveryId, "completed", {
-        observations: observations.length,
-        exactPublishedTargets: targets.length,
-      });
+      await completeWebhookDelivery(
+        env,
+        webhook.deliveryId,
+        reservation.claimId,
+        "completed",
+        {
+          observations: observations.length,
+          exactPublishedTargets: targets.length,
+        },
+      );
       try {
         await flushGitHubComments(env);
       } catch (error) {
@@ -538,7 +546,13 @@ async function githubWebhook(
     }
     const value = issueCommand(webhook);
     if (!value) {
-      await completeWebhookDelivery(env, webhook.deliveryId, "ignored", {});
+      await completeWebhookDelivery(
+        env,
+        webhook.deliveryId,
+        reservation.claimId,
+        "ignored",
+        {},
+      );
       return json({ schemaVersion: 1, accepted: true, ignored: true });
     }
     const result = await executeGitHubCommand(
@@ -548,7 +562,13 @@ async function githubWebhook(
       value.actor,
       value.command,
     );
-    await completeWebhookDelivery(env, webhook.deliveryId, "completed", result);
+    await completeWebhookDelivery(
+      env,
+      webhook.deliveryId,
+      reservation.claimId,
+      "completed",
+      result,
+    );
     try {
       await flushGitHubComments(env);
     } catch (error) {
@@ -558,14 +578,26 @@ async function githubWebhook(
     }
     return json({ schemaVersion: 1, accepted: true, ...result }, 202);
   } catch (error) {
-    await completeWebhookDelivery(env, webhook.deliveryId, "failed", {
-      code:
-        error instanceof GitHubWebhookError
-          ? error.code
-          : error instanceof HttpError
-            ? "command_rejected"
-            : "processing_failed",
-    });
+    try {
+      await completeWebhookDelivery(
+        env,
+        webhook.deliveryId,
+        reservation.claimId,
+        "failed",
+        {
+          code:
+            error instanceof GitHubWebhookError
+              ? error.code
+              : error instanceof HttpError
+                ? "command_rejected"
+                : "processing_failed",
+        },
+      );
+    } catch (completionError) {
+      console.warn("GitHub webhook failure receipt was not retained", {
+        reason: redactedReason(completionError),
+      });
+    }
     throw error;
   }
 }

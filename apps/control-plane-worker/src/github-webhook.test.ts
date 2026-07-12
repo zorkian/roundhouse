@@ -7,13 +7,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { ControlPlaneEnv } from "./environment.js";
 import {
   bindIssueRun,
+  claimPendingComments,
   completeWebhookDelivery,
   enqueueComment,
   exactPublishedCheckTargets,
   githubNativeOperatorMigration,
   issueRun,
   parseGitHubCommand,
-  pendingComments,
   reserveWebhookDelivery,
   verifyGitHubSignature,
   verifyWebhookRequest,
@@ -128,15 +128,37 @@ describe("GitHub-native operator webhook", () => {
       await signature(body, "webhook-test-secret"),
     );
     const verified = await verifyWebhookRequest(validRequest, env);
-    await expect(reserveWebhookDelivery(env, verified)).resolves.toBe("new");
-    await expect(reserveWebhookDelivery(env, verified)).resolves.toBe("replay");
-    await completeWebhookDelivery(env, verified.deliveryId, "failed", {});
-    await expect(
-      Promise.all([
-        reserveWebhookDelivery(env, verified),
-        reserveWebhookDelivery(env, verified),
-      ]),
-    ).resolves.toEqual(expect.arrayContaining(["new", "replay"]));
+    const initial = await reserveWebhookDelivery(env, verified);
+    expect(initial).toMatchObject({ kind: "new" });
+    await expect(reserveWebhookDelivery(env, verified)).resolves.toEqual({
+      kind: "replay",
+    });
+    if (initial.kind !== "new") throw new Error("expected delivery claim");
+    await completeWebhookDelivery(
+      env,
+      verified.deliveryId,
+      initial.claimId,
+      "failed",
+      {},
+    );
+    const retries = await Promise.all([
+      reserveWebhookDelivery(env, verified),
+      reserveWebhookDelivery(env, verified),
+    ]);
+    expect(retries.map((value) => value.kind)).toEqual(
+      expect.arrayContaining(["new", "replay"]),
+    );
+    const retryClaim = retries.find((value) => value.kind === "new");
+    if (!retryClaim || retryClaim.kind !== "new")
+      throw new Error("expected retry claim");
+    await env.DB.prepare(
+      "UPDATE github_webhook_deliveries SET claim_expires_at = ? WHERE delivery_id = ?",
+    )
+      .bind("1970-01-01T00:00:00.000Z", verified.deliveryId)
+      .run();
+    await expect(reserveWebhookDelivery(env, verified)).resolves.toMatchObject({
+      kind: "new",
+    });
 
     const wrong = JSON.stringify({
       ...value,
@@ -180,9 +202,16 @@ describe("GitHub-native operator webhook", () => {
     await expect(
       enqueueComment(env, "run_19:1", 19, "different status"),
     ).rejects.toMatchObject({ code: "comment_intent_conflict" });
-    await expect(pendingComments(env)).resolves.toEqual([
-      { key: "run_19:1", issueNumber: 19, body: "status" },
+    const claims = await Promise.all([
+      claimPendingComments(env),
+      claimPendingComments(env),
     ]);
+    expect(claims.flat()).toHaveLength(1);
+    expect(claims.flat()[0]).toMatchObject({
+      key: "run_19:1",
+      issueNumber: 19,
+      body: "status",
+    });
   });
 
   it("rejects a correctly signed but unsubscribed event", async () => {

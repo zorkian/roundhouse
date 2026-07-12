@@ -10,6 +10,8 @@ CREATE TABLE IF NOT EXISTS github_webhook_deliveries (
   sender_login TEXT,
   status TEXT NOT NULL CHECK (status IN ('received', 'completed', 'ignored', 'failed')),
   result_json TEXT,
+  claim_id TEXT,
+  claim_expires_at TEXT,
   received_at TEXT NOT NULL,
   completed_at TEXT
 );
@@ -29,9 +31,11 @@ CREATE TABLE IF NOT EXISTS github_comment_outbox (
   issue_number INTEGER NOT NULL,
   body TEXT NOT NULL,
   body_sha256 TEXT NOT NULL,
-  status TEXT NOT NULL CHECK (status IN ('pending', 'sent')),
+  status TEXT NOT NULL CHECK (status IN ('pending', 'sending', 'sent')),
   github_comment_id INTEGER,
   github_comment_url TEXT,
+  claim_id TEXT,
+  claim_expires_at TEXT,
   created_at TEXT NOT NULL,
   sent_at TEXT
 );
