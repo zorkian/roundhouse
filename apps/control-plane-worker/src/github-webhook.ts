@@ -87,7 +87,7 @@ export type GitHubCommand =
       revision: number;
       baseCommit: string;
       patchSha256: string;
-      evidenceSha256: string;
+      evidenceSetSha256: string;
     };
 
 const runId = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/;
@@ -130,7 +130,7 @@ export function parseGitHubCommand(body: string): GitHubCommand | null {
       revision: Number(parts[3]),
       baseCommit: parts[4]!,
       patchSha256: parts[5]!,
-      evidenceSha256: parts[6]!,
+      evidenceSetSha256: parts[6]!,
     };
   return null;
 }

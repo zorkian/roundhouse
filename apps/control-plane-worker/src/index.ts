@@ -50,6 +50,7 @@ import {
   pendingComments,
   recordCheckObservations,
   reserveWebhookDelivery,
+  sha256,
   verifyWebhookRequest,
   type GitHubCommand,
 } from "./github-webhook.js";
@@ -319,7 +320,9 @@ async function flushGitHubComments(env: ControlPlaneEnv): Promise<void> {
   }
 }
 
-function runComment(run: Awaited<ReturnType<D1JobStore["read"]>>): string {
+async function runComment(
+  run: Awaited<ReturnType<D1JobStore["read"]>>,
+): Promise<string> {
   const lines = [
     `Roundhouse run \`${run.runId}\` is **${run.state}** at revision \`${run.revision}\`.`,
     `Base: \`${run.task.baseCommit}\``,
@@ -330,16 +333,28 @@ function runComment(run: Awaited<ReturnType<D1JobStore["read"]>>): string {
       `Latest attempt: \`${attempt.attemptId}\` (${attempt.status}${attempt.classification ? `, ${attempt.classification}` : ""}).`,
     );
   if (run.state === "awaiting_approval" && run.implementation) {
-    const evidence = run.evidence.find(
-      (value) => value.evidenceId === run.implementation!.evidenceId,
-    );
-    if (evidence)
+    if (
+      run.evidence.some(
+        (value) => value.evidenceId === run.implementation!.evidenceId,
+      )
+    ) {
+      const evidenceSetSha256 = await sha256(
+        JSON.stringify(
+          run.evidence.map(({ evidenceId, objectKey, sha256, size }) => ({
+            evidenceId,
+            objectKey,
+            sha256,
+            size,
+          })),
+        ),
+      );
       lines.push(
         "Approve this exact implementation with:",
         "```text",
-        `/rh approve ${run.runId} ${run.revision} ${run.task.baseCommit} ${run.implementation.patchSha256} ${evidence.sha256}`,
+        `/rh approve ${run.runId} ${run.revision} ${run.task.baseCommit} ${run.implementation.patchSha256} ${evidenceSetSha256}`,
         "```",
       );
+    }
   }
   if (run.publication?.pullRequestUrl)
     lines.push(`Draft pull request: ${run.publication.pullRequestUrl}`);
@@ -356,7 +371,7 @@ async function enqueueRunComment(
     env,
     `run-status:${runId}:${run.revision}`,
     issueNumber,
-    runComment(run),
+    await runComment(run),
   );
 }
 
@@ -384,6 +399,16 @@ async function executeGitHubCommand(
   const actorId = `github:${actor}`;
   let runId: string;
   if (command.kind === "start") {
+    const existing = await issueRun(env, issueNumber);
+    if (existing) {
+      const current = await new D1JobStore(env.DB).read(existing);
+      await enqueueRunComment(env, issueNumber, existing);
+      return {
+        runId: existing,
+        state: current.state,
+        revision: current.revision,
+      };
+    }
     const request = new Request(
       `https://roundhouse-dev.rm-rf.rip/v1/github/issues/${issueNumber}/runs`,
       {
@@ -418,34 +443,49 @@ async function executeGitHubCommand(
         expectedRevision: run.revision,
       });
     } else if (command.kind === "approve") {
-      const run = await jobs.read(runId);
-      const evidence = run.evidence.find(
-        (value) => value.sha256 === command.evidenceSha256,
+      let run = await jobs.read(runId);
+      const evidence = run.evidence.map(
+        ({ evidenceId, objectKey, sha256, size }) => ({
+          evidenceId,
+          objectKey,
+          sha256,
+          size,
+        }),
       );
+      const evidenceSetSha256 = await sha256(JSON.stringify(evidence));
       if (
         run.task.baseCommit !== command.baseCommit ||
         run.implementation?.patchSha256 !== command.patchSha256 ||
-        !evidence
+        evidenceSetSha256 !== command.evidenceSetSha256
       )
         throw new HttpError(409, "Approval bindings do not match the run");
-      await approveRun(
-        runId,
-        {
-          schemaVersion: 1,
-          expectedRevision: command.revision,
-          patchSha256: command.patchSha256,
-          evidence: [evidence],
-          approver: actorId,
-        },
-        env,
-        actorId,
-      );
-      await publishGitHubRun(
-        runId,
-        { schemaVersion: 1, expectedRevision: command.revision + 1 },
-        env,
-        actorId,
-      );
+      if (!run.approval) {
+        await approveRun(
+          runId,
+          {
+            schemaVersion: 1,
+            expectedRevision: command.revision,
+            patchSha256: command.patchSha256,
+            evidence,
+            approver: actorId,
+          },
+          env,
+          actorId,
+        );
+        run = await jobs.read(runId);
+      } else if (
+        run.approval.approver !== actorId ||
+        run.approval.baseCommit !== command.baseCommit ||
+        run.approval.patchSha256 !== command.patchSha256
+      )
+        throw new HttpError(409, "Existing approval does not match command");
+      if (!run.publication)
+        await publishGitHubRun(
+          runId,
+          { schemaVersion: 1, expectedRevision: run.revision },
+          env,
+          actorId,
+        );
     }
   }
   const current = await new D1JobStore(env.DB).read(runId);
