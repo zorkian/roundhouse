@@ -239,9 +239,11 @@ export async function publishTrustedImplementation(
     await git(input.repositoryPath, ["clean", "-fd"]).catch(() => undefined);
     throw error;
   }
-  await git(input.repositoryPath, ["config", "user.name", input.authorName]);
-  await git(input.repositoryPath, ["config", "user.email", input.authorEmail]);
   await git(input.repositoryPath, [
+    "-c",
+    `user.name=${input.authorName}`,
+    "-c",
+    `user.email=${input.authorEmail}`,
     "commit",
     "--no-verify",
     "-m",

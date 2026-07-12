@@ -327,7 +327,7 @@ async function recordPublication(
         branch: input.branch,
         commit: input.commit,
         remoteUrl: input.remoteUrl,
-        verifiedAt: input.verifiedAt,
+        verifiedAt: new Date().toISOString(),
         pullRequestUrl: input.pullRequestUrl,
       },
       input.expectedRevision,
