@@ -94,9 +94,13 @@ export async function runResumableJobCli(argv: string[]): Promise<unknown> {
         revision: run.revision,
       });
       if (
-        ["awaiting_approval", "completed", "failed", "cancelled"].includes(
-          run.state,
-        )
+        [
+          "awaiting_approval",
+          "awaiting_publication",
+          "completed",
+          "failed",
+          "cancelled",
+        ].includes(run.state)
       )
         break;
     }

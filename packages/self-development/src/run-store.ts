@@ -26,6 +26,11 @@ import type {
   RunUpdates,
 } from "./job-ports.js";
 import type { JobStage } from "./task.js";
+import {
+  approvalMatches,
+  pullRequestMatchesRemote,
+  type ExactApproval,
+} from "./trusted-loop.js";
 
 const transitions: Record<
   SelfDevelopmentRunState,
@@ -35,7 +40,8 @@ const transitions: Record<
   workspace_ready: ["implementing", "failed", "cancelled"],
   implementing: ["validating", "failed", "cancelled"],
   validating: ["awaiting_approval", "failed", "cancelled"],
-  awaiting_approval: ["approved", "cancelled"],
+  awaiting_approval: ["awaiting_publication", "approved", "cancelled"],
+  awaiting_publication: ["completed", "cancelled"],
   approved: ["committed", "cancelled"],
   committed: ["pushed", "failed"],
   pushed: ["completed", "failed"],
@@ -206,6 +212,102 @@ export class FileRunStore implements JobStore {
             state: "cancelled",
             occurredAt: now.toISOString(),
             detail: {},
+          },
+        ],
+      });
+    });
+  }
+
+  async approve(
+    runId: string,
+    approval: ExactApproval,
+    expectedRevision: number,
+    now: Date,
+  ): Promise<SelfDevelopmentRun> {
+    return this.locked(runId, async () => {
+      const run = await this.read(runId);
+      if (run.revision !== expectedRevision)
+        throw new Error("Approval revision does not match");
+      if (run.approval) throw new Error("Run approval is immutable");
+      if (run.state !== "awaiting_approval" || !run.implementation)
+        throw new Error("Run is not awaiting an implementation approval");
+      const evidence = run.evidence.map(
+        ({ evidenceId, objectKey, sha256, size }) => ({
+          evidenceId,
+          objectKey,
+          sha256,
+          size,
+        }),
+      );
+      if (
+        !approvalMatches(approval, {
+          runId,
+          baseCommit: run.task.baseCommit,
+          patchSha256: run.implementation.patchSha256,
+          evidence,
+        })
+      )
+        throw new Error("Approval binding does not match the run");
+      return this.replace({
+        ...run,
+        state: "awaiting_publication",
+        approval,
+        updatedAt: now.toISOString(),
+        events: [
+          ...run.events,
+          {
+            sequence: run.events.length + 1,
+            type: "run.approved",
+            state: "awaiting_publication",
+            occurredAt: now.toISOString(),
+            detail: {
+              approver: approval.approver,
+              patchSha256: approval.patchSha256,
+            },
+          },
+        ],
+      });
+    });
+  }
+
+  async recordPublication(
+    runId: string,
+    publication: NonNullable<SelfDevelopmentRun["publication"]>,
+    expectedRevision: number,
+    now: Date,
+  ): Promise<SelfDevelopmentRun> {
+    return this.locked(runId, async () => {
+      const run = await this.read(runId);
+      if (run.revision !== expectedRevision)
+        throw new Error("Publication revision does not match");
+      if (run.state !== "awaiting_publication" || !run.approval)
+        throw new Error("Run does not have a valid approval");
+      if (
+        publication.branch !== run.task.publication.branch ||
+        publication.remoteUrl !== run.task.publication.remoteUrl ||
+        !pullRequestMatchesRemote(
+          publication.pullRequestUrl,
+          run.task.publication.remoteUrl,
+        )
+      )
+        throw new Error("Publication target does not match the task");
+      return this.replace({
+        ...run,
+        state: "completed",
+        publication,
+        commit: publication.commit,
+        updatedAt: now.toISOString(),
+        events: [
+          ...run.events,
+          {
+            sequence: run.events.length + 1,
+            type: "publication.verified",
+            state: "completed",
+            occurredAt: now.toISOString(),
+            detail: {
+              branch: publication.branch,
+              commit: publication.commit,
+            },
           },
         ],
       });

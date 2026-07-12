@@ -31,6 +31,7 @@ function stageFor(run: SelfDevelopmentRun): JobStage | null {
     case "pushed":
       return "complete";
     case "awaiting_approval":
+    case "awaiting_publication":
     case "completed":
     case "failed":
     case "cancelled":

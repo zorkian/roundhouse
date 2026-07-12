@@ -9,3 +9,9 @@ export function isCheckoutRequestAllowed(request: Request): boolean {
 }
 
 export const allowedCheckoutHosts = [...checkoutHosts];
+
+export function modelRequestAuditAccepted(
+  changes: number | undefined,
+): boolean {
+  return changes === 1;
+}

@@ -4,11 +4,13 @@
 import {
   repositoryExecutionRequestSchema,
   type RepositoryExecutionRequest,
+  type TrustedImplementationRequest,
 } from "@roundhouse/self-development/cloudflare";
 import { describe, expect, it } from "vitest";
 
 import {
   CloudflareRepositoryExecutionBackend,
+  CloudflareTrustedImplementationBackend,
   type EvidenceBucketPort,
   type ExecutionContainerPort,
 } from "./cloudflare-execution.js";
@@ -39,6 +41,289 @@ describe("repository execution request", () => {
         attemptId: `attempt-${"x".repeat(200)}`,
       }),
     ).toThrow();
+  });
+});
+
+const trustedRequest: TrustedImplementationRequest = {
+  schemaVersion: 1,
+  runId: "run_trusted_container_contract",
+  attemptId: "run_trusted_container_contract-prepare-1",
+  attemptNumber: 1,
+  expectedRevision: 3,
+  repositoryUrl: "https://github.com/zorkian/roundhouse.git",
+  baseCommit: "a".repeat(40),
+  subject: "Document the trusted loop",
+  instructions: "Change only the dogfood document.",
+  allowedPaths: ["docs/dogfood/trusted-self-development-loop.md"],
+  validationLevel: "full",
+  agentTimeoutMs: 1_200_000,
+  validationTimeoutMs: 900_000,
+  maxPatchBytes: 512 * 1024,
+  maxChangedFiles: 50,
+  maxOutputBytes: 5 * 1024 * 1024,
+  scenario: "success",
+};
+
+function trustedResult() {
+  const patch =
+    "diff --git a/docs/dogfood/trusted-self-development-loop.md b/docs/dogfood/trusted-self-development-loop.md\n";
+  return {
+    schemaVersion: 1 as const,
+    runId: trustedRequest.runId,
+    attemptId: trustedRequest.attemptId,
+    baseCommit: trustedRequest.baseCommit,
+    checkoutCommit: trustedRequest.baseCommit,
+    patch,
+    patchSha256:
+      "d3e85c9b33fe5cfed596b842e3e9c09c68ec52865c18272bdf209507bd49c6f8",
+    patchBytes: new TextEncoder().encode(patch).byteLength,
+    changedFiles: ["docs/dogfood/trusted-self-development-loop.md"],
+    startedAt: "2026-07-12T00:00:00.000Z",
+    completedAt: "2026-07-12T00:00:01.000Z",
+    startupDurationMs: 1,
+    checkoutDurationMs: 1,
+    agentDurationMs: 1,
+    validationDurationMs: 1,
+    agent: {
+      provider: "codex-subscription" as const,
+      outcome: "succeeded" as const,
+      summary: "Created the requested documentation.",
+      eventBytes: 100,
+    },
+    validation: [
+      {
+        name: "license" as const,
+        command: "node scripts/check-license-headers.mjs",
+        exitCode: 0,
+        timedOut: false,
+        durationMs: 1,
+        stdout: "",
+        stderr: "",
+        outputTruncated: false,
+      },
+    ],
+    network: {
+      checkoutHosts: ["github.com" as const],
+      modelHosts: ["chatgpt.com"],
+      agentToolInternetEnabled: false as const,
+      validationInternetEnabled: false as const,
+      deniedHttpProbe: true as const,
+      deniedTcpProbe: true as const,
+    },
+    credential: {
+      installedAtRuntime: true as const,
+      removedBeforeValidation: true as const,
+      absentFromEvidence: true as const,
+    },
+    resources: { diskBytes: 1, memoryBytes: 1 },
+  };
+}
+
+describe("CloudflareTrustedImplementationBackend", () => {
+  it("rejects results exceeding request-scoped limits", async () => {
+    const backend = new CloudflareTrustedImplementationBackend(
+      {
+        getByName: () => ({
+          runJob: async () => result(),
+          runTrustedJob: async () => trustedResult(),
+          destroy: async () => undefined,
+        }),
+      },
+      new MemoryEvidence(),
+      "unused",
+    );
+    await expect(
+      backend.execute({ ...trustedRequest, maxPatchBytes: 1 }),
+    ).rejects.toMatchObject({
+      classification: "implementation_binding_mismatch",
+      retryable: false,
+    });
+  });
+
+  it("rejects an empty trusted implementation patch", async () => {
+    const backend = new CloudflareTrustedImplementationBackend(
+      {
+        getByName: () => ({
+          runJob: async () => result(),
+          runTrustedJob: async () => ({
+            ...trustedResult(),
+            patch: "",
+            patchSha256:
+              "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            patchBytes: 0,
+          }),
+          destroy: async () => undefined,
+        }),
+      },
+      new MemoryEvidence(),
+      "unused",
+    );
+    await expect(backend.execute(trustedRequest)).rejects.toMatchObject({
+      classification: "implementation_binding_mismatch",
+      retryable: false,
+    });
+  });
+
+  it("rejects descendants of an exact file allowlist entry", async () => {
+    const backend = new CloudflareTrustedImplementationBackend(
+      {
+        getByName: () => ({
+          runJob: async () => result(),
+          runTrustedJob: async () => ({
+            ...trustedResult(),
+            changedFiles: [
+              "docs/dogfood/trusted-self-development-loop.md/extra.md",
+            ],
+          }),
+          destroy: async () => undefined,
+        }),
+      },
+      new MemoryEvidence(),
+      "unused",
+    );
+    await expect(backend.execute(trustedRequest)).rejects.toMatchObject({
+      classification: "implementation_binding_mismatch",
+      retryable: false,
+    });
+  });
+
+  it("stores immutable patch evidence without retaining the credential", async () => {
+    const evidence = new MemoryEvidence();
+    const credential = '{"access_token":"credential-must-not-survive"}';
+    let receivedCredential = "";
+    const backend = new CloudflareTrustedImplementationBackend(
+      {
+        getByName: () => ({
+          runJob: async () => result(),
+          runTrustedJob: async (_request, auth) => {
+            receivedCredential = auth;
+            return trustedResult();
+          },
+          destroy: async () => undefined,
+        }),
+      },
+      evidence,
+      credential,
+    );
+
+    const stage = await backend.execute(trustedRequest);
+    expect(receivedCredential).toBe(credential);
+    expect(stage).toMatchObject({
+      state: "awaiting_approval",
+      updates: {
+        implementation: {
+          patchSha256: trustedResult().patchSha256,
+          changedFiles: ["docs/dogfood/trusted-self-development-loop.md"],
+        },
+      },
+    });
+    const stored = new TextDecoder().decode([...evidence.objects.values()][0]);
+    expect(stored).not.toContain("credential-must-not-survive");
+  });
+
+  it("binds replay evidence to the exact retained object bytes", async () => {
+    const evidence = new MemoryEvidence();
+    const text = `${JSON.stringify(trustedResult(), null, 2)}\n`;
+    const bytes = new TextEncoder().encode(text);
+    evidence.objects.set(
+      `runs/${trustedRequest.runId}/attempts/${trustedRequest.attemptId}/trusted-implementation.json`,
+      bytes,
+    );
+    const backend = new CloudflareTrustedImplementationBackend(
+      {
+        getByName: () => ({
+          runJob: async () => result(),
+          destroy: async () => undefined,
+        }),
+      },
+      evidence,
+      "unused",
+    );
+    const stage = await backend.execute(trustedRequest);
+    const digest = Array.from(
+      new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
+    )
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+    expect(stage.updates?.evidence?.[0]).toMatchObject({
+      sha256: digest,
+      size: bytes.byteLength,
+    });
+  });
+
+  it("preserves integrity classification for corrupt existing evidence", async () => {
+    const evidence = new MemoryEvidence();
+    evidence.objects.set(
+      `runs/${trustedRequest.runId}/attempts/${trustedRequest.attemptId}/trusted-implementation.json`,
+      new TextEncoder().encode(
+        JSON.stringify({ ...trustedResult(), runId: "run_wrong" }),
+      ),
+    );
+    const backend = new CloudflareTrustedImplementationBackend(
+      {
+        getByName: () => ({
+          runJob: async () => result(),
+          destroy: async () => undefined,
+        }),
+      },
+      evidence,
+      "unused",
+    );
+    await expect(backend.execute(trustedRequest)).rejects.toMatchObject({
+      classification: "implementation_binding_mismatch",
+      retryable: false,
+    });
+  });
+
+  it("classifies unparsable existing evidence as non-retryable integrity failure", async () => {
+    const evidence = new MemoryEvidence();
+    evidence.objects.set(
+      `runs/${trustedRequest.runId}/attempts/${trustedRequest.attemptId}/trusted-implementation.json`,
+      new TextEncoder().encode("{"),
+    );
+    const backend = new CloudflareTrustedImplementationBackend(
+      {
+        getByName: () => ({
+          runJob: async () => result(),
+          destroy: async () => undefined,
+        }),
+      },
+      evidence,
+      "unused",
+    );
+    await expect(backend.execute(trustedRequest)).rejects.toMatchObject({
+      classification: "implementation_binding_mismatch",
+      retryable: false,
+    });
+  });
+
+  it("preserves integrity classification for corrupt raced evidence", async () => {
+    const invalid = new TextEncoder().encode(
+      JSON.stringify({ ...trustedResult(), runId: "run_wrong" }),
+    );
+    let reads = 0;
+    const evidence: EvidenceBucketPort = {
+      get: async () =>
+        reads++ === 0
+          ? null
+          : { text: async () => new TextDecoder().decode(invalid) },
+      put: async () => null,
+    };
+    const backend = new CloudflareTrustedImplementationBackend(
+      {
+        getByName: () => ({
+          runJob: async () => result(),
+          runTrustedJob: async () => trustedResult(),
+          destroy: async () => undefined,
+        }),
+      },
+      evidence,
+      "unused",
+    );
+    await expect(backend.execute(trustedRequest)).rejects.toMatchObject({
+      classification: "implementation_binding_mismatch",
+      retryable: false,
+    });
   });
 });
 

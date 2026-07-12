@@ -12,6 +12,8 @@ export * from "./resumable-coordinator.js";
 export * from "./resumable-job-cli.js";
 export * from "./run-store.js";
 export * from "./task.js";
+export * from "./trusted-loop.js";
+export * from "./trusted-publication.js";
 export * from "./workspace.js";
 export * from "./verified-push.js";
 export * from "./walking-skeleton-cli.js";

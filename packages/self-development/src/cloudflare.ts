@@ -7,3 +7,4 @@ export * from "./job-ports.js";
 export * from "./queue-delivery.js";
 export * from "./resumable-coordinator.js";
 export * from "./task.js";
+export * from "./trusted-loop.js";

@@ -3,7 +3,18 @@
 
 import { describe, expect, it } from "vitest";
 
-import { command } from "./runner.mjs";
+import {
+  assertCompleteAgentOutput,
+  boundedAgentFailure,
+  changedPaths,
+  command,
+  pathAllowed,
+  secretStrings,
+  skippedValidation,
+  validRepositoryPath,
+  validRuntimeCredentialSize,
+  withoutRuntimeCredential,
+} from "./runner.mjs";
 
 describe("execution runner command", () => {
   it("rejects promptly when spawning the executable fails", async () => {
@@ -12,5 +23,111 @@ describe("execution runner command", () => {
       command("/roundhouse-missing-executable", [], { timeoutMs: 10_000 }),
     ).rejects.toMatchObject({ code: "ENOENT" });
     expect(Date.now() - started).toBeLessThan(1_000);
+  });
+});
+
+describe("trusted agent output boundary", () => {
+  it("rejects timeout and truncation before event parsing", () => {
+    expect(() =>
+      assertCompleteAgentOutput({ timedOut: true, outputTruncated: false }),
+    ).toThrow("agent_timeout");
+    expect(() =>
+      assertCompleteAgentOutput({ timedOut: false, outputTruncated: true }),
+    ).toThrow("agent_output_truncated");
+    expect(() =>
+      assertCompleteAgentOutput({ timedOut: false, outputTruncated: false }),
+    ).not.toThrow();
+  });
+
+  it("clears credential-derived runtime state", () => {
+    expect(
+      withoutRuntimeCredential({
+        credentialInstalled: true,
+        secrets: ["sensitive"],
+        request: { runId: "run_test" },
+      }),
+    ).toEqual({
+      credentialInstalled: false,
+      secrets: [],
+      request: { runId: "run_test" },
+    });
+  });
+
+  it("keeps the credential field within the HTTP envelope", () => {
+    expect(validRuntimeCredentialSize("x".repeat(24 * 1024))).toBe(true);
+    expect(validRuntimeCredentialSize("x".repeat(24 * 1024 + 1))).toBe(false);
+  });
+
+  it("extracts credential values without treating metadata as secret", () => {
+    expect(
+      secretStrings({
+        issuer: "https://auth.openai.com",
+        client_id: "public-client-identifier",
+        tokens: {
+          access_token: "actual-access-token",
+          refresh_token: "actual-refresh-token",
+        },
+        credentials: { value: "nested-credential-value" },
+      }),
+    ).toEqual([
+      "actual-access-token",
+      "actual-refresh-token",
+      "nested-credential-value",
+    ]);
+  });
+
+  it("bounds and redacts agent failure diagnostics", () => {
+    expect(
+      boundedAgentFailure(`prefix\nactual-access-token\t${"x".repeat(1_100)}`, [
+        "actual-access-token",
+      ]),
+    ).toBe("x".repeat(1_000));
+    expect(
+      boundedAgentFailure("credential=actual-access-token", [
+        "actual-access-token",
+      ]),
+    ).toBe("credential=[redacted]");
+  });
+
+  it("records the actual reason a validation check was skipped", () => {
+    expect(
+      skippedValidation(
+        "test",
+        "not-applicable",
+        "Skipped because validation is quick",
+      ).stdout,
+    ).toBe("Skipped because validation is quick");
+  });
+
+  it("rejects control characters in repository paths", () => {
+    expect(validRepositoryPath("docs/safe.md")).toBe(true);
+    for (const path of [
+      "docs/line\nbreak.md",
+      "docs/tab\tname.md",
+      "docs/./file.md",
+      "docs//file.md",
+      "docs/",
+    ])
+      expect(validRepositoryPath(path)).toBe(false);
+  });
+
+  it("treats trusted allowed paths as exact files", () => {
+    const allowed = ["docs/dogfood/trusted-self-development-loop.md"];
+    expect(pathAllowed(allowed[0], allowed)).toBe(true);
+    expect(pathAllowed(`${allowed[0]}/extra.md`, allowed)).toBe(false);
+  });
+
+  it("parses NUL-delimited status paths without quoting ambiguity", () => {
+    expect(changedPaths("?? docs/my file.md\0 M docs/café.md\0")).toEqual([
+      "docs/my file.md",
+      "docs/café.md",
+    ]);
+    expect(changedPaths("R  docs/old name.md\0docs/new name.md\0")).toEqual([
+      "docs/old name.md",
+      "docs/new name.md",
+    ]);
+    expect(changedPaths("C  docs/source.md\0docs/copy.md\0")).toEqual([
+      "docs/copy.md",
+    ]);
   });
 });
