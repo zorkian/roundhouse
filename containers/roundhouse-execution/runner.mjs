@@ -191,10 +191,8 @@ export async function command(executable, args, options = {}) {
   };
 }
 
-function pathAllowed(path, allowedPaths) {
-  return allowedPaths.some(
-    (allowed) => path === allowed || path.startsWith(`${allowed}/`),
-  );
+export function pathAllowed(path, allowedPaths) {
+  return allowedPaths.includes(path);
 }
 
 export function changedPaths(output) {

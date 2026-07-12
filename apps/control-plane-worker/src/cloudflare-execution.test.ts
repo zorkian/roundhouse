@@ -120,6 +120,29 @@ function trustedResult() {
 }
 
 describe("CloudflareTrustedImplementationBackend", () => {
+  it("rejects descendants of an exact file allowlist entry", async () => {
+    const backend = new CloudflareTrustedImplementationBackend(
+      {
+        getByName: () => ({
+          runJob: async () => result(),
+          runTrustedJob: async () => ({
+            ...trustedResult(),
+            changedFiles: [
+              "docs/dogfood/trusted-self-development-loop.md/extra.md",
+            ],
+          }),
+          destroy: async () => undefined,
+        }),
+      },
+      new MemoryEvidence(),
+      "unused",
+    );
+    await expect(backend.execute(trustedRequest)).rejects.toMatchObject({
+      classification: "implementation_binding_mismatch",
+      retryable: false,
+    });
+  });
+
   it("stores immutable patch evidence without retaining the credential", async () => {
     const evidence = new MemoryEvidence();
     const credential = '{"access_token":"credential-must-not-survive"}';

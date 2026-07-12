@@ -75,11 +75,7 @@ async function validateTrustedResult(
     result.checkoutCommit !== request.baseCommit ||
     result.patchSha256 !== patchHash ||
     result.patchBytes !== new TextEncoder().encode(result.patch).byteLength ||
-    !result.changedFiles.every((path) =>
-      request.allowedPaths.some(
-        (allowed) => path === allowed || path.startsWith(`${allowed}/`),
-      ),
-    )
+    !result.changedFiles.every((path) => request.allowedPaths.includes(path))
   )
     throw new StageFailure(
       "Trusted implementation result did not match its immutable request",

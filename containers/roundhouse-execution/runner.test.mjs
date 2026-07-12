@@ -7,6 +7,7 @@ import {
   assertCompleteAgentOutput,
   changedPaths,
   command,
+  pathAllowed,
   secretStrings,
   validRepositoryPath,
   validRuntimeCredentialSize,
@@ -78,6 +79,12 @@ describe("trusted agent output boundary", () => {
       "docs/",
     ])
       expect(validRepositoryPath(path)).toBe(false);
+  });
+
+  it("treats trusted allowed paths as exact files", () => {
+    const allowed = ["docs/dogfood/trusted-self-development-loop.md"];
+    expect(pathAllowed(allowed[0], allowed)).toBe(true);
+    expect(pathAllowed(`${allowed[0]}/extra.md`, allowed)).toBe(false);
   });
 
   it("parses NUL-delimited status paths without quoting ambiguity", () => {
