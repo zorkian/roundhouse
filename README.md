@@ -31,6 +31,10 @@ The [resumable job loop](docs/resumable-job-loop.md) documents platform-neutral
 coordination, leases, retries, crash recovery, and the local-to-Cloudflare
 adapter map.
 
+The [local-first Cloudflare coordination adapters](docs/cloudflare-coordination-adapters.md)
+document run-targeted Queue delivery, D1 compare-and-set lease ownership, and
+the unapplied development resource proposal.
+
 ## License
 
 Roundhouse is licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution information.

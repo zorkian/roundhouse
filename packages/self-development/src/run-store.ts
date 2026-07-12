@@ -229,49 +229,64 @@ export class FileRunStore implements JobStore {
     }
     for (const runId of entries) {
       if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(runId)) continue;
-      try {
-        const claimed = await this.locked(runId, async () => {
-          const run = await this.read(runId);
-          if (!claimableStates.includes(run.state)) return null;
-          if (run.lease && Date.parse(run.lease.expiresAt) > now.getTime())
-            return null;
-          const attempts = run.attempts.map((attempt) =>
-            attempt.status === "running"
-              ? {
-                  ...attempt,
-                  status: "failed" as const,
-                  completedAt: now.toISOString(),
-                  retryable: true,
-                  classification: "lease_expired",
-                  error: "Worker lease expired before the stage completed",
-                }
-              : attempt,
-          );
-          const token = randomUUID();
-          const updated = await this.replace({
-            ...run,
-            attempts,
-            updatedAt: now.toISOString(),
-            lease: {
-              token,
-              workerId,
-              acquiredAt: now.toISOString(),
-              expiresAt: new Date(now.getTime() + leaseMs).toISOString(),
-            },
-          });
-          return { run: updated, token };
-        });
-        if (claimed) return claimed;
-      } catch (error) {
-        if (
-          error instanceof Error &&
-          error.message.startsWith("Run is concurrently modified:")
-        )
-          continue;
-        throw error;
-      }
+      const claimed = await this.claim(runId, workerId, now, leaseMs);
+      if (claimed) return claimed;
     }
     return null;
+  }
+
+  async claim(
+    runId: string,
+    workerId: string,
+    now: Date,
+    leaseMs: number,
+    expectedRevision?: number,
+  ): Promise<JobClaim | null> {
+    if (!workerId.trim()) throw new Error("Worker ID is required");
+    if (!Number.isSafeInteger(leaseMs) || leaseMs <= 0)
+      throw new Error("Lease duration must be a positive integer");
+    try {
+      return await this.locked(runId, async () => {
+        const run = await this.read(runId);
+        if (expectedRevision !== undefined && run.revision !== expectedRevision)
+          return null;
+        if (!claimableStates.includes(run.state)) return null;
+        if (run.lease && Date.parse(run.lease.expiresAt) > now.getTime())
+          return null;
+        const attempts = run.attempts.map((attempt) =>
+          attempt.status === "running"
+            ? {
+                ...attempt,
+                status: "failed" as const,
+                completedAt: now.toISOString(),
+                retryable: true,
+                classification: "lease_expired",
+                error: "Worker lease expired before the stage completed",
+              }
+            : attempt,
+        );
+        const token = randomUUID();
+        const updated = await this.replace({
+          ...run,
+          attempts,
+          updatedAt: now.toISOString(),
+          lease: {
+            token,
+            workerId,
+            acquiredAt: now.toISOString(),
+            expiresAt: new Date(now.getTime() + leaseMs).toISOString(),
+          },
+        });
+        return { run: updated, token };
+      });
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.startsWith("Run is concurrently modified:")
+      )
+        return null;
+      throw error;
+    }
   }
 
   private assertLease(
