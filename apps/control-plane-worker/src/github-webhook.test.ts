@@ -8,6 +8,7 @@ import type { ControlPlaneEnv } from "./environment.js";
 import {
   bindIssueRun,
   enqueueComment,
+  exactPublishedCheckTargets,
   githubNativeOperatorMigration,
   issueRun,
   parseGitHubCommand,
@@ -152,6 +153,46 @@ describe("GitHub-native operator webhook", () => {
     await enqueueComment(env, "run_19:1", 19, "status");
     await expect(pendingComments(env)).resolves.toEqual([
       { key: "run_19:1", issueNumber: 19, body: "status" },
+    ]);
+  });
+
+  it("reports checks only for the exact Roundhouse-published head", async () => {
+    const env = await runtime();
+    const runId = "run_exact_head";
+    const commit = "d".repeat(40);
+    await bindIssueRun(env, 23, runId);
+    await env.DB.prepare(
+      "CREATE TABLE github_publications (run_id TEXT PRIMARY KEY, status TEXT NOT NULL, result_json TEXT)",
+    ).run();
+    await env.DB.prepare(
+      "INSERT INTO github_publications(run_id, status, result_json) VALUES (?, 'published', ?)",
+    )
+      .bind(runId, JSON.stringify({ pullRequestNumber: 31, commit }))
+      .run();
+    const observations = [
+      {
+        pullRequestNumber: 31,
+        headSha: commit,
+        key: "check_run:1",
+        status: "completed",
+        conclusion: "success",
+      },
+      {
+        pullRequestNumber: 31,
+        headSha: "e".repeat(40),
+        key: "check_run:2",
+        status: "completed",
+        conclusion: "success",
+      },
+    ];
+    await expect(
+      exactPublishedCheckTargets(env, observations),
+    ).resolves.toEqual([
+      {
+        runId,
+        issueNumber: 23,
+        ...observations[0],
+      },
     ]);
   });
 });

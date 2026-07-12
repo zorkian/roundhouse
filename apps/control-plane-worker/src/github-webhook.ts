@@ -408,3 +408,61 @@ export async function recordCheckObservations(
       )
       .run();
 }
+
+export async function exactPublishedCheckTargets(
+  env: ControlPlaneEnv,
+  observations: ReturnType<typeof checkObservation>,
+): Promise<
+  Array<{
+    runId: string;
+    issueNumber: number;
+    pullRequestNumber: number;
+    headSha: string;
+    key: string;
+    status: string;
+    conclusion?: string;
+  }>
+> {
+  const publications = await env.DB.prepare(
+    "SELECT run_id, result_json FROM github_publications WHERE status = 'published' AND result_json IS NOT NULL",
+  ).all<{ run_id: string; result_json: string }>();
+  const result: Array<{
+    runId: string;
+    issueNumber: number;
+    pullRequestNumber: number;
+    headSha: string;
+    key: string;
+    status: string;
+    conclusion?: string;
+  }> = [];
+  for (const row of publications.results) {
+    let publication: { pullRequestNumber?: unknown; commit?: unknown };
+    try {
+      publication = JSON.parse(row.result_json) as typeof publication;
+    } catch {
+      continue;
+    }
+    if (
+      typeof publication.pullRequestNumber !== "number" ||
+      typeof publication.commit !== "string"
+    )
+      continue;
+    const binding = await env.DB.prepare(
+      "SELECT issue_number FROM github_issue_runs WHERE run_id = ?",
+    )
+      .bind(row.run_id)
+      .first<{ issue_number: number }>();
+    if (!binding) continue;
+    for (const observation of observations)
+      if (
+        observation.pullRequestNumber === publication.pullRequestNumber &&
+        observation.headSha === publication.commit
+      )
+        result.push({
+          runId: row.run_id,
+          issueNumber: binding.issue_number,
+          ...observation,
+        });
+  }
+  return result;
+}

@@ -43,6 +43,7 @@ import {
   checkObservation,
   completeWebhookDelivery,
   enqueueComment,
+  exactPublishedCheckTargets,
   GitHubWebhookError,
   issueCommand,
   issueRun,
@@ -505,9 +506,28 @@ async function githubWebhook(
     const observations = checkObservation(webhook);
     if (observations.length > 0) {
       await recordCheckObservations(env, observations);
+      const targets = await exactPublishedCheckTargets(env, observations);
+      for (const target of targets)
+        await enqueueComment(
+          env,
+          `check:${target.runId}:${target.headSha}:${target.key}:${target.status}:${target.conclusion ?? "pending"}`,
+          target.issueNumber,
+          [
+            `Roundhouse observed CI for exact published head \`${target.headSha}\` on pull request #${target.pullRequestNumber}.`,
+            `Check \`${target.key}\`: **${target.status}**${target.conclusion ? ` / **${target.conclusion}**` : ""}.`,
+          ].join("\n\n"),
+        );
       await completeWebhookDelivery(env, webhook.deliveryId, "completed", {
         observations: observations.length,
+        exactPublishedTargets: targets.length,
       });
+      try {
+        await flushGitHubComments(env);
+      } catch (error) {
+        console.warn("GitHub check comment delivery deferred", {
+          reason: redactedReason(error),
+        });
+      }
       return json({ schemaVersion: 1, accepted: true });
     }
     const value = issueCommand(webhook);
