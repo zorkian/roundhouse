@@ -280,10 +280,7 @@ async function installCredential(value) {
     prepared.baseCommit !== request.baseCommit
   )
     throw new Error("checkout_not_prepared");
-  if (
-    typeof value.authJson !== "string" ||
-    Buffer.byteLength(value.authJson) > 256 * 1024
-  )
+  if (!validRuntimeCredentialSize(value.authJson))
     throw new Error("invalid_runtime_credential");
   let parsed;
   try {
@@ -306,6 +303,10 @@ async function installCredential(value) {
     credentialInstalled: true,
   };
   return { installed: true };
+}
+
+export function validRuntimeCredentialSize(value) {
+  return typeof value === "string" && Buffer.byteLength(value) <= 24 * 1024;
 }
 
 async function implement(value) {

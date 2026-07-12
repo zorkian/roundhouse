@@ -8,6 +8,7 @@ import {
   changedPaths,
   command,
   validRepositoryPath,
+  validRuntimeCredentialSize,
   withoutRuntimeCredential,
 } from "./runner.mjs";
 
@@ -46,6 +47,11 @@ describe("trusted agent output boundary", () => {
       secrets: [],
       request: { runId: "run_test" },
     });
+  });
+
+  it("keeps the credential field within the HTTP envelope", () => {
+    expect(validRuntimeCredentialSize("x".repeat(24 * 1024))).toBe(true);
+    expect(validRuntimeCredentialSize("x".repeat(24 * 1024 + 1))).toBe(false);
   });
 
   it("rejects control characters in repository paths", () => {
