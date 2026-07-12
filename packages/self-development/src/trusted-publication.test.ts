@@ -255,6 +255,24 @@ describe("publishTrustedImplementation", () => {
       publishTrustedImplementation({
         repositoryPath: value.publication,
         evidence: [
+          { json: value.evidenceJson, binding: value.evidenceBinding },
+          {
+            json: value.validationEvidenceJson,
+            binding: value.validationEvidenceBinding,
+          },
+        ],
+        implementationEvidenceId: value.evidenceBinding.evidenceId,
+        runRevision: value.publicationRequest.expectedRevision,
+        approval: value.approval,
+        publication: value.publicationRequest,
+        authorName: "Roundhouse\nInjected",
+        authorEmail: "roundhouse@example.test",
+      }),
+    ).rejects.toThrow("Publication author identity is invalid");
+    await expect(
+      publishTrustedImplementation({
+        repositoryPath: value.publication,
+        evidence: [
           {
             json: `${value.evidenceJson} `,
             binding: value.evidenceBinding,

@@ -135,6 +135,15 @@ export async function publishTrustedImplementation(
 ): Promise<TrustedPublicationResult> {
   const approval = exactApprovalSchema.parse(input.approval);
   const publication = publicationRequestSchema.parse(input.publication);
+  if (
+    !input.authorName ||
+    input.authorName.length > 200 ||
+    /[\r\n]/.test(input.authorName) ||
+    !input.authorEmail ||
+    input.authorEmail.length > 320 ||
+    /[\r\n]/.test(input.authorEmail)
+  )
+    throw new Error("Publication author identity is invalid");
   if (input.runRevision !== publication.expectedRevision)
     throw new Error("Publication revision does not match durable run");
   if (input.evidence.length !== approval.evidence.length)
@@ -246,6 +255,7 @@ export async function publishTrustedImplementation(
     `user.email=${input.authorEmail}`,
     "commit",
     "--no-verify",
+    "--no-gpg-sign",
     "-m",
     publication.commitMessage,
   ]);
