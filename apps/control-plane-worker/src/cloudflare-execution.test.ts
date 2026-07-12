@@ -153,6 +153,59 @@ describe("CloudflareTrustedImplementationBackend", () => {
     const stored = new TextDecoder().decode([...evidence.objects.values()][0]);
     expect(stored).not.toContain("credential-must-not-survive");
   });
+
+  it("preserves integrity classification for corrupt existing evidence", async () => {
+    const evidence = new MemoryEvidence();
+    evidence.objects.set(
+      `runs/${trustedRequest.runId}/attempts/${trustedRequest.attemptId}/trusted-implementation.json`,
+      new TextEncoder().encode(
+        JSON.stringify({ ...trustedResult(), runId: "run_wrong" }),
+      ),
+    );
+    const backend = new CloudflareTrustedImplementationBackend(
+      {
+        getByName: () => ({
+          runJob: async () => result(),
+          destroy: async () => undefined,
+        }),
+      },
+      evidence,
+      "unused",
+    );
+    await expect(backend.execute(trustedRequest)).rejects.toMatchObject({
+      classification: "implementation_binding_mismatch",
+      retryable: false,
+    });
+  });
+
+  it("preserves integrity classification for corrupt raced evidence", async () => {
+    const invalid = new TextEncoder().encode(
+      JSON.stringify({ ...trustedResult(), runId: "run_wrong" }),
+    );
+    let reads = 0;
+    const evidence: EvidenceBucketPort = {
+      get: async () =>
+        reads++ === 0
+          ? null
+          : { text: async () => new TextDecoder().decode(invalid) },
+      put: async () => null,
+    };
+    const backend = new CloudflareTrustedImplementationBackend(
+      {
+        getByName: () => ({
+          runJob: async () => result(),
+          runTrustedJob: async () => trustedResult(),
+          destroy: async () => undefined,
+        }),
+      },
+      evidence,
+      "unused",
+    );
+    await expect(backend.execute(trustedRequest)).rejects.toMatchObject({
+      classification: "implementation_binding_mismatch",
+      retryable: false,
+    });
+  });
 });
 
 function result(exitCode = 0, timedOut = false) {

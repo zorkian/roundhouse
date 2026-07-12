@@ -107,6 +107,7 @@ export class CloudflareTrustedImplementationBackend implements TrustedImplementa
           JSON.parse(await existing.text()),
         );
       } catch (error) {
+        if (error instanceof StageFailure) throw error;
         throw new StageFailure(
           `Trusted evidence could not be read: ${boundedInfrastructureReason(error)}`,
           "evidence_unavailable",
@@ -165,6 +166,7 @@ export class CloudflareTrustedImplementationBackend implements TrustedImplementa
             JSON.parse(await raced.text()),
           );
         } catch (error) {
+          if (error instanceof StageFailure) throw error;
           throw new StageFailure(
             `Trusted raced evidence could not be verified: ${boundedInfrastructureReason(error)}`,
             "evidence_unavailable",

@@ -255,6 +255,18 @@ afterEach(async () => {
 });
 
 describe("local control-plane Worker", () => {
+  it("rejects nonliteral paths at trusted submission", async () => {
+    const { env } = await runtime();
+    env.EXECUTION_MODE = "cloudflare-trusted-codex";
+    const handler = createControlPlaneHandler();
+    const response = await handler.fetch!(
+      submission("trusted-path-boundary-01", task),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(response.status).toBe(400);
+  });
+
   it("serves exact implementation evidence and rejects binding tampering", async () => {
     const { env } = await runtime();
     const value = await awaitingImplementation(env);
