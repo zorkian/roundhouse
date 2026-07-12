@@ -192,6 +192,7 @@ export class D1JobStore implements JobStore {
         throw new Error("Approval revision does not match");
       if (run.state !== "awaiting_approval" || !run.implementation)
         throw new Error("Run is not awaiting an implementation approval");
+      if (run.approval) throw new Error("Run approval is immutable");
       const evidence = run.evidence.map(
         ({ evidenceId, objectKey, sha256, size }) => ({
           evidenceId,

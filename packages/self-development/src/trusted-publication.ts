@@ -28,7 +28,6 @@ export type TrustedPublicationInput = {
   approval: ExactApproval;
   publication: PublicationRequest;
   remote?: string;
-  baseBranch?: string;
   authorName: string;
   authorEmail: string;
 };
@@ -183,7 +182,6 @@ export async function publishTrustedImplementation(
   )
     throw new Error("Exact approval does not match publication inputs");
   const remote = input.remote ?? "origin";
-  const baseBranch = input.baseBranch ?? "main";
   if (
     (await git(input.repositoryPath, ["rev-parse", "HEAD"])) !==
     result.baseCommit
@@ -200,7 +198,7 @@ export async function publishTrustedImplementation(
     (await (dependencies.remoteHead ?? remoteHead)(
       input.repositoryPath,
       remote,
-      baseBranch,
+      "main",
     )) !== result.baseCommit
   )
     throw new Error("Remote base moved after implementation");

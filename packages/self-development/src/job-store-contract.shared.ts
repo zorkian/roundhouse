@@ -354,6 +354,14 @@ export function jobStoreContract(
         new Date(start.getTime() + 3),
       );
       expect(approved).toMatchObject({ state: "awaiting_approval", approval });
+      await expect(
+        store.approve(
+          runId,
+          { ...approval, approver: "different-approver" },
+          approved.revision,
+          new Date(start.getTime() + 4),
+        ),
+      ).rejects.toThrow("approval is immutable");
       expect(
         await store.claim(
           runId,
