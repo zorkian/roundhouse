@@ -60,7 +60,7 @@ const body = inputPath
 const response = await fetch(new URL(route.path, origin), {
   method: route.method,
   headers: {
-    authorization: `Bearer ${token}`,
+    "cf-access-token": token,
     ...(body !== undefined ? { "content-type": "application/json" } : {}),
     ...(route.method === "POST"
       ? {

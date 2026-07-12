@@ -23,7 +23,8 @@ active-alert counts with `dryRun: true` and an empty deletion list.
 
 ## Development CLI
 
-With a short-lived Access token available only in the shell environment:
+With a short-lived Access application JWT available only in the shell environment,
+the CLI sends it through the `cf-access-token` header:
 
 ```zsh
 export ROUNDHOUSE_ORIGIN='https://roundhouse-dev.rm-rf.rip'

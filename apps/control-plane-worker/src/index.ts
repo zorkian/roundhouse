@@ -165,6 +165,8 @@ async function submit(
     run = await jobs.read(reservation.row.run_id);
   }
   if (reservation.row.delivery_state === "pending") {
+    if (env.SUBMISSION_SCENARIO === "interrupt-before-delivery")
+      throw new Error("simulated interruption before Queue delivery");
     await env.RUN_QUEUE.send({
       schemaVersion: 1,
       runId: run.runId,

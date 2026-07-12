@@ -24,6 +24,7 @@ export type ControlPlaneEnv = {
     | "timeout"
     | "interrupt-once"
     | "credential-cleanup-failure";
+  SUBMISSION_SCENARIO?: "success" | "interrupt-before-delivery";
   ROUNDHOUSE_CODEX_AUTH_JSON?: string;
   ALLOWED_REPOSITORY_PATH: string;
   ALLOWED_REMOTE_URL: string;

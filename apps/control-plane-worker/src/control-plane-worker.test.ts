@@ -587,6 +587,37 @@ describe("local control-plane Worker", () => {
     expect(queued.messages).toHaveLength(1);
   });
 
+  it("repairs an API interruption before Queue delivery", async () => {
+    const { env, queued } = await runtime();
+    const handler = createControlPlaneHandler();
+    env.SUBMISSION_SCENARIO = "interrupt-before-delivery";
+    const interrupted = await handler.fetch!(
+      submission("submission-interruption-01"),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(interrupted.status).toBe(500);
+    expect(queued.messages).toHaveLength(0);
+    env.SUBMISSION_SCENARIO = "success";
+    await handler.scheduled!(
+      {} as ScheduledController,
+      env,
+      {} as ExecutionContext,
+    );
+    const reservation = await reserveSubmission(
+      env.DB,
+      "submission-interruption-01",
+      task,
+      new Date(),
+    );
+    expect(queued.messages).toHaveLength(2);
+    expect(queued.messages).toEqual([
+      expect.objectContaining({ runId: reservation.row.run_id }),
+      expect.objectContaining({ runId: reservation.row.run_id }),
+    ]);
+    expect(reservation.row.delivery_state).toBe("sent");
+  });
+
   it("rejects conflicting idempotency reuse", async () => {
     const { env } = await runtime();
     const handler = createControlPlaneHandler();
