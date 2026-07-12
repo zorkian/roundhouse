@@ -10,7 +10,7 @@ import { existsSync } from "node:fs";
 
 const workspace = "/home/runner/workspace";
 const repositoryUrl = "https://github.com/zorkian/roundhouse.git";
-const maxBodyBytes = 32 * 1024;
+const maxBodyBytes = 128 * 1024;
 const interceptedCa = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
 let prepared;
 let trusted;

@@ -259,8 +259,10 @@ describe("local control-plane Worker", () => {
     const { env } = await runtime();
     env.EXECUTION_MODE = "cloudflare-trusted-codex";
     const handler = createControlPlaneHandler();
+    const invalidPath = structuredClone(task);
+    invalidPath.publication.branch = "codex/dogfood-trusted-path-boundary";
     const response = await handler.fetch!(
-      submission("trusted-path-boundary-01", task),
+      submission("trusted-path-boundary-01", invalidPath),
       env,
       {} as ExecutionContext,
     );
