@@ -12,6 +12,19 @@ if (!origin || !token) {
   process.exit(2);
 }
 
+const runCommands = new Set([
+  "inspect",
+  "evidence",
+  "cancel",
+  "retry",
+  "approve",
+  "publish",
+]);
+if (command && runCommands.has(command) && !target) {
+  console.error(`${command} requires a run id`);
+  process.exit(2);
+}
+
 const routes = {
   inspect: { method: "GET", path: `/v1/runs/${target}` },
   evidence: { method: "GET", path: `/v1/runs/${target}/implementation` },
@@ -33,7 +46,11 @@ if (route.method === "GET" && inputPath) {
   console.error(`${command} does not accept an input file`);
   process.exit(2);
 }
-const body = inputPath ? await readFile(inputPath, "utf8") : undefined;
+const body = inputPath
+  ? await readFile(inputPath, "utf8")
+  : command === "recover"
+    ? JSON.stringify({ schemaVersion: 1 })
+    : undefined;
 const response = await fetch(new URL(route.path, origin), {
   method: route.method,
   headers: {

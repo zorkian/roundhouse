@@ -306,9 +306,14 @@ export async function retentionReport(env: ControlPlaneEnv) {
   const runs = await env.DB.prepare(
     "SELECT state, COUNT(*) AS count FROM self_development_runs GROUP BY state",
   ).all<{ state: string; count: number }>();
-  const evidence = await env.DB.prepare(
-    "SELECT COUNT(*) AS count FROM execution_evidence",
-  ).first<{ count: number }>();
+  const payloads = await env.DB.prepare(
+    "SELECT payload FROM self_development_runs",
+  ).all<{ payload: string }>();
+  const evidenceReferences = payloads.results.reduce(
+    (total, row) =>
+      total + selfDevelopmentRunSchema.parse(JSON.parse(row.payload)).evidence.length,
+    0,
+  );
   const alerts = await env.DB.prepare(
     "SELECT COUNT(*) AS count FROM operational_alerts WHERE resolved_at IS NULL",
   ).first<{ count: number }>();
@@ -318,7 +323,7 @@ export async function retentionReport(env: ControlPlaneEnv) {
     runCounts: Object.fromEntries(
       runs.results.map((row) => [row.state, row.count]),
     ),
-    evidenceObjects: evidence?.count ?? 0,
+    evidenceReferences,
     activeAlerts: alerts?.count ?? 0,
     deletions: [],
   };

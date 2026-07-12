@@ -748,6 +748,64 @@ describe("local control-plane Worker", () => {
     ).toBe(true);
   });
 
+  it("authenticates and validates operator recovery and reporting routes", async () => {
+    const { env } = await runtime();
+    const handler = createControlPlaneHandler();
+    const unauthorized = await handler.fetch!(
+      request("/v1/operations/alerts", {}, false),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(unauthorized.status).toBe(401);
+    const alerts = await handler.fetch!(
+      request("/v1/operations/alerts"),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(alerts.status).toBe(200);
+    await expect(alerts.json()).resolves.toMatchObject({ alerts: [] });
+    const retention = await handler.fetch!(
+      request("/v1/operations/retention"),
+      env,
+      {} as ExecutionContext,
+    );
+    await expect(retention.json()).resolves.toMatchObject({
+      dryRun: true,
+      deletions: [],
+    });
+    const recoveryRequest = () =>
+      request("/v1/operations/recover", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "operator-recovery-route-01",
+        },
+        body: JSON.stringify({ schemaVersion: 1 }),
+      });
+    const first = await handler.fetch!(
+      recoveryRequest(),
+      env,
+      {} as ExecutionContext,
+    );
+    const replay = await handler.fetch!(
+      recoveryRequest(),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(first.status).toBe(200);
+    expect(await replay.json()).toEqual(await first.json());
+    const invalidRetry = await handler.fetch!(
+      request("/v1/runs/run_missing/retry", {
+        method: "POST",
+        headers: { "idempotency-key": "invalid-retry-route-01" },
+        body: JSON.stringify({ schemaVersion: 1, expectedRevision: 1 }),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(invalidRetry.status).toBe(415);
+  });
+
   it("repairs retry enqueue failure before acknowledging the delivery", async () => {
     const { env, queued } = await runtime();
     const handler = createControlPlaneHandler();
