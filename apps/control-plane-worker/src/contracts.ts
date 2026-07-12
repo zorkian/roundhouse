@@ -45,3 +45,7 @@ export const revisionMutationSchema = z.object({
   schemaVersion: z.literal(1),
   expectedRevision: z.number().int().positive(),
 });
+
+export const recoveryRequestSchema = z.object({
+  schemaVersion: z.literal(1),
+});

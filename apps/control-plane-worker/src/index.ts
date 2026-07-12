@@ -23,6 +23,7 @@ import {
   approveRunSchema,
   idempotencyKeySchema,
   recordPublicationSchema,
+  recoveryRequestSchema,
   revisionMutationSchema,
   submitRunSchema,
 } from "./contracts.js";
@@ -499,7 +500,8 @@ async function route(
   }
   if (request.method === "GET" && url.pathname === "/v1/operations/retention")
     return json(await retentionReport(env));
-  if (request.method === "POST" && url.pathname === "/v1/operations/recover")
+  if (request.method === "POST" && url.pathname === "/v1/operations/recover") {
+    recoveryRequestSchema.parse(await requestBody(request.clone()));
     return mutationResponse(
       request,
       env,
@@ -508,6 +510,7 @@ async function route(
       "operations",
       async () => json(await runRecoveryCycle(env, new Date())),
     );
+  }
   throw new HttpError(404, "Not found");
 }
 

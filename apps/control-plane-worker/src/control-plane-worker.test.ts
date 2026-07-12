@@ -794,6 +794,19 @@ describe("local control-plane Worker", () => {
     );
     expect(first.status).toBe(200);
     expect(await replay.json()).toEqual(await first.json());
+    const invalidRecovery = await handler.fetch!(
+      request("/v1/operations/recover", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "invalid-recovery-route-01",
+        },
+        body: JSON.stringify({}),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(invalidRecovery.status).toBe(400);
     const invalidRetry = await handler.fetch!(
       request("/v1/runs/run_missing/retry", {
         method: "POST",

@@ -306,14 +306,12 @@ export async function retentionReport(env: ControlPlaneEnv) {
   const runs = await env.DB.prepare(
     "SELECT state, COUNT(*) AS count FROM self_development_runs GROUP BY state",
   ).all<{ state: string; count: number }>();
-  const payloads = await env.DB.prepare(
-    "SELECT payload FROM self_development_runs",
-  ).all<{ payload: string }>();
-  const evidenceReferences = payloads.results.reduce(
-    (total, row) =>
-      total + selfDevelopmentRunSchema.parse(JSON.parse(row.payload)).evidence.length,
-    0,
-  );
+  const payloadSummary = await env.DB.prepare(
+    `SELECT
+       COALESCE(SUM(CASE WHEN json_valid(payload) THEN COALESCE(json_array_length(payload, '$.evidence'), 0) ELSE 0 END), 0) AS evidence_references,
+       COALESCE(SUM(CASE WHEN json_valid(payload) THEN 0 ELSE 1 END), 0) AS malformed_payloads
+     FROM self_development_runs`,
+  ).first<{ evidence_references: number; malformed_payloads: number }>();
   const alerts = await env.DB.prepare(
     "SELECT COUNT(*) AS count FROM operational_alerts WHERE resolved_at IS NULL",
   ).first<{ count: number }>();
@@ -323,7 +321,8 @@ export async function retentionReport(env: ControlPlaneEnv) {
     runCounts: Object.fromEntries(
       runs.results.map((row) => [row.state, row.count]),
     ),
-    evidenceReferences,
+    evidenceReferences: payloadSummary?.evidence_references ?? 0,
+    malformedRunPayloads: payloadSummary?.malformed_payloads ?? 0,
     activeAlerts: alerts?.count ?? 0,
     deletions: [],
   };
