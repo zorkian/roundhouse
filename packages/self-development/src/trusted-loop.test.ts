@@ -71,6 +71,9 @@ describe("trusted self-development contracts", () => {
       repositoryRelativePathSchema.parse("docs/../secret"),
     ).toThrow();
     expect(() => repositoryRelativePathSchema.parse("docs/**")).toThrow();
+    expect(() =>
+      repositoryRelativePathSchema.parse("docs/line\nbreak.md"),
+    ).toThrow();
     expect(
       trustedImplementationResultSchema.shape.changedFiles.safeParse([])
         .success,

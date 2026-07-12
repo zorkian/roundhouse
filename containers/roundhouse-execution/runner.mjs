@@ -59,16 +59,16 @@ function validate(value) {
   return value;
 }
 
-function validRepositoryPath(value) {
+export function validRepositoryPath(value) {
   return (
     typeof value === "string" &&
     value.length > 0 &&
     value.length <= 300 &&
     !value.startsWith("/") &&
     !value.includes("\\") &&
+    !/[\u0000-\u001f\u007f]/.test(value) &&
     !/[?*[\]{}!]/.test(value) &&
-    !value.split("/").includes("..") &&
-    !value.includes("\0")
+    !value.split("/").includes("..")
   );
 }
 
@@ -340,6 +340,7 @@ async function implement(value) {
             ],
           ];
   let agent;
+  const credentialSecrets = [...trusted.secrets];
   try {
     const result = await command(invocation[0], invocation[1], {
       timeoutMs: request.scenario === "timeout" ? 500 : request.agentTimeoutMs,
@@ -357,6 +358,7 @@ async function implement(value) {
   } finally {
     if (request.scenario !== "credential-cleanup-failure")
       await rm(codexHome, { recursive: true, force: true });
+    trusted = withoutRuntimeCredential(trusted);
   }
   if (existsSync(`${codexHome}/auth.json`))
     throw new Error("credential_cleanup_failed");
@@ -393,7 +395,7 @@ async function implement(value) {
   if (patchBytes > request.maxPatchBytes || diff.outputTruncated)
     throw new Error("patch_limit_exceeded");
   const possibleEvidence = `${diff.stdout}\n${agent.summary}`;
-  if (trusted.secrets.some((secret) => possibleEvidence.includes(secret)))
+  if (credentialSecrets.some((secret) => possibleEvidence.includes(secret)))
     throw new Error("credential_leak_detected");
   trusted = {
     request,
@@ -420,6 +422,10 @@ async function implement(value) {
 export function assertCompleteAgentOutput(result) {
   if (result.timedOut) throw new Error("agent_timeout");
   if (result.outputTruncated) throw new Error("agent_output_truncated");
+}
+
+export function withoutRuntimeCredential(state) {
+  return { ...state, credentialInstalled: false, secrets: [] };
 }
 
 function skippedValidation(name, commandName) {

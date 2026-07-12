@@ -3,7 +3,12 @@
 
 import { describe, expect, it } from "vitest";
 
-import { assertCompleteAgentOutput, command } from "./runner.mjs";
+import {
+  assertCompleteAgentOutput,
+  command,
+  validRepositoryPath,
+  withoutRuntimeCredential,
+} from "./runner.mjs";
 
 describe("execution runner command", () => {
   it("rejects promptly when spawning the executable fails", async () => {
@@ -26,5 +31,25 @@ describe("trusted agent output boundary", () => {
     expect(() =>
       assertCompleteAgentOutput({ timedOut: false, outputTruncated: false }),
     ).not.toThrow();
+  });
+
+  it("clears credential-derived runtime state", () => {
+    expect(
+      withoutRuntimeCredential({
+        credentialInstalled: true,
+        secrets: ["sensitive"],
+        request: { runId: "run_test" },
+      }),
+    ).toEqual({
+      credentialInstalled: false,
+      secrets: [],
+      request: { runId: "run_test" },
+    });
+  });
+
+  it("rejects control characters in repository paths", () => {
+    expect(validRepositoryPath("docs/safe.md")).toBe(true);
+    for (const path of ["docs/line\nbreak.md", "docs/tab\tname.md"])
+      expect(validRepositoryPath(path)).toBe(false);
   });
 });
