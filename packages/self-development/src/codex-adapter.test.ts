@@ -24,6 +24,19 @@ afterEach(async () => {
 });
 
 describe("CodexExecAdapter", () => {
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, 0, -1, 2_147_483_648])(
+    "rejects invalid timeout %s",
+    (timeoutMs) => {
+      expect(
+        () =>
+          new CodexExecAdapter({
+            codexHome: "/tmp/codex-home",
+            timeoutMs,
+          }),
+      ).toThrow("timeoutMs must be a positive supported integer");
+    },
+  );
+
   it("normalizes JSONL events and exposes only its scrubbed environment", async () => {
     const workspace = await temporary("roundhouse-codex-workspace-");
     const codexHome = await temporary("roundhouse-codex-auth-");

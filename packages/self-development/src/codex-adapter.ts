@@ -23,6 +23,18 @@ export type CodexExecAdapterOptions = {
   maxEventBytes?: number;
 };
 
+const maximumTimerMilliseconds = 2_147_483_647;
+
+export function validateTimeoutMs(value: number): number {
+  if (
+    !Number.isSafeInteger(value) ||
+    value <= 0 ||
+    value > maximumTimerMilliseconds
+  )
+    throw new Error("timeoutMs must be a positive supported integer");
+  return value;
+}
+
 type CodexJsonEvent = {
   type?: string;
   thread_id?: string;
@@ -105,8 +117,12 @@ function normalize(event: CodexJsonEvent): AgentEvent[] {
 export class CodexExecAdapter implements AgentAdapter {
   readonly name = "codex-exec";
   private readonly children = new Map<string, ChildProcess>();
+  private readonly options: CodexExecAdapterOptions;
 
-  constructor(private readonly options: CodexExecAdapterOptions) {}
+  constructor(options: CodexExecAdapterOptions) {
+    if (options.timeoutMs !== undefined) validateTimeoutMs(options.timeoutMs);
+    this.options = options;
+  }
 
   async capabilities(): Promise<AgentCapabilities> {
     return new Set([

@@ -52,6 +52,17 @@ async function remoteHead(
 export async function pushVerifiedCommit(
   input: VerifiedPushInput,
 ): Promise<VerifiedPushResult> {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/.test(input.remote))
+    throw new Error("Invalid remote name");
+  try {
+    await git(input.repositoryPath, [
+      "check-ref-format",
+      "--branch",
+      input.branch,
+    ]);
+  } catch {
+    throw new Error("Invalid branch name");
+  }
   if (!/^[a-f0-9]{40}$/.test(input.commit))
     throw new Error("Invalid commit SHA");
   if (

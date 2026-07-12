@@ -62,6 +62,30 @@ afterEach(async () => {
 });
 
 describe("pushVerifiedCommit", () => {
+  it("rejects option-like remotes and malformed branch refs", async () => {
+    const value = await fixture();
+    await expect(
+      pushVerifiedCommit({
+        repositoryPath: value.repository,
+        remote: "--upload-pack=malicious",
+        expectedRemoteUrl: value.remote,
+        branch: "roundhouse/output",
+        expectedRemoteHead: null,
+        commit: value.commit,
+      }),
+    ).rejects.toThrow("Invalid remote name");
+    await expect(
+      pushVerifiedCommit({
+        repositoryPath: value.repository,
+        remote: "origin",
+        expectedRemoteUrl: value.remote,
+        branch: "roundhouse/../output",
+        expectedRemoteHead: null,
+        commit: value.commit,
+      }),
+    ).rejects.toThrow("Invalid branch name");
+  });
+
   it("updates only the expected remote head and verifies the result", async () => {
     const value = await fixture();
     const result = await pushVerifiedCommit({

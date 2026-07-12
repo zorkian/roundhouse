@@ -12,7 +12,7 @@ import {
 } from "@roundhouse/execution";
 import { parseRepositoryProfile } from "@roundhouse/repository-profile";
 
-import { CodexExecAdapter } from "./codex-adapter.js";
+import { CodexExecAdapter, validateTimeoutMs } from "./codex-adapter.js";
 import { SelfDevelopmentOrchestrator } from "./orchestrator.js";
 import type { SelfDevelopmentTask } from "./task.js";
 
@@ -38,6 +38,11 @@ function required(values: Map<string, string>, name: string): string {
   return value;
 }
 
+export function parseTimeoutMs(value: string | undefined): number {
+  const timeoutMs = value === undefined ? 600_000 : Number(value);
+  return validateTimeoutMs(timeoutMs);
+}
+
 export async function runWalkingSkeletonCli(argv: string[]): Promise<unknown> {
   const { command, values } = parseArguments(argv);
   const root = resolve(required(values, "root"));
@@ -58,7 +63,7 @@ export async function runWalkingSkeletonCli(argv: string[]): Promise<unknown> {
   if (command === "implement") {
     const adapter = new CodexExecAdapter({
       codexHome: resolve(values.get("codex-home") ?? `${homedir()}/.codex`),
-      timeoutMs: Number(values.get("timeout-ms") ?? 600_000),
+      timeoutMs: parseTimeoutMs(values.get("timeout-ms")),
     });
     await orchestrator.implement(runId, adapter);
     return orchestrator.store.read(runId);
