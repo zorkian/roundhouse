@@ -213,7 +213,8 @@ async function approveRun(
   const delegated = input.approver === delegatedApprover;
   if (delegated) {
     if (
-      actorId !== "zorkian@fastmail.fm" ||
+      !env.DELEGATED_ACTOR_ID ||
+      actorId !== env.DELEGATED_ACTOR_ID ||
       run.task.allowedPaths.length !== 1 ||
       run.task.allowedPaths[0] !==
         "docs/dogfood/trusted-self-development-loop.md" ||
@@ -308,7 +309,8 @@ async function recordPublication(
     (run.approval.approver !== actorId &&
       !(
         run.approval.approver === delegatedApprover &&
-        actorId === "zorkian@fastmail.fm"
+        env.DELEGATED_ACTOR_ID &&
+        actorId === env.DELEGATED_ACTOR_ID
       ))
   )
     throw new HttpError(403, "Authenticated actor cannot publish this run");

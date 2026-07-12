@@ -228,8 +228,12 @@ export async function publishTrustedImplementation(
     if (sha256(stagedPatch) !== patchSha256)
       throw new Error("Staged patch does not match exact approval");
   } catch (error) {
-    await git(input.repositoryPath, ["reset", "--hard", result.baseCommit]);
-    await git(input.repositoryPath, ["clean", "-fd"]);
+    await git(input.repositoryPath, [
+      "reset",
+      "--hard",
+      result.baseCommit,
+    ]).catch(() => undefined);
+    await git(input.repositoryPath, ["clean", "-fd"]).catch(() => undefined);
     throw error;
   }
   await git(input.repositoryPath, ["config", "user.name", input.authorName]);

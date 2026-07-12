@@ -91,6 +91,10 @@ Delegated approval identity:
 
 `mark-smith-delegated-trusted-loop-dogfood`
 
+The deployment variable `DELEGATED_ACTOR_ID` binds that delegated identity to
+the approved Access actor `zorkian@fastmail.fm`; approval and publication both
+require the same authenticated mapping.
+
 Delegated approval is valid only after the patch exists and only when the path,
 task content, Apache-2.0 header, exact base, patch SHA-256, evidence hashes, and
 all validation results independently verify.
