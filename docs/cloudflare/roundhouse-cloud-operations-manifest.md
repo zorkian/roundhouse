@@ -3,7 +3,12 @@
 
 # Roundhouse authenticated cloud-operations manifest
 
-Status: proposed and unapplied.
+Status: verified against the live development deployment and unapplied.
+
+Verified 2026-07-12 against Worker version
+`210ea8b2-8ae7-46ae-b018-72e3e9089f5d`: the only pending migration is
+`0004_cloud_operations.sql`, and the only Worker secret name is the retained
+`ROUNDHOUSE_CODEX_AUTH_JSON`.
 
 This manifest is the exact mutation boundary authorized for the authenticated
 cloud-operations milestone.
