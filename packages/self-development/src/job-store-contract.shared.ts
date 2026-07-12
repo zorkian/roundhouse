@@ -378,7 +378,7 @@ export function jobStoreContract(
         store.recordPublication(
           runId,
           {
-            branch: "codex/dogfood-trusted-loop-01",
+            branch: contractTask.publication.branch,
             commit: "d".repeat(40),
             remoteUrl: contractTask.publication.remoteUrl,
             verifiedAt: new Date(start.getTime() + 4).toISOString(),
@@ -387,10 +387,32 @@ export function jobStoreContract(
           new Date(start.getTime() + 4),
         ),
       ).rejects.toThrow("Publication revision does not match");
+      for (const publication of [
+        {
+          branch: "codex/different-branch",
+          remoteUrl: contractTask.publication.remoteUrl,
+        },
+        {
+          branch: contractTask.publication.branch,
+          remoteUrl: "https://example.test/different.git",
+        },
+      ])
+        await expect(
+          store.recordPublication(
+            runId,
+            {
+              ...publication,
+              commit: "d".repeat(40),
+              verifiedAt: new Date(start.getTime() + 4).toISOString(),
+            },
+            approved.revision,
+            new Date(start.getTime() + 4),
+          ),
+        ).rejects.toThrow("Publication target does not match the task");
       const completed = await store.recordPublication(
         runId,
         {
-          branch: "codex/dogfood-trusted-loop-01",
+          branch: contractTask.publication.branch,
           commit: "d".repeat(40),
           remoteUrl: contractTask.publication.remoteUrl,
           verifiedAt: new Date(start.getTime() + 4).toISOString(),
@@ -401,7 +423,7 @@ export function jobStoreContract(
       expect(completed).toMatchObject({
         state: "completed",
         commit: "d".repeat(40),
-        publication: { branch: "codex/dogfood-trusted-loop-01" },
+        publication: { branch: contractTask.publication.branch },
       });
     });
   });

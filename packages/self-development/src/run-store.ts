@@ -278,6 +278,11 @@ export class FileRunStore implements JobStore {
         throw new Error("Publication revision does not match");
       if (run.state !== "awaiting_publication" || !run.approval)
         throw new Error("Run does not have a valid approval");
+      if (
+        publication.branch !== run.task.publication.branch ||
+        publication.remoteUrl !== run.task.publication.remoteUrl
+      )
+        throw new Error("Publication target does not match the task");
       return this.replace({
         ...run,
         state: "completed",
