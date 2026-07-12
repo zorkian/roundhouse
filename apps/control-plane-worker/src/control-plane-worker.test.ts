@@ -4,6 +4,7 @@
 import {
   D1JobStore,
   d1JobStoreMigration,
+  type TrustedImplementationResult,
   type RunDelivery,
   type SelfDevelopmentTask,
 } from "@roundhouse/self-development/cloudflare";
@@ -43,6 +44,125 @@ const task: SelfDevelopmentTask = {
 };
 
 type Queued = { messages: unknown[]; failNext: boolean };
+
+async function sha256(value: string): Promise<string> {
+  return [
+    ...new Uint8Array(
+      await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)),
+    ),
+  ]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function awaitingImplementation(env: ControlPlaneEnv) {
+  const trustedTask: SelfDevelopmentTask = {
+    ...task,
+    taskId: "task_trusted_routes",
+    allowedPaths: ["docs/dogfood/trusted-self-development-loop.md"],
+    publication: {
+      ...task.publication,
+      branch: "codex/dogfood-trusted-routes",
+    },
+  };
+  const runId = "run_trusted_routes";
+  const jobs = new D1JobStore(env.DB);
+  const now = new Date("2026-07-12T00:00:00Z");
+  await jobs.submit(runId, trustedTask, now);
+  const claim = await jobs.claim(runId, "worker", now, 30_000, 1);
+  await jobs.startAttempt(runId, claim!.token, "prepare", now);
+  const patch =
+    "diff --git a/docs/dogfood/trusted-self-development-loop.md b/docs/dogfood/trusted-self-development-loop.md\n";
+  const result: TrustedImplementationResult = {
+    schemaVersion: 1,
+    runId,
+    attemptId: `${runId}-prepare-1`,
+    baseCommit: trustedTask.baseCommit,
+    checkoutCommit: trustedTask.baseCommit,
+    patch,
+    patchSha256: await sha256(patch),
+    patchBytes: new TextEncoder().encode(patch).byteLength,
+    changedFiles: ["docs/dogfood/trusted-self-development-loop.md"],
+    startedAt: now.toISOString(),
+    completedAt: now.toISOString(),
+    startupDurationMs: 1,
+    checkoutDurationMs: 1,
+    agentDurationMs: 1,
+    validationDurationMs: 1,
+    agent: {
+      provider: "codex-subscription",
+      outcome: "succeeded",
+      summary: "Created documentation.",
+      eventBytes: 1,
+    },
+    validation: [
+      {
+        name: "license",
+        command: "node scripts/check-license-headers.mjs",
+        exitCode: 0,
+        timedOut: false,
+        durationMs: 1,
+        stdout: "",
+        stderr: "",
+        outputTruncated: false,
+      },
+    ],
+    network: {
+      checkoutHosts: ["github.com"],
+      modelHosts: ["chatgpt.com"],
+      agentToolInternetEnabled: false,
+      validationInternetEnabled: false,
+      deniedHttpProbe: true,
+      deniedTcpProbe: true,
+    },
+    credential: {
+      installedAtRuntime: true,
+      removedBeforeValidation: true,
+      absentFromEvidence: true,
+    },
+    resources: { diskBytes: 1, memoryBytes: 1 },
+  };
+  const evidenceJson = JSON.stringify(result);
+  const objectKey = `runs/${runId}/attempts/${result.attemptId}/trusted-implementation.json`;
+  const evidence = {
+    schemaVersion: 1 as const,
+    evidenceId: `evidence_${result.attemptId}`,
+    attemptId: result.attemptId,
+    objectKey,
+    sha256: await sha256(evidenceJson),
+    size: new TextEncoder().encode(evidenceJson).byteLength,
+    mediaType: "application/json" as const,
+    createdAt: now.toISOString(),
+  };
+  const objects = new Map([[objectKey, evidenceJson]]);
+  env.EXECUTION_EVIDENCE = {
+    get: async (key) => {
+      const value = objects.get(key);
+      return value ? { text: async () => value } : null;
+    },
+    put: async () => ({}),
+  };
+  await jobs.completeAttempt(
+    runId,
+    claim!.token,
+    "prepare",
+    "awaiting_approval",
+    {},
+    {
+      evidence: [evidence],
+      implementation: {
+        patchSha256: result.patchSha256,
+        patchBytes: result.patchBytes,
+        changedFiles: result.changedFiles,
+        evidenceId: evidence.evidenceId,
+        objectKey,
+      },
+    },
+    now,
+  );
+  await jobs.release(runId, claim!.token, now);
+  return { runId, result, evidence, jobs, objects };
+}
 
 async function runtime(): Promise<{
   env: ControlPlaneEnv;
@@ -135,6 +255,137 @@ afterEach(async () => {
 });
 
 describe("local control-plane Worker", () => {
+  it("serves exact implementation evidence and rejects binding tampering", async () => {
+    const { env } = await runtime();
+    const value = await awaitingImplementation(env);
+    const handler = createControlPlaneHandler();
+    const response = await handler.fetch!(
+      request(`/v1/runs/${value.runId}/implementation`),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      runId: value.runId,
+      patchSha256: value.result.patchSha256,
+      changedFiles: value.result.changedFiles,
+    });
+    value.objects.delete(value.evidence.objectKey);
+    expect(
+      (
+        await handler.fetch!(
+          request(`/v1/runs/${value.runId}/implementation`),
+          env,
+          {} as ExecutionContext,
+        )
+      ).status,
+    ).toBe(409);
+    const run = await value.jobs.read(value.runId);
+    const rejected = await handler.fetch!(
+      request(`/v1/runs/${value.runId}/approval`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          schemaVersion: 1,
+          expectedRevision: run.revision,
+          patchSha256: "f".repeat(64),
+          evidence: [value.evidence],
+          approver: "local-control-plane-operator",
+        }),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(rejected.status).toBe(409);
+  });
+
+  it("records actor-bound approval and exact publication state", async () => {
+    const { env } = await runtime();
+    const value = await awaitingImplementation(env);
+    const handler = createControlPlaneHandler();
+    const awaiting = await value.jobs.read(value.runId);
+    const binding = {
+      evidenceId: value.evidence.evidenceId,
+      objectKey: value.evidence.objectKey,
+      sha256: value.evidence.sha256,
+      size: value.evidence.size,
+    };
+    const approvedResponse = await handler.fetch!(
+      request(`/v1/runs/${value.runId}/approval`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          schemaVersion: 1,
+          expectedRevision: awaiting.revision,
+          patchSha256: value.result.patchSha256,
+          evidence: [binding],
+          approver: "local-control-plane-operator",
+        }),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(approvedResponse.status).toBe(200);
+    const approved = await value.jobs.read(value.runId);
+    const rejectedDelegation = await handler.fetch!(
+      request(`/v1/runs/${value.runId}/approval`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          schemaVersion: 1,
+          expectedRevision: approved.revision,
+          patchSha256: value.result.patchSha256,
+          evidence: [binding],
+          approver: "mark-smith-delegated-trusted-loop-dogfood",
+        }),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(rejectedDelegation.status).toBe(403);
+    const rejectedPublication = await handler.fetch!(
+      request(`/v1/runs/${value.runId}/publication`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          schemaVersion: 1,
+          expectedRevision: approved.revision,
+          branch: "codex/dogfood-wrong-target",
+          commit: "e".repeat(40),
+          remoteUrl,
+          verifiedAt: "2026-07-12T00:00:01.000Z",
+        }),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(rejectedPublication.status).toBe(409);
+    const published = await handler.fetch!(
+      request(`/v1/runs/${value.runId}/publication`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          schemaVersion: 1,
+          expectedRevision: approved.revision,
+          branch: "codex/dogfood-trusted-routes",
+          commit: "e".repeat(40),
+          remoteUrl,
+          verifiedAt: "2026-07-12T00:00:01.000Z",
+          pullRequestUrl: "https://github.com/zorkian/roundhouse/pull/999",
+        }),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(published.status).toBe(200);
+    expect(await published.json()).toMatchObject({
+      state: "completed",
+      publication: {
+        branch: "codex/dogfood-trusted-routes",
+        commit: "e".repeat(40),
+      },
+    });
+  });
   it("enforces authentication and safe request boundaries", async () => {
     const { env } = await runtime();
     const handler = createControlPlaneHandler();

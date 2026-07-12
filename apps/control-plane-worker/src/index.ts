@@ -168,7 +168,9 @@ async function cancelRun(
   const current = await jobs.read(runId);
   const active = current.attempts.at(-1);
   if (
-    env.EXECUTION_MODE === "cloudflare-container" &&
+    ["cloudflare-container", "cloudflare-trusted-codex"].includes(
+      env.EXECUTION_MODE,
+    ) &&
     active?.status === "running" &&
     env.EXECUTION_CONTAINERS
   )
@@ -202,6 +204,7 @@ async function approveRun(
     input.approver === "mark-smith-delegated-trusted-loop-dogfood";
   if (delegated) {
     if (
+      actorId !== "zorkian@fastmail.fm" ||
       run.task.allowedPaths.length !== 1 ||
       run.task.allowedPaths[0] !==
         "docs/dogfood/trusted-self-development-loop.md" ||
@@ -213,20 +216,29 @@ async function approveRun(
   } else if (input.approver !== actorId) {
     throw new HttpError(403, "Approver identity does not match");
   }
-  const approved = await jobs.approve(
-    runId,
-    {
-      schemaVersion: 1,
+  const now = new Date();
+  let approved;
+  try {
+    approved = await jobs.approve(
       runId,
-      baseCommit: run.task.baseCommit,
-      patchSha256: input.patchSha256,
-      evidence: input.evidence,
-      approver: input.approver,
-      approvedAt: new Date().toISOString(),
-    },
-    input.expectedRevision,
-    new Date(),
-  );
+      {
+        schemaVersion: 1,
+        runId,
+        baseCommit: run.task.baseCommit,
+        patchSha256: input.patchSha256,
+        evidence: input.evidence,
+        approver: input.approver,
+        approvedAt: now.toISOString(),
+      },
+      input.expectedRevision,
+      now,
+    );
+  } catch (error) {
+    throw new HttpError(
+      409,
+      error instanceof Error ? error.message : "Approval was rejected",
+    );
+  }
   return json(inspectRun(approved));
 }
 
@@ -281,18 +293,26 @@ async function recordPublication(
     input.remoteUrl !== run.task.publication.remoteUrl
   )
     throw new HttpError(409, "Publication target does not match the task");
-  const completed = await jobs.recordPublication(
-    runId,
-    {
-      branch: input.branch,
-      commit: input.commit,
-      remoteUrl: input.remoteUrl,
-      verifiedAt: input.verifiedAt,
-      pullRequestUrl: input.pullRequestUrl,
-    },
-    input.expectedRevision,
-    new Date(),
-  );
+  let completed;
+  try {
+    completed = await jobs.recordPublication(
+      runId,
+      {
+        branch: input.branch,
+        commit: input.commit,
+        remoteUrl: input.remoteUrl,
+        verifiedAt: input.verifiedAt,
+        pullRequestUrl: input.pullRequestUrl,
+      },
+      input.expectedRevision,
+      new Date(),
+    );
+  } catch (error) {
+    throw new HttpError(
+      409,
+      error instanceof Error ? error.message : "Publication was rejected",
+    );
+  }
   return json(inspectRun(completed));
 }
 

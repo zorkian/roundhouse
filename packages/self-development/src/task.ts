@@ -3,7 +3,10 @@
 
 import { z } from "zod";
 
-import { exactApprovalSchema } from "./trusted-loop.js";
+import {
+  exactApprovalSchema,
+  repositoryRelativePathSchema,
+} from "./trusted-loop.js";
 
 export const selfDevelopmentTaskSchema = z.object({
   schemaVersion: z.literal(1),
@@ -129,7 +132,7 @@ export const selfDevelopmentRunSchema = z.object({
         .int()
         .nonnegative()
         .max(512 * 1024),
-      changedFiles: z.array(z.string().min(1)).max(50),
+      changedFiles: z.array(repositoryRelativePathSchema).max(50),
       evidenceId: z.string().min(1),
       objectKey: z.string().min(1),
     })

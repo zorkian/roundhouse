@@ -6,9 +6,10 @@ import { z } from "zod";
 import type { StageResult } from "./job-ports.js";
 
 const boundedIdentity = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,199}$/);
+const runIdentity = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/);
 const commit = z.string().regex(/^[a-f0-9]{40}$/);
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
-const repositoryPath = z
+export const repositoryRelativePathSchema = z
   .string()
   .min(1)
   .max(300)
@@ -23,7 +24,7 @@ const repositoryPath = z
 
 export const trustedImplementationRequestSchema = z.object({
   schemaVersion: z.literal(1),
-  runId: boundedIdentity,
+  runId: runIdentity,
   attemptId: boundedIdentity,
   attemptNumber: z.number().int().positive(),
   expectedRevision: z.number().int().positive(),
@@ -31,7 +32,7 @@ export const trustedImplementationRequestSchema = z.object({
   baseCommit: commit,
   subject: z.string().min(1).max(500),
   instructions: z.string().min(1).max(20_000),
-  allowedPaths: z.array(repositoryPath).min(1).max(50),
+  allowedPaths: z.array(repositoryRelativePathSchema).min(1).max(50),
   validationLevel: z.enum(["quick", "full"]),
   agentTimeoutMs: z
     .number()
@@ -82,7 +83,7 @@ export const validationCommandEvidenceSchema = z.object({
 
 export const trustedImplementationResultSchema = z.object({
   schemaVersion: z.literal(1),
-  runId: boundedIdentity,
+  runId: runIdentity,
   attemptId: boundedIdentity,
   baseCommit: commit,
   checkoutCommit: commit,
@@ -93,7 +94,7 @@ export const trustedImplementationResultSchema = z.object({
     .int()
     .nonnegative()
     .max(512 * 1024),
-  changedFiles: z.array(repositoryPath).max(50),
+  changedFiles: z.array(repositoryRelativePathSchema).max(50),
   startedAt: z.iso.datetime(),
   completedAt: z.iso.datetime(),
   startupDurationMs: z.number().int().nonnegative().default(0),
@@ -150,7 +151,7 @@ export const approvalEvidenceBindingSchema = z.object({
 
 export const exactApprovalSchema = z.object({
   schemaVersion: z.literal(1),
-  runId: boundedIdentity,
+  runId: runIdentity,
   baseCommit: commit,
   patchSha256: sha256,
   evidence: z.array(approvalEvidenceBindingSchema).min(1).max(20),
@@ -162,7 +163,7 @@ export type ExactApproval = z.infer<typeof exactApprovalSchema>;
 
 export const publicationRequestSchema = z.object({
   schemaVersion: z.literal(1),
-  runId: boundedIdentity,
+  runId: runIdentity,
   expectedRevision: z.number().int().positive(),
   approval: exactApprovalSchema,
   repositoryUrl: z.literal("https://github.com/zorkian/roundhouse.git"),

@@ -7,6 +7,7 @@ import {
   approvalMatches,
   exactApprovalSchema,
   publicationRequestSchema,
+  repositoryRelativePathSchema,
   trustedImplementationRequestSchema,
 } from "./trusted-loop.js";
 
@@ -58,6 +59,15 @@ describe("trusted self-development contracts", () => {
           allowedPaths: [path],
         }),
       ).toThrow();
+    expect(() =>
+      trustedImplementationRequestSchema.parse({
+        ...request,
+        runId: `r${"x".repeat(128)}`,
+      }),
+    ).toThrow();
+    expect(() =>
+      repositoryRelativePathSchema.parse("docs/../secret"),
+    ).toThrow();
   });
 
   it("binds approval to the exact run, base, patch, and ordered evidence", () => {

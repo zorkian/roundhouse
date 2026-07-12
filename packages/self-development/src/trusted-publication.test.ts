@@ -229,5 +229,23 @@ describe("publishTrustedImplementation", () => {
     expect(
       (await git(value.publication, ["status", "--porcelain"])).trim(),
     ).toBe("");
+    await expect(
+      publishTrustedImplementation({
+        repositoryPath: value.publication,
+        result: value.result,
+        evidenceJson: value.evidenceJson,
+        evidenceBinding: value.evidenceBinding,
+        approval: value.approval,
+        publication: {
+          ...value.publicationRequest,
+          approval: {
+            ...value.approval,
+            approvedAt: "2026-07-12T00:00:01.000Z",
+          },
+        },
+        authorName: "Roundhouse",
+        authorEmail: "roundhouse@example.test",
+      }),
+    ).rejects.toThrow("different approval");
   });
 });

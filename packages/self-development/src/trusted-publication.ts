@@ -76,7 +76,7 @@ function gitWithInput(
     const child = spawn("git", args, {
       cwd,
       shell: false,
-      stdio: ["pipe", "pipe", "pipe"],
+      stdio: ["pipe", "ignore", "pipe"],
     });
     let stderr = "";
     child.stderr.on("data", (chunk: Buffer) => {
@@ -117,6 +117,8 @@ export async function publishTrustedImplementation(
   const result = trustedImplementationResultSchema.parse(input.result);
   const approval = exactApprovalSchema.parse(input.approval);
   const publication = publicationRequestSchema.parse(input.publication);
+  if (JSON.stringify(publication.approval) !== JSON.stringify(approval))
+    throw new Error("Publication embeds a different approval");
   if (publication.runId !== result.runId || approval.runId !== result.runId)
     throw new Error("Publication run binding does not match");
   if (
