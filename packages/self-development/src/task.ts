@@ -132,7 +132,7 @@ export const selfDevelopmentRunSchema = z.object({
         .int()
         .nonnegative()
         .max(512 * 1024),
-      changedFiles: z.array(repositoryRelativePathSchema).max(50),
+      changedFiles: z.array(repositoryRelativePathSchema).min(1).max(50),
       evidenceId: z.string().min(1),
       objectKey: z.string().min(1),
     })

@@ -9,7 +9,9 @@ import {
   publicationRequestSchema,
   repositoryRelativePathSchema,
   trustedImplementationRequestSchema,
+  trustedImplementationResultSchema,
 } from "./trusted-loop.js";
+import { selfDevelopmentRunSchema } from "./task.js";
 
 const binding = {
   evidenceId: "evidence_run_trusted_contract-implement-1",
@@ -69,6 +71,15 @@ describe("trusted self-development contracts", () => {
       repositoryRelativePathSchema.parse("docs/../secret"),
     ).toThrow();
     expect(() => repositoryRelativePathSchema.parse("docs/**")).toThrow();
+    expect(
+      trustedImplementationResultSchema.shape.changedFiles.safeParse([])
+        .success,
+    ).toBe(false);
+    expect(
+      selfDevelopmentRunSchema.shape.implementation
+        .unwrap()
+        .shape.changedFiles.safeParse([]).success,
+    ).toBe(false);
   });
 
   it("binds approval to the exact run, base, patch, and ordered evidence", () => {

@@ -95,7 +95,7 @@ export const trustedImplementationResultSchema = z.object({
     .int()
     .nonnegative()
     .max(512 * 1024),
-  changedFiles: z.array(repositoryRelativePathSchema).max(50),
+  changedFiles: z.array(repositoryRelativePathSchema).min(1).max(50),
   startedAt: z.iso.datetime(),
   completedAt: z.iso.datetime(),
   startupDurationMs: z.number().int().nonnegative().default(0),
