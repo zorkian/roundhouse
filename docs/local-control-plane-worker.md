@@ -50,19 +50,22 @@ acknowledging. Repeated repair sends are harmless under the same revision guard.
 
 ## API
 
-| Method | Path                      | Authentication | Behavior                                |
-| ------ | ------------------------- | -------------- | --------------------------------------- |
-| GET    | `/health`                 | public         | Process liveness only                   |
-| GET    | `/ready`                  | required       | Local D1 readiness                      |
-| POST   | `/v1/runs`                | required       | Idempotent structured task              |
-| GET    | `/v1/runs/{runId}`        | required       | Redacted state and evidence             |
-| POST   | `/v1/runs/{runId}/cancel` | required       | Revision-bound, idempotent cancellation |
+| Method | Path                           | Authentication | Behavior                                |
+| ------ | ------------------------------ | -------------- | --------------------------------------- |
+| GET    | `/health`                      | public         | Process liveness only                   |
+| GET    | `/ready`                       | required       | Local D1 readiness                      |
+| POST   | `/v1/runs`                     | required       | Idempotent structured task              |
+| GET    | `/v1/runs/{runId}`             | required       | Redacted state and evidence             |
+| POST   | `/v1/runs/{runId}/cancel`      | required       | Revision-bound, idempotent cancellation |
+| POST   | `/v1/runs/{runId}/retry`       | required       | Exact retryable failure transition      |
+| POST   | `/v1/runs/{runId}/approval`    | required       | Actor/revision/evidence-bound approval  |
+| POST   | `/v1/runs/{runId}/publication` | required       | Verified publication recording          |
 
 Submission requires `Content-Type: application/json`, an `Idempotency-Key`
 header, and a body shaped as `{ "schemaVersion": 1, "task": ... }`. Bodies are
 limited to 64 KiB. Only the configured repository path and remote URL are
-accepted. There is deliberately no HTTP approval, commit, push, arbitrary
-command, arbitrary repository, or network-destination endpoint.
+accepted. There is deliberately no arbitrary command, arbitrary repository,
+unverified commit/push, or network-destination endpoint.
 
 Errors use a JSON `error` object with a stable code and safe message.
 
