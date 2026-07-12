@@ -1,0 +1,157 @@
+// Copyright 2026 Mark Smith
+// SPDX-License-Identifier: Apache-2.0
+
+import { Miniflare } from "miniflare";
+import { afterEach, describe, expect, it } from "vitest";
+
+import type { ControlPlaneEnv } from "./environment.js";
+import {
+  bindIssueRun,
+  enqueueComment,
+  githubNativeOperatorMigration,
+  issueRun,
+  parseGitHubCommand,
+  pendingComments,
+  reserveWebhookDelivery,
+  verifyGitHubSignature,
+  verifyWebhookRequest,
+} from "./github-webhook.js";
+
+const instances: Miniflare[] = [];
+
+async function runtime(): Promise<ControlPlaneEnv> {
+  const instance = new Miniflare({
+    modules: true,
+    script: "export default { fetch() { return new Response('ok') } }",
+    d1Databases: { DB: "github-webhook-test" },
+  });
+  instances.push(instance);
+  const db = await instance.getD1Database("DB");
+  for (const statement of githubNativeOperatorMigration
+    .split(";")
+    .map((value) => value.trim())
+    .filter(Boolean))
+    await db.prepare(statement).run();
+  return {
+    DB: db,
+    RUN_QUEUE: { send: async () => undefined } as unknown as Queue<unknown>,
+    EXECUTION_MODE: "deterministic-local",
+    ALLOWED_REPOSITORY_PATH: "/workspace/roundhouse",
+    ALLOWED_REMOTE_URL: "https://github.com/zorkian/roundhouse.git",
+    GITHUB_INSTALLATION_ID: "146147681",
+    ROUNDHOUSE_GITHUB_WEBHOOK_SECRET: "webhook-test-secret",
+  };
+}
+
+async function signature(body: string, secret: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const value = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(body),
+  );
+  return `sha256=${[...new Uint8Array(value)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")}`;
+}
+
+afterEach(async () => {
+  await Promise.all(instances.splice(0).map((value) => value.dispose()));
+});
+
+describe("GitHub-native operator webhook", () => {
+  it("parses only exact bounded commands", () => {
+    expect(parseGitHubCommand("/rh start")).toEqual({ kind: "start" });
+    expect(parseGitHubCommand("/rh status run_123")).toEqual({
+      kind: "status",
+      runId: "run_123",
+    });
+    expect(parseGitHubCommand("/rh retry run_123 7")).toEqual({
+      kind: "retry",
+      runId: "run_123",
+      revision: 7,
+    });
+    expect(
+      parseGitHubCommand(
+        `/rh approve run_123 8 ${"a".repeat(40)} ${"b".repeat(64)} ${"c".repeat(64)}`,
+      ),
+    ).toMatchObject({ kind: "approve", revision: 8 });
+    expect(parseGitHubCommand("please /rh start")).toBeNull();
+    expect(parseGitHubCommand("/rh shell rm -rf /")).toBeNull();
+    expect(parseGitHubCommand("/rh retry run_123 latest")).toBeNull();
+  });
+
+  it("verifies the exact bytes with HMAC-SHA-256", async () => {
+    const body = new TextEncoder().encode('{"hello":"world"}');
+    const valid = await signature('{"hello":"world"}', "secret");
+    await expect(verifyGitHubSignature(body, valid, "secret")).resolves.toBe(
+      true,
+    );
+    await expect(
+      verifyGitHubSignature(body, valid, "another-secret"),
+    ).resolves.toBe(false);
+    await expect(
+      verifyGitHubSignature(body, "sha256=not-a-hash", "secret"),
+    ).resolves.toBe(false);
+  });
+
+  it("fails closed for the wrong installation and deduplicates exact deliveries", async () => {
+    const env = await runtime();
+    const value = {
+      installation: { id: 146147681 },
+      repository: { full_name: "zorkian/roundhouse" },
+      sender: { login: "zorkian" },
+      action: "created",
+    };
+    const body = JSON.stringify(value);
+    const request = (payload: string, delivery: string) =>
+      new Request("https://roundhouse-dev.rm-rf.rip/v1/github/webhook", {
+        method: "POST",
+        headers: {
+          "x-github-delivery": delivery,
+          "x-github-event": "issue_comment",
+          "x-hub-signature-256": "placeholder",
+        },
+        body: payload,
+      });
+    const validRequest = request(body, "12345678-abcd");
+    validRequest.headers.set(
+      "x-hub-signature-256",
+      await signature(body, "webhook-test-secret"),
+    );
+    const verified = await verifyWebhookRequest(validRequest, env);
+    await expect(reserveWebhookDelivery(env, verified)).resolves.toBe("new");
+    await expect(reserveWebhookDelivery(env, verified)).resolves.toBe("replay");
+
+    const wrong = JSON.stringify({
+      ...value,
+      installation: { id: 9 },
+    });
+    const wrongRequest = request(wrong, "12345678-abce");
+    wrongRequest.headers.set(
+      "x-hub-signature-256",
+      await signature(wrong, "webhook-test-secret"),
+    );
+    await expect(verifyWebhookRequest(wrongRequest, env)).rejects.toMatchObject(
+      { status: 403, code: "unenrolled_source" },
+    );
+  });
+
+  it("persists issue bindings and idempotent comment intents", async () => {
+    const env = await runtime();
+    await bindIssueRun(env, 19, "run_19");
+    await bindIssueRun(env, 19, "run_19");
+    await expect(issueRun(env, 19)).resolves.toBe("run_19");
+    await enqueueComment(env, "run_19:1", 19, "status");
+    await enqueueComment(env, "run_19:1", 19, "status");
+    await expect(pendingComments(env)).resolves.toEqual([
+      { key: "run_19:1", issueNumber: 19, body: "status" },
+    ]);
+  });
+});

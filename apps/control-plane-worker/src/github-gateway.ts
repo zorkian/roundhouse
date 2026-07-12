@@ -190,6 +190,35 @@ export class GitHubAppGateway {
     ).value.object.sha;
   }
 
+  async createIssueComment(
+    issueNumber: number,
+    body: string,
+  ): Promise<{ id: number; url: string }> {
+    if (!Number.isSafeInteger(issueNumber) || issueNumber < 1)
+      throw new GitHubAppGatewayError(
+        "invalid_request",
+        "GitHub issue number is invalid",
+      );
+    const value = (
+      await this.api<{ id: number; html_url: string }>(
+        "POST",
+        `/repos/zorkian/roundhouse/issues/${issueNumber}/comments`,
+        { body },
+      )
+    ).value;
+    if (
+      !Number.isSafeInteger(value.id) ||
+      !/^https:\/\/github\.com\/zorkian\/roundhouse\/issues\/[1-9][0-9]*#issuecomment-[1-9][0-9]*$/.test(
+        value.html_url,
+      )
+    )
+      throw new GitHubAppGatewayError(
+        "invalid_response",
+        "GitHub comment response was invalid",
+      );
+    return { id: value.id, url: value.html_url };
+  }
+
   private async existingRef(branch: string): Promise<string | null> {
     const fetcher = this.fetcher;
     const response = await fetcher(
