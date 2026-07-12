@@ -70,7 +70,13 @@ describe("trusted agent output boundary", () => {
 
   it("rejects control characters in repository paths", () => {
     expect(validRepositoryPath("docs/safe.md")).toBe(true);
-    for (const path of ["docs/line\nbreak.md", "docs/tab\tname.md"])
+    for (const path of [
+      "docs/line\nbreak.md",
+      "docs/tab\tname.md",
+      "docs/./file.md",
+      "docs//file.md",
+      "docs/",
+    ])
       expect(validRepositoryPath(path)).toBe(false);
   });
 

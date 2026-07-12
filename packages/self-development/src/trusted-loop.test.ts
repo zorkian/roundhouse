@@ -74,6 +74,8 @@ describe("trusted self-development contracts", () => {
     expect(() =>
       repositoryRelativePathSchema.parse("docs/line\nbreak.md"),
     ).toThrow();
+    for (const path of ["docs/./file.md", "docs//file.md", "docs/"])
+      expect(() => repositoryRelativePathSchema.parse(path)).toThrow();
     expect(
       trustedImplementationResultSchema.shape.changedFiles.safeParse([])
         .success,

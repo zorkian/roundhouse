@@ -68,7 +68,9 @@ export function validRepositoryPath(value) {
     !value.includes("\\") &&
     !/[\u0000-\u001f\u007f]/.test(value) &&
     !/[?*[\]{}!]/.test(value) &&
-    !value.split("/").includes("..")
+    value
+      .split("/")
+      .every((segment) => segment !== "" && segment !== "." && segment !== "..")
   );
 }
 
