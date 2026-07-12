@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Cloudflare trusted self-development manifest
 
-Status: **preauthorized, not yet applied**
+Status: **applied and demonstrated 2026-07-12**
 
 This manifest records the exact development mutations authorized for the
 cloud-hosted trusted self-development milestone. Any difference requires a new
