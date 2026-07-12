@@ -1006,4 +1006,82 @@ describe("local control-plane Worker", () => {
       expectedRevision: durable.revision,
     });
   });
+
+  it("replays an operator retry whose Queue dispatch is recovered later", async () => {
+    const { env, queued } = await runtime();
+    const handler = createControlPlaneHandler();
+    const submitted = await handler.fetch!(
+      submission("operator-retry-dispatch-repair-01"),
+      env,
+      {} as ExecutionContext,
+    );
+    const { runId } = (await submitted.json()) as { runId: string };
+    const jobs = new D1JobStore(env.DB);
+    const now = new Date("2026-07-12T18:00:00Z");
+    const claim = await jobs.claim(runId, "worker", now, 300_000, 1);
+    await jobs.startAttempt(runId, claim!.token, "prepare", now);
+    const failed = await jobs.failAttempt(
+      runId,
+      claim!.token,
+      "prepare",
+      { retryable: true, classification: "transient", error: "retry me" },
+      true,
+      now,
+    );
+    const retryRequest = () =>
+      request(`/v1/runs/${runId}/retry`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "operator-retry-dispatch-repair-01",
+        },
+        body: JSON.stringify({
+          schemaVersion: 1,
+          expectedRevision: failed.revision,
+        }),
+      });
+    queued.failNext = true;
+    const first = await handler.fetch!(
+      retryRequest(),
+      env,
+      {} as ExecutionContext,
+    );
+    const replay = await handler.fetch!(
+      retryRequest(),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(first.status).toBe(200);
+    expect(await replay.json()).toEqual(await first.json());
+    expect(queued.messages).toHaveLength(1);
+
+    await handler.scheduled!(
+      {} as ScheduledController,
+      env,
+      {} as ExecutionContext,
+    );
+    expect(queued.messages).toHaveLength(2);
+    expect(queued.messages[1]).toMatchObject({ runId });
+    const alerts = await handler.fetch!(
+      request("/v1/operations/alerts"),
+      env,
+      {} as ExecutionContext,
+    );
+    const alertBody = (await alerts.json()) as {
+      alerts: Array<Record<string, unknown>>;
+    };
+    expect(alertBody.alerts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "retry_dispatch_failed",
+          runId,
+          occurrences: 1,
+        }),
+        expect.objectContaining({
+          kind: "lease_less_run_requeued",
+          runId,
+        }),
+      ]),
+    );
+  });
 });

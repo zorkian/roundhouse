@@ -515,12 +515,39 @@ async function route(
             input.expectedRevision,
             new Date(),
           );
-          await env.RUN_QUEUE.send({
-            schemaVersion: 1,
-            runId: run.runId,
-            deliveryId: `operator_retry_${run.runId}_${run.revision}`,
-            expectedRevision: run.revision,
-          });
+          try {
+            await env.RUN_QUEUE.send({
+              schemaVersion: 1,
+              runId: run.runId,
+              deliveryId: `operator_retry_${run.runId}_${run.revision}`,
+              expectedRevision: run.revision,
+            });
+          } catch (error) {
+            const reason = (
+              error instanceof Error ? error.message : "unknown error"
+            )
+              .replace(/https?:\/\/\S+/g, "[url]")
+              .replace(/\/(?:[^\s/:]+\/)+[^\s:]+/g, "[path]")
+              .slice(0, 160);
+            try {
+              await recordAlert(env, {
+                key: `retry_dispatch_failed:${run.runId}:${run.revision}`,
+                kind: "retry_dispatch_failed",
+                severity: "warning",
+                runId: run.runId,
+                detail: { revision: run.revision, reason },
+                now: new Date(),
+              });
+            } catch (alertError) {
+              console.warn("Retry dispatch alert persistence failed", {
+                runId: run.runId,
+                reason:
+                  alertError instanceof Error
+                    ? alertError.message.slice(0, 160)
+                    : "unknown error",
+              });
+            }
+          }
           return json(inspectRun(run));
         },
       );
