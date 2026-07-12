@@ -49,7 +49,7 @@ or data deletion is authorized.
 Estimated incremental Cloudflare usage remains below USD 10.
 
 Initial Worker version: `fe09e61b-10c9-458e-8d95-e1c8ccc55410`.
-Final reviewed Worker version: `9a8c732f-430c-47d8-9857-a22d42cda6d0`.
+Final reviewed Worker version: `1e7e035d-75e0-406c-9e0a-cd831934a9bb`.
 Applied Container image digest:
 `sha256:6b2e052e1f8beaca517bbf4bd4b3da08e893ab2aa3b8eff0510c09a021b87e58`.
 Migration `0004_cloud_operations.sql` is recorded as applied and the cron trigger

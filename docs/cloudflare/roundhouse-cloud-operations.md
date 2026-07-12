@@ -48,14 +48,51 @@ node scripts/roundhouse-operator.mjs cancel RUN_ID /tmp/cancel.json
 Tokens and request files containing credentials must remain outside the
 repository. The CLI never persists them.
 
+## Authenticated development demonstration
+
+The 2026-07-12 demonstration used only the CLI and authenticated control-plane
+routes for normal operations. It retained the following public-safe bindings:
+
+- Successful run `run_35ca873b13c010890558ebb4098e244fc650c294` used base
+  `3583ece2b7bb1431a078e730ec0a85c89607e010`, produced patch SHA-256
+  `58ef4a32a5b64b3313528ccadd2cbeb40a512ab59cc7020453eebd9747e533bc`,
+  and reached `awaiting_publication` after approval by the Access-derived actor.
+  R2 evidence
+  `runs/run_35ca873b13c010890558ebb4098e244fc650c294/attempts/run_35ca873b13c010890558ebb4098e244fc650c294-prepare-1/trusted-implementation.json`
+  independently matched SHA-256
+  `6229458782a320247e16064bb81ccb9ab81744155bc6c0fbfcfee14993964d52`
+  and size 2,884 bytes. A faithful publication dry-run produced commit
+  `cac78f438f249feff14e7f1d0cc578a429ab208c` without pushing it.
+- Cancellation run `run_1afee505cbe69d2ca6d9df977b9e5f25894938a2`
+  moved atomically from running revision 3 to cancelled revision 4. Replaying
+  its idempotency key returned the byte-identical response.
+- Retry run `run_400412566fd3cd656684e8f2967c67cfc3b6255f` retained three
+  classified `container_interrupted` failures, accepted a revision-13 retry,
+  and completed attempt 4 without duplicating prior attempts. Its evidence is
+  SHA-256 `ed0c28ff9a60305234ac633a6b6254338e849c9fba1244a54e7ba8e98c08715d`.
+- The controlled interruption deployment
+  `41feb0b9-8539-4821-874e-064db34d112e` failed after durably reserving
+  submission `cloud-ops-interruption-submit-20260712-01` but before Queue
+  delivery. After normal configuration was restored, authenticated recovery
+  cycle `4f39198b-7f42-4a2f-9256-6fdf614bb32c` repaired exactly one submission.
+  Replaying the submission returned original run
+  `run_d3b70687acdec4f1bea5f31c9c888c02538328b9` with `created: false`.
+  It completed exactly one attempt and retained R2 evidence SHA-256
+  `1d81adcbbbdd1ac58eaf862e9e23ba5076ee70986394ed2697b764dcc9d7e3a6`,
+  independently verified at 2,795 bytes.
+- Recovery history exposes scheduled actor `roundhouse:scheduler`, including
+  expired/lease-less recovery cycle `de66d5fc-5bd2-418f-853f-0a44eb2752c1`
+  and its deduplicated durable alert. The retention report remained dry-run
+  with an empty deletion list.
+
+Worker versions `951b4e30-1558-4b06-b519-460b7ad65be3` and final reviewed
+version `1e7e035d-75e0-406c-9e0a-cd831934a9bb` were deployed after the
+interruption. Authenticated inspection after both redeployments returned the
+same runs, evidence bindings, and approval, demonstrating durable survival.
+
 ## Remaining limitations
 
 This is a development operator surface. It uses the existing human Access
 boundary and the previously accepted temporary Codex credential exception.
 There is no external machine Access credential, destructive retention, private
 repository support, notification delivery, or multi-Container concurrency.
-
-The retained local `cloudflare-access-api-token` is a Cloudflare management API
-token, not an Access application JWT. It cannot authenticate operator requests.
-The remote authenticated transcript therefore requires a fresh human Access
-session; creating a service token is intentionally outside this milestone.
