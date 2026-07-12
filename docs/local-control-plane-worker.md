@@ -50,12 +50,13 @@ acknowledging. Repeated repair sends are harmless under the same revision guard.
 
 ## API
 
-| Method | Path               | Authentication | Behavior                    |
-| ------ | ------------------ | -------------- | --------------------------- |
-| GET    | `/health`          | public         | Process liveness only       |
-| GET    | `/ready`           | required       | Local D1 readiness          |
-| POST   | `/v1/runs`         | required       | Idempotent structured task  |
-| GET    | `/v1/runs/{runId}` | required       | Redacted state and evidence |
+| Method | Path                      | Authentication | Behavior                                |
+| ------ | ------------------------- | -------------- | --------------------------------------- |
+| GET    | `/health`                 | public         | Process liveness only                   |
+| GET    | `/ready`                  | required       | Local D1 readiness                      |
+| POST   | `/v1/runs`                | required       | Idempotent structured task              |
+| GET    | `/v1/runs/{runId}`        | required       | Redacted state and evidence             |
+| POST   | `/v1/runs/{runId}/cancel` | required       | Revision-bound, idempotent cancellation |
 
 Submission requires `Content-Type: application/json`, an `Idempotency-Key`
 header, and a body shaped as `{ "schemaVersion": 1, "task": ... }`. Bodies are

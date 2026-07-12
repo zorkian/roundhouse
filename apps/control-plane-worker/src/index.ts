@@ -235,10 +235,10 @@ async function mutationResponse(
     { key, action, runId, actorId, request: requestValue, now: new Date() },
     async () => {
       const response = await mutate();
-      return response.json();
+      return { status: response.status, body: await response.json() };
     },
   );
-  return json(result.value, 200);
+  return json(result.value.body, result.value.status);
 }
 
 async function approveRun(

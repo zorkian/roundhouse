@@ -13,13 +13,17 @@ export const cloudOperationsMigration = `
 CREATE TABLE IF NOT EXISTS operator_mutations (
   idempotency_key TEXT PRIMARY KEY, request_hash TEXT NOT NULL,
   action TEXT NOT NULL, run_id TEXT NOT NULL, actor_id TEXT NOT NULL,
-  status TEXT NOT NULL, response_json TEXT, created_at TEXT NOT NULL, completed_at TEXT
+  status TEXT NOT NULL CHECK (status IN ('pending', 'completed')),
+  response_json TEXT, created_at TEXT NOT NULL, completed_at TEXT
 );
+CREATE INDEX IF NOT EXISTS operator_mutations_run ON operator_mutations(run_id, created_at);
 CREATE TABLE IF NOT EXISTS operational_alerts (
-  alert_key TEXT PRIMARY KEY, kind TEXT NOT NULL, severity TEXT NOT NULL,
+  alert_key TEXT PRIMARY KEY, kind TEXT NOT NULL,
+  severity TEXT NOT NULL CHECK (severity IN ('info', 'warning', 'error')),
   run_id TEXT, detail_json TEXT NOT NULL, first_seen_at TEXT NOT NULL,
   last_seen_at TEXT NOT NULL, occurrences INTEGER NOT NULL DEFAULT 1, resolved_at TEXT
 );
+CREATE INDEX IF NOT EXISTS operational_alerts_active ON operational_alerts(resolved_at, last_seen_at);
 CREATE TABLE IF NOT EXISTS recovery_cycles (
   cycle_id TEXT PRIMARY KEY, actor_id TEXT NOT NULL, started_at TEXT NOT NULL,
   completed_at TEXT NOT NULL, repaired_submissions INTEGER NOT NULL,
@@ -27,8 +31,16 @@ CREATE TABLE IF NOT EXISTS recovery_cycles (
 );
 `;
 
-export class MutationConflictError extends Error {}
-export class MutationPendingError extends Error {}
+export class MutationConflictError extends Error {
+  constructor() {
+    super("Idempotency key is bound to a different operator mutation");
+  }
+}
+export class MutationPendingError extends Error {
+  constructor() {
+    super("An operator mutation with this idempotency key is still pending");
+  }
+}
 
 async function hash(value: unknown): Promise<string> {
   const bytes = await crypto.subtle.digest(
@@ -90,13 +102,22 @@ export async function idempotentMutation<T>(
       throw new MutationPendingError();
     return { value: JSON.parse(row.response_json) as T, replayed: true };
   }
-  const value = await mutate();
-  await env.DB.prepare(
-    "UPDATE operator_mutations SET status = 'completed', response_json = ?, completed_at = ? WHERE idempotency_key = ? AND status = 'pending'",
-  )
-    .bind(JSON.stringify(value), new Date().toISOString(), input.key)
-    .run();
-  return { value, replayed: false };
+  try {
+    const value = await mutate();
+    await env.DB.prepare(
+      "UPDATE operator_mutations SET status = 'completed', response_json = ?, completed_at = ? WHERE idempotency_key = ? AND status = 'pending'",
+    )
+      .bind(JSON.stringify(value), new Date().toISOString(), input.key)
+      .run();
+    return { value, replayed: false };
+  } catch (error) {
+    await env.DB.prepare(
+      "DELETE FROM operator_mutations WHERE idempotency_key = ? AND status = 'pending'",
+    )
+      .bind(input.key)
+      .run();
+    throw error;
+  }
 }
 
 export async function recordAlert(
@@ -164,6 +185,7 @@ export async function retryFailedRun(
   const next = selfDevelopmentRunSchema.parse({
     ...run,
     state,
+    lease: undefined,
     updatedAt: now.toISOString(),
     revision: run.revision + 1,
     events: [

@@ -29,6 +29,10 @@ if (!route) {
   console.error(`Unknown command: ${command ?? ""}`);
   process.exit(2);
 }
+if (route.method === "GET" && inputPath) {
+  console.error(`${command} does not accept an input file`);
+  process.exit(2);
+}
 const body = inputPath ? await readFile(inputPath, "utf8") : undefined;
 const response = await fetch(new URL(route.path, origin), {
   method: route.method,
