@@ -5,8 +5,14 @@
   "private": true,
   "type": "module",
   "exports": {
-    "types": "./src/index.ts",
-    "default": "./dist/index.js"
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./cloudflare": {
+      "types": "./src/cloudflare.ts",
+      "default": "./dist/cloudflare.js"
+    }
   },
   "dependencies": {
     "@roundhouse/domain": "workspace:*",
