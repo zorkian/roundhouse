@@ -74,6 +74,7 @@ async function runtime(): Promise<{
     env: {
       DB: db,
       RUN_QUEUE: queue,
+      AUTH_MODE: "local",
       LOCAL_API_TOKEN: token,
       EXECUTION_MODE: "deterministic-local",
       ALLOWED_REPOSITORY_PATH: repositoryPath,

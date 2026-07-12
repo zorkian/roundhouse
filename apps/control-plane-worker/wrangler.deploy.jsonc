@@ -1,0 +1,41 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "roundhouse-dev-control-plane",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-11",
+  "workers_dev": false,
+  "preview_urls": false,
+  "vars": {
+    "AUTH_MODE": "access",
+    "ACCESS_TEAM_DOMAIN": "zorkian",
+    "ACCESS_POLICY_AUD": "93175877f79ccfad4f2d7b0ed35f9df6ec1901269474150486076320a74f141a",
+    "EXECUTION_MODE": "deterministic-local",
+    "ALLOWED_REPOSITORY_PATH": "/workspace/roundhouse",
+    "ALLOWED_REMOTE_URL": "https://github.com/zorkian/roundhouse.git",
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "roundhouse-dev-coordination",
+      "database_id": "87a4098a-a829-4e0b-80c6-43e2eaf34ddc",
+      "migrations_dir": "migrations",
+    },
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "RUN_QUEUE",
+        "queue": "roundhouse-dev-runs",
+      },
+    ],
+    "consumers": [
+      {
+        "queue": "roundhouse-dev-runs",
+        "dead_letter_queue": "roundhouse-dev-runs-dlq",
+        "max_retries": 3,
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+      },
+    ],
+  },
+}

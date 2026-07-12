@@ -9,7 +9,7 @@ import {
 } from "@roundhouse/self-development/cloudflare";
 import { z } from "zod";
 
-import { LocalBearerAuthorizer, type RequestAuthorizer } from "./auth.js";
+import { ConfiguredAuthorizer, type RequestAuthorizer } from "./auth.js";
 import { idempotencyKeySchema, submitRunSchema } from "./contracts.js";
 import type { ControlPlaneEnv } from "./environment.js";
 import { inspectRun } from "./inspection.js";
@@ -144,7 +144,7 @@ async function route(
 }
 
 export function createControlPlaneHandler(
-  authorizer: RequestAuthorizer = new LocalBearerAuthorizer(),
+  authorizer: RequestAuthorizer = new ConfiguredAuthorizer(),
 ): ExportedHandler<ControlPlaneEnv> {
   return {
     async fetch(request, env): Promise<Response> {
