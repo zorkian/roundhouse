@@ -32,12 +32,12 @@ export const selfDevelopmentTaskSchema = z.object({
       .string()
       .min(1)
       .max(200)
-      .refine((value) => !/[\r\n]/.test(value)),
+      .refine((value) => !/[\u0000-\u001f\u007f]/.test(value)),
     authorName: z
       .string()
       .min(1)
       .max(200)
-      .refine((value) => !/[\r\n]/.test(value)),
+      .refine((value) => !/[\u0000-\u001f\u007f]/.test(value)),
     authorEmail: z
       .string()
       .email()

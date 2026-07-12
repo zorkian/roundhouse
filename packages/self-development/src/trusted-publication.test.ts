@@ -268,6 +268,45 @@ describe("publishTrustedImplementation", () => {
     ).toBe("");
   });
 
+  it("retains the local commit when the push outcome is indeterminate", async () => {
+    const value = await fixture();
+    await expect(
+      publishTrustedImplementation(
+        {
+          repositoryPath: value.publication,
+          evidence: [
+            { json: value.evidenceJson, binding: value.evidenceBinding },
+            {
+              json: value.validationEvidenceJson,
+              binding: value.validationEvidenceBinding,
+            },
+          ],
+          implementationEvidenceId: value.evidenceBinding.evidenceId,
+          runRevision: value.publicationRequest.expectedRevision,
+          approval: value.approval,
+          publication: value.publicationRequest,
+          authorName: "Roundhouse",
+          authorEmail: "roundhouse@example.test",
+        },
+        {
+          remoteHead: async (_repositoryPath, _remote, branch) => {
+            if (branch === "main") return value.result.baseCommit;
+            throw new Error("simulated remote lookup failure");
+          },
+          push: async () => {
+            throw new Error("simulated ambiguous push failure");
+          },
+        },
+      ),
+    ).rejects.toThrow("Push outcome is indeterminate");
+    expect(
+      (await git(value.publication, ["rev-parse", "HEAD"])).trim(),
+    ).not.toBe(value.result.baseCommit);
+    expect(
+      (await git(value.publication, ["status", "--porcelain"])).trim(),
+    ).toBe("");
+  });
+
   it("rejects tampered evidence before modifying the checkout", async () => {
     const value = await fixture();
     await expect(

@@ -146,10 +146,10 @@ export async function publishTrustedImplementation(
   if (
     !input.authorName ||
     input.authorName.length > 200 ||
-    /[\r\n]/.test(input.authorName) ||
+    /[\u0000-\u001f\u007f]/.test(input.authorName) ||
     !input.authorEmail ||
     input.authorEmail.length > 320 ||
-    /[\r\n]/.test(input.authorEmail)
+    /[\u0000-\u001f\u007f]/.test(input.authorEmail)
   )
     throw new Error("Publication author identity is invalid");
   if (input.runRevision !== publication.expectedRevision)
@@ -292,11 +292,19 @@ export async function publishTrustedImplementation(
       commit,
     });
   } catch (error) {
-    const publishedHead = await (dependencies.remoteHead ?? remoteHead)(
-      input.repositoryPath,
-      remote,
-      publication.branch,
-    ).catch(() => null);
+    let publishedHead: string | null;
+    try {
+      publishedHead = await (dependencies.remoteHead ?? remoteHead)(
+        input.repositoryPath,
+        remote,
+        publication.branch,
+      );
+    } catch (verificationError) {
+      throw new Error(
+        "Push outcome is indeterminate; local commit retained for inspection",
+        { cause: verificationError },
+      );
+    }
     if (publishedHead !== commit) {
       await restoreBase(input.repositoryPath, result.baseCommit);
       throw error;

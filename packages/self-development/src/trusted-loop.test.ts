@@ -149,6 +149,10 @@ describe("trusted self-development contracts", () => {
         .success,
     ).toBe(false);
     expect(
+      schema.safeParse({ ...publication, authorName: "Roundhouse\tInjected" })
+        .success,
+    ).toBe(false);
+    expect(
       schema.safeParse({
         ...publication,
         authorEmail: `${"a".repeat(310)}@example.test`,
