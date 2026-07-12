@@ -114,6 +114,25 @@ function validateResult(
   return result;
 }
 
+async function readEvidence(
+  bucket: EvidenceBucketPort,
+  key: string,
+  request: RepositoryExecutionRequest,
+): Promise<RepositoryExecutionResult | null> {
+  try {
+    const object = await bucket.get(key);
+    return object
+      ? validateResult(request, JSON.parse(await object.text()))
+      : null;
+  } catch (error) {
+    throw new StageFailure(
+      `Execution evidence could not be read: ${boundedInfrastructureReason(error)}`,
+      "evidence_unavailable",
+      true,
+    );
+  }
+}
+
 export class CloudflareRepositoryExecutionBackend implements RepositoryExecutionBackend {
   constructor(
     private readonly containers: ExecutionContainerNamespacePort,
@@ -123,10 +142,10 @@ export class CloudflareRepositoryExecutionBackend implements RepositoryExecution
   async execute(input: RepositoryExecutionRequest): Promise<StageResult> {
     const request = repositoryExecutionRequestSchema.parse(input);
     const key = evidenceKey(request);
-    const existing = await this.evidence.get(key);
+    const existing = await readEvidence(this.evidence, key, request);
     let result: RepositoryExecutionResult;
     if (existing) {
-      result = validateResult(request, JSON.parse(await existing.text()));
+      result = existing;
     } else {
       const container = this.containers.getByName(request.attemptId);
       try {
@@ -166,14 +185,14 @@ export class CloudflareRepositoryExecutionBackend implements RepositoryExecution
         );
       }
       if (!stored) {
-        const raced = await this.evidence.get(key);
+        const raced = await readEvidence(this.evidence, key, request);
         if (!raced)
           throw new StageFailure(
             "Execution evidence upload did not become durable",
             "evidence_unavailable",
             true,
           );
-        result = validateResult(request, JSON.parse(await raced.text()));
+        result = raced;
       }
     }
 

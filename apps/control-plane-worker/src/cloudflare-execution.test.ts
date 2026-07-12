@@ -197,4 +197,53 @@ describe("CloudflareRepositoryExecutionBackend", () => {
       retryable: true,
     });
   });
+
+  it("classifies malformed replay evidence as retryable", async () => {
+    const evidence = new MemoryEvidence();
+    evidence.objects.set(
+      "runs/run_container_contract/attempts/run_container_contract-prepare-1/execution.json",
+      new TextEncoder().encode("not-json"),
+    );
+    const backend = new CloudflareRepositoryExecutionBackend(
+      {
+        getByName: () => ({
+          runJob: async () => {
+            throw new Error("must not execute");
+          },
+          destroy: async () => undefined,
+        }),
+      },
+      evidence,
+    );
+
+    await expect(backend.execute(request)).rejects.toMatchObject({
+      classification: "evidence_unavailable",
+      retryable: true,
+    });
+  });
+
+  it("classifies malformed evidence after an upload race as retryable", async () => {
+    let reads = 0;
+    const evidence: EvidenceBucketPort = {
+      get: async () => {
+        reads += 1;
+        return reads === 1 ? null : { text: async () => "not-json" };
+      },
+      put: async () => null,
+    };
+    const backend = new CloudflareRepositoryExecutionBackend(
+      {
+        getByName: () => ({
+          runJob: async () => result(),
+          destroy: async () => undefined,
+        }),
+      },
+      evidence,
+    );
+
+    await expect(backend.execute(request)).rejects.toMatchObject({
+      classification: "evidence_unavailable",
+      retryable: true,
+    });
+  });
 });
