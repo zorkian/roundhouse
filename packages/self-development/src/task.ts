@@ -33,8 +33,16 @@ export const selfDevelopmentTaskSchema = z.object({
       .min(1)
       .max(200)
       .refine((value) => !/[\r\n]/.test(value)),
-    authorName: z.string().min(1).max(200),
-    authorEmail: z.string().email(),
+    authorName: z
+      .string()
+      .min(1)
+      .max(200)
+      .refine((value) => !/[\r\n]/.test(value)),
+    authorEmail: z
+      .string()
+      .email()
+      .max(320)
+      .refine((value) => !/[\r\n]/.test(value)),
   }),
 });
 

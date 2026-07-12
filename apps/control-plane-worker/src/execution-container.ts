@@ -17,9 +17,11 @@ import type { ControlPlaneEnv } from "./environment.js";
 import {
   allowedCheckoutHosts,
   isCheckoutRequestAllowed,
+  modelRequestAuditAccepted,
 } from "./execution-egress.js";
 
 const modelHosts = ["chatgpt.com", "auth.openai.com"];
+const maximumModelRequestsPerAttempt = 256;
 
 export { ContainerProxy };
 
@@ -62,8 +64,11 @@ async function auditedModelTransport(
   const attemptId = params?.attemptId;
   if (typeof attemptId !== "string")
     return new Response("Forbidden", { status: 403 });
-  await env.DB.prepare(
-    "INSERT INTO execution_egress_events(event_id, attempt_id, container_id, hostname, method, occurred_at) VALUES (?, ?, ?, ?, ?, ?)",
+  const inserted = await env.DB.prepare(
+    `INSERT INTO execution_egress_events(event_id, attempt_id, container_id, hostname, method, occurred_at)
+     SELECT ?, ?, ?, ?, ?, ?
+     WHERE (SELECT COUNT(*) FROM execution_egress_events
+            WHERE attempt_id = ? AND hostname IN ('chatgpt.com', 'auth.openai.com')) < ?`,
   )
     .bind(
       crypto.randomUUID(),
@@ -72,8 +77,12 @@ async function auditedModelTransport(
       url.hostname,
       request.method,
       new Date().toISOString(),
+      attemptId,
+      maximumModelRequestsPerAttempt,
     )
     .run();
+  if (!modelRequestAuditAccepted(inserted.meta.changes))
+    return new Response("Model request limit exceeded", { status: 429 });
   return fetch(request, { redirect: "manual" });
 }
 

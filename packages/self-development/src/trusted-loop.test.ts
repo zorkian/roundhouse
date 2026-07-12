@@ -11,7 +11,7 @@ import {
   trustedImplementationRequestSchema,
   trustedImplementationResultSchema,
 } from "./trusted-loop.js";
-import { selfDevelopmentRunSchema } from "./task.js";
+import { selfDevelopmentRunSchema, selfDevelopmentTaskSchema } from "./task.js";
 
 const binding = {
   evidenceId: "evidence_run_trusted_contract-implement-1",
@@ -130,5 +130,29 @@ describe("trusted self-development contracts", () => {
         commitMessage: "first\rsecond",
       }),
     ).toThrow();
+  });
+
+  it("aligns task publication identity with the Git boundary", () => {
+    const publication = {
+      remote: "origin",
+      remoteUrl: "https://github.com/zorkian/roundhouse.git",
+      branch: "codex/dogfood-trusted-loop-01",
+      expectedRemoteHead: null,
+      commitMessage: "Record dogfood",
+      authorName: "Roundhouse",
+      authorEmail: "roundhouse@example.test",
+    };
+    const schema = selfDevelopmentTaskSchema.shape.publication;
+    expect(schema.safeParse(publication).success).toBe(true);
+    expect(
+      schema.safeParse({ ...publication, authorName: "Roundhouse\nInjected" })
+        .success,
+    ).toBe(false);
+    expect(
+      schema.safeParse({
+        ...publication,
+        authorEmail: `${"a".repeat(310)}@example.test`,
+      }).success,
+    ).toBe(false);
   });
 });
