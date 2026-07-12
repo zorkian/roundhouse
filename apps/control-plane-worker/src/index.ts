@@ -150,7 +150,18 @@ async function cancelRun(
   )
     await env.EXECUTION_CONTAINERS.getByName(active.attemptId)
       .destroy()
-      .catch(() => undefined);
+      .catch((error: unknown) => {
+        const reason = (
+          error instanceof Error ? error.message : "unknown error"
+        )
+          .replace(/https?:\/\/\S+/g, "[url]")
+          .replace(/\/(?:[^\s/:]+\/)+[^\s:]+/g, "[path]")
+          .slice(0, 160);
+        console.warn("Cloudflare Container cancellation teardown failed", {
+          attemptId: active.attemptId,
+          reason,
+        });
+      });
   return json(inspectRun(await jobs.cancel(runId, new Date())));
 }
 

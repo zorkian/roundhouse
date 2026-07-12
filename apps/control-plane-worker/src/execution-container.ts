@@ -10,8 +10,10 @@ import {
 } from "@roundhouse/self-development/cloudflare";
 
 import type { ControlPlaneEnv } from "./environment.js";
-
-const checkoutHosts = ["github.com"];
+import {
+  allowedCheckoutHosts,
+  isCheckoutRequestAllowed,
+} from "./execution-egress.js";
 
 export { ContainerProxy };
 
@@ -21,7 +23,7 @@ async function auditedCheckout(
   context: { containerId: string; params?: unknown },
 ): Promise<Response> {
   const url = new URL(request.url);
-  if (!checkoutHosts.includes(url.hostname))
+  if (!isCheckoutRequestAllowed(request))
     return new Response("Forbidden", { status: 403 });
   const params = context.params as { attemptId?: unknown } | undefined;
   const attemptId = params?.attemptId;
@@ -39,7 +41,7 @@ async function auditedCheckout(
       new Date().toISOString(),
     )
     .run();
-  return fetch(request);
+  return fetch(request, { redirect: "manual" });
 }
 
 export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
@@ -84,28 +86,28 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
   ): Promise<RepositoryExecutionResult> {
     const request = repositoryExecutionRequestSchema.parse(input);
     const startupStarted = Date.now();
-    await this.setAllowedHosts(checkoutHosts);
-    await this.setOutboundByHosts({
-      "github.com": {
-        method: "auditedCheckout",
-        params: { attemptId: request.attemptId },
-      },
-    });
-    await this.startAndWaitForPorts({
-      ports: 8080,
-      startOptions: {
-        enableInternet: false,
-        envVars: {},
-        labels: { attemptId: request.attemptId },
-      },
-      cancellationOptions: {
-        instanceGetTimeoutMS: 30_000,
-        portReadyTimeoutMS: 60_000,
-        waitInterval: 250,
-      },
-    });
-    const startupDurationMs = Date.now() - startupStarted;
     try {
+      await this.setAllowedHosts(allowedCheckoutHosts);
+      await this.setOutboundByHosts({
+        "github.com": {
+          method: "auditedCheckout",
+          params: { attemptId: request.attemptId },
+        },
+      });
+      await this.startAndWaitForPorts({
+        ports: 8080,
+        startOptions: {
+          enableInternet: false,
+          envVars: {},
+          labels: { attemptId: request.attemptId },
+        },
+        cancellationOptions: {
+          instanceGetTimeoutMS: 30_000,
+          portReadyTimeoutMS: 60_000,
+          waitInterval: 250,
+        },
+      });
+      const startupDurationMs = Date.now() - startupStarted;
       const prepared = (await this.post("/prepare", request)) as {
         checkoutDurationMs?: unknown;
       };
@@ -117,9 +119,17 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
         checkoutDurationMs: prepared.checkoutDurationMs,
       });
     } finally {
-      await this.setOutboundByHosts({});
-      await this.setAllowedHosts([]);
-      await this.destroy().catch(() => undefined);
+      const cleanup = await Promise.allSettled([
+        this.setOutboundByHosts({}),
+        this.setAllowedHosts([]),
+        this.destroy(),
+      ]);
+      const failures = cleanup.filter((result) => result.status === "rejected");
+      if (failures.length > 0)
+        console.warn("Cloudflare Container cleanup was incomplete", {
+          attemptId: request.attemptId,
+          failures: failures.length,
+        });
     }
   }
 }
