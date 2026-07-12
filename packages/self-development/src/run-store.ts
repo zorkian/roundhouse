@@ -36,7 +36,8 @@ const transitions: Record<
   workspace_ready: ["implementing", "failed", "cancelled"],
   implementing: ["validating", "failed", "cancelled"],
   validating: ["awaiting_approval", "failed", "cancelled"],
-  awaiting_approval: ["approved", "cancelled"],
+  awaiting_approval: ["awaiting_publication", "approved", "cancelled"],
+  awaiting_publication: ["completed", "cancelled"],
   approved: ["committed", "cancelled"],
   committed: ["pushed", "failed"],
   pushed: ["completed", "failed"],
@@ -223,9 +224,9 @@ export class FileRunStore implements JobStore {
       const run = await this.read(runId);
       if (run.revision !== expectedRevision)
         throw new Error("Approval revision does not match");
+      if (run.approval) throw new Error("Run approval is immutable");
       if (run.state !== "awaiting_approval" || !run.implementation)
         throw new Error("Run is not awaiting an implementation approval");
-      if (run.approval) throw new Error("Run approval is immutable");
       const evidence = run.evidence.map(
         ({ evidenceId, objectKey, sha256, size }) => ({
           evidenceId,
@@ -245,7 +246,7 @@ export class FileRunStore implements JobStore {
         throw new Error("Approval binding does not match the run");
       return this.replace({
         ...run,
-        state: "awaiting_approval",
+        state: "awaiting_publication",
         approval,
         updatedAt: now.toISOString(),
         events: [
@@ -253,7 +254,7 @@ export class FileRunStore implements JobStore {
           {
             sequence: run.events.length + 1,
             type: "run.approved",
-            state: "awaiting_approval",
+            state: "awaiting_publication",
             occurredAt: now.toISOString(),
             detail: {
               approver: approval.approver,
@@ -275,7 +276,7 @@ export class FileRunStore implements JobStore {
       const run = await this.read(runId);
       if (run.revision !== expectedRevision)
         throw new Error("Publication revision does not match");
-      if (run.state !== "awaiting_approval" || !run.approval)
+      if (run.state !== "awaiting_publication" || !run.approval)
         throw new Error("Run does not have a valid approval");
       return this.replace({
         ...run,

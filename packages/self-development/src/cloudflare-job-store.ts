@@ -190,9 +190,9 @@ export class D1JobStore implements JobStore {
     const approved = await this.mutate(runId, (run) => {
       if (run.revision !== expectedRevision)
         throw new Error("Approval revision does not match");
+      if (run.approval) throw new Error("Run approval is immutable");
       if (run.state !== "awaiting_approval" || !run.implementation)
         throw new Error("Run is not awaiting an implementation approval");
-      if (run.approval) throw new Error("Run approval is immutable");
       const evidence = run.evidence.map(
         ({ evidenceId, objectKey, sha256, size }) => ({
           evidenceId,
@@ -212,7 +212,7 @@ export class D1JobStore implements JobStore {
         throw new Error("Approval binding does not match the run");
       const next = {
         ...run,
-        state: "awaiting_approval" as const,
+        state: "awaiting_publication" as const,
         approval,
         updatedAt: now.toISOString(),
         events: [
@@ -220,7 +220,7 @@ export class D1JobStore implements JobStore {
           {
             sequence: run.events.length + 1,
             type: "run.approved",
-            state: "awaiting_approval" as const,
+            state: "awaiting_publication" as const,
             occurredAt: now.toISOString(),
             detail: {
               approver: approval.approver,
@@ -249,7 +249,7 @@ export class D1JobStore implements JobStore {
     const recorded = await this.mutate(runId, (run) => {
       if (run.revision !== expectedRevision)
         throw new Error("Publication revision does not match");
-      if (run.state !== "awaiting_approval" || !run.approval)
+      if (run.state !== "awaiting_publication" || !run.approval)
         throw new Error("Run does not have a valid approval");
       const next = {
         ...run,

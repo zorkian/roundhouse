@@ -353,7 +353,10 @@ export function jobStoreContract(
         released.revision,
         new Date(start.getTime() + 3),
       );
-      expect(approved).toMatchObject({ state: "awaiting_approval", approval });
+      expect(approved).toMatchObject({
+        state: "awaiting_publication",
+        approval,
+      });
       await expect(
         store.approve(
           runId,

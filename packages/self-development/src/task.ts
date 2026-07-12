@@ -46,6 +46,7 @@ export const runStates = [
   "implementing",
   "validating",
   "awaiting_approval",
+  "awaiting_publication",
   "approved",
   "committed",
   "pushed",
