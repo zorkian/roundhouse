@@ -130,12 +130,23 @@ async function fixture() {
     sha256: hash(evidenceJson),
     size: Buffer.byteLength(evidenceJson),
   };
+  const validationEvidenceJson = JSON.stringify({
+    schemaVersion: 1,
+    runId: result.runId,
+    checks: ["license"],
+  });
+  const validationEvidenceBinding = {
+    evidenceId: "evidence_trusted_publication_validation",
+    objectKey: "runs/trusted/validation.json",
+    sha256: hash(validationEvidenceJson),
+    size: Buffer.byteLength(validationEvidenceJson),
+  };
   const approval: ExactApproval = {
     schemaVersion: 1,
     runId: result.runId,
     baseCommit,
     patchSha256: result.patchSha256,
-    evidence: [evidenceBinding],
+    evidence: [evidenceBinding, validationEvidenceBinding],
     approver: "mark-smith-delegated-trusted-loop-dogfood",
     approvedAt: now,
   };
@@ -155,6 +166,8 @@ async function fixture() {
     result,
     evidenceJson,
     evidenceBinding,
+    validationEvidenceJson,
+    validationEvidenceBinding,
     approval,
     publicationRequest,
     path,
@@ -173,9 +186,14 @@ describe("publishTrustedImplementation", () => {
     const published = await publishTrustedImplementation(
       {
         repositoryPath: value.publication,
-        result: value.result,
-        evidenceJson: value.evidenceJson,
-        evidenceBinding: value.evidenceBinding,
+        evidence: [
+          { json: value.evidenceJson, binding: value.evidenceBinding },
+          {
+            json: value.validationEvidenceJson,
+            binding: value.validationEvidenceBinding,
+          },
+        ],
+        implementationEvidenceId: value.evidenceBinding.evidenceId,
         approval: value.approval,
         publication: value.publicationRequest,
         authorName: "Roundhouse",
@@ -217,9 +235,17 @@ describe("publishTrustedImplementation", () => {
     await expect(
       publishTrustedImplementation({
         repositoryPath: value.publication,
-        result: value.result,
-        evidenceJson: `${value.evidenceJson} `,
-        evidenceBinding: value.evidenceBinding,
+        evidence: [
+          {
+            json: `${value.evidenceJson} `,
+            binding: value.evidenceBinding,
+          },
+          {
+            json: value.validationEvidenceJson,
+            binding: value.validationEvidenceBinding,
+          },
+        ],
+        implementationEvidenceId: value.evidenceBinding.evidenceId,
         approval: value.approval,
         publication: value.publicationRequest,
         authorName: "Roundhouse",
@@ -232,9 +258,14 @@ describe("publishTrustedImplementation", () => {
     await expect(
       publishTrustedImplementation({
         repositoryPath: value.publication,
-        result: value.result,
-        evidenceJson: value.evidenceJson,
-        evidenceBinding: value.evidenceBinding,
+        evidence: [
+          { json: value.evidenceJson, binding: value.evidenceBinding },
+          {
+            json: value.validationEvidenceJson,
+            binding: value.validationEvidenceBinding,
+          },
+        ],
+        implementationEvidenceId: value.evidenceBinding.evidenceId,
         approval: value.approval,
         publication: {
           ...value.publicationRequest,

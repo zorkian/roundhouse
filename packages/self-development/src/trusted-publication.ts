@@ -20,9 +20,11 @@ const execFileAsync = promisify(execFile);
 
 export type TrustedPublicationInput = {
   repositoryPath: string;
-  result: TrustedImplementationResult;
-  evidenceJson: string;
-  evidenceBinding: ExactApproval["evidence"][number];
+  evidence: Array<{
+    json: string;
+    binding: ExactApproval["evidence"][number];
+  }>;
+  implementationEvidenceId: string;
   approval: ExactApproval;
   publication: PublicationRequest;
   remote?: string;
@@ -131,9 +133,31 @@ export async function publishTrustedImplementation(
   input: TrustedPublicationInput,
   dependencies: TrustedPublicationDependencies = {},
 ): Promise<TrustedPublicationResult> {
-  const result = trustedImplementationResultSchema.parse(input.result);
   const approval = exactApprovalSchema.parse(input.approval);
   const publication = publicationRequestSchema.parse(input.publication);
+  if (input.evidence.length !== approval.evidence.length)
+    throw new Error("Complete approval evidence is required");
+  for (const [index, value] of input.evidence.entries()) {
+    const approved = approval.evidence[index];
+    if (
+      !approved ||
+      value.binding.evidenceId !== approved.evidenceId ||
+      value.binding.objectKey !== approved.objectKey ||
+      value.binding.sha256 !== approved.sha256 ||
+      value.binding.size !== approved.size ||
+      sha256(value.json) !== value.binding.sha256 ||
+      Buffer.byteLength(value.json) !== value.binding.size
+    )
+      throw new Error("Implementation evidence binding does not match");
+  }
+  const implementationEvidence = input.evidence.find(
+    (value) => value.binding.evidenceId === input.implementationEvidenceId,
+  );
+  if (!implementationEvidence)
+    throw new Error("Implementation evidence is not approval-bound");
+  const result = trustedImplementationResultSchema.parse(
+    JSON.parse(implementationEvidence.json),
+  );
   if (!approvalsEqual(publication.approval, approval))
     throw new Error("Publication embeds a different approval");
   if (publication.runId !== result.runId || approval.runId !== result.runId)
@@ -150,16 +174,11 @@ export async function publishTrustedImplementation(
   )
     throw new Error("Implementation patch binding does not match");
   if (
-    sha256(input.evidenceJson) !== input.evidenceBinding.sha256 ||
-    Buffer.byteLength(input.evidenceJson) !== input.evidenceBinding.size
-  )
-    throw new Error("Implementation evidence binding does not match");
-  if (
     !approvalMatches(approval, {
       runId: result.runId,
       baseCommit: result.baseCommit,
       patchSha256,
-      evidence: [input.evidenceBinding],
+      evidence: input.evidence.map((value) => value.binding),
     })
   )
     throw new Error("Exact approval does not match publication inputs");

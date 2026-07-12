@@ -66,6 +66,7 @@ function validRepositoryPath(value) {
     value.length <= 300 &&
     !value.startsWith("/") &&
     !value.includes("\\") &&
+    !/[?*[\]{}!]/.test(value) &&
     !value.split("/").includes("..") &&
     !value.includes("\0")
   );
