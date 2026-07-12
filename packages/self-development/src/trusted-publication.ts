@@ -25,6 +25,7 @@ export type TrustedPublicationInput = {
     binding: ExactApproval["evidence"][number];
   }>;
   implementationEvidenceId: string;
+  runRevision: number;
   approval: ExactApproval;
   publication: PublicationRequest;
   remote?: string;
@@ -134,6 +135,8 @@ export async function publishTrustedImplementation(
 ): Promise<TrustedPublicationResult> {
   const approval = exactApprovalSchema.parse(input.approval);
   const publication = publicationRequestSchema.parse(input.publication);
+  if (input.runRevision !== publication.expectedRevision)
+    throw new Error("Publication revision does not match durable run");
   if (input.evidence.length !== approval.evidence.length)
     throw new Error("Complete approval evidence is required");
   for (const [index, value] of input.evidence.entries()) {

@@ -194,6 +194,7 @@ describe("publishTrustedImplementation", () => {
           },
         ],
         implementationEvidenceId: value.evidenceBinding.evidenceId,
+        runRevision: value.publicationRequest.expectedRevision,
         approval: value.approval,
         publication: value.publicationRequest,
         authorName: "Roundhouse",
@@ -236,6 +237,24 @@ describe("publishTrustedImplementation", () => {
       publishTrustedImplementation({
         repositoryPath: value.publication,
         evidence: [
+          { json: value.evidenceJson, binding: value.evidenceBinding },
+          {
+            json: value.validationEvidenceJson,
+            binding: value.validationEvidenceBinding,
+          },
+        ],
+        implementationEvidenceId: value.evidenceBinding.evidenceId,
+        runRevision: value.publicationRequest.expectedRevision + 1,
+        approval: value.approval,
+        publication: value.publicationRequest,
+        authorName: "Roundhouse",
+        authorEmail: "roundhouse@example.test",
+      }),
+    ).rejects.toThrow("Publication revision does not match durable run");
+    await expect(
+      publishTrustedImplementation({
+        repositoryPath: value.publication,
+        evidence: [
           {
             json: `${value.evidenceJson} `,
             binding: value.evidenceBinding,
@@ -246,6 +265,7 @@ describe("publishTrustedImplementation", () => {
           },
         ],
         implementationEvidenceId: value.evidenceBinding.evidenceId,
+        runRevision: value.publicationRequest.expectedRevision,
         approval: value.approval,
         publication: value.publicationRequest,
         authorName: "Roundhouse",
@@ -266,6 +286,7 @@ describe("publishTrustedImplementation", () => {
           },
         ],
         implementationEvidenceId: value.evidenceBinding.evidenceId,
+        runRevision: value.publicationRequest.expectedRevision,
         approval: value.approval,
         publication: {
           ...value.publicationRequest,
@@ -303,6 +324,7 @@ describe("publishTrustedImplementation", () => {
           },
         ],
         implementationEvidenceId: binding.evidenceId,
+        runRevision: value.publicationRequest.expectedRevision,
         approval,
         publication: { ...value.publicationRequest, approval },
         authorName: "Roundhouse",
