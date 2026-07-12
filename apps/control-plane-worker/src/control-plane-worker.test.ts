@@ -752,15 +752,19 @@ describe("local control-plane Worker", () => {
     const { env, queued } = await runtime();
     const handler = createControlPlaneHandler();
     queued.failNext = true;
-    expect(
-      (
-        await handler.fetch!(
-          submission("outbox-recovery-01"),
-          env,
-          {} as ExecutionContext,
-        )
-      ).status,
-    ).toBe(500);
+    const failed = await handler.fetch!(
+      submission("outbox-recovery-01"),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(failed.status).toBe(500);
+    await expect(failed.json()).resolves.toEqual({
+      error: {
+        code: "internal_error",
+        message: "Internal server error",
+        detail: "simulated queue outage",
+      },
+    });
     const recovered = await handler.fetch!(
       submission("outbox-recovery-01"),
       env,
