@@ -350,8 +350,8 @@ async function implement(value) {
         USERPROFILE: "/home/runner",
       },
     });
+    assertCompleteAgentOutput(result);
     agent = parseCodexEvents(result.stdout, request.maxOutputBytes);
-    if (result.timedOut) throw new Error("agent_timeout");
     if (result.exitCode !== 0 || agent.outcome !== "succeeded")
       throw new Error("agent_failed");
   } finally {
@@ -415,6 +415,11 @@ async function implement(value) {
     agentDurationMs: trusted.agentDurationMs,
     credentialRemoved: true,
   };
+}
+
+export function assertCompleteAgentOutput(result) {
+  if (result.timedOut) throw new Error("agent_timeout");
+  if (result.outputTruncated) throw new Error("agent_output_truncated");
 }
 
 function skippedValidation(name, commandName) {
