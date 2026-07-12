@@ -113,11 +113,13 @@ export async function idempotentMutation<T>(
       .run();
     throw error;
   }
-  await env.DB.prepare(
+  const completed = await env.DB.prepare(
     "UPDATE operator_mutations SET status = 'completed', response_json = ?, completed_at = ? WHERE idempotency_key = ? AND status = 'pending'",
   )
     .bind(JSON.stringify(value), new Date().toISOString(), input.key)
     .run();
+  if ((completed.meta.changes ?? 0) !== 1)
+    throw new Error("Operator mutation receipt could not be completed");
   return { value, replayed: false };
 }
 

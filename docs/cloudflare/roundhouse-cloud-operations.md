@@ -24,7 +24,8 @@ active-alert counts with `dryRun: true` and an empty deletion list.
 ## Development CLI
 
 With a short-lived Access application JWT available only in the shell environment,
-the CLI sends it through the `cf-access-token` header:
+the CLI presents it to Cloudflare Access through `cf-access-token`. After Access
+validates it, the proxy injects `cf-access-jwt-assertion` for the Worker authorizer:
 
 ```zsh
 export ROUNDHOUSE_ORIGIN='https://roundhouse-dev.rm-rf.rip'
