@@ -251,17 +251,22 @@ export async function publishTrustedImplementation(
     await restoreBase(input.repositoryPath, result.baseCommit);
     throw error;
   }
-  await git(input.repositoryPath, [
-    "-c",
-    `user.name=${input.authorName}`,
-    "-c",
-    `user.email=${input.authorEmail}`,
-    "commit",
-    "--no-verify",
-    "--no-gpg-sign",
-    "-m",
-    publication.commitMessage,
-  ]);
+  try {
+    await git(input.repositoryPath, [
+      "-c",
+      `user.name=${input.authorName}`,
+      "-c",
+      `user.email=${input.authorEmail}`,
+      "commit",
+      "--no-verify",
+      "--no-gpg-sign",
+      "-m",
+      publication.commitMessage,
+    ]);
+  } catch (error) {
+    await restoreBase(input.repositoryPath, result.baseCommit);
+    throw error;
+  }
   const commit = await git(input.repositoryPath, ["rev-parse", "HEAD"]);
   const committedPatch = await git(
     input.repositoryPath,
