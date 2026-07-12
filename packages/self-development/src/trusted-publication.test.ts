@@ -279,4 +279,35 @@ describe("publishTrustedImplementation", () => {
       }),
     ).rejects.toThrow("different approval");
   });
+
+  it("classifies malformed approval-bound implementation evidence", async () => {
+    const value = await fixture();
+    const invalidJson = "{";
+    const binding = {
+      ...value.evidenceBinding,
+      sha256: hash(invalidJson),
+      size: Buffer.byteLength(invalidJson),
+    };
+    const approval = {
+      ...value.approval,
+      evidence: [binding, value.validationEvidenceBinding],
+    };
+    await expect(
+      publishTrustedImplementation({
+        repositoryPath: value.publication,
+        evidence: [
+          { json: invalidJson, binding },
+          {
+            json: value.validationEvidenceJson,
+            binding: value.validationEvidenceBinding,
+          },
+        ],
+        implementationEvidenceId: binding.evidenceId,
+        approval,
+        publication: { ...value.publicationRequest, approval },
+        authorName: "Roundhouse",
+        authorEmail: "roundhouse@example.test",
+      }),
+    ).rejects.toThrow("Implementation evidence is not valid JSON");
+  });
 });

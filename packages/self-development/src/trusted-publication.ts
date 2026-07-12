@@ -154,9 +154,13 @@ export async function publishTrustedImplementation(
   );
   if (!implementationEvidence)
     throw new Error("Implementation evidence is not approval-bound");
-  const result = trustedImplementationResultSchema.parse(
-    JSON.parse(implementationEvidence.json),
-  );
+  let implementationValue: unknown;
+  try {
+    implementationValue = JSON.parse(implementationEvidence.json);
+  } catch {
+    throw new Error("Implementation evidence is not valid JSON");
+  }
+  const result = trustedImplementationResultSchema.parse(implementationValue);
   if (!approvalsEqual(publication.approval, approval))
     throw new Error("Publication embeds a different approval");
   if (publication.runId !== result.runId || approval.runId !== result.runId)
@@ -225,6 +229,7 @@ export async function publishTrustedImplementation(
       throw new Error("Staged patch does not match exact approval");
   } catch (error) {
     await git(input.repositoryPath, ["reset", "--hard", result.baseCommit]);
+    await git(input.repositoryPath, ["clean", "-fd"]);
     throw error;
   }
   await git(input.repositoryPath, ["config", "user.name", input.authorName]);
