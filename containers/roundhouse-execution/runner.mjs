@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { spawn } from "node:child_process";
-import { once } from "node:events";
 import { createServer } from "node:http";
 import { connect } from "node:net";
 import { rm } from "node:fs/promises";
@@ -57,7 +56,7 @@ function validate(value) {
   return value;
 }
 
-async function command(executable, args, options = {}) {
+export async function command(executable, args, options = {}) {
   const started = Date.now();
   const child = spawn(executable, args, {
     cwd: options.cwd ?? workspace,
@@ -100,8 +99,17 @@ async function command(executable, args, options = {}) {
         child.kill("SIGKILL");
       }, options.timeoutMs)
     : undefined;
-  const [exitCode] = await once(child, "close");
-  if (timer) clearTimeout(timer);
+  const exitCode = await new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (callback) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      callback();
+    };
+    child.once("error", (error) => finish(() => reject(error)));
+    child.once("close", (code) => finish(() => resolve(code)));
+  });
   return {
     exitCode,
     timedOut,
@@ -249,18 +257,19 @@ async function execute(value) {
   };
 }
 
-createServer(async (request, response) => {
-  try {
-    if (request.method === "GET" && request.url === "/ping")
-      return json(response, 200, { ok: true });
-    if (request.method === "POST" && request.url === "/prepare")
-      return json(response, 200, await prepare(await body(request)));
-    if (request.method === "POST" && request.url === "/execute")
-      return json(response, 200, await execute(await body(request)));
-    return json(response, 404, { error: "not_found" });
-  } catch (error) {
-    return json(response, 400, {
-      error: error instanceof Error ? error.message : "runner_error",
-    });
-  }
-}).listen(8080, "0.0.0.0");
+if (import.meta.main)
+  createServer(async (request, response) => {
+    try {
+      if (request.method === "GET" && request.url === "/ping")
+        return json(response, 200, { ok: true });
+      if (request.method === "POST" && request.url === "/prepare")
+        return json(response, 200, await prepare(await body(request)));
+      if (request.method === "POST" && request.url === "/execute")
+        return json(response, 200, await execute(await body(request)));
+      return json(response, 404, { error: "not_found" });
+    } catch (error) {
+      return json(response, 400, {
+        error: error instanceof Error ? error.message : "runner_error",
+      });
+    }
+  }).listen(8080, "0.0.0.0");
