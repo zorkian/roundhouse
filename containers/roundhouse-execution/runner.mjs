@@ -385,13 +385,18 @@ async function implement(value) {
     throw new Error("invalid_changed_path");
   if (!files.every((path) => pathAllowed(path, request.allowedPaths)))
     throw new Error("changed_path_not_allowed");
-  const intent = await command("git", [
-    "add",
-    "--intent-to-add",
-    "--",
-    ...files,
-  ]);
-  if (intent.exitCode !== 0) throw new Error("patch_inventory_failed");
+  const intentPaths = files.filter((path) =>
+    existsSync(`${workspace}/${path}`),
+  );
+  if (intentPaths.length > 0) {
+    const intent = await command("git", [
+      "add",
+      "--intent-to-add",
+      "--",
+      ...intentPaths,
+    ]);
+    if (intent.exitCode !== 0) throw new Error("patch_inventory_failed");
+  }
   const diff = await command(
     "git",
     ["diff", "--binary", "--full-index", "--no-ext-diff", "--", ...files],

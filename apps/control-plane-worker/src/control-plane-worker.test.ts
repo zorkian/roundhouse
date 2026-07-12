@@ -265,6 +265,19 @@ describe("local control-plane Worker", () => {
       {} as ExecutionContext,
     );
     expect(response.status).toBe(400);
+    const invalidBranch = structuredClone(task);
+    invalidBranch.allowedPaths = [
+      "docs/dogfood/trusted-self-development-loop.md",
+    ];
+    expect(
+      (
+        await handler.fetch!(
+          submission("trusted-branch-boundary-01", invalidBranch),
+          env,
+          {} as ExecutionContext,
+        )
+      ).status,
+    ).toBe(400);
   });
 
   it("serves exact implementation evidence and rejects binding tampering", async () => {

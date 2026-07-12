@@ -162,6 +162,10 @@ export const exactApprovalSchema = z.object({
 
 export type ExactApproval = z.infer<typeof exactApprovalSchema>;
 
+export const dogfoodPublicationBranchSchema = z
+  .string()
+  .regex(/^codex\/dogfood-[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$/);
+
 export const publicationRequestSchema = z.object({
   schemaVersion: z.literal(1),
   runId: runIdentity,
@@ -169,7 +173,7 @@ export const publicationRequestSchema = z.object({
   approval: exactApprovalSchema,
   repositoryUrl: z.literal("https://github.com/zorkian/roundhouse.git"),
   baseCommit: commit,
-  branch: z.string().regex(/^codex\/dogfood-[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$/),
+  branch: dogfoodPublicationBranchSchema,
   commitMessage: z
     .string()
     .min(1)

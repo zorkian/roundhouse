@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import {
+  dogfoodPublicationBranchSchema,
   repositoryRelativePathSchema,
   trustedImplementationResultSchema,
   consumeRunDelivery,
@@ -121,11 +122,13 @@ async function submit(
     request.headers.get("idempotency-key"),
   );
   const input = submitRunSchema.parse(await requestBody(request));
-  if (env.EXECUTION_MODE === "cloudflare-trusted-codex")
+  if (env.EXECUTION_MODE === "cloudflare-trusted-codex") {
     z.array(repositoryRelativePathSchema)
       .min(1)
       .max(50)
       .parse(input.task.allowedPaths);
+    dogfoodPublicationBranchSchema.parse(input.task.publication.branch);
+  }
   if (
     input.task.repositoryPath !== env.ALLOWED_REPOSITORY_PATH ||
     input.task.publication.remoteUrl !== env.ALLOWED_REMOTE_URL

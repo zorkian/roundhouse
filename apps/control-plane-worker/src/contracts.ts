@@ -3,6 +3,7 @@
 
 import {
   approvalEvidenceBindingSchema,
+  dogfoodPublicationBranchSchema,
   selfDevelopmentTaskSchema,
 } from "@roundhouse/self-development/cloudflare";
 import { z } from "zod";
@@ -31,7 +32,7 @@ export const approveRunSchema = z.object({
 export const recordPublicationSchema = z.object({
   schemaVersion: z.literal(1),
   expectedRevision: z.number().int().positive(),
-  branch: z.string().regex(/^codex\/dogfood-[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$/),
+  branch: dogfoodPublicationBranchSchema,
   commit: z.string().regex(/^[a-f0-9]{40}$/),
   remoteUrl: z.literal("https://github.com/zorkian/roundhouse.git"),
   verifiedAt: z.iso.datetime(),
