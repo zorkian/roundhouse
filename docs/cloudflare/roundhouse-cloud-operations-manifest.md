@@ -35,8 +35,9 @@ billing setting changes.
    `recovery_cycles`, plus non-destructive indexes.
 2. Deploy the existing Worker with the repository configuration and one cron
    trigger: `*/5 * * * *`.
-3. Deploy the existing Container image only if its source or build context has
-   changed. This milestone does not currently require an image change.
+3. Wrangler may mechanically rebuild the existing Container image from its
+   unchanged source while deploying the owning Worker. No Container source,
+   name, class, instance type, maximum instance count, or rollout policy changes.
 
 ## Retention and rollback
 
