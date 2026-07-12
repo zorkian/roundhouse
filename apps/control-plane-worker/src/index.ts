@@ -212,21 +212,38 @@ async function cancelRun(
     active?.status === "failed" &&
     active.classification === "cancelled" &&
     env.EXECUTION_CONTAINERS
-  )
-    await env.EXECUTION_CONTAINERS.getByName(active.attemptId)
-      .destroy()
-      .catch((error: unknown) => {
-        const reason = (
-          error instanceof Error ? error.message : "unknown error"
-        )
-          .replace(/https?:\/\/\S+/g, "[url]")
-          .replace(/\/(?:[^\s/:]+\/)+[^\s:]+/g, "[path]")
-          .slice(0, 160);
-        console.warn("Cloudflare Container cancellation teardown failed", {
-          attemptId: active.attemptId,
-          reason,
-        });
+  ) {
+    try {
+      await env.EXECUTION_CONTAINERS.getByName(active.attemptId).destroy();
+    } catch (error) {
+      const reason = (error instanceof Error ? error.message : "unknown error")
+        .replace(/https?:\/\/\S+/g, "[url]")
+        .replace(/\/(?:[^\s/:]+\/)+[^\s:]+/g, "[path]")
+        .slice(0, 160);
+      console.warn("Cloudflare Container cancellation teardown failed", {
+        attemptId: active.attemptId,
+        reason,
       });
+      try {
+        await recordAlert(env, {
+          key: `container_cleanup_failed:${runId}:${active.attemptId}`,
+          kind: "container_cleanup_failed",
+          severity: "error",
+          runId,
+          detail: { attemptId: active.attemptId, reason },
+          now: new Date(),
+        });
+      } catch (alertError) {
+        console.warn("Container cleanup alert persistence failed", {
+          runId,
+          reason:
+            alertError instanceof Error
+              ? alertError.message.slice(0, 160)
+              : "unknown error",
+        });
+      }
+    }
+  }
   return json(inspectRun(cancelled));
 }
 

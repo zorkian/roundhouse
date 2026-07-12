@@ -237,7 +237,7 @@ export async function runRecoveryCycle(
   let alertsRecorded = 0;
   const deliveredRunIds = new Set<string>();
   const pending = await env.DB.prepare(
-    "SELECT idempotency_key, run_id, delivery_id FROM control_plane_submissions WHERE delivery_state = 'pending' LIMIT 50",
+    "SELECT idempotency_key, run_id, delivery_id FROM control_plane_submissions WHERE delivery_state = 'pending' ORDER BY created_at ASC LIMIT 50",
   ).all<{ idempotency_key: string; run_id: string; delivery_id: string }>();
   for (const row of pending.results) {
     const run = await env.DB.prepare(

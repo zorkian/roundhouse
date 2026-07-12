@@ -707,6 +707,59 @@ describe("local control-plane Worker", () => {
     expect(durable.events.at(-1)?.type).toBe("run.cancelled");
   });
 
+  it("durably alerts when cancellation cannot tear down a Container", async () => {
+    const { env } = await runtime();
+    const handler = createControlPlaneHandler();
+    const submitted = await handler.fetch!(
+      submission("cancel-cleanup-alert-01"),
+      env,
+      {} as ExecutionContext,
+    );
+    const { runId } = (await submitted.json()) as { runId: string };
+    const jobs = new D1JobStore(env.DB);
+    const now = new Date("2026-07-12T18:00:00Z");
+    const claim = await jobs.claim(runId, "container-worker", now, 300_000, 1);
+    await jobs.startAttempt(runId, claim!.token, "prepare", now);
+    const running = await jobs.read(runId);
+    env.EXECUTION_MODE = "cloudflare-container";
+    env.EXECUTION_CONTAINERS = {
+      getByName: () => ({
+        destroy: async () => {
+          throw new Error("teardown failed at /sensitive/local/path");
+        },
+      }),
+    } as unknown as ControlPlaneEnv["EXECUTION_CONTAINERS"];
+
+    const cancelled = await handler.fetch!(
+      request(`/v1/runs/${runId}/cancel`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          schemaVersion: 1,
+          expectedRevision: running.revision,
+        }),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(cancelled.status).toBe(200);
+    const alerts = await handler.fetch!(
+      request("/v1/operations/alerts"),
+      env,
+      {} as ExecutionContext,
+    );
+    const body = (await alerts.json()) as {
+      alerts: Array<Record<string, unknown>>;
+    };
+    expect(body.alerts).toHaveLength(1);
+    expect(body.alerts[0]).toMatchObject({
+      kind: "container_cleanup_failed",
+      severity: "error",
+      runId,
+    });
+    expect(JSON.stringify(body)).not.toContain("/sensitive/local/path");
+  });
+
   it("acks malformed messages and durably records terminal dispatch failure", async () => {
     const { env, queued } = await runtime();
     const handler = createControlPlaneHandler();
