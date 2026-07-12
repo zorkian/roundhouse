@@ -3,7 +3,7 @@
 
 # GitHub-integrated self-development POC manifest
 
-Status: GitHub App configuration verified; Cloudflare changes unapplied.
+Status: applied and demonstrated on 2026-07-12.
 
 This is the exact external mutation boundary authorized for the
 GitHub-integrated self-development POC. All committed values are safe for
@@ -68,3 +68,9 @@ and a draft pull request. Existing refs are never overwritten.
 Rollback is a Worker version rollback and removal of the new secret in a later
 reviewed operation. Additive tables, retained evidence, the dogfood issue, and
 the draft pull request remain inspectable. No destructive rollback is applied.
+
+The completed deployment used Worker version
+`3a562209-0947-411e-9d57-c09060ccfb16` and execution image digest
+`sha256:3281c0276bd8079670698ed1fdfc729522214b72af3986d84f0526d6e77c1c0d`.
+The complete demonstration transcript and immutable bindings are recorded in
+`roundhouse-github-integrated-poc.md`.
