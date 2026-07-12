@@ -235,6 +235,7 @@ export async function runRecoveryCycle(
   let repairedSubmissions = 0;
   let requeuedRuns = 0;
   let alertsRecorded = 0;
+  const deliveredRunIds = new Set<string>();
   const pending = await env.DB.prepare(
     "SELECT idempotency_key, run_id, delivery_id FROM control_plane_submissions WHERE delivery_state = 'pending' LIMIT 50",
   ).all<{ idempotency_key: string; run_id: string; delivery_id: string }>();
@@ -268,11 +269,13 @@ export async function runRecoveryCycle(
       .bind(now.toISOString(), row.idempotency_key)
       .run();
     repairedSubmissions += 1;
+    deliveredRunIds.add(row.run_id);
   }
   const rows = await env.DB.prepare(
     "SELECT run_id, revision, payload FROM self_development_runs WHERE state NOT IN ('completed', 'cancelled', 'failed', 'awaiting_approval', 'awaiting_publication') LIMIT 100",
   ).all<{ run_id: string; revision: number; payload: string }>();
   for (const row of rows.results) {
+    if (deliveredRunIds.has(row.run_id)) continue;
     let run: SelfDevelopmentRun;
     try {
       run = selfDevelopmentRunSchema.parse(JSON.parse(row.payload));

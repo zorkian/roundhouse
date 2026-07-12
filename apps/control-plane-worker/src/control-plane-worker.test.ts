@@ -610,9 +610,7 @@ describe("local control-plane Worker", () => {
       task,
       new Date(),
     );
-    expect(queued.messages).toHaveLength(2);
     expect(queued.messages).toEqual([
-      expect.objectContaining({ runId: reservation.row.run_id }),
       expect.objectContaining({ runId: reservation.row.run_id }),
     ]);
     expect(reservation.row.delivery_state).toBe("sent");
