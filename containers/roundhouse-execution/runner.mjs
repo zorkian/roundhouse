@@ -377,7 +377,9 @@ async function implement(value) {
     assertCompleteAgentOutput(result);
     agent = parseCodexEvents(result.stdout, request.maxOutputBytes);
     if (result.exitCode !== 0 || agent.outcome !== "succeeded")
-      throw new Error("agent_failed");
+      throw new Error(
+        `agent_failed: ${boundedAgentFailure(result.stderr, credentialSecrets)}`,
+      );
   } finally {
     if (request.scenario !== "credential-cleanup-failure")
       await rm(codexHome, { recursive: true, force: true });
@@ -455,6 +457,14 @@ export function assertCompleteAgentOutput(result) {
 
 export function withoutRuntimeCredential(state) {
   return { ...state, credentialInstalled: false, secrets: [] };
+}
+
+export function boundedAgentFailure(stderr, secrets) {
+  let value = typeof stderr === "string" ? stderr : "";
+  for (const secret of secrets)
+    if (secret) value = value.split(secret).join("[redacted]");
+  value = value.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
+  return (value || "no stderr").slice(-1_000);
 }
 
 function skippedValidation(name, commandName) {

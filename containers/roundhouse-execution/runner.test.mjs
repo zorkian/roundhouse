@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   assertCompleteAgentOutput,
+  boundedAgentFailure,
   changedPaths,
   command,
   pathAllowed,
@@ -72,6 +73,19 @@ describe("trusted agent output boundary", () => {
       "actual-refresh-token",
       "nested-credential-value",
     ]);
+  });
+
+  it("bounds and redacts agent failure diagnostics", () => {
+    expect(
+      boundedAgentFailure(`prefix\nactual-access-token\t${"x".repeat(1_100)}`, [
+        "actual-access-token",
+      ]),
+    ).toBe("x".repeat(1_000));
+    expect(
+      boundedAgentFailure("credential=actual-access-token", [
+        "actual-access-token",
+      ]),
+    ).toBe("credential=[redacted]");
   });
 
   it("rejects control characters in repository paths", () => {
