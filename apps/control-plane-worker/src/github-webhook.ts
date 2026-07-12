@@ -185,6 +185,8 @@ export async function verifyWebhookRequest(
 ): Promise<VerifiedWebhook> {
   if (!env.ROUNDHOUSE_GITHUB_WEBHOOK_SECRET)
     throw new GitHubWebhookError(503, "webhook_not_configured");
+  if (!env.GITHUB_INSTALLATION_ID)
+    throw new GitHubWebhookError(503, "installation_not_configured");
   const deliveryId = request.headers.get("x-github-delivery") ?? "";
   const eventName = request.headers.get("x-github-event") ?? "";
   if (!/^[a-fA-F0-9-]{8,64}$/.test(deliveryId))
@@ -310,12 +312,12 @@ export async function reserveWebhookDelivery(
   )
     throw new GitHubWebhookError(409, "delivery_conflict");
   if (row.status === "failed") {
-    await env.DB.prepare(
+    const reclaimed = await env.DB.prepare(
       "UPDATE github_webhook_deliveries SET status = 'received', result_json = NULL, completed_at = NULL WHERE delivery_id = ? AND status = 'failed'",
     )
       .bind(value.deliveryId)
       .run();
-    return "new";
+    return (reclaimed.meta.changes ?? 0) === 1 ? "new" : "replay";
   }
   return "replay";
 }
@@ -453,8 +455,8 @@ export async function exactPublishedCheckTargets(
   }>
 > {
   const publications = await env.DB.prepare(
-    "SELECT run_id, result_json FROM github_publications WHERE status = 'published' AND result_json IS NOT NULL",
-  ).all<{ run_id: string; result_json: string }>();
+    "SELECT publications.run_id, publications.result_json, bindings.issue_number FROM github_publications AS publications INNER JOIN github_issue_runs AS bindings ON bindings.run_id = publications.run_id WHERE publications.status = 'published' AND publications.result_json IS NOT NULL",
+  ).all<{ run_id: string; result_json: string; issue_number: number }>();
   const result: Array<{
     runId: string;
     issueNumber: number;
@@ -476,12 +478,6 @@ export async function exactPublishedCheckTargets(
       typeof publication.commit !== "string"
     )
       continue;
-    const binding = await env.DB.prepare(
-      "SELECT issue_number FROM github_issue_runs WHERE run_id = ?",
-    )
-      .bind(row.run_id)
-      .first<{ issue_number: number }>();
-    if (!binding) continue;
     for (const observation of observations)
       if (
         observation.pullRequestNumber === publication.pullRequestNumber &&
@@ -489,7 +485,7 @@ export async function exactPublishedCheckTargets(
       )
         result.push({
           runId: row.run_id,
-          issueNumber: binding.issue_number,
+          issueNumber: row.issue_number,
           ...observation,
         });
   }

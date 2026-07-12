@@ -1200,7 +1200,14 @@ export function createControlPlaneHandler(
                 run.task.source.issueNumber,
                 run.runId,
               );
-              await flushGitHubComments(env);
+              try {
+                await flushGitHubComments(env);
+              } catch (error) {
+                console.warn("GitHub Queue status delivery deferred", {
+                  runId: run.runId,
+                  reason: redactedReason(error),
+                });
+              }
             }
           },
         );

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { ControlPlaneEnv } from "./environment.js";
 import {
   bindIssueRun,
+  completeWebhookDelivery,
   enqueueComment,
   exactPublishedCheckTargets,
   githubNativeOperatorMigration,
@@ -129,6 +130,13 @@ describe("GitHub-native operator webhook", () => {
     const verified = await verifyWebhookRequest(validRequest, env);
     await expect(reserveWebhookDelivery(env, verified)).resolves.toBe("new");
     await expect(reserveWebhookDelivery(env, verified)).resolves.toBe("replay");
+    await completeWebhookDelivery(env, verified.deliveryId, "failed", {});
+    await expect(
+      Promise.all([
+        reserveWebhookDelivery(env, verified),
+        reserveWebhookDelivery(env, verified),
+      ]),
+    ).resolves.toEqual(expect.arrayContaining(["new", "replay"]));
 
     const wrong = JSON.stringify({
       ...value,
@@ -142,6 +150,21 @@ describe("GitHub-native operator webhook", () => {
     await expect(verifyWebhookRequest(wrongRequest, env)).rejects.toMatchObject(
       { status: 403, code: "unenrolled_source" },
     );
+
+    const missingConfigRequest = request(body, "12345678-abcf");
+    missingConfigRequest.headers.set(
+      "x-hub-signature-256",
+      await signature(body, "webhook-test-secret"),
+    );
+    await expect(
+      verifyWebhookRequest(missingConfigRequest, {
+        ...env,
+        GITHUB_INSTALLATION_ID: undefined,
+      }),
+    ).rejects.toMatchObject({
+      status: 503,
+      code: "installation_not_configured",
+    });
   });
 
   it("persists issue bindings and idempotent comment intents", async () => {
