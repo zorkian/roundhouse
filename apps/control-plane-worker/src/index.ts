@@ -6,7 +6,7 @@ import {
   D1JobStore,
   DispatchingStageExecutor,
   ResumableCoordinator,
-} from "@roundhouse/self-development";
+} from "@roundhouse/self-development/cloudflare";
 import { z } from "zod";
 
 import { LocalBearerAuthorizer, type RequestAuthorizer } from "./auth.js";

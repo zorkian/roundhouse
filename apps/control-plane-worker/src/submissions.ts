@@ -4,7 +4,7 @@
 import type {
   D1DatabasePort,
   SelfDevelopmentTask,
-} from "@roundhouse/self-development";
+} from "@roundhouse/self-development/cloudflare";
 
 type SubmissionRow = {
   idempotency_key: string;

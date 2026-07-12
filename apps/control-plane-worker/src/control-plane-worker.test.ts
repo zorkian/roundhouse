@@ -6,7 +6,7 @@ import {
   d1JobStoreMigration,
   type RunDelivery,
   type SelfDevelopmentTask,
-} from "@roundhouse/self-development";
+} from "@roundhouse/self-development/cloudflare";
 import { Miniflare } from "miniflare";
 import { afterEach, describe, expect, it } from "vitest";
 

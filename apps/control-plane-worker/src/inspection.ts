@@ -1,7 +1,7 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import type { SelfDevelopmentRun } from "@roundhouse/self-development";
+import type { SelfDevelopmentRun } from "@roundhouse/self-development/cloudflare";
 
 export function inspectRun(run: SelfDevelopmentRun): Record<string, unknown> {
   return {

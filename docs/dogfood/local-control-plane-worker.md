@@ -55,3 +55,27 @@ The automated evidence is the assertions in
 `apps/control-plane-worker/src/control-plane-worker.test.ts`. A full repository
 gate after the first implementation slice passed 23 test files and 76 tests;
 the final gate is recorded in the pull request.
+
+## Live Workerd transcript
+
+The initial live bundle check correctly failed because the broad package barrel
+included Node-only execution modules. The Worker was changed to import the
+dedicated Cloudflare-safe entrypoint rather than enabling broad Node
+compatibility. A second `wrangler dev --local` run produced:
+
+```text
+GET /health                                             200
+GET /ready (temporary local bearer token)               200
+POST /v1/runs                                           201
+run ID                 run_1fa3d35ea5428c745f3eda48617d52372923be60
+local Queue consumer state                              workspace_ready
+durable revision                                        5
+prepare attempts                                        1 succeeded
+```
+
+The live inspection response contained the run/task IDs, state, timestamps,
+attempt status, and safe event envelope only. It did not contain instructions,
+repository or publication paths, lease material, workspace references, event
+detail, or raw errors. The temporary token existed only on the local Wrangler
+command line. The server and local `.wrangler` state were terminated and removed
+after the demonstration.

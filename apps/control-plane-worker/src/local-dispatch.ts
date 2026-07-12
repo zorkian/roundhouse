@@ -5,8 +5,8 @@ import type {
   ExecutionDispatcher,
   ExecutionDispatchRequest,
   StageResult,
-} from "@roundhouse/self-development";
-import { StageFailure } from "@roundhouse/self-development";
+} from "@roundhouse/self-development/cloudflare";
+import { StageFailure } from "@roundhouse/self-development/cloudflare";
 
 const nextState: Record<
   ExecutionDispatchRequest["stage"],

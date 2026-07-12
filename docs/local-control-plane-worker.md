@@ -15,6 +15,11 @@ around the platform-neutral self-development coordinator. The Worker owns HTTP
 and Queue protocol concerns. `D1JobStore`, `ResumableCoordinator`, and the
 execution-dispatch contract remain independent of Workers.
 
+The Worker imports the dedicated `@roundhouse/self-development/cloudflare`
+entrypoint. That entrypoint excludes Node-only workspace, process, agent, and
+publication modules from the Workerd bundle; the control plane does not enable
+broad Node compatibility to mask an unsafe dependency boundary.
+
 ```text
 authenticated HTTP request
   -> schema and enrolled-repository policy

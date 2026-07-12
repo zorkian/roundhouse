@@ -1,7 +1,7 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import { selfDevelopmentTaskSchema } from "@roundhouse/self-development";
+import { selfDevelopmentTaskSchema } from "@roundhouse/self-development/cloudflare";
 import { z } from "zod";
 
 export const submitRunSchema = z.object({
