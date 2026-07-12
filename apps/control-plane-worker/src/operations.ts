@@ -272,7 +272,7 @@ export async function runRecoveryCycle(
     deliveredRunIds.add(row.run_id);
   }
   const rows = await env.DB.prepare(
-    "SELECT run_id, revision, payload FROM self_development_runs WHERE state NOT IN ('completed', 'cancelled', 'failed', 'awaiting_approval', 'awaiting_publication') LIMIT 100",
+    "SELECT run_id, revision, payload FROM self_development_runs WHERE state NOT IN ('completed', 'cancelled', 'failed', 'awaiting_approval', 'awaiting_publication') ORDER BY updated_at ASC LIMIT 100",
   ).all<{ run_id: string; revision: number; payload: string }>();
   for (const row of rows.results) {
     if (deliveredRunIds.has(row.run_id)) continue;
