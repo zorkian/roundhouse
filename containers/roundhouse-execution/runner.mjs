@@ -371,7 +371,7 @@ async function implement(value) {
       env: {
         CODEX_HOME: codexHome,
         HOME: "/home/runner",
-        SSL_CERT_FILE: interceptedCa,
+        ...(existsSync(interceptedCa) ? { SSL_CERT_FILE: interceptedCa } : {}),
         USERPROFILE: "/home/runner",
       },
     });
