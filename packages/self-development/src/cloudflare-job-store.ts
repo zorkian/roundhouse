@@ -354,9 +354,11 @@ export class D1JobStore implements JobStore {
             }
           : value,
       );
+      const { evidence, ...otherUpdates } = updates;
       const next = {
         ...run,
-        ...updates,
+        ...otherUpdates,
+        evidence: evidence ? [...run.evidence, ...evidence] : run.evidence,
         state,
         updatedAt: now.toISOString(),
         attempts,

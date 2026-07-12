@@ -213,5 +213,77 @@ export function jobStoreContract(
         evidence(2),
       ]);
     });
+
+    it("preserves failed-attempt evidence when a later attempt succeeds", async () => {
+      const store = await createStore();
+      const start = new Date("2026-07-12T00:00:00Z");
+      const evidence = (number: number) => ({
+        schemaVersion: 1 as const,
+        evidenceId: `mixed-evidence-${number}`,
+        attemptId: `run_contract_mixed_evidence-prepare-${number}`,
+        objectKey: `runs/run_contract_mixed_evidence/attempts/${number}.json`,
+        sha256: String(number).repeat(64),
+        size: number,
+        mediaType: "application/json" as const,
+        createdAt: new Date(start.getTime() + number).toISOString(),
+      });
+      await store.submit("run_contract_mixed_evidence", contractTask, start);
+      const first = await store.claim(
+        "run_contract_mixed_evidence",
+        "worker-a",
+        start,
+        10_000,
+        1,
+      );
+      await store.startAttempt(
+        "run_contract_mixed_evidence",
+        first!.token,
+        "prepare",
+        start,
+      );
+      await store.failAttempt(
+        "run_contract_mixed_evidence",
+        first!.token,
+        "prepare",
+        {
+          retryable: true,
+          classification: "evidence_test",
+          error: "first",
+          evidence: [evidence(1)],
+        },
+        false,
+        new Date(start.getTime() + 1),
+      );
+      await store.release(
+        "run_contract_mixed_evidence",
+        first!.token,
+        new Date(start.getTime() + 2),
+      );
+      const second = await store.claim(
+        "run_contract_mixed_evidence",
+        "worker-b",
+        new Date(start.getTime() + 3),
+        10_000,
+      );
+      await store.startAttempt(
+        "run_contract_mixed_evidence",
+        second!.token,
+        "prepare",
+        new Date(start.getTime() + 3),
+      );
+      await store.completeAttempt(
+        "run_contract_mixed_evidence",
+        second!.token,
+        "prepare",
+        "awaiting_approval",
+        {},
+        { evidence: [evidence(2)] },
+        new Date(start.getTime() + 4),
+      );
+
+      expect(
+        (await store.read("run_contract_mixed_evidence")).evidence,
+      ).toEqual([evidence(1), evidence(2)]);
+    });
   });
 }

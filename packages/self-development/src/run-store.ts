@@ -224,9 +224,13 @@ export class FileRunStore implements JobStore {
       const current = await this.read(runId);
       if (!(transitions[current.state] ?? []).includes(state))
         throw new Error(`Invalid run transition: ${current.state} -> ${state}`);
+      const { evidence, ...otherUpdates } = updates;
       const run = selfDevelopmentRunSchema.parse({
         ...current,
-        ...updates,
+        ...otherUpdates,
+        evidence: evidence
+          ? [...current.evidence, ...evidence]
+          : current.evidence,
         revision: current.revision + 1,
         state,
         updatedAt: now,
@@ -422,9 +426,11 @@ export class FileRunStore implements JobStore {
             }
           : attempt,
       );
+      const { evidence, ...otherUpdates } = updates;
       return this.replace({
         ...run,
-        ...updates,
+        ...otherUpdates,
+        evidence: evidence ? [...run.evidence, ...evidence] : run.evidence,
         state,
         updatedAt: now.toISOString(),
         attempts,
