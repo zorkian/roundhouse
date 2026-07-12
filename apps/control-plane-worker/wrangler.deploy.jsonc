@@ -16,6 +16,8 @@
     "EXECUTION_MODE": "cloudflare-trusted-codex",
     "EXECUTION_SCENARIO": "success",
     "TRUSTED_EXECUTION_SCENARIO": "success",
+    "GITHUB_APP_ID": "4281837",
+    "GITHUB_INSTALLATION_ID": "146147681",
     "ALLOWED_REPOSITORY_PATH": "/workspace/roundhouse",
     "ALLOWED_REMOTE_URL": "https://github.com/zorkian/roundhouse.git",
   },

@@ -31,9 +31,14 @@ const runCommands = new Set([
   "retry",
   "approve",
   "publish",
+  "github-publish",
 ]);
 if (command && runCommands.has(command) && !target) {
   console.error(`${command} requires a run id`);
+  process.exit(2);
+}
+if (command === "issue" && !/^[1-9][0-9]*$/.test(target ?? "")) {
+  console.error("issue requires a positive issue number");
   process.exit(2);
 }
 
@@ -48,6 +53,11 @@ const routes = {
   retry: { method: "POST", path: `/v1/runs/${target}/retry` },
   approve: { method: "POST", path: `/v1/runs/${target}/approval` },
   publish: { method: "POST", path: `/v1/runs/${target}/publication` },
+  issue: { method: "POST", path: `/v1/github/issues/${target}/runs` },
+  "github-publish": {
+    method: "POST",
+    path: `/v1/runs/${target}/github-publication`,
+  },
   recover: { method: "POST", path: "/v1/operations/recover" },
 };
 const route = routes[command];

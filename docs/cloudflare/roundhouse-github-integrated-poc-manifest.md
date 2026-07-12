@@ -3,7 +3,7 @@
 
 # GitHub-integrated self-development POC manifest
 
-Status: proposed and unapplied.
+Status: GitHub App configuration verified; Cloudflare changes unapplied.
 
 This is the exact external mutation boundary authorized for the
 GitHub-integrated self-development POC. All committed values are safe for
@@ -20,6 +20,10 @@ public disclosure; secret values are never recorded here.
   - Issues: read
 - No organization permissions, webhook, callback, or additional repository
   permission is configured.
+- App ID: `4281837`.
+- Installation ID: `146147681`.
+- The installation API reported `selected` repository mode and exactly one
+  accessible repository: `zorkian/roundhouse`.
 - Create at most one dogfood issue, one `codex/dogfood-*` branch, one dogfood
   draft pull request, and one milestone pull request. Neither pull request is
   merged by this milestone.
@@ -29,6 +33,10 @@ private key is installed only as `ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY` on the
 existing Worker. Installation access tokens are minted in memory, used by the
 GitHub gateway, and discarded. No GitHub credential enters a Container, D1,
 R2, evidence, logs, or agent input.
+
+The GitHub-generated PKCS#1 key is converted locally to an owner-readable-only
+PKCS#8 file because the Worker signer uses WebCrypto. Both files remain outside
+the repository. Only the PKCS#8 value is submitted to the Worker secret.
 
 ## Cloudflare
 

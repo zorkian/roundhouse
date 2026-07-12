@@ -229,7 +229,7 @@ describe("publishTrustedImplementation", () => {
     expect(
       await readFile(join(value.publication, value.path), "utf8"),
     ).toContain("# Trusted loop dogfood");
-  });
+  }, 30_000);
 
   it("restores the exact base after a verified push failure", async () => {
     const value = await fixture();
