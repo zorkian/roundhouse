@@ -122,7 +122,16 @@ export function jobStoreContract(
         start,
       );
 
-      const cancelled = await store.cancel("run_contract_cancel", cancelledAt);
+      const running = await store.read("run_contract_cancel");
+      await expect(
+        store.cancel("run_contract_cancel", cancelledAt, running.revision - 1),
+      ).rejects.toThrow("Cancellation revision does not match");
+
+      const cancelled = await store.cancel(
+        "run_contract_cancel",
+        cancelledAt,
+        running.revision,
+      );
       expect(cancelled.state).toBe("cancelled");
       expect(cancelled.lease).toBeUndefined();
       expect(cancelled.attempts[0]).toMatchObject({

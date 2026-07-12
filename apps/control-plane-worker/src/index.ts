@@ -23,6 +23,8 @@ import {
   approveRunSchema,
   idempotencyKeySchema,
   recordPublicationSchema,
+  recoveryRequestSchema,
+  revisionMutationSchema,
   submitRunSchema,
 } from "./contracts.js";
 import type { ControlPlaneEnv } from "./environment.js";
@@ -33,6 +35,17 @@ import {
   markDelivered,
   reserveSubmission,
 } from "./submissions.js";
+import {
+  idempotentMutation,
+  internalRecoveryActor,
+  MutationConflictError,
+  MutationPendingError,
+  recordAlert,
+  recoveryHistory,
+  retentionReport,
+  retryFailedRun,
+  runRecoveryCycle,
+} from "./operations.js";
 
 const maxBodyBytes = 64 * 1024;
 const jsonHeaders = { "content-type": "application/json; charset=utf-8" };
@@ -51,7 +64,16 @@ class HttpError extends Error {
   }
 }
 
-async function requestBody(request: Request): Promise<unknown> {
+function redactedReason(error: unknown): string {
+  return (error instanceof Error ? error.message : "unknown error")
+    .replace(/https?:\/\/\S+/g, "[url]")
+    .replace(/\/(?:[^\s/:]+\/)+[^\s:]+/g, "[path]")
+    .slice(0, 160);
+}
+
+async function requestBody(
+  request: Pick<Request, "headers" | "text">,
+): Promise<unknown> {
   if (
     !(request.headers.get("content-type") ?? "")
       .toLowerCase()
@@ -151,6 +173,8 @@ async function submit(
     run = await jobs.read(reservation.row.run_id);
   }
   if (reservation.row.delivery_state === "pending") {
+    if (env.SUBMISSION_SCENARIO === "interrupt-before-delivery")
+      throw new Error("simulated interruption before Queue delivery");
     await env.RUN_QUEUE.send({
       schemaVersion: 1,
       runId: run.runId,
@@ -172,42 +196,88 @@ async function submit(
 
 async function cancelRun(
   runId: string,
+  expectedRevision: number,
   env: ControlPlaneEnv,
 ): Promise<Response> {
   const jobs = new D1JobStore(env.DB);
-  const current = await jobs.read(runId);
-  const active = current.attempts.at(-1);
+  let cancelled;
+  try {
+    cancelled = await jobs.cancel(runId, new Date(), expectedRevision);
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message === "Cancellation revision does not match"
+    )
+      throw new HttpError(409, error.message);
+    throw error;
+  }
+  const active = cancelled.attempts.at(-1);
   if (
+    cancelled.revision === expectedRevision + 1 &&
     ["cloudflare-container", "cloudflare-trusted-codex"].includes(
       env.EXECUTION_MODE,
     ) &&
-    active?.status === "running" &&
+    active?.status === "failed" &&
+    active.classification === "cancelled" &&
     env.EXECUTION_CONTAINERS
-  )
-    await env.EXECUTION_CONTAINERS.getByName(active.attemptId)
-      .destroy()
-      .catch((error: unknown) => {
-        const reason = (
-          error instanceof Error ? error.message : "unknown error"
-        )
-          .replace(/https?:\/\/\S+/g, "[url]")
-          .replace(/\/(?:[^\s/:]+\/)+[^\s:]+/g, "[path]")
-          .slice(0, 160);
-        console.warn("Cloudflare Container cancellation teardown failed", {
-          attemptId: active.attemptId,
-          reason,
-        });
+  ) {
+    try {
+      await env.EXECUTION_CONTAINERS.getByName(active.attemptId).destroy();
+    } catch (error) {
+      const reason = redactedReason(error);
+      console.warn("Cloudflare Container cancellation teardown failed", {
+        attemptId: active.attemptId,
+        reason,
       });
-  return json(inspectRun(await jobs.cancel(runId, new Date())));
+      try {
+        await recordAlert(env, {
+          key: `container_cleanup_failed:${runId}:${active.attemptId}`,
+          kind: "container_cleanup_failed",
+          severity: "error",
+          runId,
+          detail: { attemptId: active.attemptId, reason },
+          now: new Date(),
+        });
+      } catch (alertError) {
+        console.warn("Container cleanup alert persistence failed", {
+          runId,
+          reason: redactedReason(alertError),
+        });
+      }
+    }
+  }
+  return json(inspectRun(cancelled));
+}
+
+async function mutationResponse(
+  request: Request,
+  env: ControlPlaneEnv,
+  actorId: string,
+  action: string,
+  runId: string,
+  requestValue: unknown,
+  mutate: () => Promise<Response>,
+): Promise<Response> {
+  const key = idempotencyKeySchema.parse(
+    request.headers.get("idempotency-key"),
+  );
+  const result = await idempotentMutation(
+    env,
+    { key, action, runId, actorId, request: requestValue, now: new Date() },
+    async () => {
+      const response = await mutate();
+      return { status: response.status, body: await response.json() };
+    },
+  );
+  return json(result.value.body, result.value.status);
 }
 
 async function approveRun(
   runId: string,
-  request: Request,
+  input: z.infer<typeof approveRunSchema>,
   env: ControlPlaneEnv,
   actorId: string,
 ): Promise<Response> {
-  const input = approveRunSchema.parse(await requestBody(request));
   const jobs = new D1JobStore(env.DB);
   const run = await jobs.read(runId);
   const delegated = input.approver === delegatedApprover;
@@ -297,11 +367,10 @@ async function implementationEvidence(
 
 async function recordPublication(
   runId: string,
-  request: Request,
+  input: z.infer<typeof recordPublicationSchema>,
   env: ControlPlaneEnv,
   actorId: string,
 ): Promise<Response> {
-  const input = recordPublicationSchema.parse(await requestBody(request));
   const jobs = new D1JobStore(env.DB);
   const run = await jobs.read(runId);
   if (
@@ -378,22 +447,162 @@ async function route(
     /^\/v1\/runs\/([a-zA-Z0-9][a-zA-Z0-9_-]{0,127})\/approval$/.exec(
       url.pathname,
     );
-  if (request.method === "POST" && approvalMatch?.[1])
-    return approveRun(approvalMatch[1], request, env, actorId);
+  if (request.method === "POST" && approvalMatch?.[1]) {
+    const input = approveRunSchema.parse(await requestBody(request));
+    return mutationResponse(
+      request,
+      env,
+      actorId,
+      "approve",
+      approvalMatch[1],
+      input,
+      () => approveRun(approvalMatch[1]!, input, env, actorId),
+    );
+  }
   const publicationMatch =
     /^\/v1\/runs\/([a-zA-Z0-9][a-zA-Z0-9_-]{0,127})\/publication$/.exec(
       url.pathname,
     );
-  if (request.method === "POST" && publicationMatch?.[1])
-    return recordPublication(publicationMatch[1], request, env, actorId);
-  if (request.method === "DELETE" && match?.[1]) {
+  if (request.method === "POST" && publicationMatch?.[1]) {
+    const input = recordPublicationSchema.parse(await requestBody(request));
+    return mutationResponse(
+      request,
+      env,
+      actorId,
+      "publish",
+      publicationMatch[1],
+      input,
+      () => recordPublication(publicationMatch[1]!, input, env, actorId),
+    );
+  }
+  const cancelMatch =
+    /^\/v1\/runs\/([a-zA-Z0-9][a-zA-Z0-9_-]{0,127})\/cancel$/.exec(
+      url.pathname,
+    );
+  if (request.method === "POST" && cancelMatch?.[1]) {
     try {
-      return await cancelRun(match[1], env);
+      const input = revisionMutationSchema.parse(await requestBody(request));
+      return await mutationResponse(
+        request,
+        env,
+        actorId,
+        "cancel",
+        cancelMatch[1],
+        input,
+        () => cancelRun(cancelMatch[1]!, input.expectedRevision, env),
+      );
     } catch (error) {
       if (error instanceof Error && error.message.startsWith("Run not found:"))
         throw new HttpError(404, "Run not found");
       throw error;
     }
+  }
+  const retryMatch =
+    /^\/v1\/runs\/([a-zA-Z0-9][a-zA-Z0-9_-]{0,127})\/retry$/.exec(url.pathname);
+  if (request.method === "POST" && retryMatch?.[1]) {
+    try {
+      const input = revisionMutationSchema.parse(await requestBody(request));
+      return await mutationResponse(
+        request,
+        env,
+        actorId,
+        "retry",
+        retryMatch[1],
+        input,
+        async () => {
+          const run = await retryFailedRun(
+            env,
+            retryMatch[1]!,
+            input.expectedRevision,
+            new Date(),
+          );
+          try {
+            await env.RUN_QUEUE.send({
+              schemaVersion: 1,
+              runId: run.runId,
+              deliveryId: `operator_retry_${run.runId}_${run.revision}`,
+              expectedRevision: run.revision,
+            });
+          } catch (error) {
+            const reason = redactedReason(error);
+            try {
+              await recordAlert(env, {
+                key: `retry_dispatch_failed:${run.runId}:${run.revision}`,
+                kind: "retry_dispatch_failed",
+                severity: "warning",
+                runId: run.runId,
+                detail: { revision: run.revision, reason },
+                now: new Date(),
+              });
+            } catch (alertError) {
+              console.warn("Retry dispatch alert persistence failed", {
+                runId: run.runId,
+                reason: redactedReason(alertError),
+              });
+            }
+          }
+          return json(inspectRun(run));
+        },
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("Run not found:"))
+        throw new HttpError(404, "Run not found");
+      if (
+        error instanceof Error &&
+        (error.message === "Run is not eligible for retry at this revision" ||
+          error.message === "Retry revision changed concurrently")
+      )
+        throw new HttpError(409, error.message);
+      throw error;
+    }
+  }
+  if (request.method === "GET" && url.pathname === "/v1/operations/alerts") {
+    const rows = await env.DB.prepare(
+      "SELECT alert_key, kind, severity, run_id, detail_json, first_seen_at, last_seen_at, occurrences, resolved_at FROM operational_alerts ORDER BY last_seen_at DESC LIMIT 100",
+    ).all<{
+      alert_key: string;
+      kind: string;
+      severity: string;
+      run_id: string | null;
+      detail_json: string;
+      first_seen_at: string;
+      last_seen_at: string;
+      occurrences: number;
+      resolved_at: string | null;
+    }>();
+    return json({
+      schemaVersion: 1,
+      alerts: rows.results.map((row) => ({
+        alertKey: row.alert_key,
+        kind: row.kind,
+        severity: row.severity,
+        runId: row.run_id ?? undefined,
+        detail: JSON.parse(row.detail_json) as unknown,
+        firstSeenAt: row.first_seen_at,
+        lastSeenAt: row.last_seen_at,
+        occurrences: row.occurrences,
+        resolvedAt: row.resolved_at ?? undefined,
+      })),
+    });
+  }
+  if (request.method === "GET" && url.pathname === "/v1/operations/retention")
+    return json(await retentionReport(env));
+  if (
+    request.method === "GET" &&
+    url.pathname === "/v1/operations/recovery-cycles"
+  )
+    return json(await recoveryHistory(env));
+  if (request.method === "POST" && url.pathname === "/v1/operations/recover") {
+    const input = recoveryRequestSchema.parse(await requestBody(request));
+    return mutationResponse(
+      request,
+      env,
+      actorId,
+      "recover",
+      "operations",
+      input,
+      async () => json(await runRecoveryCycle(env, new Date())),
+    );
   }
   throw new HttpError(404, "Not found");
 }
@@ -430,6 +639,16 @@ export function createControlPlaneHandler(
                 message: "Idempotency key was used for a different request",
               },
             },
+            409,
+          );
+        if (error instanceof MutationConflictError)
+          return json(
+            { error: { code: "idempotency_conflict", message: error.message } },
+            409,
+          );
+        if (error instanceof MutationPendingError)
+          return json(
+            { error: { code: "mutation_pending", message: error.message } },
             409,
           );
         if (error instanceof z.ZodError)
@@ -489,6 +708,23 @@ export function createControlPlaneHandler(
               });
           },
         );
+      }
+    },
+    async scheduled(_controller, env): Promise<void> {
+      try {
+        await runRecoveryCycle(env, new Date());
+      } catch (error) {
+        await recordAlert(env, {
+          key: "scheduled_recovery_failed",
+          kind: "scheduled_recovery_failed",
+          severity: "error",
+          detail: {
+            actorId: internalRecoveryActor,
+            reason: redactedReason(error),
+          },
+          now: new Date(),
+        });
+        throw error;
       }
     },
   };

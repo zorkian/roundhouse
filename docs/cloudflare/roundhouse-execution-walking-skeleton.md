@@ -128,10 +128,12 @@ instances`, `wrangler queues info`, `wrangler d1 execute`, and `wrangler r2
 object get --remote --pipe`. Never print credential environment variables or
 attach them to a Container.
 
-An authenticated `DELETE /v1/runs/<run-id>` destroys a currently running
-deterministic Container, removes the lease, closes any running attempt as
-`cancelled`, and records a durable `run.cancelled` event. Repeated cancellation
-and later Queue delivery are harmless.
+An authenticated `POST /v1/runs/<run-id>/cancel` with JSON
+`{"schemaVersion":1,"expectedRevision":<revision>}` and an `Idempotency-Key`
+destroys a currently running deterministic Container, removes the lease, closes
+any running attempt as `cancelled`, and records a durable `run.cancelled` event.
+Exact replay returns the stored result; stale revisions and conflicting key reuse
+are rejected. Later Queue delivery is harmless.
 
 ## Cost and retention
 

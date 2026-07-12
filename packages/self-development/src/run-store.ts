@@ -182,9 +182,15 @@ export class FileRunStore implements JobStore {
     );
   }
 
-  async cancel(runId: string, now: Date): Promise<SelfDevelopmentRun> {
+  async cancel(
+    runId: string,
+    now: Date,
+    expectedRevision?: number,
+  ): Promise<SelfDevelopmentRun> {
     return this.locked(runId, async () => {
       const run = await this.read(runId);
+      if (expectedRevision !== undefined && run.revision !== expectedRevision)
+        throw new Error("Cancellation revision does not match");
       if (["cancelled", "completed", "failed"].includes(run.state)) return run;
       const attempts = run.attempts.map((attempt) =>
         attempt.status === "running"

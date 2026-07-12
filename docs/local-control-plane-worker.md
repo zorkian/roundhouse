@@ -5,8 +5,8 @@ SPDX-License-Identifier: Apache-2.0
 
 # Local control-plane Worker
 
-Status: local V1 walking skeleton; no Cloudflare resources are provisioned or
-deployed.
+Status: local V1 walking skeleton and contract-test harness for the deployed
+development control plane.
 
 ## Architecture
 
@@ -50,27 +50,37 @@ acknowledging. Repeated repair sends are harmless under the same revision guard.
 
 ## API
 
-| Method | Path               | Authentication | Behavior                    |
-| ------ | ------------------ | -------------- | --------------------------- |
-| GET    | `/health`          | public         | Process liveness only       |
-| GET    | `/ready`           | required       | Local D1 readiness          |
-| POST   | `/v1/runs`         | required       | Idempotent structured task  |
-| GET    | `/v1/runs/{runId}` | required       | Redacted state and evidence |
+| Method | Path                              | Authentication | Behavior                                |
+| ------ | --------------------------------- | -------------- | --------------------------------------- |
+| GET    | `/health`                         | public         | Process liveness only                   |
+| GET    | `/ready`                          | required       | D1 readiness                            |
+| POST   | `/v1/runs`                        | required       | Idempotent structured task              |
+| GET    | `/v1/runs/{runId}`                | required       | Redacted state and evidence             |
+| GET    | `/v1/runs/{runId}/implementation` | required       | Exact immutable implementation evidence |
+| POST   | `/v1/runs/{runId}/cancel`         | required       | Revision-bound, idempotent cancellation |
+| POST   | `/v1/runs/{runId}/retry`          | required       | Exact retryable failure transition      |
+| POST   | `/v1/runs/{runId}/approval`       | required       | Actor/revision/evidence-bound approval  |
+| POST   | `/v1/runs/{runId}/publication`    | required       | Verified publication recording          |
+| GET    | `/v1/operations/alerts`           | required       | Bounded durable alert history           |
+| GET    | `/v1/operations/recovery-cycles`  | required       | Bounded recovery-cycle history          |
+| GET    | `/v1/operations/retention`        | required       | Reporting-only retention dry-run        |
+| POST   | `/v1/operations/recover`          | required       | Idempotent operator recovery cycle      |
 
 Submission requires `Content-Type: application/json`, an `Idempotency-Key`
 header, and a body shaped as `{ "schemaVersion": 1, "task": ... }`. Bodies are
 limited to 64 KiB. Only the configured repository path and remote URL are
-accepted. There is deliberately no HTTP approval, commit, push, arbitrary
-command, arbitrary repository, or network-destination endpoint.
+accepted. There is deliberately no arbitrary command, arbitrary repository,
+unverified commit/push, or network-destination endpoint.
 
 Errors use a JSON `error` object with a stable code and safe message.
 
 ## Trust boundaries
 
-The current `LocalBearerAuthorizer` is a port adapter for local development,
-not a production identity system. The token is supplied at runtime and is never
-committed or returned in evidence. A future Cloudflare Access adapter must
-validate Access identity and authorization before producing the same decision.
+`LocalBearerAuthorizer` is a port adapter for local development, not a
+production identity system. Its token is supplied at runtime and is never
+committed or returned in evidence. The deployed development configuration uses
+the separate Cloudflare Access authorizer and derives the actor from the
+verified Access assertion.
 
 The inspection projection is allowlisted. It omits instructions, repository and
 remote locations, publication configuration, lease tokens, workspace paths and

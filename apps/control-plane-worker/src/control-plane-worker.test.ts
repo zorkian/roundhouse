@@ -17,6 +17,7 @@ import {
   controlPlaneSubmissionMigration,
   reserveSubmission,
 } from "./submissions.js";
+import { cloudOperationsMigration } from "./operations.js";
 
 const instances: Miniflare[] = [];
 const token = "local-test-token";
@@ -175,7 +176,7 @@ async function runtime(): Promise<{
   });
   instances.push(mf);
   const db = await mf.getD1Database("DB");
-  for (const statement of `${d1JobStoreMigration}\n${controlPlaneSubmissionMigration}`
+  for (const statement of `${d1JobStoreMigration}\n${controlPlaneSubmissionMigration}\n${cloudOperationsMigration}`
     .split(";")
     .map((value) => value.trim())
     .filter(Boolean))
@@ -211,6 +212,12 @@ function request(
 ): Request<unknown, IncomingRequestCfProperties> {
   const headers = new Headers(init.headers);
   if (authenticated) headers.set("authorization", `Bearer ${token}`);
+  if (
+    init.method === "POST" &&
+    path !== "/v1/runs" &&
+    !headers.has("idempotency-key")
+  )
+    headers.set("idempotency-key", `test-${crypto.randomUUID()}`);
   return new Request(`http://roundhouse.local${path}`, {
     ...init,
     headers,
@@ -580,6 +587,35 @@ describe("local control-plane Worker", () => {
     expect(queued.messages).toHaveLength(1);
   });
 
+  it("repairs an API interruption before Queue delivery", async () => {
+    const { env, queued } = await runtime();
+    const handler = createControlPlaneHandler();
+    env.SUBMISSION_SCENARIO = "interrupt-before-delivery";
+    const interrupted = await handler.fetch!(
+      submission("submission-interruption-01"),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(interrupted.status).toBe(500);
+    expect(queued.messages).toHaveLength(0);
+    env.SUBMISSION_SCENARIO = "success";
+    await handler.scheduled!(
+      {} as ScheduledController,
+      env,
+      {} as ExecutionContext,
+    );
+    const reservation = await reserveSubmission(
+      env.DB,
+      "submission-interruption-01",
+      task,
+      new Date(),
+    );
+    expect(queued.messages).toEqual([
+      expect.objectContaining({ runId: reservation.row.run_id }),
+    ]);
+    expect(reservation.row.delivery_state).toBe("sent");
+  });
+
   it("rejects conflicting idempotency reuse", async () => {
     const { env } = await runtime();
     const handler = createControlPlaneHandler();
@@ -643,9 +679,17 @@ describe("local control-plane Worker", () => {
       {} as ExecutionContext,
     );
     const { runId } = (await submitted.json()) as { runId: string };
+    const current = await new D1JobStore(env.DB).read(runId);
 
     const cancelled = await handler.fetch!(
-      request(`/v1/runs/${runId}`, { method: "DELETE" }),
+      request(`/v1/runs/${runId}/cancel`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          schemaVersion: 1,
+          expectedRevision: current.revision,
+        }),
+      }),
       env,
       {} as ExecutionContext,
     );
@@ -661,6 +705,78 @@ describe("local control-plane Worker", () => {
     expect(durable.state).toBe("cancelled");
     expect(durable.attempts).toHaveLength(0);
     expect(durable.events.at(-1)?.type).toBe("run.cancelled");
+  });
+
+  it("durably alerts when cancellation cannot tear down a Container", async () => {
+    const { env } = await runtime();
+    const handler = createControlPlaneHandler();
+    const submitted = await handler.fetch!(
+      submission("cancel-cleanup-alert-01"),
+      env,
+      {} as ExecutionContext,
+    );
+    const { runId } = (await submitted.json()) as { runId: string };
+    const jobs = new D1JobStore(env.DB);
+    const now = new Date("2026-07-12T18:00:00Z");
+    const claim = await jobs.claim(runId, "container-worker", now, 300_000, 1);
+    await jobs.startAttempt(runId, claim!.token, "prepare", now);
+    const running = await jobs.read(runId);
+    env.EXECUTION_MODE = "cloudflare-container";
+    let destroyAttempts = 0;
+    env.EXECUTION_CONTAINERS = {
+      getByName: () => ({
+        destroy: async () => {
+          destroyAttempts += 1;
+          throw new Error("teardown failed at /sensitive/local/path");
+        },
+      }),
+    } as unknown as ControlPlaneEnv["EXECUTION_CONTAINERS"];
+
+    const cancelled = await handler.fetch!(
+      request(`/v1/runs/${runId}/cancel`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          schemaVersion: 1,
+          expectedRevision: running.revision,
+        }),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(cancelled.status).toBe(200);
+    const cancelledBody = (await cancelled.json()) as { revision: number };
+    expect(destroyAttempts).toBe(1);
+    const repeated = await handler.fetch!(
+      request(`/v1/runs/${runId}/cancel`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          schemaVersion: 1,
+          expectedRevision: cancelledBody.revision,
+        }),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(repeated.status).toBe(200);
+    expect(destroyAttempts).toBe(1);
+    const alerts = await handler.fetch!(
+      request("/v1/operations/alerts"),
+      env,
+      {} as ExecutionContext,
+    );
+    const body = (await alerts.json()) as {
+      alerts: Array<Record<string, unknown>>;
+    };
+    expect(body.alerts).toHaveLength(1);
+    expect(body.alerts[0]).toMatchObject({
+      kind: "container_cleanup_failed",
+      severity: "error",
+      runId,
+      occurrences: 1,
+    });
+    expect(JSON.stringify(body)).not.toContain("/sensitive/local/path");
   });
 
   it("acks malformed messages and durably records terminal dispatch failure", async () => {
@@ -733,6 +849,133 @@ describe("local control-plane Worker", () => {
     ).toBe(true);
   });
 
+  it("authenticates and validates operator recovery and reporting routes", async () => {
+    const { env } = await runtime();
+    const handler = createControlPlaneHandler();
+    const unauthorized = await handler.fetch!(
+      request("/v1/operations/alerts", {}, false),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(unauthorized.status).toBe(401);
+    const alerts = await handler.fetch!(
+      request("/v1/operations/alerts"),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(alerts.status).toBe(200);
+    await expect(alerts.json()).resolves.toMatchObject({ alerts: [] });
+    const retention = await handler.fetch!(
+      request("/v1/operations/retention"),
+      env,
+      {} as ExecutionContext,
+    );
+    await expect(retention.json()).resolves.toMatchObject({
+      dryRun: true,
+      deletions: [],
+    });
+    const emptyHistory = await handler.fetch!(
+      request("/v1/operations/recovery-cycles"),
+      env,
+      {} as ExecutionContext,
+    );
+    await expect(emptyHistory.json()).resolves.toEqual({
+      schemaVersion: 1,
+      cycles: [],
+    });
+    const recoveryRequest = () =>
+      request("/v1/operations/recover", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "operator-recovery-route-01",
+        },
+        body: JSON.stringify({ schemaVersion: 1 }),
+      });
+    const first = await handler.fetch!(
+      recoveryRequest(),
+      env,
+      {} as ExecutionContext,
+    );
+    const replay = await handler.fetch!(
+      recoveryRequest(),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(first.status).toBe(200);
+    expect(await replay.json()).toEqual(await first.json());
+    const history = await handler.fetch!(
+      request("/v1/operations/recovery-cycles"),
+      env,
+      {} as ExecutionContext,
+    );
+    const historyBody = (await history.json()) as {
+      cycles: Array<Record<string, unknown>>;
+    };
+    expect(historyBody.cycles).toHaveLength(1);
+    expect(historyBody.cycles[0]).toMatchObject({
+      actorId: "roundhouse:scheduler",
+      repairedSubmissions: 0,
+      requeuedRuns: 0,
+      alertsRecorded: 0,
+    });
+    const invalidRecovery = await handler.fetch!(
+      request("/v1/operations/recover", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "invalid-recovery-route-01",
+        },
+        body: JSON.stringify({}),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(invalidRecovery.status).toBe(400);
+    const invalidRetry = await handler.fetch!(
+      request("/v1/runs/run_missing/retry", {
+        method: "POST",
+        headers: { "idempotency-key": "invalid-retry-route-01" },
+        body: JSON.stringify({ schemaVersion: 1, expectedRevision: 1 }),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(invalidRetry.status).toBe(415);
+    const missingRetry = await handler.fetch!(
+      request("/v1/runs/run_missing/retry", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "missing-retry-route-01",
+        },
+        body: JSON.stringify({ schemaVersion: 1, expectedRevision: 1 }),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(missingRetry.status).toBe(404);
+    const submitted = await handler.fetch!(
+      submission("ineligible-retry-route-01"),
+      env,
+      {} as ExecutionContext,
+    );
+    const { runId } = (await submitted.json()) as { runId: string };
+    const ineligibleRetry = await handler.fetch!(
+      request(`/v1/runs/${runId}/retry`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "ineligible-retry-route-01",
+        },
+        body: JSON.stringify({ schemaVersion: 1, expectedRevision: 1 }),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(ineligibleRetry.status).toBe(409);
+  });
+
   it("repairs retry enqueue failure before acknowledging the delivery", async () => {
     const { env, queued } = await runtime();
     const handler = createControlPlaneHandler();
@@ -762,5 +1005,119 @@ describe("local control-plane Worker", () => {
       runId,
       expectedRevision: durable.revision,
     });
+  });
+
+  it("replays an operator retry whose Queue dispatch is recovered later", async () => {
+    const { env, queued } = await runtime();
+    const handler = createControlPlaneHandler();
+    const submitted = await handler.fetch!(
+      submission("operator-retry-dispatch-repair-01"),
+      env,
+      {} as ExecutionContext,
+    );
+    const { runId } = (await submitted.json()) as { runId: string };
+    const jobs = new D1JobStore(env.DB);
+    const now = new Date("2026-07-12T18:00:00Z");
+    const claim = await jobs.claim(runId, "worker", now, 300_000, 1);
+    await jobs.startAttempt(runId, claim!.token, "prepare", now);
+    const failed = await jobs.failAttempt(
+      runId,
+      claim!.token,
+      "prepare",
+      { retryable: true, classification: "transient", error: "retry me" },
+      true,
+      now,
+    );
+    const retryRequest = () =>
+      request(`/v1/runs/${runId}/retry`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "operator-retry-dispatch-repair-01",
+        },
+        body: JSON.stringify({
+          schemaVersion: 1,
+          expectedRevision: failed.revision,
+        }),
+      });
+    queued.failNext = true;
+    const first = await handler.fetch!(
+      retryRequest(),
+      env,
+      {} as ExecutionContext,
+    );
+    const replay = await handler.fetch!(
+      retryRequest(),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(first.status).toBe(200);
+    expect(await replay.json()).toEqual(await first.json());
+    expect(queued.messages).toHaveLength(1);
+
+    await handler.scheduled!(
+      {} as ScheduledController,
+      env,
+      {} as ExecutionContext,
+    );
+    expect(queued.messages).toHaveLength(2);
+    expect(queued.messages[1]).toMatchObject({ runId });
+    const alerts = await handler.fetch!(
+      request("/v1/operations/alerts"),
+      env,
+      {} as ExecutionContext,
+    );
+    const alertBody = (await alerts.json()) as {
+      alerts: Array<Record<string, unknown>>;
+    };
+    expect(alertBody.alerts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "retry_dispatch_failed",
+          runId,
+          occurrences: 1,
+        }),
+        expect.objectContaining({
+          kind: "lease_less_run_requeued",
+          runId,
+        }),
+      ]),
+    );
+  });
+
+  it("redacts scheduled recovery failures in durable alerts", async () => {
+    const { env } = await runtime();
+    const handler = createControlPlaneHandler();
+    await handler.fetch!(
+      submission("scheduled-recovery-redaction-01"),
+      env,
+      {} as ExecutionContext,
+    );
+    env.RUN_QUEUE = {
+      send: async () => {
+        throw new Error(
+          "recovery failed at https://internal.example.invalid/token and /private/workspace/path",
+        );
+      },
+    } as unknown as Queue<unknown>;
+
+    await expect(
+      handler.scheduled!(
+        {} as ScheduledController,
+        env,
+        {} as ExecutionContext,
+      ),
+    ).rejects.toThrow("recovery failed");
+    const alerts = await handler.fetch!(
+      request("/v1/operations/alerts"),
+      env,
+      {} as ExecutionContext,
+    );
+    const text = await alerts.text();
+    expect(text).toContain("scheduled_recovery_failed");
+    expect(text).toContain("[url]");
+    expect(text).toContain("[path]");
+    expect(text).not.toContain("internal.example.invalid");
+    expect(text).not.toContain("/private/workspace/path");
   });
 });

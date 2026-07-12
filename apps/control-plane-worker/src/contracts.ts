@@ -40,3 +40,12 @@ export const recordPublicationSchema = z.object({
     .regex(/^https:\/\/github\.com\/zorkian\/roundhouse\/pull\/[1-9][0-9]*$/)
     .optional(),
 });
+
+export const revisionMutationSchema = z.object({
+  schemaVersion: z.literal(1),
+  expectedRevision: z.number().int().positive(),
+});
+
+export const recoveryRequestSchema = z.object({
+  schemaVersion: z.literal(1),
+});

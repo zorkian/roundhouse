@@ -142,8 +142,14 @@ export class D1JobStore implements JobStore {
     return selfDevelopmentRunSchema.parse(JSON.parse(row.payload));
   }
 
-  async cancel(runId: string, now: Date): Promise<SelfDevelopmentRun> {
+  async cancel(
+    runId: string,
+    now: Date,
+    expectedRevision?: number,
+  ): Promise<SelfDevelopmentRun> {
     const cancelled = await this.mutate(runId, (run) => {
+      if (expectedRevision !== undefined && run.revision !== expectedRevision)
+        throw new Error("Cancellation revision does not match");
       if (["cancelled", "completed", "failed"].includes(run.state)) return null;
       const attempts = run.attempts.map((attempt) =>
         attempt.status === "running"
