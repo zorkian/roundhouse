@@ -43,9 +43,10 @@ class MutableClock implements Clock {
 class RecordingExecutor implements JobStageExecutor {
   readonly stages: JobStage[] = [];
   failures = 0;
+  constructor(private readonly failFirstPrepare = true) {}
   async execute(stage: JobStage): Promise<StageResult> {
     this.stages.push(stage);
-    if (stage === "prepare" && this.failures++ === 0)
+    if (stage === "prepare" && this.failFirstPrepare && this.failures++ === 0)
       throw new StageFailure("temporary", "infrastructure", true);
     const states = {
       prepare: "workspace_ready",
@@ -99,4 +100,76 @@ describe("ResumableCoordinator", () => {
       classification: "infrastructure",
     });
   });
+
+  it.each([
+    ["prepare", 0],
+    ["implement", 1],
+    ["validate", 2],
+    ["commit", 3],
+    ["push", 4],
+    ["complete", 5],
+  ] as const)(
+    "recovers an expired worker during %s without losing history",
+    async (stage, steps) => {
+      const root = await mkdtemp(
+        join(tmpdir(), `roundhouse-recovery-${stage}-`),
+      );
+      paths.push(root);
+      const store = new FileRunStore(root);
+      const clock = new MutableClock(new Date("2026-07-12T00:00:00Z"));
+      const executor = new RecordingExecutor(false);
+      const worker = new ResumableCoordinator(store, executor, clock, {
+        workerId: "worker-initial",
+        leaseMs: 1_000,
+      });
+      await worker.submit(`run_${stage}`, task);
+      for (let index = 0; index < steps; index += 1) {
+        if (stage === "commit" && index === 3)
+          await store.transition(
+            `run_${stage}`,
+            "approved",
+            "approval.recorded",
+          );
+        if (stage === "push" && index === 3)
+          await store.transition(
+            `run_${stage}`,
+            "approved",
+            "approval.recorded",
+          );
+        if (stage === "complete" && index === 3)
+          await store.transition(
+            `run_${stage}`,
+            "approved",
+            "approval.recorded",
+          );
+        await worker.workOnce();
+      }
+      if (stage === "commit")
+        await store.transition(`run_${stage}`, "approved", "approval.recorded");
+      const claim = await store.claimNext("worker-crashed", clock.now(), 1_000);
+      expect(claim).not.toBeNull();
+      await store.startAttempt(
+        `run_${stage}`,
+        claim!.token,
+        stage,
+        clock.now(),
+      );
+
+      clock.value = new Date("2026-07-12T00:00:02Z");
+      const recovered = new ResumableCoordinator(store, executor, clock, {
+        workerId: "worker-recovered",
+        leaseMs: 1_000,
+      });
+      await recovered.workOnce();
+      const run = await store.read(`run_${stage}`);
+      const stageAttempts = run.attempts.filter(
+        (attempt) => attempt.stage === stage,
+      );
+      expect(stageAttempts.at(-2)).toMatchObject({
+        status: "failed",
+        classification: "lease_expired",
+      });
+      expect(stageAttempts.at(-1)).toMatchObject({ status: "succeeded" });
+    },
+  );
 });

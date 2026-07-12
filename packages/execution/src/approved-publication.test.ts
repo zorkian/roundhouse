@@ -139,7 +139,7 @@ describe("publishApprovedPatch", () => {
         runId: "run_publish",
         message: "Apply approved change",
       }),
-    ).rejects.toThrow("HEAD does not match the approved base commit");
+    ).rejects.toThrow("HEAD does not match the approved base or patch");
   });
 
   it("rejects a pre-existing staged change", async () => {

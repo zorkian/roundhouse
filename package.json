@@ -18,6 +18,7 @@
     "self:prepare": "pnpm build && node packages/execution/dist/self-development-cli.js prepare",
     "self:verify": "pnpm build && node packages/execution/dist/self-development-cli.js verify",
     "skeleton": "pnpm build && node packages/self-development/dist/walking-skeleton-cli.js",
+    "job": "pnpm build && node packages/self-development/dist/resumable-job-cli.js",
     "test": "vitest run",
     "typecheck": "tsc -b --pretty false"
   },

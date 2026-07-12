@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { execFile } from "node:child_process";
-import { mkdir } from "node:fs/promises";
+import { access, mkdir, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
@@ -32,14 +32,19 @@ export async function createIsolatedWorkspace(input: {
     throw new Error("Invalid run ID");
   const workspace = join(input.workspaceRoot, "runs", input.runId, "workspace");
   await mkdir(dirname(workspace), { recursive: true, mode: 0o700 });
-  await git([
-    "clone",
-    "--no-checkout",
-    "--no-local",
-    "--",
-    input.sourceRepository,
-    workspace,
-  ]);
+  try {
+    await access(join(workspace, ".git"));
+  } catch {
+    await rm(workspace, { recursive: true, force: true });
+    await git([
+      "clone",
+      "--no-checkout",
+      "--no-local",
+      "--",
+      input.sourceRepository,
+      workspace,
+    ]);
+  }
   await git(["cat-file", "-e", `${input.baseCommit}^{commit}`], workspace);
   await git(["checkout", "--detach", input.baseCommit], workspace);
   if (input.remoteUrl)
@@ -51,4 +56,16 @@ export async function createIsolatedWorkspace(input: {
   if ((await git(["rev-parse", "HEAD"], workspace)) !== input.baseCommit)
     throw new Error("Workspace HEAD does not match requested base commit");
   return workspace;
+}
+
+export async function resetIsolatedWorkspace(
+  workspace: string,
+  baseCommit: string,
+): Promise<void> {
+  await git(["reset", "--hard", baseCommit], workspace);
+  await git(["clean", "-fd"], workspace);
+  if ((await git(["rev-parse", "HEAD"], workspace)) !== baseCommit)
+    throw new Error(
+      "Reset workspace HEAD does not match requested base commit",
+    );
 }

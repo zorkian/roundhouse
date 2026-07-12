@@ -25,6 +25,7 @@ version: 1
 runtime: { image: roundhouse/runner:dev, workspace: /workspace }
 bootstrap: { command: pnpm, args: [install] }
 validation:
+  license: { command: pnpm, args: [license:check] }
   format: { command: pnpm, args: [format:check] }
   compile: { command: pnpm, args: [typecheck] }
   targeted: { command: pnpm, args: [test] }
@@ -119,8 +120,9 @@ describe("runSupervisedValidation", () => {
     });
 
     expect(result.evidence.succeeded).toBe(true);
-    expect(result.evidence.commands).toHaveLength(3);
-    expect(backend.commands[0]).toContain("tracked.ts untracked.ts");
+    expect(result.evidence.commands).toHaveLength(4);
+    expect(result.evidence.commands[0]?.name).toBe("license");
+    expect(backend.commands[1]).toContain("tracked.ts untracked.ts");
     expect(result.patch).toContain("export const after = true;");
     expect(result.patch).toContain("export const added = true;");
     expect(result.evidence.patchBytes).toBeGreaterThan(0);
@@ -133,7 +135,7 @@ describe("runSupervisedValidation", () => {
       join(repo.path, "tracked.ts"),
       "export const after = true;\n",
     );
-    const backend = new RecordingBackend(2);
+    const backend = new RecordingBackend(3);
 
     const result = await runSupervisedValidation({
       repositoryPath: repo.path,
@@ -148,7 +150,7 @@ describe("runSupervisedValidation", () => {
       succeeded: false,
       failedCommand: "compile",
     });
-    expect(backend.commands).toHaveLength(2);
-    expect(result.evidence.commands[1]?.stderrSha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(backend.commands).toHaveLength(3);
+    expect(result.evidence.commands[2]?.stderrSha256).toMatch(/^[a-f0-9]{64}$/);
   });
 });

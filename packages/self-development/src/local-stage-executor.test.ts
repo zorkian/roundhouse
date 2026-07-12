@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -16,14 +16,17 @@ import type {
   AgentMessage,
   AgentRunInput,
 } from "@roundhouse/domain";
-import type {
-  CommandExecution,
-  ExecutionBackend,
-  ExecutionLimits,
+import {
+  recordValidationApproval,
+  type CommandExecution,
+  type ExecutionBackend,
+  type ExecutionLimits,
 } from "@roundhouse/execution";
 import { parseRepositoryProfile } from "@roundhouse/repository-profile";
 
-import { SelfDevelopmentOrchestrator } from "./orchestrator.js";
+import { LocalJobStageExecutor } from "./local-stage-executor.js";
+import { ResumableCoordinator } from "./resumable-coordinator.js";
+import { FileRunStore } from "./run-store.js";
 import type { SelfDevelopmentTask } from "./task.js";
 
 const execFileAsync = promisify(execFile);
@@ -60,20 +63,19 @@ async function git(repository: string, ...args: string[]): Promise<string> {
 }
 
 class EditingAgent implements AgentAdapter {
-  readonly name = "editing-test-agent";
+  readonly name = "editing-agent";
   async capabilities(): Promise<AgentCapabilities> {
     return new Set(["structured-events"]);
   }
   async *start(input: AgentRunInput): AsyncIterable<AgentEvent> {
     await writeFile(join(input.workspace, "change.md"), "implemented\n");
-    yield { type: "session.started", sessionId: "session-test" };
     yield { type: "completed", outcome: "succeeded" };
   }
   async *resume(
     _sessionId: string,
     _input: AgentMessage,
   ): AsyncIterable<AgentEvent> {
-    throw new Error("not supported");
+    throw new Error("unsupported");
   }
   async cancel(_attemptId: string): Promise<void> {}
 }
@@ -88,9 +90,9 @@ class PassingBackend implements ExecutionBackend {
     return {
       command,
       cwd,
-      startedAt: "2026-07-11T00:00:00.000Z",
-      completedAt: "2026-07-11T00:00:01.000Z",
-      durationMs: 1000,
+      startedAt: "2026-07-12T00:00:00.000Z",
+      completedAt: "2026-07-12T00:00:01.000Z",
+      durationMs: 1_000,
       exitCode: 0,
       signal: null,
       timedOut: false,
@@ -107,11 +109,11 @@ afterEach(async () => {
   );
 });
 
-describe("SelfDevelopmentOrchestrator", () => {
-  it("runs a restart-safe task through verified push", async () => {
-    const source = await temporary("roundhouse-orchestrator-source-");
-    const remote = await temporary("roundhouse-orchestrator-remote-");
-    const root = await temporary("roundhouse-orchestrator-runs-");
+describe("LocalJobStageExecutor", () => {
+  it("runs the port-based coordinator through exact approval and verified push", async () => {
+    const source = await temporary("roundhouse-local-source-");
+    const remote = await temporary("roundhouse-local-remote-");
+    const root = await temporary("roundhouse-local-runs-");
     await git(remote, "init", "--bare");
     await git(source, "init", "--initial-branch=main");
     await git(source, "config", "user.name", "Roundhouse Test");
@@ -122,8 +124,8 @@ describe("SelfDevelopmentOrchestrator", () => {
     const base = await git(source, "rev-parse", "HEAD");
     const task: SelfDevelopmentTask = {
       schemaVersion: 1,
-      taskId: "task_test",
-      subject: "Add a file",
+      taskId: "task_local",
+      subject: "Local port test",
       instructions: "Create change.md.",
       repositoryPath: source,
       baseCommit: base,
@@ -134,45 +136,47 @@ describe("SelfDevelopmentOrchestrator", () => {
         remoteUrl: remote,
         branch: "roundhouse/output",
         expectedRemoteHead: null,
-        commitMessage: "Add generated change",
+        commitMessage: "Add port change",
         authorName: "Roundhouse Test",
         authorEmail: "roundhouse@example.invalid",
       },
     };
-    const orchestrator = new SelfDevelopmentOrchestrator(root, profile);
-    await orchestrator.start("run_test", task, new PassingBackend());
-    await orchestrator.implement("run_test", new EditingAgent());
-    const manifest = await orchestrator.validate(
-      "run_test",
-      new PassingBackend(),
+    const store = new FileRunStore(root);
+    const worker = new ResumableCoordinator(
+      store,
+      new LocalJobStageExecutor(
+        root,
+        profile,
+        new PassingBackend(),
+        new EditingAgent(),
+      ),
+      { now: () => new Date() },
+      { workerId: "worker-local" },
     );
-    await orchestrator.approve({
+    await worker.submit("run_local", task);
+    await worker.workOnce();
+    await worker.workOnce();
+    expect((await worker.workOnce())?.state).toBe("awaiting_approval");
+    const manifest = JSON.parse(
+      await readFile(
+        join(root, "runs/run_local/validation/manifest.json"),
+        "utf8",
+      ),
+    ) as { patch: { sha256: string } };
+    await recordValidationApproval(root, {
       schemaVersion: 1,
-      runId: "run_test",
-      actorId: "mark",
+      runId: "run_local",
+      actorId: "operator",
       baseCommit: base,
       patchSha256: manifest.patch.sha256,
-      approvedAt: "2026-07-11T00:01:00.000Z",
+      approvedAt: new Date().toISOString(),
     });
-    const publication = await orchestrator.commit("run_test");
-    const pushed = await orchestrator.push("run_test", publication.commit);
-
-    expect(pushed.head).toBe(publication.commit);
-    const recovered = await new SelfDevelopmentOrchestrator(
-      root,
-      profile,
-    ).store.read("run_test");
-    expect(recovered.state).toBe("completed");
-    expect(recovered.events.map((event) => event.state)).toEqual([
-      "created",
-      "workspace_ready",
-      "implementing",
-      "validating",
-      "awaiting_approval",
-      "approved",
-      "committed",
-      "pushed",
-      "completed",
-    ]);
-  }, 15_000);
+    await store.transition("run_local", "approved", "approval.recorded");
+    await worker.workOnce();
+    await worker.workOnce();
+    expect((await worker.workOnce())?.state).toBe("completed");
+    expect(await git(remote, "rev-parse", "refs/heads/roundhouse/output")).toBe(
+      (await store.read("run_local")).commit,
+    );
+  }, 20_000);
 });

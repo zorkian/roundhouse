@@ -16,6 +16,7 @@ bootstrap:
   command: pnpm
   args: [install, --frozen-lockfile]
 validation:
+  license: { command: pnpm, args: [license:check] }
   format: { command: pnpm, args: [format:check] }
   compile: { command: pnpm, args: [typecheck] }
   targeted: { command: pnpm, args: [test] }

@@ -138,8 +138,6 @@ export async function persistValidationArtifacts(
   createdAt = new Date().toISOString(),
 ): Promise<ValidationArtifactManifest> {
   assertRunId(runId);
-  if (!result.evidence.succeeded)
-    throw new Error("Failed validation cannot be prepared for approval");
   if (
     sha256(result.patch) !== result.evidence.patchSha256 ||
     byteLength(result.patch) !== result.evidence.patchBytes
