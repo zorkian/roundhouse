@@ -263,12 +263,12 @@ export async function runRecoveryCycle(
       deliveryId: row.delivery_id,
       expectedRevision: run.revision,
     });
-    await env.DB.prepare(
+    const delivered = await env.DB.prepare(
       "UPDATE control_plane_submissions SET delivery_state = 'sent', delivered_at = ? WHERE idempotency_key = ? AND delivery_state = 'pending'",
     )
       .bind(now.toISOString(), row.idempotency_key)
       .run();
-    repairedSubmissions += 1;
+    if ((delivered.meta.changes ?? 0) === 1) repairedSubmissions += 1;
     deliveredRunIds.add(row.run_id);
   }
   const rows = await env.DB.prepare(

@@ -24,13 +24,6 @@ if (!bodyOnlyCommand && !noArgumentCommand && arguments_.length > 2) {
 }
 const target = bodyOnlyCommand || noArgumentCommand ? undefined : arguments_[0];
 const inputPath = bodyOnlyCommand ? arguments_[0] : arguments_[1];
-const origin = process.env.ROUNDHOUSE_ORIGIN;
-const token = process.env.ROUNDHOUSE_ACCESS_TOKEN;
-if (!origin || !token) {
-  console.error("Set ROUNDHOUSE_ORIGIN and ROUNDHOUSE_ACCESS_TOKEN");
-  process.exit(2);
-}
-
 const runCommands = new Set([
   "inspect",
   "evidence",
@@ -60,6 +53,12 @@ const routes = {
 const route = routes[command];
 if (!route) {
   console.error(`Unknown command: ${command ?? ""}`);
+  process.exit(2);
+}
+const origin = process.env.ROUNDHOUSE_ORIGIN;
+const token = process.env.ROUNDHOUSE_ACCESS_TOKEN;
+if (!origin || !token) {
+  console.error("Set ROUNDHOUSE_ORIGIN and ROUNDHOUSE_ACCESS_TOKEN");
   process.exit(2);
 }
 if (route.method === "GET" && inputPath) {
