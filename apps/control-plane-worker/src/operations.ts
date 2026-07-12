@@ -166,6 +166,7 @@ const retryState = {
   push: "committed",
   complete: "pushed",
 } as const;
+const maxStageAttempts = 3;
 
 export async function retryFailedRun(
   env: ControlPlaneEnv,
@@ -310,6 +311,85 @@ export async function runRecoveryCycle(
       now,
     });
     requeuedRuns += 1;
+    alertsRecorded += 1;
+  }
+  const monitored = await env.DB.prepare(
+    "SELECT run_id, revision, payload FROM self_development_runs WHERE state IN ('failed', 'awaiting_approval', 'awaiting_publication', 'completed') ORDER BY updated_at ASC LIMIT 100",
+  ).all<{ run_id: string; revision: number; payload: string }>();
+  for (const row of monitored.results) {
+    let run: SelfDevelopmentRun;
+    try {
+      run = selfDevelopmentRunSchema.parse(JSON.parse(row.payload));
+    } catch {
+      await recordAlert(env, {
+        key: `malformed_run_payload:${row.run_id}`,
+        kind: "malformed_run_payload",
+        severity: "error",
+        runId: row.run_id,
+        detail: { revision: row.revision },
+        now,
+      });
+      alertsRecorded += 1;
+      continue;
+    }
+    const latest = run.attempts.at(-1);
+    if (
+      run.state === "failed" &&
+      latest?.retryable &&
+      run.attempts.filter((attempt) => attempt.stage === latest.stage).length >=
+        maxStageAttempts
+    ) {
+      await recordAlert(env, {
+        key: `retries_exhausted:${run.runId}:${run.revision}`,
+        kind: "retries_exhausted",
+        severity: "error",
+        runId: run.runId,
+        detail: {
+          revision: run.revision,
+          stage: latest.stage,
+          attempts: maxStageAttempts,
+          classification: latest.classification,
+        },
+        now,
+      });
+      alertsRecorded += 1;
+    }
+    if (
+      ["awaiting_approval", "awaiting_publication", "completed"].includes(
+        run.state,
+      ) &&
+      (!run.implementation ||
+        !run.evidence.some(
+          (evidence) =>
+            evidence.evidenceId === run.implementation?.evidenceId &&
+            evidence.objectKey === run.implementation.objectKey,
+        ))
+    ) {
+      await recordAlert(env, {
+        key: `missing_evidence:${run.runId}:${run.revision}`,
+        kind: "missing_evidence",
+        severity: "error",
+        runId: run.runId,
+        detail: { revision: run.revision, state: run.state },
+        now,
+      });
+      alertsRecorded += 1;
+    }
+  }
+  const ambiguousPublications = await env.DB.prepare(
+    "SELECT idempotency_key, run_id, created_at FROM operator_mutations WHERE status = 'pending' AND action = 'publish' AND created_at <= ? ORDER BY created_at ASC LIMIT 100",
+  )
+    .bind(new Date(now.getTime() - 300_000).toISOString())
+    .all<{ idempotency_key: string; run_id: string; created_at: string }>();
+  for (const mutation of ambiguousPublications.results) {
+    await recordAlert(env, {
+      key: `publication_ambiguous:${mutation.idempotency_key}`,
+      kind: "publication_ambiguous",
+      severity: "error",
+      runId: mutation.run_id,
+      detail: { mutationCreatedAt: mutation.created_at },
+      now,
+    });
     alertsRecorded += 1;
   }
   const cycleId = crypto.randomUUID();

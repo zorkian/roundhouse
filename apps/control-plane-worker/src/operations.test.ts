@@ -211,4 +211,64 @@ describe("cloud operator persistence", () => {
       deletions: [],
     });
   });
+
+  it("records exhausted retry, missing evidence, and publication ambiguity alerts", async () => {
+    const env = await runtime();
+    const jobs = new D1JobStore(env.DB);
+    const start = new Date("2026-07-12T00:00:00Z");
+    await jobs.submit("run_exhausted", task, start);
+    const claim = await jobs.claim("run_exhausted", "worker", start, 1_000, 1);
+    await jobs.startAttempt("run_exhausted", claim!.token, "prepare", start);
+    const failed = await jobs.failAttempt(
+      "run_exhausted",
+      claim!.token,
+      "prepare",
+      { retryable: true, classification: "transient", error: "retry me" },
+      true,
+      start,
+    );
+    const exhausted = {
+      ...failed,
+      attempts: [1, 2, 3].map((number) => ({
+        ...failed.attempts[0]!,
+        attemptId: `run_exhausted-prepare-${number}`,
+        number,
+      })),
+    };
+    await env.DB.prepare(
+      "UPDATE self_development_runs SET payload = ? WHERE run_id = 'run_exhausted'",
+    )
+      .bind(JSON.stringify(exhausted))
+      .run();
+    await jobs.submit(
+      "run_missing_evidence",
+      { ...task, taskId: "task_missing_evidence" },
+      start,
+    );
+    const missing = await jobs.read("run_missing_evidence");
+    await env.DB.prepare(
+      "UPDATE self_development_runs SET state = 'awaiting_approval', payload = ? WHERE run_id = 'run_missing_evidence'",
+    )
+      .bind(JSON.stringify({ ...missing, state: "awaiting_approval" }))
+      .run();
+    await env.DB.prepare(
+      "INSERT INTO operator_mutations(idempotency_key, request_hash, action, run_id, actor_id, status, created_at) VALUES ('ambiguous-publication-01', 'hash', 'publish', 'run_missing_evidence', 'operator@example.test', 'pending', ?)",
+    )
+      .bind(start.toISOString())
+      .run();
+
+    const cycle = await runRecoveryCycle(
+      env,
+      new Date(start.getTime() + 600_000),
+    );
+    expect(cycle.alertsRecorded).toBeGreaterThanOrEqual(3);
+    const alerts = await env.DB.prepare(
+      "SELECT kind FROM operational_alerts WHERE kind IN ('retries_exhausted', 'missing_evidence', 'publication_ambiguous') ORDER BY kind",
+    ).all<{ kind: string }>();
+    expect(alerts.results.map((alert) => alert.kind)).toEqual([
+      "missing_evidence",
+      "publication_ambiguous",
+      "retries_exhausted",
+    ]);
+  });
 });
