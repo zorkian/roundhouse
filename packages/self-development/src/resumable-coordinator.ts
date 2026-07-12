@@ -9,6 +9,7 @@ export class StageFailure extends Error {
     message: string,
     readonly classification: string,
     readonly retryable: boolean,
+    readonly evidence?: SelfDevelopmentRun["evidence"],
   ) {
     super(message);
   }
@@ -70,13 +71,32 @@ export class ResumableCoordinator {
     runId: string,
     expectedRevision?: number,
   ): Promise<SelfDevelopmentRun | null> {
-    const claim = await this.store.claim(
+    let claim = await this.store.claim(
       runId,
       this.options.workerId,
       this.clock.now(),
       this.options.leaseMs ?? 30_000,
       expectedRevision,
     );
+    if (!claim && expectedRevision !== undefined) {
+      const current = await this.store.read(runId);
+      const latest = current.attempts.at(-1);
+      const leaseExpired =
+        current.lease !== undefined &&
+        Date.parse(current.lease.expiresAt) <= this.clock.now().getTime();
+      if (
+        current.revision > expectedRevision &&
+        latest?.status === "running" &&
+        leaseExpired
+      )
+        claim = await this.store.claim(
+          runId,
+          this.options.workerId,
+          this.clock.now(),
+          this.options.leaseMs ?? 30_000,
+          current.revision,
+        );
+    }
     if (!claim) return null;
     return this.workClaim(claim);
   }
@@ -131,6 +151,7 @@ export class ResumableCoordinator {
           retryable: failure.retryable,
           classification: failure.classification,
           error: failure.message,
+          evidence: failure.evidence,
         },
         terminal,
         this.clock.now(),

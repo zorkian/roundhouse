@@ -1,7 +1,7 @@
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "roundhouse-dev-control-plane",
-  "main": "src/index.ts",
+  "main": "src/deploy.ts",
   "compatibility_date": "2026-07-11",
   "workers_dev": false,
   "preview_urls": false,
@@ -9,7 +9,8 @@
     "AUTH_MODE": "access",
     "ACCESS_TEAM_DOMAIN": "zorkian",
     "ACCESS_POLICY_AUD": "93175877f79ccfad4f2d7b0ed35f9df6ec1901269474150486076320a74f141a",
-    "EXECUTION_MODE": "deterministic-local",
+    "EXECUTION_MODE": "cloudflare-container",
+    "EXECUTION_SCENARIO": "success",
     "ALLOWED_REPOSITORY_PATH": "/workspace/roundhouse",
     "ALLOWED_REMOTE_URL": "https://github.com/zorkian/roundhouse.git",
   },
@@ -19,6 +20,37 @@
       "database_name": "roundhouse-dev-coordination",
       "database_id": "87a4098a-a829-4e0b-80c6-43e2eaf34ddc",
       "migrations_dir": "migrations",
+    },
+  ],
+  "r2_buckets": [
+    {
+      "binding": "EXECUTION_EVIDENCE",
+      "bucket_name": "roundhouse-dev-evidence",
+    },
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "EXECUTION_CONTAINERS",
+        "class_name": "RoundhouseExecutionContainer",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "execution-container-v1",
+      "new_sqlite_classes": ["RoundhouseExecutionContainer"],
+    },
+  ],
+  "containers": [
+    {
+      "name": "roundhouse-dev-execution",
+      "class_name": "RoundhouseExecutionContainer",
+      "image": "../../containers/roundhouse-execution/Dockerfile",
+      "max_instances": 1,
+      "instance_type": "standard-1",
+      "rollout_step_percentage": 100,
+      "rollout_active_grace_period": 0,
     },
   ],
   "queues": {

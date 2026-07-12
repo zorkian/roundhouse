@@ -56,6 +56,9 @@ importers:
 
   apps/control-plane-worker:
     dependencies:
+      '@cloudflare/containers':
+        specifier: 'catalog:'
+        version: 0.3.7
       '@roundhouse/self-development':
         specifier: workspace:*
         version: link:../../packages/self-development

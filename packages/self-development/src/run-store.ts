@@ -176,6 +176,42 @@ export class FileRunStore implements JobStore {
     );
   }
 
+  async cancel(runId: string, now: Date): Promise<SelfDevelopmentRun> {
+    return this.locked(runId, async () => {
+      const run = await this.read(runId);
+      if (["cancelled", "completed", "failed"].includes(run.state)) return run;
+      const attempts = run.attempts.map((attempt) =>
+        attempt.status === "running"
+          ? {
+              ...attempt,
+              status: "failed" as const,
+              completedAt: now.toISOString(),
+              retryable: false,
+              classification: "cancelled",
+              error: "Run was cancelled",
+            }
+          : attempt,
+      );
+      const { lease: _lease, ...rest } = run;
+      return this.replace({
+        ...rest,
+        state: "cancelled",
+        updatedAt: now.toISOString(),
+        attempts,
+        events: [
+          ...run.events,
+          {
+            sequence: run.events.length + 1,
+            type: "run.cancelled",
+            state: "cancelled",
+            occurredAt: now.toISOString(),
+            detail: {},
+          },
+        ],
+      });
+    });
+  }
+
   async transition(
     runId: string,
     state: SelfDevelopmentRunState,
@@ -188,9 +224,13 @@ export class FileRunStore implements JobStore {
       const current = await this.read(runId);
       if (!(transitions[current.state] ?? []).includes(state))
         throw new Error(`Invalid run transition: ${current.state} -> ${state}`);
+      const { evidence, ...otherUpdates } = updates;
       const run = selfDevelopmentRunSchema.parse({
         ...current,
-        ...updates,
+        ...otherUpdates,
+        evidence: evidence
+          ? [...current.evidence, ...evidence]
+          : current.evidence,
         revision: current.revision + 1,
         state,
         updatedAt: now,
@@ -386,9 +426,11 @@ export class FileRunStore implements JobStore {
             }
           : attempt,
       );
+      const { evidence, ...otherUpdates } = updates;
       return this.replace({
         ...run,
-        ...updates,
+        ...otherUpdates,
+        evidence: evidence ? [...run.evidence, ...evidence] : run.evidence,
         state,
         updatedAt: now.toISOString(),
         attempts,
@@ -418,6 +460,7 @@ export class FileRunStore implements JobStore {
       const run = await this.read(runId);
       this.assertLease(run, token, now);
       const state = terminal ? "failed" : recoveryState[stage];
+      const { evidence, ...attemptFailure } = failure;
       const attempts = run.attempts.map((attempt, index) =>
         index === run.attempts.length - 1 &&
         attempt.stage === stage &&
@@ -426,7 +469,7 @@ export class FileRunStore implements JobStore {
               ...attempt,
               status: "failed" as const,
               completedAt: now.toISOString(),
-              ...failure,
+              ...attemptFailure,
             }
           : attempt,
       );
@@ -435,6 +478,7 @@ export class FileRunStore implements JobStore {
         state,
         updatedAt: now.toISOString(),
         attempts,
+        evidence: evidence ? [...run.evidence, ...evidence] : run.evidence,
         events: [
           ...run.events,
           {
@@ -442,7 +486,7 @@ export class FileRunStore implements JobStore {
             type: `${stage}.failed`,
             state,
             occurredAt: now.toISOString(),
-            detail: failure,
+            detail: attemptFailure,
           },
         ],
       });

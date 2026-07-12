@@ -102,5 +102,188 @@ export function jobStoreContract(
       expect(released.updatedAt).toBe(releasedAt.toISOString());
       expect(released.lease).toBeUndefined();
     });
+
+    it("durably cancels work and closes a running attempt", async () => {
+      const store = await createStore();
+      const start = new Date("2026-07-12T00:00:00Z");
+      const cancelledAt = new Date("2026-07-12T00:00:01Z");
+      await store.submit("run_contract_cancel", contractTask, start);
+      const claim = await store.claim(
+        "run_contract_cancel",
+        "worker-a",
+        start,
+        10_000,
+        1,
+      );
+      await store.startAttempt(
+        "run_contract_cancel",
+        claim!.token,
+        "prepare",
+        start,
+      );
+
+      const cancelled = await store.cancel("run_contract_cancel", cancelledAt);
+      expect(cancelled.state).toBe("cancelled");
+      expect(cancelled.lease).toBeUndefined();
+      expect(cancelled.attempts[0]).toMatchObject({
+        status: "failed",
+        retryable: false,
+        classification: "cancelled",
+      });
+      expect(cancelled.events.at(-1)?.type).toBe("run.cancelled");
+      expect(
+        (await (await createStore()).read("run_contract_cancel")).state,
+      ).toBe("cancelled");
+    });
+
+    it("preserves evidence across multiple failed attempts", async () => {
+      const store = await createStore();
+      const start = new Date("2026-07-12T00:00:00Z");
+      await store.submit("run_contract_evidence", contractTask, start);
+      const evidence = (number: number) => ({
+        schemaVersion: 1 as const,
+        evidenceId: `evidence-${number}`,
+        attemptId: `run_contract_evidence-prepare-${number}`,
+        objectKey: `runs/run_contract_evidence/attempts/${number}.json`,
+        sha256: String(number).repeat(64),
+        size: number,
+        mediaType: "application/json" as const,
+        createdAt: new Date(start.getTime() + number).toISOString(),
+      });
+
+      const first = await store.claim(
+        "run_contract_evidence",
+        "worker-a",
+        start,
+        10_000,
+        1,
+      );
+      await store.startAttempt(
+        "run_contract_evidence",
+        first!.token,
+        "prepare",
+        start,
+      );
+      await store.failAttempt(
+        "run_contract_evidence",
+        first!.token,
+        "prepare",
+        {
+          retryable: true,
+          classification: "evidence_test",
+          error: "first",
+          evidence: [evidence(1)],
+        },
+        false,
+        new Date(start.getTime() + 1),
+      );
+      await store.release(
+        "run_contract_evidence",
+        first!.token,
+        new Date(start.getTime() + 2),
+      );
+      const second = await store.claim(
+        "run_contract_evidence",
+        "worker-b",
+        new Date(start.getTime() + 3),
+        10_000,
+      );
+      await store.startAttempt(
+        "run_contract_evidence",
+        second!.token,
+        "prepare",
+        new Date(start.getTime() + 3),
+      );
+      await store.failAttempt(
+        "run_contract_evidence",
+        second!.token,
+        "prepare",
+        {
+          retryable: false,
+          classification: "evidence_test",
+          error: "second",
+          evidence: [evidence(2)],
+        },
+        true,
+        new Date(start.getTime() + 4),
+      );
+
+      expect((await store.read("run_contract_evidence")).evidence).toEqual([
+        evidence(1),
+        evidence(2),
+      ]);
+    });
+
+    it("preserves failed-attempt evidence when a later attempt succeeds", async () => {
+      const store = await createStore();
+      const start = new Date("2026-07-12T00:00:00Z");
+      const evidence = (number: number) => ({
+        schemaVersion: 1 as const,
+        evidenceId: `mixed-evidence-${number}`,
+        attemptId: `run_contract_mixed_evidence-prepare-${number}`,
+        objectKey: `runs/run_contract_mixed_evidence/attempts/${number}.json`,
+        sha256: String(number).repeat(64),
+        size: number,
+        mediaType: "application/json" as const,
+        createdAt: new Date(start.getTime() + number).toISOString(),
+      });
+      await store.submit("run_contract_mixed_evidence", contractTask, start);
+      const first = await store.claim(
+        "run_contract_mixed_evidence",
+        "worker-a",
+        start,
+        10_000,
+        1,
+      );
+      await store.startAttempt(
+        "run_contract_mixed_evidence",
+        first!.token,
+        "prepare",
+        start,
+      );
+      await store.failAttempt(
+        "run_contract_mixed_evidence",
+        first!.token,
+        "prepare",
+        {
+          retryable: true,
+          classification: "evidence_test",
+          error: "first",
+          evidence: [evidence(1)],
+        },
+        false,
+        new Date(start.getTime() + 1),
+      );
+      await store.release(
+        "run_contract_mixed_evidence",
+        first!.token,
+        new Date(start.getTime() + 2),
+      );
+      const second = await store.claim(
+        "run_contract_mixed_evidence",
+        "worker-b",
+        new Date(start.getTime() + 3),
+        10_000,
+      );
+      await store.startAttempt(
+        "run_contract_mixed_evidence",
+        second!.token,
+        "prepare",
+        new Date(start.getTime() + 3),
+      );
+      await store.completeAttempt(
+        "run_contract_mixed_evidence",
+        second!.token,
+        "prepare",
+        "awaiting_approval",
+        {},
+        { evidence: [evidence(2)] },
+        new Date(start.getTime() + 4),
+      );
+
+      expect(
+        (await store.read("run_contract_mixed_evidence")).evidence,
+      ).toEqual([evidence(1), evidence(2)]);
+    });
   });
 }

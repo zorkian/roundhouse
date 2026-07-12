@@ -10,6 +10,10 @@ import {
 import { z } from "zod";
 
 import { ConfiguredAuthorizer, type RequestAuthorizer } from "./auth.js";
+import {
+  CloudflareExecutionDispatcher,
+  CloudflareRepositoryExecutionBackend,
+} from "./cloudflare-execution.js";
 import { idempotencyKeySchema, submitRunSchema } from "./contracts.js";
 import type { ControlPlaneEnv } from "./environment.js";
 import { inspectRun } from "./inspection.js";
@@ -57,13 +61,30 @@ async function requestBody(request: Request): Promise<unknown> {
 }
 
 function coordinator(env: ControlPlaneEnv): ResumableCoordinator {
+  if (
+    env.EXECUTION_MODE === "cloudflare-container" &&
+    (!env.EXECUTION_CONTAINERS || !env.EXECUTION_EVIDENCE)
+  )
+    throw new Error("Cloudflare execution bindings are not configured");
+  const dispatcher =
+    env.EXECUTION_MODE === "cloudflare-container"
+      ? new CloudflareExecutionDispatcher(
+          new CloudflareRepositoryExecutionBackend(
+            env.EXECUTION_CONTAINERS!,
+            env.EXECUTION_EVIDENCE!,
+          ),
+          env.EXECUTION_SCENARIO ?? "success",
+        )
+      : new DeterministicLocalDispatcher(env.EXECUTION_MODE);
   return new ResumableCoordinator(
     new D1JobStore(env.DB),
-    new DispatchingStageExecutor(
-      new DeterministicLocalDispatcher(env.EXECUTION_MODE),
-    ),
+    new DispatchingStageExecutor(dispatcher),
     { now: () => new Date() },
-    { workerId: "local-control-plane-queue", maxAttemptsPerStage: 3 },
+    {
+      workerId: "roundhouse-dev-control-plane-queue",
+      leaseMs: 300_000,
+      maxAttemptsPerStage: 3,
+    },
   );
 }
 
@@ -115,6 +136,35 @@ async function submit(
   );
 }
 
+async function cancelRun(
+  runId: string,
+  env: ControlPlaneEnv,
+): Promise<Response> {
+  const jobs = new D1JobStore(env.DB);
+  const current = await jobs.read(runId);
+  const active = current.attempts.at(-1);
+  if (
+    env.EXECUTION_MODE === "cloudflare-container" &&
+    active?.status === "running" &&
+    env.EXECUTION_CONTAINERS
+  )
+    await env.EXECUTION_CONTAINERS.getByName(active.attemptId)
+      .destroy()
+      .catch((error: unknown) => {
+        const reason = (
+          error instanceof Error ? error.message : "unknown error"
+        )
+          .replace(/https?:\/\/\S+/g, "[url]")
+          .replace(/\/(?:[^\s/:]+\/)+[^\s:]+/g, "[path]")
+          .slice(0, 160);
+        console.warn("Cloudflare Container cancellation teardown failed", {
+          attemptId: active.attemptId,
+          reason,
+        });
+      });
+  return json(inspectRun(await jobs.cancel(runId, new Date())));
+}
+
 async function route(
   request: Request,
   env: ControlPlaneEnv,
@@ -134,6 +184,15 @@ async function route(
   if (request.method === "GET" && match?.[1]) {
     try {
       return json(inspectRun(await new D1JobStore(env.DB).read(match[1])));
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("Run not found:"))
+        throw new HttpError(404, "Run not found");
+      throw error;
+    }
+  }
+  if (request.method === "DELETE" && match?.[1]) {
+    try {
+      return await cancelRun(match[1], env);
     } catch (error) {
       if (error instanceof Error && error.message.startsWith("Run not found:"))
         throw new HttpError(404, "Run not found");

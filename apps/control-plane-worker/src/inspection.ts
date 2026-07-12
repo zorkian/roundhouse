@@ -22,6 +22,15 @@ export function inspectRun(run: SelfDevelopmentRun): Record<string, unknown> {
       retryable: attempt.retryable,
       classification: attempt.classification,
     })),
+    evidence: run.evidence.map((item) => ({
+      evidenceId: item.evidenceId,
+      attemptId: item.attemptId,
+      objectKey: item.objectKey,
+      sha256: item.sha256,
+      size: item.size,
+      mediaType: item.mediaType,
+      createdAt: item.createdAt,
+    })),
     events: run.events.map((event) => ({
       sequence: event.sequence,
       type: event.type,
