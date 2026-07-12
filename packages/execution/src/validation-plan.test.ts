@@ -12,6 +12,7 @@ version: 1
 runtime: { image: roundhouse/runner:dev, workspace: /workspace }
 bootstrap: { command: pnpm, args: [install] }
 validation:
+  license: { command: pnpm, args: [license:check] }
   format: { command: pnpm, args: [format:check] }
   compile: { command: pnpm, args: [typecheck] }
   targeted: { command: pnpm, args: [test] }
@@ -40,7 +41,7 @@ describe("planValidation", () => {
     });
 
     expect(plan.effectiveLevel).toBe("quick");
-    expect(plan.commands[0]).toEqual({
+    expect(plan.commands[1]).toEqual({
       name: "format",
       command: {
         command: "pnpm",
@@ -48,6 +49,7 @@ describe("planValidation", () => {
       },
     });
     expect(plan.commands.map((command) => command.name)).toEqual([
+      "license",
       "format",
       "compile",
       "targeted",
@@ -63,7 +65,8 @@ describe("planValidation", () => {
 
     expect(plan.effectiveLevel).toBe("full");
     expect(plan.reasons).toEqual(["package.json requires full validation"]);
-    expect(plan.commands[0]?.command.args).toEqual(["format:check"]);
+    expect(plan.commands[0]?.command.args).toEqual(["license:check"]);
+    expect(plan.commands[1]?.command.args).toEqual(["format:check"]);
   });
 
   it("checks a renamed file's previous path when deciding escalation", () => {

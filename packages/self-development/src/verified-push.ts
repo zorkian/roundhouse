@@ -85,6 +85,15 @@ export async function pushVerifiedCommit(
     input.remote,
     input.branch,
   );
+  if (before === input.commit) {
+    return {
+      remote: input.remote,
+      remoteUrl,
+      branch: input.branch,
+      previousHead: before,
+      head: before,
+    };
+  }
   if (before !== input.expectedRemoteHead)
     throw new Error("Remote branch moved from its expected head");
 

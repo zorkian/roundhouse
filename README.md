@@ -27,6 +27,10 @@ The [self-development walking skeleton](docs/self-development-walking-skeleton.m
 documents the durable local task-to-approved-publication path and its current
 V1 boundaries.
 
+The [resumable job loop](docs/resumable-job-loop.md) documents platform-neutral
+coordination, leases, retries, crash recovery, and the local-to-Cloudflare
+adapter map.
+
 ## License
 
 Roundhouse is licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution information.

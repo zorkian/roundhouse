@@ -11,7 +11,8 @@ import type {
 import type { ChangedFile } from "./changed-files.js";
 import type { ValidationLevel, ValidationRequest } from "./types.js";
 
-export type ValidationCommandName = "format" | "compile" | "targeted";
+export type ValidationCommandName =
+  "license" | "format" | "compile" | "targeted";
 
 export type PlannedValidationCommand = {
   name: ValidationCommandName;
@@ -31,13 +32,17 @@ function matchesAny(path: string, patterns: string[]): boolean {
 }
 
 function fullCommands(profile: RepositoryProfile): PlannedValidationCommand[] {
-  return (["format", "compile", "targeted"] as const).map((name) => ({
+  const names = ["format", "compile", "targeted"] as const;
+  const commands: PlannedValidationCommand[] = names.map((name) => ({
     name,
     command: {
       command: profile.validation[name].command,
       args: profile.validation[name].args,
     },
   }));
+  if (profile.validation.license)
+    commands.unshift({ name: "license", command: profile.validation.license });
+  return commands;
 }
 
 export function planValidation(
@@ -85,6 +90,8 @@ export function planValidation(
     .map((change) => change.path)
     .filter((path) => matchesAny(path, quick.format.include));
   const commands: PlannedValidationCommand[] = [];
+  if (profile.validation.license)
+    commands.push({ name: "license", command: profile.validation.license });
   if (formatPaths.length > 0) {
     commands.push({
       name: "format",

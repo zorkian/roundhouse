@@ -26,6 +26,7 @@ export const repositoryProfileSchema = z.object({
   }),
   bootstrap: commandSchema,
   validation: z.object({
+    license: commandSchema.optional(),
     format: commandSchema,
     compile: commandSchema,
     targeted: commandSchema,

@@ -90,8 +90,26 @@ export async function publishApprovedPatch(
     input.runId,
   );
   const head = (await git(input.repositoryPath, ["rev-parse", "HEAD"])).trim();
-  if (head !== verified.approval.baseCommit)
-    throw new Error("HEAD does not match the approved base commit");
+  if (head !== verified.approval.baseCommit) {
+    const existingPatch = await git(input.repositoryPath, [
+      "diff",
+      "--binary",
+      "--no-ext-diff",
+      verified.approval.baseCommit,
+      head,
+      "--",
+    ]);
+    if (sha256(existingPatch) !== verified.approval.patchSha256)
+      throw new Error("HEAD does not match the approved base or patch");
+    return {
+      runId: input.runId,
+      actorId: verified.approval.actorId,
+      baseCommit: verified.approval.baseCommit,
+      commit: head,
+      patchSha256: verified.approval.patchSha256,
+      committedAt: new Date().toISOString(),
+    };
+  }
 
   const staged = await git(input.repositoryPath, [
     "diff",

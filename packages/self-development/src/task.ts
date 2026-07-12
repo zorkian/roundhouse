@@ -60,14 +60,51 @@ export const runEventSchema = z.object({
   detail: z.record(z.string(), z.unknown()).default({}),
 });
 
+export const jobStageSchema = z.enum([
+  "prepare",
+  "implement",
+  "validate",
+  "commit",
+  "push",
+  "complete",
+]);
+export type JobStage = z.infer<typeof jobStageSchema>;
+
+export const runAttemptSchema = z.object({
+  attemptId: z.string().min(1),
+  stage: jobStageSchema,
+  number: z.number().int().positive(),
+  status: z.enum(["running", "succeeded", "failed"]),
+  startedAt: z.iso.datetime(),
+  completedAt: z.iso.datetime().optional(),
+  retryable: z.boolean().optional(),
+  classification: z.string().min(1).optional(),
+  error: z.string().min(1).optional(),
+});
+
+export const runLeaseSchema = z.object({
+  token: z.string().min(1),
+  workerId: z.string().min(1),
+  acquiredAt: z.iso.datetime(),
+  expiresAt: z.iso.datetime(),
+});
+
 export const selfDevelopmentRunSchema = z.object({
   schemaVersion: z.literal(1),
   runId: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/),
+  revision: z.number().int().positive().default(1),
   task: selfDevelopmentTaskSchema,
   state: runStateSchema,
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
   workspacePath: z.string().optional(),
+  workspaceRef: z.string().min(1).optional(),
+  commit: z
+    .string()
+    .regex(/^[a-f0-9]{40}$/)
+    .optional(),
+  lease: runLeaseSchema.optional(),
+  attempts: z.array(runAttemptSchema).default([]),
   events: z.array(runEventSchema).min(1),
 });
 
