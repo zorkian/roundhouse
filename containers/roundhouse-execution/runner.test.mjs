@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   assertCompleteAgentOutput,
+  changedPaths,
   command,
   validRepositoryPath,
   withoutRuntimeCredential,
@@ -51,5 +52,15 @@ describe("trusted agent output boundary", () => {
     expect(validRepositoryPath("docs/safe.md")).toBe(true);
     for (const path of ["docs/line\nbreak.md", "docs/tab\tname.md"])
       expect(validRepositoryPath(path)).toBe(false);
+  });
+
+  it("parses NUL-delimited status paths without quoting ambiguity", () => {
+    expect(changedPaths("?? docs/my file.md\0 M docs/café.md\0")).toEqual([
+      "docs/my file.md",
+      "docs/café.md",
+    ]);
+    expect(changedPaths("R  docs/new name.md\0docs/old name.md\0")).toEqual([
+      "docs/new name.md",
+    ]);
   });
 });

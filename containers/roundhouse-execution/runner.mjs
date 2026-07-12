@@ -195,14 +195,16 @@ function pathAllowed(path, allowedPaths) {
   );
 }
 
-function changedPaths(output) {
-  return output
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => {
-      const path = line.slice(3);
-      return path.includes(" -> ") ? path.split(" -> ").at(-1) : path;
-    });
+export function changedPaths(output) {
+  const entries = output.split("\0").filter(Boolean);
+  const paths = [];
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    paths.push(entry.slice(3));
+    if (["R", "C"].includes(entry[0]) || ["R", "C"].includes(entry[1]))
+      index += 1;
+  }
+  return paths;
 }
 
 function promptFor(request) {
@@ -366,6 +368,7 @@ async function implement(value) {
   const status = await command("git", [
     "status",
     "--porcelain=v1",
+    "-z",
     "--untracked-files=all",
   ]);
   if (status.exitCode !== 0) throw new Error("changed_file_inventory_failed");

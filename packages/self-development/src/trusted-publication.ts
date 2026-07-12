@@ -204,26 +204,31 @@ export async function publishTrustedImplementation(
     )) !== result.baseCommit
   )
     throw new Error("Remote base moved after implementation");
-  await gitWithInput(
-    input.repositoryPath,
-    ["apply", "--index", "--binary", "--whitespace=nowarn", "-"],
-    result.patch,
-  );
-  const stagedPatch = await git(
-    input.repositoryPath,
-    [
-      "diff",
-      "--cached",
-      "--binary",
-      "--full-index",
-      "--no-ext-diff",
-      result.baseCommit,
-      "--",
-    ],
-    true,
-  );
-  if (sha256(stagedPatch) !== patchSha256)
-    throw new Error("Staged patch does not match exact approval");
+  try {
+    await gitWithInput(
+      input.repositoryPath,
+      ["apply", "--index", "--binary", "--whitespace=nowarn", "-"],
+      result.patch,
+    );
+    const stagedPatch = await git(
+      input.repositoryPath,
+      [
+        "diff",
+        "--cached",
+        "--binary",
+        "--full-index",
+        "--no-ext-diff",
+        result.baseCommit,
+        "--",
+      ],
+      true,
+    );
+    if (sha256(stagedPatch) !== patchSha256)
+      throw new Error("Staged patch does not match exact approval");
+  } catch (error) {
+    await git(input.repositoryPath, ["reset", "--hard", result.baseCommit]);
+    throw error;
+  }
   await git(input.repositoryPath, ["config", "user.name", input.authorName]);
   await git(input.repositoryPath, ["config", "user.email", input.authorEmail]);
   await git(input.repositoryPath, [
