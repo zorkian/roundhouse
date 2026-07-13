@@ -73,6 +73,8 @@ describe("inspectRun execution evidence", () => {
     });
 
     const serialized = JSON.stringify(inspectRun(run));
+    expect(serialized).toContain("Inspect evidence");
+    expect(serialized).toContain("a".repeat(40));
     expect(serialized).toContain("evidence_run_inspection_evidence-prepare-1");
     expect(serialized).toContain("command_failed");
     expect(serialized).not.toContain("internal runner detail");

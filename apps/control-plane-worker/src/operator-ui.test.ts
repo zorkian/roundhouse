@@ -1,9 +1,11 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { operatorPage } from "./operator-ui.js";
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("operator UI", () => {
   it("serves authenticated dashboard, plan, and run shells", async () => {
@@ -24,5 +26,42 @@ describe("operator UI", () => {
   it("does not claim unrelated routes", () => {
     expect(operatorPage("/v1/github/webhook")).toBeUndefined();
     expect(operatorPage("/plans/bad/path")).toBeUndefined();
+  });
+
+  it("renders the public run-inspection contract without an internal task", async () => {
+    const response = operatorPage("/")!;
+    const script = /<script>([\s\S]+)<\/script>/.exec(
+      await response.text(),
+    )![1];
+    const app = { innerHTML: "Loading…" };
+    vi.stubGlobal("document", { getElementById: () => app });
+    vi.stubGlobal("setInterval", () => 0);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          schemaVersion: 1,
+          plans: [],
+          runs: [
+            {
+              schemaVersion: 1,
+              runId: "run_ui_contract",
+              taskId: "task_ui_contract",
+              subject: "Public inspection subject",
+              baseCommit: "a".repeat(40),
+              state: "created",
+              revision: 3,
+              attempts: [],
+              evidence: [],
+            },
+          ],
+        }),
+      ),
+    );
+
+    new Function(script!)();
+    await vi.waitFor(() =>
+      expect(app.innerHTML).toContain("Public inspection subject"),
+    );
   });
 });
