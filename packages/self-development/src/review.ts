@@ -10,6 +10,7 @@ const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
 const boundedIdentitySchema = z
   .string()
   .regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,199}$/);
+const runIdentitySchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/);
 
 export const reviewSeveritySchema = z.enum([
   "critical",
@@ -32,7 +33,7 @@ export const independentReviewRequestSchema = z.object({
   attemptId: boundedIdentitySchema,
   attemptNumber: z.number().int().positive().max(3),
   cycle: z.number().int().min(1).max(2),
-  runId: boundedIdentitySchema,
+  runId: runIdentitySchema,
   repositoryUrl: z.literal("https://github.com/zorkian/roundhouse.git"),
   issueNumber: z.number().int().positive(),
   issueUrl: z
@@ -97,7 +98,7 @@ export const independentReviewResultSchema = z.object({
   reviewId: z.string().regex(/^review_[a-f0-9]{40}$/),
   attemptId: boundedIdentitySchema,
   cycle: z.number().int().min(1).max(2),
-  runId: boundedIdentitySchema,
+  runId: runIdentitySchema,
   baseCommit: commitSchema,
   headCommit: commitSchema,
   patchSha256: sha256Schema,

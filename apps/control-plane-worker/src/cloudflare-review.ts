@@ -107,6 +107,8 @@ export class CloudflareIndependentReviewBackend implements IndependentReviewBack
     const existing = await this.evidence.get(objectKey);
     if (existing) {
       text = await existing.text();
+      if (text.includes(this.oauthToken))
+        throw new Error("Claude review credential leaked into evidence");
       result = await parseEvidence(request, text);
     } else {
       const container = this.containers.getByName(request.attemptId);

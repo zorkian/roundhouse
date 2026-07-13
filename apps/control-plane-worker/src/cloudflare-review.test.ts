@@ -151,6 +151,34 @@ describe("Cloudflare independent review backend", () => {
     expect(first.evidence.sha256).toMatch(/^[a-f0-9]{64}$/);
   });
 
+  it("rejects a retained object containing the active Claude credential", async () => {
+    const input = request();
+    const retained = await result(input);
+    retained.summary = `unsafe retained credential: ${token}`;
+    const evidence = bucket();
+    evidence.retained.set(
+      `reviews/${input.reviewId}/attempts/${input.attemptId}/review.json`,
+      JSON.stringify(retained),
+    );
+    const runReviewJob = vi.fn();
+    const backend = new CloudflareIndependentReviewBackend(
+      {
+        getByName: () =>
+          ({
+            runJob: vi.fn(),
+            runReviewJob,
+            destroy: vi.fn(),
+          }) as unknown as ExecutionContainerPort,
+      },
+      evidence.port,
+      JSON.stringify({ oauthToken: token }),
+    );
+    await expect(backend.execute(input)).rejects.toThrow(
+      "Claude review credential leaked into evidence",
+    );
+    expect(runReviewJob).not.toHaveBeenCalled();
+  });
+
   it("rejects a result for another exact head", async () => {
     const input = request();
     const mismatched = { ...(await result(input)), headCommit: "9".repeat(40) };

@@ -5,11 +5,31 @@ import { describe, expect, it } from "vitest";
 
 import {
   defaultFindingDisposition,
+  independentReviewRequestSchema,
+  independentReviewResultSchema,
   normalizeReviewFindings,
   reviewIdentity,
 } from "./review.js";
 
 describe("independent review contracts", () => {
+  it("keeps review run identity aligned with the durable run contract", async () => {
+    const maximumRunId = `run_${"x".repeat(124)}`;
+    const oversizedRunId = `${maximumRunId}x`;
+    expect(maximumRunId).toHaveLength(128);
+    expect(oversizedRunId).toHaveLength(129);
+    expect(
+      independentReviewRequestSchema.shape.runId.safeParse(maximumRunId)
+        .success,
+    ).toBe(true);
+    expect(
+      independentReviewRequestSchema.shape.runId.safeParse(oversizedRunId)
+        .success,
+    ).toBe(false);
+    expect(
+      independentReviewResultSchema.shape.runId.safeParse(oversizedRunId)
+        .success,
+    ).toBe(false);
+  });
   it("creates deterministic review and finding identities", async () => {
     const reviewId = await reviewIdentity({
       runId: "run_review_contract",
