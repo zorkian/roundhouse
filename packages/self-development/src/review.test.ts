@@ -60,7 +60,15 @@ describe("independent review contracts", () => {
       10,
     );
 
-    expect(reviewId).toMatch(/^review_[a-f0-9]{40}$/);
+    expect(reviewId).toBe("review_a4ba1fe06c33ffc1e14f567747e5dfdb4abcd619");
+    await expect(
+      reviewIdentity({
+        cycle: 1,
+        headCommit: "a".repeat(40),
+        runId: "run_review_contract",
+        ignored: "caller-only metadata",
+      } as Parameters<typeof reviewIdentity>[0]),
+    ).resolves.toBe(reviewId);
     expect(findings).toHaveLength(1);
     expect(findings[0]?.findingId).toMatch(/^finding_[a-f0-9]{40}$/);
     await expect(

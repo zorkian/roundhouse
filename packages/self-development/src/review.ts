@@ -270,7 +270,13 @@ export async function reviewIdentity(input: {
   headCommit: string;
   cycle: number;
 }): Promise<string> {
-  return `review_${(await digest(input)).slice(0, 40)}`;
+  return `review_${(
+    await digest({
+      runId: input.runId,
+      headCommit: input.headCommit,
+      cycle: input.cycle,
+    })
+  ).slice(0, 40)}`;
 }
 
 export async function normalizeReviewFindings(
