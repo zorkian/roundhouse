@@ -1044,7 +1044,7 @@ async function route(
     const input = z
       .object({
         schemaVersion: z.literal(1),
-        expectedRevision: z.number().int().nonnegative(),
+        expectedRevision: z.number().int().positive(),
         planSha256: z.string().regex(/^[a-f0-9]{64}$/),
       })
       .parse(await requestBody(request));
@@ -1069,7 +1069,9 @@ async function route(
         error instanceof Error &&
         (error.message.includes("binding") ||
           error.message.includes("actor") ||
-          error.message.includes("cannot run"))
+          error.message.includes("cannot run") ||
+          error.message.includes("not approved") ||
+          error.message.includes("concurrent"))
       )
         throw new HttpError(409, error.message);
       throw error;

@@ -420,6 +420,25 @@ describe("local control-plane Worker", () => {
     const plan = await readIssuePlan(env, 17);
     expect(plan).toMatchObject({ status: "proposed", revision: 1 });
 
+    const zeroRevisionApproval = await handler.fetch!(
+      request(`/v1/plans/${plan!.plan.planId}/approve`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "zero-plan-revision-01",
+        },
+        body: JSON.stringify({
+          schemaVersion: 1,
+          expectedRevision: 0,
+          planSha256: plan!.plan.planSha256,
+        }),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(zeroRevisionApproval.status).toBe(400);
+    expect(queued.messages).toHaveLength(0);
+
     const repeatedStart = await handler.fetch!(
       await webhook("/rh start", 42, "87654321-abcd-4321-abcd-1234567890ab"),
       env,
