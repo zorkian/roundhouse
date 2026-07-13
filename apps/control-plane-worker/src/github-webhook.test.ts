@@ -88,6 +88,16 @@ describe("GitHub-native operator webhook", () => {
     expect(parseGitHubCommand("please /rh start")).toBeNull();
     expect(parseGitHubCommand("/rh shell rm -rf /")).toBeNull();
     expect(parseGitHubCommand("/rh retry run_123 latest")).toBeNull();
+    expect(
+      parseGitHubCommand(
+        `/rh retry run_123 ${BigInt(Number.MAX_SAFE_INTEGER) + 1n}`,
+      ),
+    ).toBeNull();
+    expect(
+      parseGitHubCommand(
+        `/rh approve run_123 ${BigInt(Number.MAX_SAFE_INTEGER) + 1n} ${"a".repeat(40)} ${"b".repeat(64)} ${"c".repeat(64)}`,
+      ),
+    ).toBeNull();
   });
 
   it("verifies the exact bytes with HMAC-SHA-256", async () => {

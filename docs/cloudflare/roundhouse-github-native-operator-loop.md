@@ -93,6 +93,55 @@ dependency overlay only when its `pnpm-lock.yaml` SHA-256 matches the image
 binding. Validation therefore runs with network disabled and without a runtime
 package installation; a lock mismatch fails before agent execution.
 
+## Applied cloud demonstration
+
+The approved manifest was applied without creating another hostname, DNS
+record, Worker, D1 database, Queue, R2 bucket, or Container application:
+
+- GitHub App `roundhouse-dev`: app `4281837`, installation `146147681`, scoped
+  only to `zorkian/roundhouse`;
+- Access application `Roundhouse GitHub webhook`:
+  `47c28288-e6d1-4625-9df6-5b1ca8216621`;
+- additive migration: `0006_github_native_operator.sql`;
+- Worker `roundhouse-dev-control-plane` version
+  `e4450372-0f5c-4229-ace5-aeffd5b232f4`;
+- Container application version `21`, immutable image
+  `sha256:1d62376c2d19ac11040ae4ca57402a51f270b1a8676d52a28bdb005f3596330a`.
+
+Live boundary probes returned an empty `404` for
+`/v1/github/webhook/extra`, `405` for `GET /v1/github/webhook`, `401` for a
+structurally valid delivery with an invalid HMAC, and an Access login redirect
+for `/v1/operations/alerts`. A signed GitHub App `ping` was accepted without a
+workflow effect.
+
+Dogfood issue [#14](https://github.com/zorkian/roundhouse/issues/14) started
+run `run_72e8989151d68ed991bfbe356e2e452e453955fc` at exact base
+`510fae10d48396d80751a277bcb99d6c07d906e8`. Earlier attempts exposed and then
+demonstrated recovery from an expired lease, safe bounded retry, precise
+validation-failure classification, and the missing offline dependency boundary.
+After dependencies were baked into the immutable image, attempt
+`run_72e8989151d68ed991bfbe356e2e452e453955fc-prepare-8` succeeded with:
+
+- patch SHA-256
+  `675b83cbf528d08480b6ee8c90cfca258bc0b573c10f19817c1a9a1ef0d2a0da`;
+- evidence object
+  `runs/run_72e8989151d68ed991bfbe356e2e452e453955fc/attempts/run_72e8989151d68ed991bfbe356e2e452e453955fc-prepare-8/trusted-implementation.json`;
+- evidence SHA-256
+  `a79052f9a3c8c5e1714a80d40a9a6fa185ab9521b18f86fbc719f8bc6c78fb2e`,
+  57,505 bytes;
+- evidence-set SHA-256
+  `d390e16e7e1cf50696942111595eb3cd15d123c47e43834f3bc8cbb2474c23c2`;
+- successful diff, format, Apache-2.0 header, typecheck, and 157-test gates;
+- denied HTTP and raw TCP probes after credential removal.
+
+The exact GitHub approval at revision 35 produced only commit
+`75337bb3dca4f728e022375e98cdefa074b129bb`, whose sole parent is the approved
+base. The two published blob SHA-256 values exactly match the retained
+publication manifest. Draft dogfood PR
+[#15](https://github.com/zorkian/roundhouse/pull/15) passed CI, and signed
+`check_suite` and `check_run` deliveries for that exact head were durably
+observed and reported back on issue #14.
+
 ## Local verification
 
 Use Node 24, as required by the repository:

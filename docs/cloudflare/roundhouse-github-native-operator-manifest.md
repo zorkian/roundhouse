@@ -3,7 +3,8 @@
 
 # GitHub-native operator-loop manifest
 
-Status: approved, unapplied.
+Status: approved and applied on 2026-07-12; see the operator-loop demonstration
+record.
 
 This manifest is the exact external mutation boundary authorized for the
 GitHub-native operator-loop milestone. Secret values are never recorded here.

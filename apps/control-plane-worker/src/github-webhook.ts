@@ -110,6 +110,12 @@ const runId = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/;
 const sha40 = /^[a-f0-9]{40}$/;
 const sha64 = /^[a-f0-9]{64}$/;
 
+function parseRevision(value: string | undefined): number | null {
+  if (!/^[1-9][0-9]*$/.test(value ?? "")) return null;
+  const parsed = Number.parseInt(value!, 10);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
 export function parseGitHubCommand(body: string): GitHubCommand | null {
   const line = body.trim().split(/\r?\n/, 1)[0]?.trim();
   if (!line?.startsWith("/rh")) return null;
@@ -120,22 +126,23 @@ export function parseGitHubCommand(body: string): GitHubCommand | null {
     if (parts[2] && !runId.test(parts[2])) return null;
     return { kind: "status", runId: parts[2] };
   }
+  const revision = parseRevision(parts[3]);
   if (
     ["cancel", "retry"].includes(parts[1] ?? "") &&
     parts.length === 4 &&
     runId.test(parts[2] ?? "") &&
-    /^[1-9][0-9]*$/.test(parts[3] ?? "")
+    revision !== null
   )
     return {
       kind: parts[1] as "cancel" | "retry",
       runId: parts[2]!,
-      revision: Number(parts[3]),
+      revision,
     };
   if (
     parts[1] === "approve" &&
     parts.length === 7 &&
     runId.test(parts[2] ?? "") &&
-    /^[1-9][0-9]*$/.test(parts[3] ?? "") &&
+    revision !== null &&
     sha40.test(parts[4] ?? "") &&
     sha64.test(parts[5] ?? "") &&
     sha64.test(parts[6] ?? "")
@@ -143,7 +150,7 @@ export function parseGitHubCommand(body: string): GitHubCommand | null {
     return {
       kind: "approve",
       runId: parts[2]!,
-      revision: Number(parts[3]),
+      revision,
       baseCommit: parts[4]!,
       patchSha256: parts[5]!,
       evidenceSetSha256: parts[6]!,
