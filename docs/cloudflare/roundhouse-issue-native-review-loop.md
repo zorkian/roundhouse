@@ -94,3 +94,49 @@ issues, pull requests, and demonstration evidence.
   exceptions, not the production credential architecture.
 - Only the public `zorkian/roundhouse` repository and fixed dogfood branches
   are supported.
+
+## Demonstration record
+
+Dogfood issue [#20](https://github.com/zorkian/roundhouse/issues/20) produced
+plan `plan_0e61da5e0de860b76ed0790f41ea56a39c93acd9`, bound to base
+`f9deed03401b574eb890d0bdbc3d33d107cb2d07`, plan SHA-256
+`3cf5baa8c1f876d59553666b2ffa9fca4a2ff6b1cc3cb0ed057f952ccd458494`,
+and the single path `docs/dogfood/issue-native-independent-review.md`.
+
+Initial run `run_e5909de75a14fdbcb16938191628cac3699d39c2` retained patch
+SHA-256 `fc36c29016aa5d50f4a44b07272cf1d23ca1fd3c268a95fbefdba9f8d4cd9676`
+and published commit `1754573bda65079f2e5ce2bb9181799523bdbbfc`, whose sole parent is the
+exact plan base. It opened draft pull request
+[#21](https://github.com/zorkian/roundhouse/pull/21).
+
+Cycle-one review `review_f2589b323ee7e53450ca488194ce5f79330918c0`
+checked that exact head and retained 2,461 bytes at
+`reviews/review_f2589b323ee7e53450ca488194ce5f79330918c0/attempts/review_f2589b323ee7e53450ca488194ce5f79330918c0-attempt-1/review.json`.
+Independent retrieval matched SHA-256
+`971ffbd2da9c4072707805619fda7a70708cb565002bd63c4160be3408698472`.
+Claude ran with tools and arbitrary Internet disabled, reported one high
+finding on the exact allowed path, and Roundhouse accepted finding
+`finding_73a392bf46b9b29604a8670c9024b324ec4da9af`.
+
+Remediation run `run_56307d42e7999bd54fc357d25eae895e0b8a1913`
+started from the reviewed head, changed only the same file, passed validation,
+and retained patch SHA-256
+`bd715af468cb07645fab9b872aee7607b6a53e1d4b067f89c1343f8c0257b5ee`.
+Verified publication advanced the existing branch without force to commit
+`b8b99e73cd4024f77d86c2783cb4c1310559a8e0`, whose sole parent is the reviewed
+head. The first API response was an HTTP 502 after GitHub accepted the update;
+an idempotent replay reconciled the retained publication result without another
+commit or review reservation.
+
+Cycle-two review `review_fa3bb3502b5e86622108b1a1517805effc36b0a4`
+retained 1,380 bytes at
+`reviews/review_fa3bb3502b5e86622108b1a1517805effc36b0a4/attempts/review_fa3bb3502b5e86622108b1a1517805effc36b0a4-attempt-1/review.json`.
+Independent retrieval matched SHA-256
+`280b890005463503f44d7fda2f1ba04dee782758619ba082f853a87085590c58`.
+It completed with zero findings. Pull request #21 contains the two-commit exact
+parent chain, one changed file, and a successful GitHub check.
+
+A temporary two-hour Access service token and Service Auth policy were used to
+inspect and operate the authenticated API after the previous smoke JWT expired.
+Both the policy and token were deleted after the demonstration; the original
+`Allow Mark` policy is again the only control-plane policy.
