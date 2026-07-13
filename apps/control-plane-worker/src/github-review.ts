@@ -182,6 +182,18 @@ export async function readIndependentReview(
   return value ? record(value) : null;
 }
 
+export async function readReviewByRemediationRun(
+  env: ControlPlaneEnv,
+  runId: string,
+): Promise<DurableIndependentReview | null> {
+  const value = await env.DB.prepare(
+    "SELECT review_id, request_hash, revision, status, attempt_count, lease_expires_at, dispatch_state, payload FROM independent_reviews WHERE json_extract(payload, '$.remediationRunId') = ? LIMIT 1",
+  )
+    .bind(runId)
+    .first<ReviewRow>();
+  return value ? record(value) : null;
+}
+
 export async function listIndependentReviews(
   env: ControlPlaneEnv,
   limit = 50,
@@ -309,14 +321,23 @@ export async function completeIndependentReview(
     )
       throw new Error("Independent review completion binding mismatch");
     const timestamp = now.toISOString();
-    const dispositions = execution.result.findings.map((finding) =>
-      defaultFindingDisposition(
+    const dispositions = execution.result.findings.map((finding) => {
+      const disposition = defaultFindingDisposition(
         reviewId,
         finding,
         current.request.allowedPaths,
         now,
-      ),
-    );
+      );
+      return current.request.cycle === 2 &&
+        disposition.disposition === "accepted"
+        ? {
+            ...disposition,
+            disposition: "deferred" as const,
+            rationale:
+              "The bounded two-cycle remediation limit was reached; this finding remains visible for later work.",
+          }
+        : disposition;
+    });
     const accepted = dispositions.filter(
       (value) => value.disposition === "accepted",
     );

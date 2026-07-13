@@ -109,6 +109,7 @@ export async function publishApprovedGitHubRun(input: {
   return input.github.publish({
     manifest: result.publicationManifest,
     branch: input.branch,
+    expectedRemoteHead: run.task.publication.expectedRemoteHead,
     commitMessage: input.commitMessage,
     pullRequestTitle: input.pullRequestTitle,
     issueNumber: input.issueNumber,

@@ -18,6 +18,7 @@ import {
   failIndependentReview,
   markReviewDispatched,
   readIndependentReview,
+  readReviewByRemediationRun,
   recordReviewRemediation,
   recoverableReviewDeliveries,
   reserveIndependentReview,
@@ -275,6 +276,50 @@ describe("durable independent review coordination", () => {
       status: "remediated",
       remediationRunId: "run_remediation_1",
     });
+    await expect(
+      readReviewByRemediationRun(env, "run_remediation_1"),
+    ).resolves.toMatchObject({ request: { reviewId: input.reviewId } });
+  });
+
+  it("defers otherwise accepted findings at the bounded second cycle", async () => {
+    const env = await runtime();
+    const original = await request();
+    const reviewId = await reviewIdentity({
+      runId: "run_review_cycle_2",
+      headCommit: "9".repeat(40),
+      cycle: 2,
+    });
+    const input = {
+      ...original,
+      reviewId,
+      attemptId: `${reviewId}-attempt-1`,
+      cycle: 2 as const,
+      runId: "run_review_cycle_2",
+      headCommit: "9".repeat(40),
+    };
+    await reserveIndependentReview(
+      env,
+      input,
+      new Date("2026-07-12T00:00:00Z"),
+    );
+    const claim = await claimIndependentReview(
+      env,
+      reviewId,
+      "worker-a",
+      new Date("2026-07-12T00:00:01Z"),
+      60_000,
+    );
+    const completed = await completeIndependentReview(
+      env,
+      reviewId,
+      claim!.token,
+      await execution(claim!.review.request),
+      new Date("2026-07-12T00:00:02Z"),
+    );
+    expect(completed.status).toBe("completed");
+    expect(
+      completed.dispositions.every((value) => value.disposition === "deferred"),
+    ).toBe(true);
   });
 
   it("bounds retry attempts and exposes stranded or expired delivery", async () => {
