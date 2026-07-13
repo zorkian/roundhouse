@@ -4,12 +4,14 @@
 import {
   D1JobStore,
   d1JobStoreMigration,
+  normalizeReviewFindings,
   type TrustedImplementationResult,
   type RunDelivery,
   type SelfDevelopmentTask,
 } from "@roundhouse/self-development/cloudflare";
 import { Miniflare } from "miniflare";
 import { exportPKCS8, generateKeyPair } from "jose";
+import { readFile } from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { ControlPlaneEnv } from "./environment.js";
@@ -77,6 +79,16 @@ async function awaitingImplementation(env: ControlPlaneEnv) {
       nodeId: "issue-node-7",
       contentSha256: "7".repeat(64),
       updatedAt: "2026-07-12T00:00:00.000Z",
+    },
+    planning: {
+      planId: `plan_${"6".repeat(40)}`,
+      planSha256: "5".repeat(64),
+      profileId: "roundhouse-self-development-v1",
+      profileVersion: 1,
+      issueContentSha256: "7".repeat(64),
+      exactPathsSha256: "4".repeat(64),
+      approvedBy: "github:zorkian",
+      approvedAt: "2026-07-12T00:00:00.000Z",
     },
     publication: {
       ...task.publication,
@@ -177,7 +189,11 @@ async function awaitingImplementation(env: ControlPlaneEnv) {
       const value = objects.get(key);
       return value ? { text: async () => value } : null;
     },
-    put: async () => ({}),
+    put: async (key, bytes) => {
+      if (objects.has(key)) return null;
+      objects.set(key, new TextDecoder().decode(bytes));
+      return {};
+    },
   };
   await jobs.completeAttempt(
     runId,
@@ -212,7 +228,11 @@ async function runtime(): Promise<{
   });
   instances.push(mf);
   const db = await mf.getD1Database("DB");
-  for (const statement of `${d1JobStoreMigration}\n${controlPlaneSubmissionMigration}\n${cloudOperationsMigration}\n${githubPocMigration}\n${githubNativeOperatorMigration}\n${githubPlanningMigration}`
+  const independentReviewMigration = await readFile(
+    new URL("../migrations/0008_independent_review.sql", import.meta.url),
+    "utf8",
+  );
+  for (const statement of `${d1JobStoreMigration}\n${controlPlaneSubmissionMigration}\n${cloudOperationsMigration}\n${githubPocMigration}\n${githubNativeOperatorMigration}\n${githubPlanningMigration}\n${independentReviewMigration}`
     .split(";")
     .map((value) => value.trim())
     .filter(Boolean))
@@ -790,8 +810,8 @@ describe("local control-plane Worker", () => {
     });
   });
 
-  it("publishes an exactly approved run through the GitHub gateway once", async () => {
-    const { env } = await runtime();
+  it("publishes an approved run, reserves review, and starts bounded remediation", async () => {
+    const { env, queued } = await runtime();
     const value = await awaitingImplementation(env);
     const handler = createControlPlaneHandler();
     const awaiting = await value.jobs.read(value.runId);
@@ -822,6 +842,7 @@ describe("local control-plane Worker", () => {
     env.GITHUB_APP_ID = "1";
     env.GITHUB_INSTALLATION_ID = "2";
     env.ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY = await exportPKCS8(pair.privateKey);
+    env.INDEPENDENT_REVIEW_ENABLED = "true";
     const tree = "c".repeat(40);
     const commit = "e".repeat(40);
     let branch: string | null = null;
@@ -917,8 +938,17 @@ describe("local control-plane Worker", () => {
       {} as ExecutionContext,
     );
     expect(first.status).toBe(200);
-    expect(await replay.json()).toEqual(await first.json());
+    const firstBody = (await first.json()) as {
+      review: { request: { reviewId: string } };
+    };
+    expect(await replay.json()).toEqual(firstBody);
     expect(pullWrites).toBe(1);
+    expect(
+      queued.messages.filter(
+        (message) =>
+          (message as { kind?: string }).kind === "independent_review",
+      ),
+    ).toHaveLength(1);
     await expect(value.jobs.read(value.runId)).resolves.toMatchObject({
       state: "completed",
       publication: {
@@ -926,6 +956,96 @@ describe("local control-plane Worker", () => {
         pullRequestUrl: "https://github.com/zorkian/roundhouse/pull/11",
       },
     });
+    env.ROUNDHOUSE_CLAUDE_AUTH_JSON = JSON.stringify({
+      oauthToken: `setup-token-${"s".repeat(80)}`,
+    });
+    env.EXECUTION_CONTAINERS = {
+      getByName: () => ({
+        runJob: async () => {
+          throw new Error("ordinary execution is not expected in this test");
+        },
+        runReviewJob: async (review) => ({
+          schemaVersion: 1,
+          reviewId: review.reviewId,
+          attemptId: review.attemptId,
+          cycle: review.cycle,
+          runId: review.runId,
+          baseCommit: review.baseCommit,
+          headCommit: review.headCommit,
+          patchSha256: review.patchSha256,
+          startedAt: "2026-07-12T00:04:00.000Z",
+          completedAt: "2026-07-12T00:04:01.000Z",
+          startupDurationMs: 1,
+          provider: "claude-subscription",
+          model: "claude-sonnet-4-6",
+          summary: "One material finding.",
+          findings: await normalizeReviewFindings(
+            review.reviewId,
+            review.headCommit,
+            [
+              {
+                severity: "medium",
+                path: review.allowedPaths[0]!,
+                title: "Correct the exact implementation",
+                rationale: "The implementation misses the requested case.",
+                recommendation: "Handle the requested case.",
+              },
+            ],
+            review.maxFindings,
+          ),
+          outputBytes: 100,
+          usage: { inputTokens: 10, outputTokens: 10, turns: 1 },
+          network: {
+            checkoutHosts: ["github.com"],
+            modelHosts: ["api.anthropic.com"],
+            reviewerToolsEnabled: false,
+            arbitraryInternetEnabled: false,
+            deniedHttpProbe: true,
+            deniedTcpProbe: true,
+          },
+          credential: {
+            installedAtRuntime: true,
+            writtenToFilesystem: false,
+            absentFromEvidence: true,
+          },
+          resources: { diskBytes: 1, memoryBytes: 1 },
+        }),
+        destroy: async () => undefined,
+      }),
+    };
+    const reviewDelivery = queued.messages.find(
+      (message) => (message as { kind?: string }).kind === "independent_review",
+    )!;
+    await expect(deliver(handler, env, [reviewDelivery])).resolves.toEqual([
+      "ack:0",
+    ]);
+    const reviewResponse = await handler.fetch!(
+      request(`/v1/reviews/${firstBody.review.request.reviewId}`),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(await reviewResponse.json()).toMatchObject({
+      status: "remediated",
+      request: { headCommit: commit, cycle: 1 },
+      remediationRunId: expect.stringMatching(/^run_/),
+    });
+    const reviewEvidence = await handler.fetch!(
+      request(`/v1/reviews/${firstBody.review.request.reviewId}/evidence`),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(reviewEvidence.status).toBe(200);
+    expect(await reviewEvidence.json()).toMatchObject({
+      reviewId: firstBody.review.request.reviewId,
+      headCommit: commit,
+    });
+    expect(
+      queued.messages.some(
+        (message) =>
+          (message as { runId?: string; kind?: string }).runId &&
+          !(message as { kind?: string }).kind,
+      ),
+    ).toBe(true);
   });
   it("enforces authentication and safe request boundaries", async () => {
     const { env } = await runtime();

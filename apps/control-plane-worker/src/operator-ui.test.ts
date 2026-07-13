@@ -8,8 +8,13 @@ import { operatorPage } from "./operator-ui.js";
 afterEach(() => vi.unstubAllGlobals());
 
 describe("operator UI", () => {
-  it("serves authenticated dashboard, plan, and run shells", async () => {
-    for (const path of ["/", "/plans/plan_abc", "/runs/run_abc"]) {
+  it("serves authenticated dashboard, plan, run, and review shells", async () => {
+    for (const path of [
+      "/",
+      "/plans/plan_abc",
+      "/runs/run_abc",
+      `/reviews/review_${"a".repeat(40)}`,
+    ]) {
       const response = operatorPage(path);
       expect(response?.status).toBe(200);
       expect(response?.headers.get("content-security-policy")).toContain(
@@ -25,6 +30,69 @@ describe("operator UI", () => {
       expect(script).toBeDefined();
       expect(() => new Function(script!)).not.toThrow();
     }
+  });
+
+  it("renders linked independent-review evidence and findings", async () => {
+    const reviewId = `review_${"a".repeat(40)}`;
+    const response = operatorPage(`/reviews/${reviewId}`)!;
+    const script = /<script[^>]*>([\s\S]+)<\/script>/.exec(
+      await response.text(),
+    )![1];
+    const app = { innerHTML: "Loading…" };
+    vi.stubGlobal("document", {
+      getElementById: (id: string) => (id === "app" ? app : null),
+    });
+    vi.stubGlobal("setInterval", () => 0);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          schemaVersion: 1,
+          revision: 3,
+          status: "completed",
+          request: {
+            reviewId,
+            cycle: 1,
+            issueNumber: 24,
+            issueUrl: "https://github.com/zorkian/roundhouse/issues/24",
+            pullRequestNumber: 25,
+            pullRequestUrl: "https://github.com/zorkian/roundhouse/pull/25",
+            runId: "run_reviewed",
+            baseCommit: "b".repeat(40),
+            headCommit: "c".repeat(40),
+            patchSha256: "d".repeat(64),
+          },
+          execution: {
+            evidence: {
+              objectKey: `reviews/${reviewId}/review.json`,
+              sha256: "e".repeat(64),
+            },
+            result: {
+              findings: [
+                {
+                  findingId: `finding_${"f".repeat(40)}`,
+                  severity: "medium",
+                  path: "packages/domain/src/ids.ts",
+                  title: "Validate identity",
+                  rationale: "Malformed identity was accepted.",
+                  recommendation: "Validate the complete syntax.",
+                },
+              ],
+            },
+          },
+          dispositions: [],
+          events: [],
+        }),
+      ),
+    );
+    new Function(script!)();
+    await vi.waitFor(() =>
+      expect(app.innerHTML).toContain("Validate identity"),
+    );
+    expect(app.innerHTML).toContain(`/v1/reviews/${reviewId}/evidence`);
+    expect(app.innerHTML).toContain(
+      "https://github.com/zorkian/roundhouse/pull/25",
+    );
   });
 
   it("does not claim unrelated routes", () => {

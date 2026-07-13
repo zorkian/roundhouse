@@ -102,7 +102,12 @@ import {
   retryFailedRun,
   runRecoveryCycle,
 } from "./operations.js";
-import { dashboard, operatorPage, planInspection } from "./operator-ui.js";
+import {
+  dashboard,
+  operatorPage,
+  planInspection,
+  reviewInspection,
+} from "./operator-ui.js";
 
 const maxBodyBytes = 64 * 1024;
 const jsonHeaders = { "content-type": "application/json; charset=utf-8" };
@@ -644,8 +649,10 @@ async function reservePublicationReview(
     },
     new Date(),
   );
-  await dispatchReview(env, reserved.review);
-  await enqueueReviewComment(env, reserved.review);
+  if (reserved.created) {
+    await dispatchReview(env, reserved.review);
+    await enqueueReviewComment(env, reserved.review);
+  }
   return reserved.review;
 }
 
@@ -1221,6 +1228,32 @@ async function implementationEvidence(
   });
 }
 
+async function exactEvidence(
+  reference: { objectKey: string; sha256: string; size: number },
+  env: ControlPlaneEnv,
+): Promise<Response> {
+  if (!env.EXECUTION_EVIDENCE)
+    throw new HttpError(404, "Evidence storage is not configured");
+  const object = await env.EXECUTION_EVIDENCE.get(reference.objectKey);
+  if (!object) throw new HttpError(409, "Evidence object is missing");
+  const text = await object.text();
+  const bytes = new TextEncoder().encode(text);
+  const sha256 = [
+    ...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
+  ]
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("");
+  if (sha256 !== reference.sha256 || bytes.byteLength !== reference.size)
+    throw new HttpError(409, "Evidence object binding does not match");
+  return new Response(text, {
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
+    },
+  });
+}
+
 async function recordPublication(
   runId: string,
   input: z.infer<typeof recordPublicationSchema>,
@@ -1362,6 +1395,29 @@ async function route(
     if (!value) throw new HttpError(404, "Plan not found");
     return json(value);
   }
+  const planEvidenceMatch =
+    /^\/v1\/plans\/([a-zA-Z0-9_-]{1,128})\/evidence$/.exec(url.pathname);
+  if (request.method === "GET" && planEvidenceMatch?.[1]) {
+    const plan = await readPlanById(env, planEvidenceMatch[1]);
+    if (!plan) throw new HttpError(404, "Plan not found");
+    return exactEvidence(plan.evidence, env);
+  }
+  const reviewMatch = /^\/v1\/reviews\/(review_[a-f0-9]{40})$/.exec(
+    url.pathname,
+  );
+  if (request.method === "GET" && reviewMatch?.[1]) {
+    const value = await reviewInspection(env, reviewMatch[1]);
+    if (!value) throw new HttpError(404, "Independent review not found");
+    return json(value);
+  }
+  const reviewEvidenceMatch =
+    /^\/v1\/reviews\/(review_[a-f0-9]{40})\/evidence$/.exec(url.pathname);
+  if (request.method === "GET" && reviewEvidenceMatch?.[1]) {
+    const review = await readIndependentReview(env, reviewEvidenceMatch[1]);
+    if (!review?.execution)
+      throw new HttpError(404, "Independent review evidence not found");
+    return exactEvidence(review.execution.evidence, env);
+  }
   const planApprovalMatch =
     /^\/v1\/plans\/([a-zA-Z0-9_-]{1,128})\/approve$/.exec(url.pathname);
   if (request.method === "POST" && planApprovalMatch?.[1]) {
@@ -1422,6 +1478,22 @@ async function route(
     );
   if (request.method === "GET" && implementationMatch?.[1])
     return implementationEvidence(implementationMatch[1], env);
+  const runEvidenceMatch =
+    /^\/v1\/runs\/([a-zA-Z0-9][a-zA-Z0-9_-]{0,127})\/evidence\/([a-zA-Z0-9][a-zA-Z0-9_-]{0,199})$/.exec(
+      url.pathname,
+    );
+  if (
+    request.method === "GET" &&
+    runEvidenceMatch?.[1] &&
+    runEvidenceMatch[2]
+  ) {
+    const run = await new D1JobStore(env.DB).read(runEvidenceMatch[1]);
+    const reference = run.evidence.find(
+      (value) => value.evidenceId === runEvidenceMatch[2],
+    );
+    if (!reference) throw new HttpError(404, "Run evidence not found");
+    return exactEvidence(reference, env);
+  }
   const approvalMatch =
     /^\/v1\/runs\/([a-zA-Z0-9][a-zA-Z0-9_-]{0,127})\/approval$/.exec(
       url.pathname,
