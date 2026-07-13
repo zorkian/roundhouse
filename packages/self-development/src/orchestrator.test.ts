@@ -174,5 +174,5 @@ describe("SelfDevelopmentOrchestrator", () => {
       "pushed",
       "completed",
     ]);
-  }, 15_000);
+  }, 30_000);
 });

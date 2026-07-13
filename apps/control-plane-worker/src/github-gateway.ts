@@ -51,6 +51,16 @@ function safeGitHubError(status: number): GitHubAppGatewayError {
   );
 }
 
+function repositoryPath(repositoryFullName: string): string {
+  if (!/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(repositoryFullName))
+    throw new GitHubAppGatewayError(
+      "invalid_request",
+      "GitHub repository identity is invalid",
+    );
+  const [owner, repository] = repositoryFullName.split("/");
+  return `/repos/${encodeURIComponent(owner!)}/${encodeURIComponent(repository!)}`;
+}
+
 export class GitHubAppGateway {
   private token?: { value: string; expiresAt: number };
 
@@ -221,6 +231,183 @@ export class GitHubAppGateway {
         "GitHub comment response was invalid",
       );
     return { id: value.id, url: value.html_url };
+  }
+
+  async upsertIssueStatusComment(input: {
+    repositoryFullName: string;
+    issueNumber: number;
+    body: string;
+    existingCommentId?: number;
+  }): Promise<{ id: number; url: string }> {
+    if (!Number.isSafeInteger(input.issueNumber) || input.issueNumber < 1)
+      throw new GitHubAppGatewayError(
+        "invalid_request",
+        "GitHub issue number is invalid",
+      );
+    const base = repositoryPath(input.repositoryFullName);
+    const marker = `<!-- roundhouse-status:${input.repositoryFullName}#${input.issueNumber} -->`;
+    if (!input.body.startsWith(marker))
+      throw new GitHubAppGatewayError(
+        "invalid_request",
+        "GitHub status comment marker is invalid",
+      );
+    type Comment = {
+      id: number;
+      html_url: string;
+      body: string;
+    };
+    const validate = (value: Comment): { id: number; url: string } => {
+      const url = new URL(value.html_url);
+      if (
+        !Number.isSafeInteger(value.id) ||
+        value.id < 1 ||
+        url.origin !== "https://github.com" ||
+        !url.pathname.startsWith(`/${input.repositoryFullName}/issues/`)
+      )
+        throw new GitHubAppGatewayError(
+          "invalid_response",
+          "GitHub comment response was invalid",
+        );
+      return { id: value.id, url: value.html_url };
+    };
+    const find = async (): Promise<Comment | undefined> =>
+      (
+        await this.api<Comment[]>(
+          "GET",
+          `${base}/issues/${input.issueNumber}/comments?per_page=100&sort=created&direction=desc`,
+        )
+      ).value.find((value) => value.body.startsWith(marker));
+    const update = async (id: number): Promise<{ id: number; url: string }> =>
+      validate(
+        (
+          await this.api<Comment>("PATCH", `${base}/issues/comments/${id}`, {
+            body: input.body,
+          })
+        ).value,
+      );
+    if (input.existingCommentId) {
+      try {
+        return await update(input.existingCommentId);
+      } catch (error) {
+        const reconciled = await find();
+        if (reconciled?.body === input.body) return validate(reconciled);
+        throw error;
+      }
+    }
+    const existing = await find();
+    if (existing) return update(existing.id);
+    try {
+      return validate(
+        (
+          await this.api<Comment>(
+            "POST",
+            `${base}/issues/${input.issueNumber}/comments`,
+            { body: input.body },
+          )
+        ).value,
+      );
+    } catch (error) {
+      const reconciled = await find();
+      if (reconciled?.body === input.body) return validate(reconciled);
+      throw error;
+    }
+  }
+
+  async upsertReviewCheck(input: {
+    repositoryFullName: string;
+    reviewId: string;
+    headSha: string;
+    status: "in_progress" | "completed";
+    conclusion: "success" | "failure" | "neutral" | "action_required" | null;
+    title: string;
+    summary: string;
+    detailsUrl: string;
+    existingCheckRunId?: number;
+  }): Promise<{ id: number; url: string }> {
+    if (
+      !/^review_[a-f0-9]{40}$/.test(input.reviewId) ||
+      !/^[a-f0-9]{40}$/.test(input.headSha) ||
+      (input.status === "in_progress") !== (input.conclusion === null)
+    )
+      throw new GitHubAppGatewayError(
+        "invalid_request",
+        "GitHub review Check projection is invalid",
+      );
+    const base = repositoryPath(input.repositoryFullName);
+    type Check = {
+      id: number;
+      html_url: string;
+      external_id: string;
+      head_sha: string;
+      status: string;
+      conclusion: string | null;
+      details_url: string;
+      output: { title: string; summary: string };
+    };
+    const payload = {
+      name: "Roundhouse independent review",
+      head_sha: input.headSha,
+      external_id: input.reviewId,
+      details_url: input.detailsUrl,
+      status: input.status,
+      ...(input.conclusion ? { conclusion: input.conclusion } : {}),
+      output: { title: input.title, summary: input.summary },
+    };
+    const validate = (value: Check): { id: number; url: string } => {
+      const url = new URL(value.html_url);
+      if (
+        !Number.isSafeInteger(value.id) ||
+        value.id < 1 ||
+        value.external_id !== input.reviewId ||
+        value.head_sha !== input.headSha ||
+        url.origin !== "https://github.com" ||
+        !url.pathname.startsWith(`/${input.repositoryFullName}/runs/`)
+      )
+        throw new GitHubAppGatewayError(
+          "invalid_response",
+          "GitHub Check response was invalid",
+        );
+      return { id: value.id, url: value.html_url };
+    };
+    const exact = (value: Check): boolean =>
+      value.status === input.status &&
+      value.conclusion === input.conclusion &&
+      value.details_url === input.detailsUrl &&
+      value.output.title === input.title &&
+      value.output.summary === input.summary;
+    const find = async (): Promise<Check | undefined> =>
+      (
+        await this.api<{ check_runs: Check[] }>(
+          "GET",
+          `${base}/commits/${input.headSha}/check-runs?check_name=${encodeURIComponent("Roundhouse independent review")}&filter=all&per_page=100`,
+        )
+      ).value.check_runs.find((value) => value.external_id === input.reviewId);
+    const update = async (id: number): Promise<{ id: number; url: string }> =>
+      validate(
+        (await this.api<Check>("PATCH", `${base}/check-runs/${id}`, payload))
+          .value,
+      );
+    const known = input.existingCheckRunId
+      ? ({ id: input.existingCheckRunId } as Check)
+      : await find();
+    if (known) {
+      try {
+        return await update(known.id);
+      } catch (error) {
+        const reconciled = await find();
+        if (reconciled && exact(reconciled)) return validate(reconciled);
+        throw error;
+      }
+    }
+    try {
+      return validate(
+        (await this.api<Check>("POST", `${base}/check-runs`, payload)).value,
+      );
+    } catch (error) {
+      const reconciled = await find();
+      if (reconciled && exact(reconciled)) return validate(reconciled);
+      throw error;
+    }
   }
 
   private async existingRef(branch: string): Promise<string | null> {

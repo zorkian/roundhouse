@@ -10,6 +10,7 @@ import {
   claimPendingComments,
   completeWebhookDelivery,
   enqueueComment,
+  enqueueStatusComment,
   exactPublishedCheckTargets,
   githubNativeOperatorMigration,
   issueRun,
@@ -243,6 +244,45 @@ describe("GitHub-native operator webhook", () => {
       issueNumber: 19,
       body: "status",
     });
+  });
+
+  it("updates one repository-qualified issue status projection", async () => {
+    const env = await runtime();
+    const marker = "<!-- roundhouse-status:zorkian/roundhouse#19 -->";
+    await enqueueStatusComment(
+      env,
+      "zorkian/roundhouse",
+      19,
+      `${marker}\nFirst state`,
+    );
+    await enqueueStatusComment(
+      env,
+      "zorkian/roundhouse",
+      19,
+      `${marker}\nSecond state`,
+    );
+    await enqueueStatusComment(
+      env,
+      "another/roundhouse",
+      19,
+      "<!-- roundhouse-status:another/roundhouse#19 -->\nIndependent state",
+    );
+    const claims = await claimPendingComments(env);
+    expect(claims).toHaveLength(2);
+    expect(claims).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          repositoryFullName: "zorkian/roundhouse",
+          issueNumber: 19,
+          body: `${marker}\nSecond state`,
+        }),
+        expect.objectContaining({
+          repositoryFullName: "another/roundhouse",
+          issueNumber: 19,
+          body: expect.stringContaining("Independent state"),
+        }),
+      ]),
+    );
   });
 
   it("rejects a correctly signed but unsubscribed event", async () => {

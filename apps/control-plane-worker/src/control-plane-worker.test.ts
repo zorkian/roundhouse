@@ -27,10 +27,12 @@ import {
   enqueueComment,
   githubNativeOperatorMigration,
 } from "./github-webhook.js";
+import { githubReviewCheckMigration } from "./github-status.js";
 
 let instance: Miniflare;
 let database: D1Database;
 const resetTables = [
+  "github_review_check_outbox",
   "independent_review_findings",
   "independent_review_events",
   "independent_reviews",
@@ -276,7 +278,7 @@ beforeAll(async () => {
     new URL("../migrations/0008_independent_review.sql", import.meta.url),
     "utf8",
   );
-  for (const statement of `${d1JobStoreMigration}\n${controlPlaneSubmissionMigration}\n${cloudOperationsMigration}\n${githubPocMigration}\n${githubNativeOperatorMigration}\n${githubPlanningMigration}\n${independentReviewMigration}`
+  for (const statement of `${d1JobStoreMigration}\n${controlPlaneSubmissionMigration}\n${cloudOperationsMigration}\n${githubPocMigration}\n${githubNativeOperatorMigration}\n${githubPlanningMigration}\n${independentReviewMigration}\n${githubReviewCheckMigration}`
     .split(";")
     .map((value) => value.trim())
     .filter(Boolean))
@@ -374,6 +376,8 @@ describe("local control-plane Worker", () => {
     env.ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY = await exportPKCS8(pair.privateKey);
     env.ROUNDHOUSE_GITHUB_WEBHOOK_SECRET = "signed-webhook-secret";
     let comments = 0;
+    let statusComment:
+      { id: number; html_url: string; body: string } | undefined;
     env.GITHUB_API_FETCHER = async (input, init) => {
       const url = new URL(String(input));
       if (url.pathname.endsWith("/access_tokens"))
@@ -406,16 +410,35 @@ describe("local control-plane Worker", () => {
         return new Response(
           JSON.stringify({ object: { sha: "e".repeat(40) } }),
         );
-      if (url.pathname.endsWith("/issues/17/comments")) {
-        comments += 1;
+      if (
+        url.pathname.endsWith("/issues/17/comments") &&
+        (init?.method ?? "GET") === "GET"
+      )
         return new Response(
-          JSON.stringify({
-            id: 991,
-            html_url:
-              "https://github.com/zorkian/roundhouse/issues/17#issuecomment-991",
-          }),
-          { status: 201 },
+          JSON.stringify(statusComment ? [statusComment] : []),
         );
+      if (
+        url.pathname.endsWith("/issues/17/comments") &&
+        init?.method === "POST"
+      ) {
+        comments += 1;
+        statusComment = {
+          id: 991,
+          html_url:
+            "https://github.com/zorkian/roundhouse/issues/17#issuecomment-991",
+          body: (JSON.parse(String(init.body)) as { body: string }).body,
+        };
+        return new Response(JSON.stringify(statusComment), { status: 201 });
+      }
+      if (
+        url.pathname.endsWith("/issues/comments/991") &&
+        init?.method === "PATCH"
+      ) {
+        statusComment = {
+          ...statusComment!,
+          body: (JSON.parse(String(init.body)) as { body: string }).body,
+        };
+        return new Response(JSON.stringify(statusComment));
       }
       return new Response("{}", { status: 404 });
     };
@@ -537,7 +560,10 @@ describe("local control-plane Worker", () => {
     };
     expect(implementationResult.runId).toMatch(/^run_[a-f0-9]{40}$/);
     expect(queued.messages).toHaveLength(1);
-    expect(comments).toBe(2);
+    expect(comments).toBe(1);
+    expect(statusComment?.body).toContain(
+      `https://roundhouse-dev.rm-rf.rip/runs/${implementationResult.runId}`,
+    );
 
     const planPage = await handler.fetch!(
       request(`/plans/${plan!.plan.planId}`),
@@ -883,9 +909,27 @@ describe("local control-plane Worker", () => {
     const commit = "e".repeat(40);
     let branch: string | null = null;
     let pullWrites = 0;
+    let reviewCheck:
+      | {
+          id: number;
+          html_url: string;
+          external_id: string;
+          head_sha: string;
+          status: string;
+          conclusion: string | null;
+          details_url: string;
+          output: { title: string; summary: string };
+        }
+      | undefined;
+    let checkWrites = 0;
+    let issueStatusComment:
+      { id: number; html_url: string; body: string } | undefined;
     env.GITHUB_API_FETCHER = async (input, init) => {
       const url = new URL(String(input));
       const method = init?.method ?? "GET";
+      const body = init?.body
+        ? (JSON.parse(String(init.body)) as Record<string, unknown>)
+        : undefined;
       if (url.pathname.endsWith("/access_tokens"))
         return new Response(
           JSON.stringify({
@@ -949,6 +993,60 @@ describe("local control-plane Worker", () => {
             parents: [{ sha: approved.task.baseCommit }],
           }),
         );
+      if (url.pathname.endsWith("/issues/7/comments") && method === "GET")
+        return new Response(
+          JSON.stringify(issueStatusComment ? [issueStatusComment] : []),
+        );
+      if (url.pathname.endsWith("/issues/7/comments") && method === "POST") {
+        issueStatusComment = {
+          id: 51,
+          html_url:
+            "https://github.com/zorkian/roundhouse/issues/7#issuecomment-51",
+          body: String(body?.body),
+        };
+        return new Response(JSON.stringify(issueStatusComment), {
+          status: 201,
+        });
+      }
+      if (url.pathname.endsWith("/issues/comments/51") && method === "PATCH") {
+        issueStatusComment = {
+          ...issueStatusComment!,
+          body: String(body?.body),
+        };
+        return new Response(JSON.stringify(issueStatusComment));
+      }
+      if (
+        url.pathname.endsWith(`/commits/${commit}/check-runs`) &&
+        method === "GET"
+      )
+        return new Response(
+          JSON.stringify({ check_runs: reviewCheck ? [reviewCheck] : [] }),
+        );
+      if (url.pathname.endsWith("/check-runs") && method === "POST") {
+        checkWrites += 1;
+        reviewCheck = {
+          id: 41,
+          html_url: "https://github.com/zorkian/roundhouse/runs/41",
+          external_id: String(body?.external_id),
+          head_sha: String(body?.head_sha),
+          status: String(body?.status),
+          conclusion: (body?.conclusion as string | undefined) ?? null,
+          details_url: String(body?.details_url),
+          output: body?.output as { title: string; summary: string },
+        };
+        return new Response(JSON.stringify(reviewCheck), { status: 201 });
+      }
+      if (url.pathname.endsWith("/check-runs/41") && method === "PATCH") {
+        checkWrites += 1;
+        reviewCheck = {
+          ...reviewCheck!,
+          status: String(body?.status),
+          conclusion: (body?.conclusion as string | undefined) ?? null,
+          details_url: String(body?.details_url),
+          output: body?.output as { title: string; summary: string },
+        };
+        return new Response(JSON.stringify(reviewCheck));
+      }
       return new Response("{}", { status: 404 });
     };
     const publicationRequest = () =>
@@ -979,6 +1077,18 @@ describe("local control-plane Worker", () => {
     };
     expect(await replay.json()).toEqual(firstBody);
     expect(pullWrites).toBe(1);
+    await expect(
+      env.DB.prepare(
+        "SELECT head_sha, check_status, conclusion, status FROM github_review_check_outbox WHERE repository_full_name = ? AND review_id = ?",
+      )
+        .bind("zorkian/roundhouse", firstBody.review.request.reviewId)
+        .first(),
+    ).resolves.toMatchObject({
+      head_sha: commit,
+      check_status: "in_progress",
+      conclusion: null,
+      status: "pending",
+    });
     expect(
       queued.messages.filter(
         (message) =>
@@ -1065,6 +1175,16 @@ describe("local control-plane Worker", () => {
       request: { headCommit: commit, cycle: 1 },
       remediationRunId: expect.stringMatching(/^run_/),
     });
+    expect(checkWrites).toBe(1);
+    expect(reviewCheck).toMatchObject({
+      head_sha: commit,
+      status: "completed",
+      conclusion: "neutral",
+      output: { title: "Independent review found 1 substantive finding" },
+    });
+    expect(issueStatusComment?.body).toContain(
+      `Workflow: https://roundhouse-dev.rm-rf.rip/repositories/zorkian/roundhouse/issues/7`,
+    );
     const reviewEvidence = await handler.fetch!(
       request(`/v1/reviews/${firstBody.review.request.reviewId}/evidence`),
       env,
@@ -1147,6 +1267,28 @@ describe("local control-plane Worker", () => {
         )
       ).status,
     ).toBe(403);
+    expect(
+      (
+        await handler.fetch!(
+          request("/v1/repositories/another/roundhouse/issues/7"),
+          env,
+          {} as ExecutionContext,
+        )
+      ).status,
+    ).toBe(404);
+    const enrolledIssue = await handler.fetch!(
+      request("/v1/repositories/zorkian/roundhouse/issues/999"),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(enrolledIssue.status).toBe(200);
+    expect(await enrolledIssue.json()).toEqual({
+      schemaVersion: 1,
+      repositoryFullName: "zorkian/roundhouse",
+      issueNumber: 999,
+      plan: null,
+      reviews: [],
+    });
   });
 
   it("recovers a pending outbox, deduplicates submission and delivery, and redacts inspection", async () => {

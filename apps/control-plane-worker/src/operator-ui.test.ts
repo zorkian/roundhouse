@@ -8,9 +8,10 @@ import { operatorPage } from "./operator-ui.js";
 afterEach(() => vi.unstubAllGlobals());
 
 describe("operator UI", () => {
-  it("serves authenticated dashboard, plan, run, and review shells", async () => {
+  it("serves authenticated dashboard, issue, plan, run, and review shells", async () => {
     for (const path of [
       "/",
+      "/repositories/zorkian/roundhouse/issues/24",
       "/plans/plan_abc",
       "/runs/run_abc",
       `/reviews/review_${"a".repeat(40)}`,
@@ -30,6 +31,59 @@ describe("operator UI", () => {
       expect(script).toBeDefined();
       expect(() => new Function(script!)).not.toThrow();
     }
+  });
+
+  it("renders one repository-qualified issue workflow", async () => {
+    const reviewId = `review_${"a".repeat(40)}`;
+    const response = operatorPage(
+      "/repositories/zorkian/roundhouse/issues/24",
+    )!;
+    const script = /<script[^>]*>([\s\S]+)<\/script>/.exec(
+      await response.text(),
+    )![1];
+    const app = { innerHTML: "Loading…" };
+    vi.stubGlobal("document", {
+      getElementById: (id: string) => (id === "app" ? app : null),
+    });
+    vi.stubGlobal("setInterval", () => 0);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string) => {
+        expect(input).toBe("/v1/repositories/zorkian/roundhouse/issues/24");
+        return Response.json({
+          schemaVersion: 1,
+          repositoryFullName: "zorkian/roundhouse",
+          issueNumber: 24,
+          plan: {
+            plan: { planId: "plan_issue_workflow" },
+          },
+          sourceRun: { runId: "run_source" },
+          activeRun: {
+            runId: "run_remediation",
+            publication: {
+              pullRequestUrl: "https://github.com/zorkian/roundhouse/pull/25",
+            },
+          },
+          reviews: [
+            {
+              status: "completed",
+              request: {
+                cycle: 2,
+                reviewId,
+                headCommit: "b".repeat(40),
+              },
+              execution: { result: { findings: [] } },
+            },
+          ],
+        });
+      }),
+    );
+    new Function(script!)();
+    await vi.waitFor(() => expect(app.innerHTML).toContain("run_remediation"));
+    expect(app.innerHTML).toContain(`/reviews/${reviewId}`);
+    expect(app.innerHTML).toContain(
+      "https://github.com/zorkian/roundhouse/pull/25",
+    );
   });
 
   it("renders linked independent-review evidence and findings", async () => {
