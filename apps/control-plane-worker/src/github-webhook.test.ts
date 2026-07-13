@@ -13,6 +13,7 @@ import {
   enqueueStatusComment,
   exactPublishedCheckTargets,
   githubNativeOperatorMigration,
+  issueCommand,
   issueRun,
   parseGitHubCommand,
   reserveWebhookDelivery,
@@ -109,6 +110,30 @@ describe("GitHub-native operator webhook", () => {
         `/rh approve run_123 ${BigInt(Number.MAX_SAFE_INTEGER) + 1n} ${"a".repeat(40)} ${"b".repeat(64)} ${"c".repeat(64)}`,
       ),
     ).toBeNull();
+  });
+
+  it("carries the verified repository into issue command identity", () => {
+    expect(
+      issueCommand({
+        deliveryId: "12345678-abcd-4321-abcd-1234567890ab",
+        eventName: "issue_comment",
+        payloadSha256: "a".repeat(64),
+        payload: {
+          installation: { id: 146147681 },
+          repository: { full_name: "another/roundhouse" },
+          action: "created",
+          issue: { number: 19 },
+          comment: {
+            id: 1900,
+            body: "/rh status",
+            user: { login: "zorkian" },
+          },
+        },
+      }),
+    ).toMatchObject({
+      repositoryFullName: "another/roundhouse",
+      issueNumber: 19,
+    });
   });
 
   it("verifies the exact bytes with HMAC-SHA-256", async () => {

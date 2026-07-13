@@ -941,6 +941,7 @@ async function consumeReviewMessage(
 
 async function runForIssueCommand(
   env: ControlPlaneEnv,
+  repositoryFullName: string,
   issueNumber: number,
   requested?: string,
 ): Promise<string> {
@@ -949,7 +950,7 @@ async function runForIssueCommand(
   if (!requested || requested === bound) return bound;
   if (
     await isIssueRemediationRun(env, {
-      repositoryFullName: "zorkian/roundhouse",
+      repositoryFullName,
       issueNumber,
       sourceRunId: bound,
       remediationRunId: requested,
@@ -962,6 +963,7 @@ async function runForIssueCommand(
 async function executeGitHubCommand(
   env: ControlPlaneEnv,
   deliveryId: string,
+  repositoryFullName: string,
   issueNumber: number,
   actor: string,
   command: GitHubCommand,
@@ -1027,7 +1029,12 @@ async function executeGitHubCommand(
           revision: plan.revision,
         };
   } else {
-    runId = await runForIssueCommand(env, issueNumber, command.runId);
+    runId = await runForIssueCommand(
+      env,
+      repositoryFullName,
+      issueNumber,
+      command.runId,
+    );
     const jobs = new D1JobStore(env.DB);
     if (command.kind === "cancel")
       await cancelRun(runId, command.revision, env);
@@ -1164,6 +1171,7 @@ async function githubWebhook(
     const result = await executeGitHubCommand(
       env,
       webhook.deliveryId,
+      value.repositoryFullName,
       value.issueNumber,
       value.actor,
       value.command,

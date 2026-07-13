@@ -336,6 +336,7 @@ async function readLimitedBody(
 }
 
 export function issueCommand(value: VerifiedWebhook): {
+  repositoryFullName: string;
   issueNumber: number;
   actor: string;
   command: GitHubCommand;
@@ -346,6 +347,7 @@ export function issueCommand(value: VerifiedWebhook): {
   const command = parseGitHubCommand(payload.comment.body);
   if (!command) return null;
   return {
+    repositoryFullName: payload.repository.full_name,
     issueNumber: payload.issue.number,
     actor: payload.comment.user.login,
     command,
