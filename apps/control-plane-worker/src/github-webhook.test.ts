@@ -323,6 +323,14 @@ describe("GitHub-native operator webhook", () => {
     await expect(
       enqueueStatusComment(env, "zorkian/roundhouse", 19, "missing marker"),
     ).rejects.toMatchObject({ code: "invalid_status_marker" });
+    await expect(
+      enqueueStatusComment(
+        env,
+        "zorkian/roundhouse",
+        19,
+        "prefix\n<!-- roundhouse-status:zorkian/roundhouse#19 -->",
+      ),
+    ).rejects.toMatchObject({ code: "invalid_status_marker" });
     const row = await env.DB.prepare(
       "SELECT COUNT(*) AS count FROM github_comment_outbox",
     ).first<{ count: number }>();

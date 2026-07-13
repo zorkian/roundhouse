@@ -527,7 +527,7 @@ export async function enqueueStatusComment(
   if (!Number.isSafeInteger(issueNumber) || issueNumber < 1)
     throw new GitHubWebhookError(400, "invalid_issue_identity");
   const marker = `<!-- roundhouse-status:${repositoryFullName}#${issueNumber} -->`;
-  if (!body.includes(marker))
+  if (!body.startsWith(marker))
     throw new GitHubWebhookError(400, "invalid_status_marker");
   const key = `issue-status:${repositoryFullName}:${issueNumber}`;
   const bodySha256 = await sha256(body);

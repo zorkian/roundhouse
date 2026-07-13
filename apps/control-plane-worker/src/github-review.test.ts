@@ -17,6 +17,7 @@ import {
   completeIndependentReview,
   failIndependentReview,
   isIssueRemediationRun,
+  listIssueReviews,
   markReviewDispatched,
   readIndependentReview,
   readReviewByRemediationRun,
@@ -174,6 +175,34 @@ async function execution(
 }
 
 describe("durable independent review coordination", () => {
+  it("limits issue inspection to the newest reviews in chronological order", async () => {
+    const env = await runtime();
+    const original = await request();
+    for (const number of [1, 2, 3]) {
+      const runId = `run_issue_review_${number}`;
+      const headCommit = String(number).repeat(40);
+      const reviewId = await reviewIdentity({ runId, headCommit, cycle: 1 });
+      await reserveIndependentReview(
+        env,
+        {
+          ...original,
+          reviewId,
+          attemptId: `${reviewId}-attempt-1`,
+          runId,
+          headCommit,
+        },
+        new Date(`2026-07-12T00:00:0${number}Z`),
+      );
+    }
+
+    await expect(
+      listIssueReviews(env, "zorkian/roundhouse", 24, 2),
+    ).resolves.toMatchObject([
+      { request: { runId: "run_issue_review_2" } },
+      { request: { runId: "run_issue_review_3" } },
+    ]);
+  });
+
   it("reserves and replays one exact review intent", async () => {
     const env = await runtime();
     const input = await request();
