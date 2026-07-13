@@ -17,7 +17,7 @@ FROM node:24.4.1-bookworm-slim@sha256:36ae19f59c91f3303c7a648f07493fe14c4bd91320
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates git tini \
     && rm -rf /var/lib/apt/lists/* \
-    && npm install --global pnpm@10.13.1 @openai/codex@0.144.1 prettier@3.6.2 \
+    && npm install --global pnpm@10.13.1 @openai/codex@0.144.1 @anthropic-ai/claude-code@2.1.142 prettier@3.6.2 \
     && useradd --create-home --uid 10001 --shell /usr/sbin/nologin runner \
     && install --directory --owner runner --group runner /home/runner/workspace
 

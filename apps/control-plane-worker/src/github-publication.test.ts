@@ -183,9 +183,11 @@ describe("approved GitHub publication", () => {
       get: async () => ({ text: async () => evidenceJson }),
     } as unknown as EvidenceBucketPort;
     let published = 0;
+    let receivedExpectedHead: string | null | undefined;
     const github = {
-      publish: async () => {
+      publish: async (input: { expectedRemoteHead: string | null }) => {
         published += 1;
+        receivedExpectedHead = input.expectedRemoteHead;
         return {
           schemaVersion: 1 as const,
           repository: "zorkian/roundhouse" as const,
@@ -214,5 +216,6 @@ describe("approved GitHub publication", () => {
       }),
     ).resolves.toMatchObject({ pullRequestNumber: 11 });
     expect(published).toBe(1);
+    expect(receivedExpectedHead).toBeNull();
   });
 });

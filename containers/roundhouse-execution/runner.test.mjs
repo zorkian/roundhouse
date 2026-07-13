@@ -10,6 +10,7 @@ import {
   createPublicationManifest,
   command,
   pathAllowed,
+  parseClaudeReviewOutput,
   secretStrings,
   skippedValidation,
   validRepositoryPath,
@@ -154,5 +155,73 @@ describe("trusted agent output boundary", () => {
     expect(changedPaths("C  docs/source.md\0docs/copy.md\0")).toEqual([
       "docs/copy.md",
     ]);
+  });
+});
+
+describe("independent Claude review boundary", () => {
+  const request = {
+    reviewId: `review_${"a".repeat(40)}`,
+    headCommit: "b".repeat(40),
+    maxFindings: 10,
+  };
+
+  it("normalizes structured findings into stable identities", () => {
+    const envelope = JSON.stringify({
+      subtype: "success",
+      is_error: false,
+      num_turns: 1,
+      usage: { input_tokens: 100, output_tokens: 40 },
+      modelUsage: { "claude-sonnet-4-6": {} },
+      structured_output: {
+        summary: "One substantive issue.",
+        findings: [
+          {
+            severity: "high",
+            path: "packages/domain/src/ids.ts",
+            line: 12,
+            title: "Reject malformed values",
+            rationale: "The predicate accepts an invalid identity.",
+            recommendation: "Validate the complete identity syntax.",
+          },
+        ],
+      },
+    });
+    const first = parseClaudeReviewOutput(envelope, request);
+    const replay = parseClaudeReviewOutput(envelope, request);
+
+    expect(replay).toEqual(first);
+    expect(first.findings[0].findingId).toMatch(/^finding_[a-f0-9]{40}$/);
+    expect(first.usage).toEqual({
+      inputTokens: 100,
+      outputTokens: 40,
+      turns: 1,
+    });
+  });
+
+  it("rejects malformed or unbounded structured output", () => {
+    expect(() =>
+      parseClaudeReviewOutput(
+        JSON.stringify({
+          subtype: "success",
+          is_error: false,
+          structured_output: {
+            summary: "Invalid path.",
+            findings: [
+              {
+                severity: "high",
+                path: "../outside.ts",
+                title: "Outside",
+                rationale: "Invalid path.",
+                recommendation: "Reject it.",
+              },
+            ],
+          },
+        }),
+        request,
+      ),
+    ).toThrow("review_invalid_finding");
+    expect(() => parseClaudeReviewOutput("not json", request)).toThrow(
+      "review_invalid_json",
+    );
   });
 });

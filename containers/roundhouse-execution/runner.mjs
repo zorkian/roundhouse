@@ -16,7 +16,9 @@ const maxBodyBytes = 128 * 1024;
 const interceptedCa = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
 let prepared;
 let trusted;
+let review;
 const codexHome = "/home/runner/.roundhouse-codex";
+const claudeHome = "/home/runner/.roundhouse-claude";
 
 function json(response, status, value) {
   response.writeHead(status, { "content-type": "application/json" });
@@ -125,6 +127,52 @@ function validateTrusted(value) {
   return value;
 }
 
+function validateReview(value) {
+  if (
+    value?.schemaVersion !== 1 ||
+    !/^review_[a-f0-9]{40}$/.test(value.reviewId) ||
+    !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(value.runId) ||
+    !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,199}$/.test(value.attemptId) ||
+    !Number.isInteger(value.attemptNumber) ||
+    value.attemptNumber < 1 ||
+    value.attemptNumber > 3 ||
+    !Number.isInteger(value.cycle) ||
+    value.cycle < 1 ||
+    value.cycle > 2 ||
+    value.repositoryUrl !== repositoryUrl ||
+    !/^[a-f0-9]{40}$/.test(value.baseCommit) ||
+    !/^[a-f0-9]{40}$/.test(value.headCommit) ||
+    !/^[a-f0-9]{64}$/.test(value.patchSha256) ||
+    typeof value.subject !== "string" ||
+    value.subject.length < 1 ||
+    value.subject.length > 500 ||
+    typeof value.instructions !== "string" ||
+    value.instructions.length < 1 ||
+    value.instructions.length > 20_000 ||
+    !Array.isArray(value.allowedPaths) ||
+    value.allowedPaths.length < 1 ||
+    value.allowedPaths.length > 50 ||
+    !value.allowedPaths.every(validRepositoryPath) ||
+    !Array.isArray(value.evidence) ||
+    value.evidence.length < 1 ||
+    value.evidence.length > 20 ||
+    !Number.isInteger(value.timeoutMs) ||
+    value.timeoutMs < 1 ||
+    value.timeoutMs > 900_000 ||
+    !Number.isInteger(value.maxOutputBytes) ||
+    value.maxOutputBytes < 1 ||
+    value.maxOutputBytes > 256 * 1024 ||
+    !Number.isInteger(value.maxFindings) ||
+    value.maxFindings < 1 ||
+    value.maxFindings > 50 ||
+    !["success", "timeout", "interrupt-once", "invalid-output"].includes(
+      value.scenario ?? "success",
+    )
+  )
+    throw new Error("invalid_independent_review_request");
+  return value;
+}
+
 export async function command(executable, args, options = {}) {
   const started = Date.now();
   const child = spawn(executable, args, {
@@ -230,6 +278,152 @@ function promptFor(request) {
   ].join("\n");
 }
 
+function reviewPrompt(request, diff) {
+  return [
+    "You are an independent read-only code reviewer in an isolated exact-commit checkout.",
+    "You have no tools and cannot modify files, invoke GitHub, approve, publish, or merge.",
+    "Review only the supplied exact diff against the task, approved scope, and security invariants.",
+    "Report only concrete correctness, security-boundary, or material maintainability defects.",
+    "Do not report style preferences, speculative hardening, or issues outside the changed paths.",
+    "Use critical only for immediately exploitable boundary failures, high for likely serious defects, medium for substantive functional defects, and low sparingly.",
+    "Every finding must identify one normalized repository-relative path from the diff.",
+    "Return only the required structured output.",
+    "",
+    `Task: ${request.subject}`,
+    request.instructions,
+    `Exact base: ${request.baseCommit}`,
+    `Exact head: ${request.headCommit}`,
+    `Approved paths: ${request.allowedPaths.join(", ")}`,
+    `Implementation patch SHA-256: ${request.patchSha256}`,
+    "",
+    "Exact diff:",
+    diff,
+  ].join("\n");
+}
+
+const claudeReviewOutputSchema = JSON.stringify({
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    summary: { type: "string", maxLength: 20_000 },
+    findings: {
+      type: "array",
+      maxItems: 50,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          severity: {
+            type: "string",
+            enum: ["critical", "high", "medium", "low"],
+          },
+          path: { type: "string", minLength: 1, maxLength: 300 },
+          line: { type: "integer", minimum: 1, maximum: 1_000_000 },
+          title: { type: "string", minLength: 1, maxLength: 200 },
+          rationale: { type: "string", minLength: 1, maxLength: 4_000 },
+          recommendation: {
+            type: "string",
+            minLength: 1,
+            maxLength: 4_000,
+          },
+        },
+        required: ["severity", "path", "title", "rationale", "recommendation"],
+      },
+    },
+  },
+  required: ["summary", "findings"],
+});
+
+function validateRawFinding(value) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    !["critical", "high", "medium", "low"].includes(value.severity) ||
+    !validRepositoryPath(value.path) ||
+    (value.line !== undefined &&
+      (!Number.isInteger(value.line) ||
+        value.line < 1 ||
+        value.line > 1_000_000)) ||
+    typeof value.title !== "string" ||
+    value.title.length < 1 ||
+    value.title.length > 200 ||
+    typeof value.rationale !== "string" ||
+    value.rationale.length < 1 ||
+    value.rationale.length > 4_000 ||
+    typeof value.recommendation !== "string" ||
+    value.recommendation.length < 1 ||
+    value.recommendation.length > 4_000
+  )
+    throw new Error("review_invalid_finding");
+  return {
+    severity: value.severity,
+    path: value.path,
+    ...(value.line === undefined ? {} : { line: value.line }),
+    title: value.title,
+    rationale: value.rationale,
+    recommendation: value.recommendation,
+  };
+}
+
+export function parseClaudeReviewOutput(stdout, request) {
+  let envelope;
+  try {
+    envelope = JSON.parse(stdout);
+  } catch {
+    throw new Error("review_invalid_json");
+  }
+  if (envelope?.is_error || envelope?.subtype !== "success")
+    throw new Error("review_agent_failed");
+  let output = envelope.structured_output;
+  if (!output && typeof envelope.result === "string") {
+    try {
+      output = JSON.parse(envelope.result);
+    } catch {
+      throw new Error("review_invalid_structured_output");
+    }
+  }
+  if (
+    !output ||
+    typeof output !== "object" ||
+    typeof output.summary !== "string" ||
+    output.summary.length > 20_000 ||
+    !Array.isArray(output.findings) ||
+    output.findings.length > request.maxFindings
+  )
+    throw new Error("review_invalid_structured_output");
+  const unique = new Map();
+  for (const value of output.findings) {
+    const finding = validateRawFinding(value);
+    const identity = createHash("sha256")
+      .update(
+        JSON.stringify({
+          reviewId: request.reviewId,
+          headCommit: request.headCommit,
+          finding,
+        }),
+      )
+      .digest("hex")
+      .slice(0, 40);
+    unique.set(`finding_${identity}`, {
+      ...finding,
+      findingId: `finding_${identity}`,
+    });
+  }
+  return {
+    summary: output.summary,
+    findings: [...unique.values()].sort((left, right) =>
+      left.findingId.localeCompare(right.findingId),
+    ),
+    usage: {
+      inputTokens: envelope.usage?.input_tokens,
+      outputTokens: envelope.usage?.output_tokens,
+      turns: Number.isInteger(envelope.num_turns) ? envelope.num_turns : 0,
+    },
+    model:
+      Object.keys(envelope.modelUsage ?? {}).sort()[0] ?? "claude-sonnet-4-6",
+  };
+}
+
 function parseCodexEvents(stdout, maximum) {
   let sessionId;
   let inputTokens;
@@ -321,6 +515,42 @@ async function installCredential(value) {
     credentialInstalled: true,
   };
   return { installed: true };
+}
+
+async function installReviewCredential(value) {
+  const request = validateReview(value?.request);
+  if (
+    !prepared ||
+    prepared.attemptId !== request.attemptId ||
+    prepared.baseCommit !== request.baseCommit ||
+    prepared.checkoutCommit !== request.headCommit
+  )
+    throw new Error("review_checkout_not_prepared");
+  if (!validRuntimeCredentialSize(value.authJson))
+    throw new Error("invalid_review_runtime_credential");
+  let parsed;
+  try {
+    parsed = JSON.parse(value.authJson);
+  } catch {
+    throw new Error("invalid_review_runtime_credential");
+  }
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    typeof parsed.oauthToken !== "string" ||
+    parsed.oauthToken.length < 32 ||
+    parsed.oauthToken.length > 4_096
+  )
+    throw new Error("invalid_review_runtime_credential");
+  await rm(claudeHome, { recursive: true, force: true });
+  await mkdir(claudeHome, { recursive: true, mode: 0o700 });
+  review = {
+    request,
+    oauthToken: parsed.oauthToken,
+    secrets: [parsed.oauthToken],
+    credentialInstalled: true,
+  };
+  return { installed: true, writtenToFilesystem: false };
 }
 
 export function validRuntimeCredentialSize(value) {
@@ -451,6 +681,172 @@ async function implement(value) {
     changedFiles: files,
     agentDurationMs: trusted.agentDurationMs,
     credentialRemoved: true,
+  };
+}
+
+async function runReview(value) {
+  const request = validateReview(value);
+  if (
+    !review?.credentialInstalled ||
+    review.request.attemptId !== request.attemptId ||
+    review.request.headCommit !== request.headCommit
+  )
+    throw new Error("review_runtime_credential_not_installed");
+  if (request.scenario === "interrupt-once" && request.attemptNumber === 1) {
+    setTimeout(() => process.exit(97), 10);
+    await new Promise(() => undefined);
+  }
+  const diff = await command(
+    "git",
+    [
+      "diff",
+      "--no-ext-diff",
+      "--unified=80",
+      request.baseCommit,
+      request.headCommit,
+      "--",
+      ...request.allowedPaths,
+    ],
+    { maxOutputBytes: 512 * 1024 },
+  );
+  if (diff.exitCode !== 0 || diff.outputTruncated)
+    throw new Error("review_diff_unavailable");
+  const startedAt = new Date().toISOString();
+  const invocation =
+    request.scenario === "timeout"
+      ? ["node", ["-e", "setTimeout(() => {}, 300000)"]]
+      : request.scenario === "invalid-output"
+        ? ["node", ["-e", "process.stdout.write('not-json')"]]
+        : [
+            "claude",
+            [
+              "-p",
+              reviewPrompt(request, diff.stdout),
+              "--model",
+              "sonnet",
+              "--effort",
+              "low",
+              "--tools",
+              "",
+              "--disable-slash-commands",
+              "--no-chrome",
+              "--no-session-persistence",
+              "--strict-mcp-config",
+              "--mcp-config",
+              '{"mcpServers":{}}',
+              "--setting-sources",
+              "",
+              "--output-format",
+              "json",
+              "--json-schema",
+              claudeReviewOutputSchema,
+              "--max-budget-usd",
+              "1.50",
+            ],
+          ];
+  const secrets = [...review.secrets];
+  let parsed;
+  try {
+    const result = await command(invocation[0], invocation[1], {
+      timeoutMs: request.scenario === "timeout" ? 500 : request.timeoutMs,
+      maxOutputBytes: request.maxOutputBytes,
+      env: {
+        HOME: claudeHome,
+        CLAUDE_CONFIG_DIR: `${claudeHome}/.claude`,
+        CLAUDE_CODE_OAUTH_TOKEN: review.oauthToken,
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+        DISABLE_TELEMETRY: "1",
+        DISABLE_ERROR_REPORTING: "1",
+        DISABLE_AUTOUPDATER: "1",
+        CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: "1",
+        ...(existsSync(interceptedCa) ? { SSL_CERT_FILE: interceptedCa } : {}),
+      },
+    });
+    assertCompleteAgentOutput(result);
+    if (result.exitCode !== 0)
+      throw new Error(
+        `review_agent_failed: ${boundedAgentFailure(result.stderr, secrets)}`,
+      );
+    parsed = parseClaudeReviewOutput(result.stdout, request);
+    const possibleEvidence = JSON.stringify(parsed);
+    if (secrets.some((secret) => possibleEvidence.includes(secret)))
+      throw new Error("review_credential_leak_detected");
+  } finally {
+    await rm(claudeHome, { recursive: true, force: true });
+    review = {
+      ...review,
+      oauthToken: undefined,
+      secrets: [],
+      credentialInstalled: false,
+    };
+  }
+  review = {
+    request,
+    parsed,
+    startedAt,
+    completedAt: new Date().toISOString(),
+    credentialInstalled: false,
+    secrets: [],
+  };
+  return {
+    reviewId: request.reviewId,
+    findingCount: parsed.findings.length,
+    credentialRemoved: true,
+  };
+}
+
+async function finalizeReview(value) {
+  const request = validateReview(value);
+  if (
+    !review?.parsed ||
+    review.request.attemptId !== request.attemptId ||
+    review.request.headCommit !== request.headCommit ||
+    review.credentialInstalled ||
+    review.oauthToken
+  )
+    throw new Error("review_not_prepared");
+  if (existsSync(claudeHome)) throw new Error("review_credential_home_present");
+  const deniedHttp = await deniedHttpProbe();
+  const deniedTcp = await deniedTcpProbe();
+  if (!deniedHttp || !deniedTcp) throw new Error("review_network_not_denied");
+  const status = await command("git", [
+    "status",
+    "--porcelain=v1",
+    "--untracked-files=all",
+  ]);
+  if (status.exitCode !== 0 || status.stdout !== "")
+    throw new Error("review_workspace_modified");
+  return {
+    schemaVersion: 1,
+    reviewId: request.reviewId,
+    attemptId: request.attemptId,
+    cycle: request.cycle,
+    runId: request.runId,
+    baseCommit: request.baseCommit,
+    headCommit: request.headCommit,
+    patchSha256: request.patchSha256,
+    startedAt: review.startedAt,
+    completedAt: review.completedAt,
+    provider: "claude-subscription",
+    model: review.parsed.model,
+    summary: review.parsed.summary,
+    findings: review.parsed.findings,
+    outputBytes: Buffer.byteLength(JSON.stringify(review.parsed)),
+    usage: review.parsed.usage,
+    network: {
+      checkoutHosts: ["github.com"],
+      modelHosts: ["api.anthropic.com"],
+      reviewerToolsEnabled: false,
+      arbitraryInternetEnabled: false,
+      deniedHttpProbe: deniedHttp,
+      deniedTcpProbe: deniedTcp,
+    },
+    credential: {
+      installedAtRuntime: true,
+      writtenToFilesystem: false,
+      absentFromEvidence: true,
+    },
+    resources: await resourceUsage(),
   };
 }
 
@@ -664,14 +1060,26 @@ export async function createPublicationManifest(
 }
 
 async function prepare(value, mode) {
-  const request = mode === "trusted" ? validateTrusted(value) : validate(value);
+  const request =
+    mode === "trusted"
+      ? validateTrusted(value)
+      : mode === "review"
+        ? validateReview(value)
+        : validate(value);
+  const checkoutTarget =
+    mode === "review" ? request.headCommit : request.baseCommit;
   if (prepared?.attemptId === request.attemptId) {
-    if (prepared.baseCommit !== request.baseCommit)
+    if (
+      prepared.baseCommit !== request.baseCommit ||
+      prepared.checkoutCommit !== checkoutTarget
+    )
       throw new Error("checkout_binding_mismatch");
     return prepared;
   }
   trusted = undefined;
+  review = undefined;
   await rm(codexHome, { recursive: true, force: true });
+  await rm(claudeHome, { recursive: true, force: true });
   await rm(workspace, { recursive: true, force: true });
   const init = await command("git", ["init", "--quiet", workspace], {
     cwd: "/home/runner",
@@ -689,19 +1097,31 @@ async function prepare(value, mode) {
     "--quiet",
     "--depth=1",
     "origin",
-    request.baseCommit,
+    checkoutTarget,
   ]);
   if (fetched.exitCode !== 0) throw new Error("checkout_fetch_failed");
+  let baseFetchDurationMs = 0;
+  if (mode === "review" && request.baseCommit !== checkoutTarget) {
+    const baseFetched = await command("git", [
+      "fetch",
+      "--quiet",
+      "--depth=1",
+      "origin",
+      request.baseCommit,
+    ]);
+    if (baseFetched.exitCode !== 0) throw new Error("review_base_fetch_failed");
+    baseFetchDurationMs = baseFetched.durationMs;
+  }
   const checkout = await command("git", [
     "checkout",
     "--quiet",
     "--detach",
-    "FETCH_HEAD",
+    checkoutTarget,
   ]);
   if (checkout.exitCode !== 0) throw new Error("checkout_failed");
   const head = await command("git", ["rev-parse", "HEAD"]);
   const checkoutCommit = head.stdout.trim();
-  if (head.exitCode !== 0 || checkoutCommit !== request.baseCommit)
+  if (head.exitCode !== 0 || checkoutCommit !== checkoutTarget)
     throw new Error("checkout_binding_mismatch");
   const expectedLockDigest = (
     await readFile(dependencyLockDigest, "utf8")
@@ -728,6 +1148,7 @@ async function prepare(value, mode) {
       init.durationMs +
       remote.durationMs +
       fetched.durationMs +
+      baseFetchDurationMs +
       checkout.durationMs +
       head.durationMs +
       dependencies.durationMs,
@@ -860,6 +1281,22 @@ if (import.meta.main)
           200,
           await validateImplementation(await body(request)),
         );
+      if (request.method === "POST" && request.url === "/review/prepare")
+        return json(
+          response,
+          200,
+          await prepare(await body(request), "review"),
+        );
+      if (request.method === "POST" && request.url === "/review/credential")
+        return json(
+          response,
+          200,
+          await installReviewCredential(await body(request)),
+        );
+      if (request.method === "POST" && request.url === "/review/run")
+        return json(response, 200, await runReview(await body(request)));
+      if (request.method === "POST" && request.url === "/review/result")
+        return json(response, 200, await finalizeReview(await body(request)));
       return json(response, 404, { error: "not_found" });
     } catch (error) {
       return json(response, 400, {

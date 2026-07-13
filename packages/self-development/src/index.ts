@@ -5,6 +5,7 @@ export * from "./codex-adapter.js";
 export * from "./github-integration.js";
 export * from "./orchestrator.js";
 export * from "./planning.js";
+export * from "./review.js";
 export * from "./job-ports.js";
 export * from "./cloudflare-job-store.js";
 export * from "./execution-dispatch.js";

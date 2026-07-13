@@ -262,6 +262,7 @@ export class GitHubAppGateway {
   async publish(input: {
     manifest: TrustedPublicationManifest;
     branch: string;
+    expectedRemoteHead: string | null;
     commitMessage: string;
     pullRequestTitle: string;
     issueNumber: number;
@@ -332,14 +333,28 @@ export class GitHubAppGateway {
 
     const existing = await this.existingRef(input.branch);
     let reconciled = existing !== null;
-    if (existing !== null && existing !== commit)
-      throw new Error("Publication branch already exists at another commit");
+    if (existing !== commit && existing !== input.expectedRemoteHead)
+      throw new Error("Publication branch does not match the expected head");
     if (existing === null) {
+      if (input.expectedRemoteHead !== null)
+        throw new Error("Publication branch expected an existing head");
       try {
         await this.api("POST", "/repos/zorkian/roundhouse/git/refs", {
           ref: `refs/heads/${input.branch}`,
           sha: commit,
         });
+      } catch (error) {
+        const after = await this.existingRef(input.branch);
+        if (after !== commit) throw error;
+        reconciled = true;
+      }
+    } else if (existing !== commit) {
+      try {
+        await this.api(
+          "PATCH",
+          `/repos/zorkian/roundhouse/git/refs/heads/${encodeURIComponent(input.branch)}`,
+          { sha: commit, force: false },
+        );
       } catch (error) {
         const after = await this.existingRef(input.branch);
         if (after !== commit) throw error;

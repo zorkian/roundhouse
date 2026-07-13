@@ -295,6 +295,7 @@ describe("GitHub App gateway", () => {
         sha256: "2".repeat(64),
       },
       branch: "codex/dogfood-github-integrated-poc",
+      expectedRemoteHead: null,
       commitMessage: "Record GitHub dogfood",
       pullRequestTitle: "Roundhouse GitHub dogfood",
       issueNumber: 7,
@@ -306,5 +307,88 @@ describe("GitHub App gateway", () => {
       pullRequestNumber: 11,
       reconciled: true,
     });
+  });
+
+  it("advances an existing branch only from the exact expected head", async () => {
+    const base = "a".repeat(40);
+    const tree = "c".repeat(40);
+    const commit = "d".repeat(40);
+    let branch = base;
+    let updates = 0;
+    const fetcher: typeof fetch = async (input, init) => {
+      const url = new URL(String(input));
+      const method = init?.method ?? "GET";
+      if (url.pathname.endsWith("/access_tokens"))
+        return json({
+          token: "installation-token",
+          expires_at: "2026-07-12T02:00:00Z",
+        });
+      if (url.pathname.endsWith(`/git/commits/${base}`))
+        return json({ tree: { sha: "b".repeat(40) } });
+      if (url.pathname.endsWith("/git/blobs") && method === "POST")
+        return json({ sha: "e".repeat(40) }, 201);
+      if (url.pathname.endsWith("/git/trees") && method === "POST")
+        return json({ sha: tree }, 201);
+      if (url.pathname.endsWith("/git/commits") && method === "POST")
+        return json({ sha: commit }, 201);
+      if (url.pathname.includes("/git/ref/heads/"))
+        return json({ object: { sha: branch } });
+      if (url.pathname.includes("/git/refs/heads/") && method === "PATCH") {
+        const body = JSON.parse(String(init?.body)) as {
+          sha: string;
+          force: boolean;
+        };
+        expect(body).toEqual({ sha: commit, force: false });
+        branch = body.sha;
+        updates += 1;
+        return json({ object: { sha: commit } });
+      }
+      if (url.pathname.endsWith("/pulls") && method === "GET")
+        return json([
+          {
+            number: 11,
+            html_url: "https://github.com/zorkian/roundhouse/pull/11",
+            head: { sha: commit },
+          },
+        ]);
+      if (url.pathname.endsWith(`/git/commits/${commit}`))
+        return json({
+          sha: commit,
+          tree: { sha: tree },
+          parents: [{ sha: base }],
+        });
+      return json({}, 404);
+    };
+    const gateway = new GitHubAppGateway(
+      { appId: "1", installationId: "2", privateKey },
+      fetcher,
+      () => new Date("2026-07-12T01:00:00Z"),
+    );
+    await expect(
+      gateway.publish({
+        manifest: {
+          schemaVersion: 1,
+          baseCommit: base,
+          patchSha256: "f".repeat(64),
+          files: [
+            {
+              path: "docs/dogfood/github-integrated-poc.md",
+              operation: "upsert",
+              contentBase64: btoa("dogfood\n"),
+              size: 8,
+              sha256: "1".repeat(64),
+            },
+          ],
+          sha256: "2".repeat(64),
+        },
+        branch: "codex/dogfood-github-integrated-poc",
+        expectedRemoteHead: base,
+        commitMessage: "Remediate review",
+        pullRequestTitle: "Roundhouse GitHub dogfood",
+        issueNumber: 7,
+        approvedAt: "2026-07-12T00:45:00Z",
+      }),
+    ).resolves.toMatchObject({ commit, pullRequestNumber: 11 });
+    expect(updates).toBe(1);
   });
 });

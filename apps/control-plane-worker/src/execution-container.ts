@@ -5,10 +5,14 @@ import { Container, ContainerProxy } from "@cloudflare/containers";
 import {
   repositoryExecutionRequestSchema,
   repositoryExecutionResultSchema,
+  independentReviewRequestSchema,
+  independentReviewResultSchema,
   trustedImplementationRequestSchema,
   trustedImplementationResultSchema,
   type RepositoryExecutionRequest,
   type RepositoryExecutionResult,
+  type IndependentReviewRequest,
+  type IndependentReviewResult,
   type TrustedImplementationRequest,
   type TrustedImplementationResult,
 } from "@roundhouse/self-development/cloudflare";
@@ -21,6 +25,8 @@ import {
 } from "./execution-egress.js";
 
 const modelHosts = ["chatgpt.com", "auth.openai.com"];
+const reviewModelHosts = ["api.anthropic.com"];
+const allModelHosts = [...modelHosts, ...reviewModelHosts];
 const maximumModelRequestsPerAttempt = 256;
 
 export { ContainerProxy };
@@ -58,7 +64,7 @@ async function auditedModelTransport(
   context: { containerId: string; params?: unknown },
 ): Promise<Response> {
   const url = new URL(request.url);
-  if (url.protocol !== "https:" || !modelHosts.includes(url.hostname))
+  if (url.protocol !== "https:" || !allModelHosts.includes(url.hostname))
     return new Response("Forbidden", { status: 403 });
   const params = context.params as { attemptId?: unknown } | undefined;
   const attemptId = params?.attemptId;
@@ -68,7 +74,7 @@ async function auditedModelTransport(
     `INSERT INTO execution_egress_events(event_id, attempt_id, container_id, hostname, method, occurred_at)
      SELECT ?, ?, ?, ?, ?, ?
      WHERE (SELECT COUNT(*) FROM execution_egress_events
-            WHERE attempt_id = ? AND hostname IN ('chatgpt.com', 'auth.openai.com')) < ?`,
+            WHERE attempt_id = ? AND hostname IN ('chatgpt.com', 'auth.openai.com', 'api.anthropic.com')) < ?`,
   )
     .bind(
       crypto.randomUUID(),
@@ -239,6 +245,68 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
       const failures = cleanup.filter((result) => result.status === "rejected");
       if (failures.length > 0)
         console.warn("Trusted Container cleanup was incomplete", {
+          attemptId: request.attemptId,
+          failures: failures.length,
+        });
+    }
+  }
+
+  async runReviewJob(
+    input: IndependentReviewRequest,
+    claudeAuthJson: string,
+  ): Promise<IndependentReviewResult> {
+    const request = independentReviewRequestSchema.parse(input);
+    const startupStarted = Date.now();
+    try {
+      await this.setAllowedHosts(allowedCheckoutHosts);
+      await this.setOutboundByHosts({
+        "github.com": {
+          method: "auditedCheckout",
+          params: { attemptId: request.attemptId },
+        },
+      });
+      await this.startAndWaitForPorts({
+        ports: 8080,
+        startOptions: {
+          enableInternet: false,
+          envVars: {},
+          labels: { attemptId: request.attemptId, mode: "independent-review" },
+        },
+        cancellationOptions: {
+          instanceGetTimeoutMS: 30_000,
+          portReadyTimeoutMS: 60_000,
+          waitInterval: 250,
+        },
+      });
+      const startupDurationMs = Date.now() - startupStarted;
+      await this.post("/review/prepare", request);
+      await this.setAllowedHosts(reviewModelHosts);
+      await this.setOutboundByHosts({
+        "api.anthropic.com": {
+          method: "auditedModelTransport",
+          params: { attemptId: request.attemptId },
+        },
+      });
+      await this.post("/review/credential", {
+        request,
+        authJson: claudeAuthJson,
+      });
+      await this.post("/review/run", request);
+      await this.setOutboundByHosts({});
+      await this.setAllowedHosts([]);
+      return independentReviewResultSchema.parse({
+        ...((await this.post("/review/result", request)) as object),
+        startupDurationMs,
+      });
+    } finally {
+      const cleanup = await Promise.allSettled([
+        this.setOutboundByHosts({}),
+        this.setAllowedHosts([]),
+        this.destroy(),
+      ]);
+      const failures = cleanup.filter((result) => result.status === "rejected");
+      if (failures.length > 0)
+        console.warn("Independent review Container cleanup was incomplete", {
           attemptId: request.attemptId,
           failures: failures.length,
         });
