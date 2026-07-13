@@ -4,6 +4,7 @@
 import { z } from "zod";
 
 import type { ControlPlaneEnv } from "./environment.js";
+import { runtimeIdentity } from "./runtime-config.js";
 
 export const githubNativeOperatorMigration = `
 CREATE TABLE IF NOT EXISTS github_webhook_deliveries (
@@ -54,7 +55,7 @@ const pingSchema = z.object({
     config: z.object({
       content_type: z.literal("json"),
       insecure_ssl: z.union([z.literal("0"), z.literal(0)]),
-      url: z.literal("https://roundhouse-dev.rm-rf.rip/v1/github/webhook"),
+      url: z.string().url(),
     }),
   }),
 });
@@ -227,6 +228,7 @@ export async function verifyWebhookRequest(
   request: Request,
   env: ControlPlaneEnv,
 ): Promise<VerifiedWebhook> {
+  const identity = runtimeIdentity(env);
   if (!env.ROUNDHOUSE_GITHUB_WEBHOOK_SECRET)
     throw new GitHubWebhookError(503, "webhook_not_configured");
   if (!env.GITHUB_INSTALLATION_ID)
@@ -269,7 +271,8 @@ export async function verifyWebhookRequest(
     const ping = pingSchema.parse(decoded);
     if (
       ping.hook_id !== ping.hook.id ||
-      String(ping.hook.app_id) !== env.GITHUB_APP_ID
+      String(ping.hook.app_id) !== env.GITHUB_APP_ID ||
+      ping.hook.config.url !== `${identity.origin}/v1/github/webhook`
     )
       throw new GitHubWebhookError(403, "unenrolled_source");
     return {
@@ -278,14 +281,14 @@ export async function verifyWebhookRequest(
       payloadSha256: await sha256(bytes),
       payload: {
         installation: { id: Number(env.GITHUB_INSTALLATION_ID) },
-        repository: { full_name: "zorkian/roundhouse" },
+        repository: { full_name: identity.repositoryFullName },
       },
     };
   }
   const payload = envelopeSchema.passthrough().parse(decoded);
   if (
     String(payload.installation.id) !== env.GITHUB_INSTALLATION_ID ||
-    payload.repository.full_name !== "zorkian/roundhouse"
+    payload.repository.full_name !== identity.repositoryFullName
   )
     throw new GitHubWebhookError(403, "unenrolled_source");
   return {

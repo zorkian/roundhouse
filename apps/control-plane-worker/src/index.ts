@@ -117,6 +117,7 @@ import {
   planInspection,
   reviewInspection,
 } from "./operator-ui.js";
+import { runtimeIdentity } from "./runtime-config.js";
 
 const maxBodyBytes = 64 * 1024;
 const jsonHeaders = { "content-type": "application/json; charset=utf-8" };
@@ -205,7 +206,7 @@ function coordinator(env: ControlPlaneEnv): ResumableCoordinator {
     new DispatchingStageExecutor(dispatcher),
     { now: () => new Date() },
     {
-      workerId: "roundhouse-dev-control-plane-queue",
+      workerId: `${runtimeIdentity(env).workerId}-queue`,
       leaseMs:
         env.EXECUTION_MODE === "cloudflare-trusted-codex"
           ? trustedImplementationLeaseMs
@@ -292,6 +293,8 @@ function githubGateway(env: ControlPlaneEnv): GitHubAppGateway {
       appId: env.GITHUB_APP_ID,
       installationId: env.GITHUB_INSTALLATION_ID,
       privateKey: env.ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY,
+      repositoryFullName: runtimeIdentity(env).repositoryFullName,
+      userAgent: runtimeIdentity(env).workerId,
     },
     env.GITHUB_API_FETCHER,
   );
@@ -302,11 +305,12 @@ async function planGitHubIssue(
   env: ControlPlaneEnv,
   actorId: string,
 ): Promise<DurableIssuePlan> {
+  const identity = runtimeIdentity(env);
   const github = githubGateway(env);
   const snapshot = await github.fetchIssue({
     schemaVersion: 1,
-    owner: "zorkian",
-    repository: "roundhouse",
+    owner: identity.owner,
+    repository: identity.repository,
     number: issueNumber,
   });
   const baseCommit = await github.mainHead();
@@ -335,6 +339,7 @@ async function materializeGitHubPlan(
   input: Extract<GitHubCommand, { kind: "implement" }>,
   actorId: string,
 ): Promise<string> {
+  const identity = runtimeIdentity(env);
   const existing = await readIssuePlan(env, issueNumber);
   if (!existing || existing.plan.planId !== input.planId)
     throw new HttpError(409, "Command plan does not match this issue");
@@ -382,8 +387,8 @@ async function materializeGitHubPlan(
       },
       source: {
         kind: "github_issue",
-        owner: "zorkian",
-        repository: "roundhouse",
+        owner: identity.owner,
+        repository: identity.repository,
         issueNumber,
         issueUrl: snapshot.url,
         nodeId: snapshot.nodeId,
@@ -392,11 +397,11 @@ async function materializeGitHubPlan(
       },
       publication: {
         remote: "origin",
-        remoteUrl: "https://github.com/zorkian/roundhouse.git",
+        remoteUrl: env.ALLOWED_REMOTE_URL,
         branch: `codex/dogfood-issue-${issueNumber}`,
         expectedRemoteHead: null,
         commitMessage: `Implement Roundhouse dogfood issue ${issueNumber}`,
-        authorName: "Roundhouse Development",
+        authorName: `Roundhouse ${identity.environment}`,
         authorEmail: "roundhouse@example.invalid",
       },
     },
@@ -408,11 +413,14 @@ async function materializeGitHubPlan(
   return body.runId;
 }
 
-async function planComment(value: DurableIssuePlan): Promise<string> {
+async function planComment(
+  value: DurableIssuePlan,
+  identity: ReturnType<typeof runtimeIdentity>,
+): Promise<string> {
   const lines = [
     `Roundhouse plan \`${value.plan.planId}\` is **${value.status}** at revision \`${value.revision}\`.`,
-    `Workflow: https://roundhouse-dev.rm-rf.rip/repositories/zorkian/roundhouse/issues/${value.plan.issueNumber}`,
-    `Plan: https://roundhouse-dev.rm-rf.rip/plans/${value.plan.planId}`,
+    `Workflow: ${identity.origin}/repositories/${identity.repositoryFullName}/issues/${value.plan.issueNumber}`,
+    `Plan: ${identity.origin}/plans/${value.plan.planId}`,
     `Base: \`${value.plan.baseCommit}\``,
     `Profile: \`${value.plan.profileId}@${value.plan.profileVersion}\``,
   ];
@@ -450,11 +458,12 @@ async function enqueuePlanComment(
   issueNumber: number,
   value: DurableIssuePlan,
 ): Promise<void> {
+  const identity = runtimeIdentity(env);
   await enqueueStatusComment(
     env,
-    "zorkian/roundhouse",
+    identity.repositoryFullName,
     issueNumber,
-    `<!-- roundhouse-status:zorkian/roundhouse#${issueNumber} -->\n\n${await planComment(value)}`,
+    `<!-- roundhouse-status:${identity.repositoryFullName}#${issueNumber} -->\n\n${await planComment(value, identity)}`,
   );
 }
 
@@ -566,15 +575,16 @@ async function flushGitHubOutputs(env: ControlPlaneEnv): Promise<void> {
 
 async function runComment(
   run: Awaited<ReturnType<D1JobStore["read"]>>,
+  identity: ReturnType<typeof runtimeIdentity>,
 ): Promise<string> {
   const lines = [
     `Roundhouse run \`${run.runId}\` is **${run.state}** at revision \`${run.revision}\`.`,
     ...(run.task.source?.kind === "github_issue"
       ? [
-          `Workflow: https://roundhouse-dev.rm-rf.rip/repositories/zorkian/roundhouse/issues/${run.task.source.issueNumber}`,
+          `Workflow: ${identity.origin}/repositories/${identity.repositoryFullName}/issues/${run.task.source.issueNumber}`,
         ]
       : []),
-    `Status: https://roundhouse-dev.rm-rf.rip/runs/${run.runId}`,
+    `Status: ${identity.origin}/runs/${run.runId}`,
     `Base: \`${run.task.baseCommit}\``,
   ];
   const attempt = run.attempts.at(-1);
@@ -616,12 +626,13 @@ async function enqueueRunComment(
   issueNumber: number,
   runId: string,
 ): Promise<void> {
+  const identity = runtimeIdentity(env);
   const run = await new D1JobStore(env.DB).read(runId);
   await enqueueStatusComment(
     env,
-    "zorkian/roundhouse",
+    identity.repositoryFullName,
     issueNumber,
-    `<!-- roundhouse-status:zorkian/roundhouse#${issueNumber} -->\n\n${await runComment(run)}`,
+    `<!-- roundhouse-status:${identity.repositoryFullName}#${issueNumber} -->\n\n${await runComment(run, identity)}`,
   );
 }
 
@@ -629,10 +640,11 @@ async function enqueueReviewComment(
   env: ControlPlaneEnv,
   review: DurableIndependentReview,
 ): Promise<void> {
+  const identity = runtimeIdentity(env);
   const lines = [
     `Roundhouse independent review \`${review.request.reviewId}\` is **${review.status}** at revision \`${review.revision}\`.`,
-    `Workflow: https://roundhouse-dev.rm-rf.rip/repositories/zorkian/roundhouse/issues/${review.request.issueNumber}`,
-    `Status: https://roundhouse-dev.rm-rf.rip/reviews/${review.request.reviewId}`,
+    `Workflow: ${identity.origin}/repositories/${identity.repositoryFullName}/issues/${review.request.issueNumber}`,
+    `Status: ${identity.origin}/reviews/${review.request.reviewId}`,
     `Exact pull-request head: \`${review.request.headCommit}\``,
   ];
   if (review.execution) {
@@ -651,22 +663,22 @@ async function enqueueReviewComment(
   const body = lines.join("\n\n");
   await enqueueStatusComment(
     env,
-    "zorkian/roundhouse",
+    identity.repositoryFullName,
     review.request.issueNumber,
-    `<!-- roundhouse-status:zorkian/roundhouse#${review.request.issueNumber} -->\n\n${body}`,
+    `<!-- roundhouse-status:${identity.repositoryFullName}#${review.request.issueNumber} -->\n\n${body}`,
   );
   await enqueueStatusComment(
     env,
-    "zorkian/roundhouse",
+    identity.repositoryFullName,
     review.request.pullRequestNumber,
-    `<!-- roundhouse-status:zorkian/roundhouse#${review.request.pullRequestNumber} -->\n\n${body}\n\nSource issue: ${review.request.issueUrl}`,
+    `<!-- roundhouse-status:${identity.repositoryFullName}#${review.request.pullRequestNumber} -->\n\n${body}\n\nSource issue: ${review.request.issueUrl}`,
   );
   if (env.GITHUB_REVIEW_CHECKS_ENABLED !== "true") return;
   const findings = review.execution?.result.findings.length ?? 0;
   const running = review.status === "pending" || review.status === "running";
   const failed = review.status === "failed";
   await enqueueReviewCheck(env, {
-    repositoryFullName: "zorkian/roundhouse",
+    repositoryFullName: identity.repositoryFullName,
     reviewId: review.request.reviewId,
     pullRequestNumber: review.request.pullRequestNumber,
     headSha: review.request.headCommit,
@@ -695,7 +707,7 @@ async function enqueueReviewComment(
       `Findings: ${findings}`,
       `Cycle: ${review.request.cycle} of 2`,
     ].join("\n"),
-    detailsUrl: `https://roundhouse-dev.rm-rf.rip/reviews/${review.request.reviewId}`,
+    detailsUrl: `${identity.origin}/reviews/${review.request.reviewId}`,
   });
 }
 
@@ -880,7 +892,7 @@ async function consumeReviewMessage(
   const claim = await claimIndependentReview(
     env,
     parsed.data.reviewId,
-    "roundhouse-dev-independent-review",
+    `${runtimeIdentity(env).workerId}-independent-review`,
     new Date(),
     20 * 60_000,
   );
@@ -1135,7 +1147,7 @@ async function githubWebhook(
             [
               `Roundhouse observed an actionable CI failure for exact published head \`${target.headSha}\` on pull request #${target.pullRequestNumber}.`,
               `Check \`${target.key}\`: **${target.conclusion}**.`,
-              `Status: https://roundhouse-dev.rm-rf.rip/runs/${target.runId}`,
+              `Status: ${runtimeIdentity(env).origin}/runs/${target.runId}`,
             ].join("\n\n"),
           );
       await completeWebhookDelivery(
@@ -1505,7 +1517,7 @@ async function publishGitHubRun(
         {
           branch: result.branch,
           commit: result.commit,
-          remoteUrl: "https://github.com/zorkian/roundhouse.git",
+          remoteUrl: env.ALLOWED_REMOTE_URL,
           verifiedAt: result.verifiedAt,
           pullRequestUrl: result.pullRequestUrl,
         },
@@ -1559,7 +1571,7 @@ async function route(
     );
   if (request.method === "GET" && issueMatch) {
     const repositoryFullName = `${issueMatch[1]}/${issueMatch[2]}`;
-    if (repositoryFullName !== "zorkian/roundhouse")
+    if (repositoryFullName !== runtimeIdentity(env).repositoryFullName)
       throw new HttpError(
         404,
         "Repository is not enrolled in this development adapter",
