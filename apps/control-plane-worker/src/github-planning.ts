@@ -227,17 +227,20 @@ export async function approvePlan(
 ): Promise<DurableIssuePlan> {
   const row = await planRow(env, "plan_id", input.planId);
   if (!row) throw new Error("Plan not found");
-  if (
-    row.plan_sha256 !== input.planSha256 ||
-    row.revision !== input.expectedRevision
-  )
+  if (row.plan_sha256 !== input.planSha256)
     throw new Error("Plan approval binding does not match");
   if (row.status === "rejected") throw new Error("Rejected plan cannot run");
   if (row.status === "approved" || row.status === "materialized") {
-    if (row.approved_by !== input.actorId)
+    const plan = parseDecision(row.plan_json);
+    if (
+      row.approved_by !== input.actorId ||
+      input.expectedRevision !== plan.revision
+    )
       throw new Error("Existing plan approval actor does not match");
     return durable(row);
   }
+  if (row.revision !== input.expectedRevision)
+    throw new Error("Plan approval binding does not match");
   const approvedAt = input.now.toISOString();
   const updated = await env.DB.prepare(
     "UPDATE github_issue_plans SET status = 'approved', revision = revision + 1, approved_by = ?, approved_at = ?, updated_at = ? WHERE plan_id = ? AND revision = ? AND status = 'proposed' AND plan_sha256 = ?",

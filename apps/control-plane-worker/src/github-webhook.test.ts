@@ -85,6 +85,16 @@ describe("GitHub-native operator webhook", () => {
         `/rh approve run_123 8 ${"a".repeat(40)} ${"b".repeat(64)} ${"c".repeat(64)}`,
       ),
     ).toMatchObject({ kind: "approve", revision: 8 });
+    expect(
+      parseGitHubCommand(
+        `/rh implement plan_${"a".repeat(40)} 2 ${"b".repeat(64)}`,
+      ),
+    ).toEqual({
+      kind: "implement",
+      planId: `plan_${"a".repeat(40)}`,
+      revision: 2,
+      planSha256: "b".repeat(64),
+    });
     expect(parseGitHubCommand("please /rh start")).toBeNull();
     expect(parseGitHubCommand("/rh shell rm -rf /")).toBeNull();
     expect(parseGitHubCommand("/rh retry run_123 latest")).toBeNull();

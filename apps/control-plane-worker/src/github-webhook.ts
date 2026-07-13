@@ -95,6 +95,12 @@ const checkSchema = envelopeSchema.extend({
 export type GitHubCommand =
   | { kind: "start" }
   | { kind: "status"; runId?: string }
+  | {
+      kind: "implement";
+      planId: string;
+      revision: number;
+      planSha256: string;
+    }
   | { kind: "cancel"; runId: string; revision: number }
   | { kind: "retry"; runId: string; revision: number }
   | {
@@ -107,6 +113,7 @@ export type GitHubCommand =
     };
 
 const runId = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/;
+const planId = /^plan_[a-f0-9]{40}$/;
 const sha40 = /^[a-f0-9]{40}$/;
 const sha64 = /^[a-f0-9]{64}$/;
 
@@ -127,6 +134,19 @@ export function parseGitHubCommand(body: string): GitHubCommand | null {
     return { kind: "status", runId: parts[2] };
   }
   const revision = parseRevision(parts[3]);
+  if (
+    parts[1] === "implement" &&
+    parts.length === 5 &&
+    planId.test(parts[2] ?? "") &&
+    revision !== null &&
+    sha64.test(parts[4] ?? "")
+  )
+    return {
+      kind: "implement",
+      planId: parts[2]!,
+      revision,
+      planSha256: parts[4]!,
+    };
   if (
     ["cancel", "retry"].includes(parts[1] ?? "") &&
     parts.length === 4 &&

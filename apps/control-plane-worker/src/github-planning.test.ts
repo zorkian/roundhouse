@@ -107,6 +107,15 @@ describe("durable issue planning", () => {
       approvePlan(env, {
         planId: decision.planId,
         expectedRevision: 1,
+        planSha256: decision.planSha256,
+        actorId: "github:zorkian",
+        now: new Date("2026-07-12T00:02:30Z"),
+      }),
+    ).resolves.toEqual(approved);
+    await expect(
+      approvePlan(env, {
+        planId: decision.planId,
+        expectedRevision: 1,
         planSha256: "f".repeat(64),
         actorId: "github:zorkian",
         now: new Date(),
