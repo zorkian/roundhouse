@@ -87,6 +87,12 @@ status includes the exact copyable command. Completed publication status
 includes the draft PR URL. Check-run and check-suite events are stored by pull
 request and exact head SHA; events for another head never satisfy that head.
 
+The development execution image bakes the repository's locked workspace
+dependencies at image-build time. A fresh exact-commit checkout receives that
+dependency overlay only when its `pnpm-lock.yaml` SHA-256 matches the image
+binding. Validation therefore runs with network disabled and without a runtime
+package installation; a lock mismatch fails before agent execution.
+
 ## Local verification
 
 Use Node 24, as required by the repository:

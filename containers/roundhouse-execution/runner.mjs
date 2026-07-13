@@ -10,6 +10,8 @@ import { existsSync } from "node:fs";
 
 const workspace = "/home/runner/workspace";
 const repositoryUrl = "https://github.com/zorkian/roundhouse.git";
+const dependencyArchive = "/opt/roundhouse/dependencies.tar";
+const dependencyLockDigest = "/opt/roundhouse/dependencies.sha256";
 const maxBodyBytes = 128 * 1024;
 const interceptedCa = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
 let prepared;
@@ -701,6 +703,21 @@ async function prepare(value, mode) {
   const checkoutCommit = head.stdout.trim();
   if (head.exitCode !== 0 || checkoutCommit !== request.baseCommit)
     throw new Error("checkout_binding_mismatch");
+  const expectedLockDigest = (
+    await readFile(dependencyLockDigest, "utf8")
+  ).trim();
+  const actualLockDigest = createHash("sha256")
+    .update(await readFile(`${workspace}/pnpm-lock.yaml`))
+    .digest("hex");
+  if (actualLockDigest !== expectedLockDigest)
+    throw new Error("dependency_lock_mismatch");
+  const dependencies = await command(
+    "tar",
+    ["--extract", `--file=${dependencyArchive}`, `--directory=${workspace}`],
+    { timeoutMs: 60_000 },
+  );
+  if (dependencies.exitCode !== 0 || dependencies.timedOut)
+    throw new Error("dependency_overlay_failed");
   prepared = {
     schemaVersion: 1,
     runId: request.runId,
@@ -712,7 +729,8 @@ async function prepare(value, mode) {
       remote.durationMs +
       fetched.durationMs +
       checkout.durationMs +
-      head.durationMs,
+      head.durationMs +
+      dependencies.durationMs,
   };
   return prepared;
 }
