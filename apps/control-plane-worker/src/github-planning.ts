@@ -130,14 +130,6 @@ export async function readPlanById(
   return row ? durable(row) : undefined;
 }
 
-export async function readPlan(
-  env: ControlPlaneEnv,
-  planId: string,
-): Promise<DurableIssuePlan | null> {
-  const row = await planRow(env, "plan_id", planId);
-  return row ? durable(row) : null;
-}
-
 async function recordEvent(
   env: ControlPlaneEnv,
   planId: string,

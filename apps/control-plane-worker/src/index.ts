@@ -5,6 +5,7 @@ import {
   dogfoodPublicationBranchSchema,
   exactPathsSha256,
   extractExactPaths,
+  maxPlannedInstructionCharacters,
   qualifyAndPlan,
   repositoryRelativePathSchema,
   trustedImplementationResultSchema,
@@ -274,12 +275,16 @@ async function planGitHubIssue(
   });
   const baseCommit = await github.mainHead();
   await saveIssueSnapshot(env, snapshot, JSON.stringify(snapshot));
+  const plannedInstructions = snapshot.body.slice(
+    0,
+    maxPlannedInstructionCharacters,
+  );
   const decision = await qualifyAndPlan(
     {
       issueNumber,
       issueContentSha256: snapshot.contentSha256,
       subject: snapshot.title,
-      instructions: snapshot.body,
+      instructions: plannedInstructions,
       baseCommit,
       requestedPaths: extractExactPaths(snapshot.body),
     },
@@ -323,7 +328,7 @@ async function materializeGitHubPlan(
         `Plan SHA-256: ${plan.planSha256}`,
         `Issue title: ${plan.subject}`,
         "Issue body:",
-        snapshot.body.slice(0, 18_000),
+        snapshot.body.slice(0, maxPlannedInstructionCharacters),
       ].join("\n\n"),
       repositoryPath: env.ALLOWED_REPOSITORY_PATH,
       baseCommit: plan.baseCommit,

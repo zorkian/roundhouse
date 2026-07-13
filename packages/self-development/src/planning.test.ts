@@ -52,6 +52,8 @@ describe("issue qualification and planning", () => {
     ["apps/control-plane-worker/migrations/0008.sql", "protected_path"],
     ["apps/control-plane-worker/wrangler.deploy.jsonc", "protected_path"],
     ["LICENSE", "protected_path"],
+    ["packages/domain/package.json", "protected_path"],
+    ["apps/control-plane-worker/package-lock.json", "protected_path"],
     ["scripts/arbitrary.mjs", "path_not_enrolled"],
     ["packages/**/*.ts", "invalid_path"],
     ["../outside", "invalid_path"],
@@ -65,5 +67,22 @@ describe("issue qualification and planning", () => {
       expect(decision.findings).toEqual(
         expect.arrayContaining([expect.objectContaining({ code, path })]),
       );
+  });
+
+  it("returns a structured rejection for a large bounded scope", async () => {
+    const decision = await qualifyAndPlan(
+      {
+        ...input,
+        requestedPaths: Array.from(
+          { length: 101 },
+          (_, index) => `packages/domain/src/generated-${index}.ts`,
+        ),
+      },
+      new Date("2026-07-12T00:00:00Z"),
+    );
+    expect(decision).toMatchObject({
+      status: "rejected",
+      findings: [expect.objectContaining({ code: "too_many_paths" })],
+    });
   });
 });

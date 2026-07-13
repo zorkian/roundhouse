@@ -7,6 +7,14 @@ import { repositoryRelativePathSchema } from "./trusted-loop.js";
 
 const sha40 = z.string().regex(/^[a-f0-9]{40}$/);
 const sha64 = z.string().regex(/^[a-f0-9]{64}$/);
+export const maxPlannedInstructionCharacters = 18_000;
+const maxRequestedPaths = 1_000;
+const protectedManifestNames = new Set([
+  "package.json",
+  "package-lock.json",
+  "pnpm-lock.yaml",
+  "yarn.lock",
+]);
 
 export const roundhouseSelfDevelopmentProfile = {
   profileId: "roundhouse-self-development-v1",
@@ -31,9 +39,9 @@ export const qualificationIssueSchema = z.object({
   issueNumber: z.number().int().positive(),
   issueContentSha256: sha64,
   subject: z.string().min(1).max(500),
-  instructions: z.string().min(1).max(20_000),
+  instructions: z.string().min(1).max(maxPlannedInstructionCharacters),
   baseCommit: sha40,
-  requestedPaths: z.array(z.string()).max(100),
+  requestedPaths: z.array(z.string()).max(maxRequestedPaths),
 });
 
 export type QualificationIssue = z.infer<typeof qualificationIssueSchema>;
@@ -90,7 +98,7 @@ export const rejectedQualificationSchema = z.object({
   issueContentSha256: sha64,
   subject: z.string().min(1).max(500),
   baseCommit: sha40,
-  requestedPaths: z.array(z.string()).max(100),
+  requestedPaths: z.array(z.string()).max(maxRequestedPaths),
   findings: z.array(qualificationFindingSchema).min(1),
   createdAt: z.iso.datetime(),
   planSha256: sha64,
@@ -159,6 +167,7 @@ function pathFindings(paths: string[]) {
       roundhouseSelfDevelopmentProfile.deniedExactPaths.includes(
         path as never,
       ) ||
+      protectedManifestNames.has(path.split("/").at(-1) ?? "") ||
       roundhouseSelfDevelopmentProfile.deniedPrefixes.some((prefix) =>
         path.startsWith(prefix),
       )
