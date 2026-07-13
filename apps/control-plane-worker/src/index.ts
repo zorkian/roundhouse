@@ -45,6 +45,7 @@ import {
   approvePlan,
   materializePlan,
   readIssuePlan,
+  readPlanById,
   recordPlanningDecision,
   requireQualifiedPlan,
   type DurableIssuePlan,
@@ -85,6 +86,7 @@ import {
   retryFailedRun,
   runRecoveryCycle,
 } from "./operations.js";
+import { dashboard, operatorPage, planInspection } from "./operator-ui.js";
 
 const maxBodyBytes = 64 * 1024;
 const jsonHeaders = { "content-type": "application/json; charset=utf-8" };
@@ -235,7 +237,7 @@ async function submitTask(
       schemaVersion: 1,
       runId: reservation.row.run_id,
       created: reservation.created,
-      statusUrl: `/v1/runs/${reservation.row.run_id}`,
+      statusUrl: `/runs/${reservation.row.run_id}`,
     },
     reservation.created ? 201 : 200,
   );
@@ -449,7 +451,7 @@ async function runComment(
 ): Promise<string> {
   const lines = [
     `Roundhouse run \`${run.runId}\` is **${run.state}** at revision \`${run.revision}\`.`,
-    `Status: https://roundhouse-dev.rm-rf.rip/v1/runs/${run.runId}`,
+    `Status: https://roundhouse-dev.rm-rf.rip/runs/${run.runId}`,
     `Base: \`${run.task.baseCommit}\``,
   ];
   const attempt = run.attempts.at(-1);
@@ -1023,6 +1025,56 @@ async function route(
   if (request.method === "GET" && url.pathname === "/ready") {
     await env.DB.prepare("SELECT 1").first();
     return json({ schemaVersion: 1, ready: true });
+  }
+  if (request.method === "GET") {
+    const page = operatorPage(url.pathname);
+    if (page) return page;
+  }
+  if (request.method === "GET" && url.pathname === "/v1/dashboard")
+    return json(await dashboard(env));
+  const planMatch = /^\/v1\/plans\/([a-zA-Z0-9_-]{1,128})$/.exec(url.pathname);
+  if (request.method === "GET" && planMatch?.[1]) {
+    const value = await planInspection(env, planMatch[1]);
+    if (!value) throw new HttpError(404, "Plan not found");
+    return json(value);
+  }
+  const planApprovalMatch =
+    /^\/v1\/plans\/([a-zA-Z0-9_-]{1,128})\/approve$/.exec(url.pathname);
+  if (request.method === "POST" && planApprovalMatch?.[1]) {
+    const input = z
+      .object({
+        schemaVersion: z.literal(1),
+        expectedRevision: z.number().int().nonnegative(),
+        planSha256: z.string().regex(/^[a-f0-9]{64}$/),
+      })
+      .parse(await requestBody(request));
+    idempotencyKeySchema.parse(request.headers.get("idempotency-key"));
+    const plan = await readPlanById(env, planApprovalMatch[1]);
+    if (!plan) throw new HttpError(404, "Plan not found");
+    let runId: string;
+    try {
+      runId = await materializeGitHubPlan(
+        env,
+        plan.plan.issueNumber,
+        {
+          kind: "implement",
+          planId: plan.plan.planId,
+          revision: input.expectedRevision,
+          planSha256: input.planSha256,
+        },
+        actorId,
+      );
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        (error.message.includes("binding") ||
+          error.message.includes("actor") ||
+          error.message.includes("cannot run"))
+      )
+        throw new HttpError(409, error.message);
+      throw error;
+    }
+    return json({ schemaVersion: 1, runId, statusUrl: `/runs/${runId}` });
   }
   if (request.method === "POST" && url.pathname === "/v1/runs")
     return submit(request, env);

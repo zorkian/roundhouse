@@ -459,6 +459,50 @@ describe("local control-plane Worker", () => {
     expect(queued.messages).toHaveLength(1);
     expect(comments).toBe(2);
 
+    const planPage = await handler.fetch!(
+      request(`/plans/${plan!.plan.planId}`),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(planPage.headers.get("content-type")).toContain("text/html");
+    await expect(
+      handler.fetch!(
+        request(`/v1/plans/${plan!.plan.planId}`),
+        env,
+        {} as ExecutionContext,
+      ),
+    ).resolves.toMatchObject({ status: 200 });
+    const dashboard = await handler.fetch!(
+      request("/v1/dashboard"),
+      env,
+      {} as ExecutionContext,
+    );
+    await expect(dashboard.json()).resolves.toMatchObject({
+      plans: [{ status: "materialized", runId: implementationResult.runId }],
+      runs: [{ runId: implementationResult.runId }],
+    });
+    const replayedUiApproval = await handler.fetch!(
+      request(`/v1/plans/${plan!.plan.planId}/approve`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "ui-plan-replay-01",
+        },
+        body: JSON.stringify({
+          schemaVersion: 1,
+          expectedRevision: 1,
+          planSha256: plan!.plan.planSha256,
+        }),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(replayedUiApproval.status).toBe(409);
+    await expect(replayedUiApproval.json()).resolves.toMatchObject({
+      error: { message: "Existing plan approval actor does not match" },
+    });
+    expect(queued.messages).toHaveLength(1);
+
     const rejectedPayload = JSON.stringify({
       action: "created",
       installation: { id: 146147681 },

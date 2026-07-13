@@ -121,6 +121,14 @@ export async function readIssuePlan(
   return row ? durable(row) : null;
 }
 
+export async function readPlanById(
+  env: ControlPlaneEnv,
+  planId: string,
+): Promise<DurableIssuePlan | undefined> {
+  const row = await planRow(env, "plan_id", planId);
+  return row ? durable(row) : undefined;
+}
+
 export async function readPlan(
   env: ControlPlaneEnv,
   planId: string,
