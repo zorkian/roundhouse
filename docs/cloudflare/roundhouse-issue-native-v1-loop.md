@@ -92,9 +92,10 @@ retain the additive tables, R2 evidence, runs, issues, and pull requests.
 
 The approved manifest was applied to the existing development resources. D1
 migration `0007_issue_native_planning.sql` completed successfully. The final
-demonstrated Worker version was `9ce124c4-1e4c-484b-8ac9-df4caaeccc55`; later
-milestone-scoped review fixes may supersede this version without changing the
-resource envelope. No Container rollout was performed.
+demonstrated Worker version was `b89eef8f-3f4a-4296-95a1-23dd2b9df2b6`. The
+initial milestone deployment was `584db4d4-6f16-4116-91b4-93638a97c964`;
+review-scoped fixes were deployed without changing the resource envelope. No
+Container rollout was performed.
 
 Successful issue [#16](https://github.com/zorkian/roundhouse/issues/16)
 produced:
