@@ -155,14 +155,6 @@ function pathFindings(paths: string[]) {
       });
       continue;
     }
-    if (/[?*\[\]{}]/.test(path)) {
-      findings.push({
-        code: "invalid_path",
-        path,
-        message: "Scope path cannot contain a glob",
-      });
-      continue;
-    }
     if (
       roundhouseSelfDevelopmentProfile.deniedExactPaths.includes(
         path as never,

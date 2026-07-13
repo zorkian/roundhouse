@@ -15,10 +15,13 @@ describe("operator UI", () => {
       expect(response?.headers.get("content-security-policy")).toContain(
         "frame-ancestors 'none'",
       );
+      expect(response?.headers.get("content-security-policy")).not.toContain(
+        "unsafe-inline",
+      );
       expect(response?.headers.get("cache-control")).toBe("no-store");
       const html = await response!.text();
       expect(html).toContain("refreshes every 5s");
-      const script = /<script>([\s\S]+)<\/script>/.exec(html)?.[1];
+      const script = /<script[^>]*>([\s\S]+)<\/script>/.exec(html)?.[1];
       expect(script).toBeDefined();
       expect(() => new Function(script!)).not.toThrow();
     }
@@ -31,11 +34,13 @@ describe("operator UI", () => {
 
   it("renders the public run-inspection contract without an internal task", async () => {
     const response = operatorPage("/")!;
-    const script = /<script>([\s\S]+)<\/script>/.exec(
+    const script = /<script[^>]*>([\s\S]+)<\/script>/.exec(
       await response.text(),
     )![1];
     const app = { innerHTML: "Loading…" };
-    vi.stubGlobal("document", { getElementById: () => app });
+    vi.stubGlobal("document", {
+      getElementById: (id: string) => (id === "app" ? app : null),
+    });
     vi.stubGlobal("setInterval", () => 0);
     vi.stubGlobal(
       "fetch",
