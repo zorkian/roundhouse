@@ -267,7 +267,8 @@ export class GitHubAppGateway {
         value.id < 1 ||
         url.origin !== "https://github.com" ||
         url.pathname !==
-          `/${input.repositoryFullName}/issues/${input.issueNumber}`
+          `/${input.repositoryFullName}/issues/${input.issueNumber}` ||
+        !/^#issuecomment-[1-9][0-9]*$/.test(url.hash)
       )
         throw new GitHubAppGatewayError(
           "invalid_response",

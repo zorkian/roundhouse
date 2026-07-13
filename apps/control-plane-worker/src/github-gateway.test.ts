@@ -223,6 +223,38 @@ describe("GitHub App gateway", () => {
     ).rejects.toMatchObject({ code: "invalid_response" });
   });
 
+  it("rejects a rolling status response without a comment identity", async () => {
+    const fetcher: typeof fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/access_tokens"))
+        return json({
+          token: "installation-token",
+          expires_at: "2026-07-12T02:00:00Z",
+        });
+      if (url.pathname.endsWith("/issues/comments/71"))
+        return json({
+          id: 71,
+          html_url: "https://github.com/zorkian/roundhouse/issues/7",
+          body: "<!-- roundhouse-status:zorkian/roundhouse#7 -->\nCurrent state",
+        });
+      if (url.pathname.endsWith("/issues/7/comments")) return json([]);
+      return json({}, 404);
+    };
+    const gateway = new GitHubAppGateway(
+      { appId: "1", installationId: "2", privateKey },
+      fetcher,
+      () => new Date("2026-07-12T01:00:00Z"),
+    );
+    await expect(
+      gateway.upsertIssueStatusComment({
+        repositoryFullName: "zorkian/roundhouse",
+        issueNumber: 7,
+        body: "<!-- roundhouse-status:zorkian/roundhouse#7 -->\nCurrent state",
+        existingCommentId: 71,
+      }),
+    ).rejects.toMatchObject({ code: "invalid_response" });
+  });
+
   it("reconciles one exact-head review Check by external identity", async () => {
     const head = "b".repeat(40);
     const reviewId = `review_${"a".repeat(40)}`;

@@ -485,6 +485,8 @@ export async function enqueueComment(
 ): Promise<void> {
   if (!/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(repositoryFullName))
     throw new GitHubWebhookError(400, "invalid_repository_identity");
+  if (!Number.isSafeInteger(issueNumber) || issueNumber < 1)
+    throw new GitHubWebhookError(400, "invalid_issue_identity");
   const bodySha256 = await sha256(body);
   await env.DB.prepare(
     "INSERT OR IGNORE INTO github_comment_outbox(comment_key, issue_number, repository_full_name, body, body_sha256, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)",

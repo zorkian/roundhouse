@@ -254,6 +254,9 @@ describe("GitHub-native operator webhook", () => {
     await expect(bindIssueRun(env, 19, "run_other")).rejects.toMatchObject({
       code: "issue_already_bound",
     });
+    await expect(
+      enqueueComment(env, "invalid", 0, "status"),
+    ).rejects.toMatchObject({ code: "invalid_issue_identity" });
     await enqueueComment(env, "run_19:1", 19, "status");
     await enqueueComment(env, "run_19:1", 19, "status");
     await expect(
