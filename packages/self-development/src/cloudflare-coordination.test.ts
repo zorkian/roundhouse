@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Miniflare } from "miniflare";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   D1JobStore,
@@ -19,7 +19,8 @@ import { ResumableCoordinator } from "./resumable-coordinator.js";
 import type { JobStageExecutor } from "./job-ports.js";
 import type { SelfDevelopmentTask } from "./task.js";
 
-const instances: Miniflare[] = [];
+let instance: Miniflare;
+let testDatabase: D1DatabasePort;
 const task: SelfDevelopmentTask = {
   schemaVersion: 1,
   taskId: "task_cloudflare",
@@ -40,30 +41,31 @@ const task: SelfDevelopmentTask = {
   },
 };
 
-async function database(): Promise<D1DatabasePort> {
-  const mf = new Miniflare({
+beforeAll(async () => {
+  instance = new Miniflare({
     modules: true,
     script: "export default { fetch() { return new Response('ok') } }",
     d1Databases: { DB: "roundhouse-local" },
   });
-  instances.push(mf);
-  const db = await mf.getD1Database("DB");
+  testDatabase = await instance.getD1Database("DB");
   for (const statement of d1JobStoreMigration
     .split(";")
     .map((value) => value.trim())
     .filter(Boolean))
-    await db.prepare(statement).run();
-  return db;
-}
+    await testDatabase.prepare(statement).run();
+});
+
+beforeEach(async () => {
+  await testDatabase.prepare("DELETE FROM self_development_runs").run();
+});
+
+afterAll(async () => {
+  await instance.dispose();
+});
 
 async function store(): Promise<D1JobStore> {
-  return new D1JobStore(await database());
+  return new D1JobStore(testDatabase);
 }
-
-afterEach(async () => {
-  await Promise.all(instances.splice(0).map((value) => value.dispose()));
-  contractDatabase = undefined;
-});
 
 describe("local Cloudflare coordination", () => {
   it("uses D1 compare-and-set for exclusive claims and expiry reclaim", async () => {
@@ -211,8 +213,6 @@ describe("local Cloudflare coordination", () => {
   });
 });
 
-let contractDatabase: D1DatabasePort | undefined;
 jobStoreContract("D1JobStore (Miniflare)", async () => {
-  contractDatabase ??= await database();
-  return new D1JobStore(contractDatabase);
+  return new D1JobStore(testDatabase);
 });
