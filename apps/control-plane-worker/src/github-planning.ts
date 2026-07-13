@@ -188,6 +188,40 @@ export async function recordPlanningDecision(
       }
     }
   }
+  const prior = await planRow(env, "issue_number", decision.issueNumber);
+  if (
+    prior &&
+    (prior.plan_id !== decision.planId ||
+      prior.plan_sha256 !== decision.planSha256 ||
+      prior.plan_json !== JSON.stringify(decision))
+  ) {
+    const previousDecision = parseDecision(prior.plan_json);
+    if (
+      prior.status !== "rejected" ||
+      previousDecision.issueContentSha256 === decision.issueContentSha256
+    )
+      throw new Error("Issue already has a different immutable plan");
+    const revised = await env.DB.prepare(
+      "UPDATE github_issue_plans SET plan_id = ?, revision = revision + 1, status = ?, plan_sha256 = ?, plan_json = ?, evidence_object_key = ?, evidence_sha256 = ?, evidence_size = ?, approved_by = NULL, approved_at = NULL, run_id = NULL, created_at = ?, updated_at = ? WHERE issue_number = ? AND plan_id = ? AND revision = ? AND status = 'rejected'",
+    )
+      .bind(
+        decision.planId,
+        decision.status,
+        decision.planSha256,
+        JSON.stringify(decision),
+        objectKey,
+        evidenceSha256,
+        bytes.byteLength,
+        decision.createdAt,
+        decision.createdAt,
+        decision.issueNumber,
+        prior.plan_id,
+        prior.revision,
+      )
+      .run();
+    if ((revised.meta.changes ?? 0) !== 1)
+      throw new Error("Issue plan revision changed concurrently");
+  }
   await env.DB.prepare(
     "INSERT OR IGNORE INTO github_issue_plans(plan_id, issue_number, revision, status, plan_sha256, plan_json, evidence_object_key, evidence_sha256, evidence_size, created_at, updated_at) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)",
   )
@@ -216,7 +250,7 @@ export async function recordPlanningDecision(
   await recordEvent(
     env,
     decision.planId,
-    1,
+    row.revision,
     decision.status === "proposed" ? "plan.proposed" : "plan.rejected",
     actorId,
     { planSha256: decision.planSha256 },

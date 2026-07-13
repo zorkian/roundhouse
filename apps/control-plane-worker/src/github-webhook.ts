@@ -4,6 +4,7 @@
 import { z } from "zod";
 
 import type { ControlPlaneEnv } from "./environment.js";
+import { runtimeIdentity } from "./runtime-config.js";
 
 export const githubNativeOperatorMigration = `
 CREATE TABLE IF NOT EXISTS github_webhook_deliveries (
@@ -54,7 +55,7 @@ const pingSchema = z.object({
     config: z.object({
       content_type: z.literal("json"),
       insecure_ssl: z.union([z.literal("0"), z.literal(0)]),
-      url: z.literal("https://roundhouse-dev.rm-rf.rip/v1/github/webhook"),
+      url: z.string().url(),
     }),
   }),
 });
@@ -68,6 +69,47 @@ const issueCommentSchema = envelopeSchema.extend({
   comment: z.object({
     id: z.number().int().positive(),
     body: z.string(),
+    user: z.object({ login: z.string() }),
+  }),
+});
+
+const pullRequestIssueCommentSchema = issueCommentSchema.extend({
+  issue: z.object({
+    number: z.number().int().positive(),
+    pull_request: z.object({ url: z.string().url() }),
+  }),
+  comment: z.object({
+    id: z.number().int().positive(),
+    body: z.string(),
+    html_url: z.string().url().optional(),
+    user: z.object({ login: z.string() }),
+  }),
+});
+
+const pullRequestReviewSchema = envelopeSchema.extend({
+  action: z.string(),
+  pull_request: z.object({
+    number: z.number().int().positive(),
+    head: z.object({ sha: z.string().regex(/^[a-f0-9]{40}$/) }),
+  }),
+  review: z.object({
+    id: z.number().int().positive(),
+    body: z.string().nullable(),
+    html_url: z.string().url().optional(),
+    user: z.object({ login: z.string() }),
+  }),
+});
+
+const pullRequestReviewCommentSchema = envelopeSchema.extend({
+  action: z.string(),
+  pull_request: z.object({
+    number: z.number().int().positive(),
+    head: z.object({ sha: z.string().regex(/^[a-f0-9]{40}$/) }),
+  }),
+  comment: z.object({
+    id: z.number().int().positive(),
+    body: z.string(),
+    html_url: z.string().url().optional(),
     user: z.object({ login: z.string() }),
   }),
 });
@@ -112,6 +154,18 @@ export type GitHubCommand =
       patchSha256: string;
       evidenceSetSha256: string;
     };
+
+export type GitHubPullRequestFeedback = {
+  repositoryFullName: string;
+  pullRequestNumber: number;
+  actor: string;
+  sourceId: string;
+  sourceUrl?: string;
+  runId: string;
+  revision: number;
+  headCommit: string;
+  feedback: string;
+};
 
 const runId = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/;
 const planId = /^plan_[a-f0-9]{40}$/;
@@ -179,6 +233,35 @@ export function parseGitHubCommand(body: string): GitHubCommand | null {
   return null;
 }
 
+function parsePullRequestFeedbackBody(
+  body: string,
+): Pick<
+  GitHubPullRequestFeedback,
+  "runId" | "revision" | "headCommit" | "feedback"
+> | null {
+  const [line, ...feedbackLines] = body.trim().split(/\r?\n/);
+  const parts = line?.trim().split(/\s+/) ?? [];
+  const revision = parseRevision(parts[3]);
+  const feedback = feedbackLines.join("\n").trim();
+  if (
+    parts.length !== 5 ||
+    parts[0] !== "/rh" ||
+    parts[1] !== "revise" ||
+    !runId.test(parts[2] ?? "") ||
+    revision === null ||
+    !sha40.test(parts[4] ?? "") ||
+    feedback.length < 1 ||
+    feedback.length > 10_000
+  )
+    return null;
+  return {
+    runId: parts[2]!,
+    revision,
+    headCommit: parts[4]!,
+    feedback,
+  };
+}
+
 function hex(value: ArrayBuffer): string {
   return [...new Uint8Array(value)]
     .map((byte) => byte.toString(16).padStart(2, "0"))
@@ -223,10 +306,15 @@ export type VerifiedWebhook = {
   payload: z.infer<typeof envelopeSchema> & Record<string, unknown>;
 };
 
+export function isUnretainedWebhookEvent(value: VerifiedWebhook): boolean {
+  return value.eventName === "push" || value.eventName === "workflow_run";
+}
+
 export async function verifyWebhookRequest(
   request: Request,
   env: ControlPlaneEnv,
 ): Promise<VerifiedWebhook> {
+  const identity = runtimeIdentity(env);
   if (!env.ROUNDHOUSE_GITHUB_WEBHOOK_SECRET)
     throw new GitHubWebhookError(503, "webhook_not_configured");
   if (!env.GITHUB_INSTALLATION_ID)
@@ -242,8 +330,12 @@ export async function verifyWebhookRequest(
       "issues",
       "issue_comment",
       "pull_request",
+      "pull_request_review",
+      "pull_request_review_comment",
       "check_run",
       "check_suite",
+      "push",
+      "workflow_run",
       "ping",
     ].includes(eventName)
   )
@@ -269,7 +361,8 @@ export async function verifyWebhookRequest(
     const ping = pingSchema.parse(decoded);
     if (
       ping.hook_id !== ping.hook.id ||
-      String(ping.hook.app_id) !== env.GITHUB_APP_ID
+      String(ping.hook.app_id) !== env.GITHUB_APP_ID ||
+      ping.hook.config.url !== `${identity.origin}/v1/github/webhook`
     )
       throw new GitHubWebhookError(403, "unenrolled_source");
     return {
@@ -278,14 +371,14 @@ export async function verifyWebhookRequest(
       payloadSha256: await sha256(bytes),
       payload: {
         installation: { id: Number(env.GITHUB_INSTALLATION_ID) },
-        repository: { full_name: "zorkian/roundhouse" },
+        repository: { full_name: identity.repositoryFullName },
       },
     };
   }
   const payload = envelopeSchema.passthrough().parse(decoded);
   if (
     String(payload.installation.id) !== env.GITHUB_INSTALLATION_ID ||
-    payload.repository.full_name !== "zorkian/roundhouse"
+    payload.repository.full_name !== identity.repositoryFullName
   )
     throw new GitHubWebhookError(403, "unenrolled_source");
   return {
@@ -352,6 +445,58 @@ export function issueCommand(value: VerifiedWebhook): {
     actor: payload.comment.user.login,
     command,
   };
+}
+
+export function pullRequestFeedback(
+  value: VerifiedWebhook,
+): GitHubPullRequestFeedback | null {
+  if (value.eventName === "issue_comment") {
+    const payload = pullRequestIssueCommentSchema.safeParse(value.payload);
+    if (!payload.success || payload.data.action !== "created") return null;
+    const command = parsePullRequestFeedbackBody(payload.data.comment.body);
+    if (!command) return null;
+    return {
+      repositoryFullName: payload.data.repository.full_name,
+      pullRequestNumber: payload.data.issue.number,
+      actor: payload.data.comment.user.login,
+      sourceId: `issue_comment:${payload.data.comment.id}`,
+      sourceUrl: payload.data.comment.html_url,
+      ...command,
+    };
+  }
+  if (value.eventName === "pull_request_review") {
+    const payload = pullRequestReviewSchema.safeParse(value.payload);
+    if (!payload.success || payload.data.action !== "submitted") return null;
+    const command = parsePullRequestFeedbackBody(
+      payload.data.review.body ?? "",
+    );
+    if (!command || command.headCommit !== payload.data.pull_request.head.sha)
+      return null;
+    return {
+      repositoryFullName: payload.data.repository.full_name,
+      pullRequestNumber: payload.data.pull_request.number,
+      actor: payload.data.review.user.login,
+      sourceId: `pull_request_review:${payload.data.review.id}`,
+      sourceUrl: payload.data.review.html_url,
+      ...command,
+    };
+  }
+  if (value.eventName === "pull_request_review_comment") {
+    const payload = pullRequestReviewCommentSchema.safeParse(value.payload);
+    if (!payload.success || payload.data.action !== "created") return null;
+    const command = parsePullRequestFeedbackBody(payload.data.comment.body);
+    if (!command || command.headCommit !== payload.data.pull_request.head.sha)
+      return null;
+    return {
+      repositoryFullName: payload.data.repository.full_name,
+      pullRequestNumber: payload.data.pull_request.number,
+      actor: payload.data.comment.user.login,
+      sourceId: `pull_request_review_comment:${payload.data.comment.id}`,
+      sourceUrl: payload.data.comment.html_url,
+      ...command,
+    };
+  }
+  return null;
 }
 
 export function checkObservation(value: VerifiedWebhook): Array<{

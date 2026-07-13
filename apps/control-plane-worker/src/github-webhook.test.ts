@@ -15,7 +15,9 @@ import {
   githubNativeOperatorMigration,
   issueCommand,
   issueRun,
+  isUnretainedWebhookEvent,
   parseGitHubCommand,
+  pullRequestFeedback,
   reserveWebhookDelivery,
   verifyGitHubSignature,
   verifyWebhookRequest,
@@ -134,6 +136,86 @@ describe("GitHub-native operator webhook", () => {
       repositoryFullName: "another/roundhouse",
       issueNumber: 19,
     });
+  });
+
+  it("binds explicit pull-request feedback to an exact run revision and head", () => {
+    const headCommit = "a".repeat(40);
+    expect(
+      pullRequestFeedback({
+        deliveryId: "12345678-abcd-4321-abcd-1234567890ab",
+        eventName: "pull_request_review",
+        payloadSha256: "b".repeat(64),
+        payload: {
+          installation: { id: 146147681 },
+          repository: { full_name: "zorkian/roundhouse" },
+          action: "submitted",
+          pull_request: { number: 31, head: { sha: headCommit } },
+          review: {
+            id: 9001,
+            body: `/rh revise run_source 18 ${headCommit}\n\nPlease fix the dashboard link.`,
+            html_url:
+              "https://github.com/zorkian/roundhouse/pull/31#pullrequestreview-9001",
+            user: { login: "zorkian" },
+          },
+        },
+      }),
+    ).toEqual({
+      repositoryFullName: "zorkian/roundhouse",
+      pullRequestNumber: 31,
+      actor: "zorkian",
+      sourceId: "pull_request_review:9001",
+      sourceUrl:
+        "https://github.com/zorkian/roundhouse/pull/31#pullrequestreview-9001",
+      runId: "run_source",
+      revision: 18,
+      headCommit,
+      feedback: "Please fix the dashboard link.",
+    });
+  });
+
+  it("identifies verified high-volume events that must not grow delivery storage", () => {
+    const value = (eventName: string) =>
+      isUnretainedWebhookEvent({
+        deliveryId: "12345678-abcd-4321-abcd-1234567890ab",
+        eventName,
+        payloadSha256: "b".repeat(64),
+        payload: {
+          installation: { id: 146147681 },
+          repository: { full_name: "zorkian/roundhouse" },
+        },
+      });
+    expect(value("push")).toBe(true);
+    expect(value("workflow_run")).toBe(true);
+    expect(value("issue_comment")).toBe(false);
+    expect(value("check_run")).toBe(false);
+  });
+
+  it("rejects stale or unbounded pull-request feedback commands", () => {
+    const headCommit = "a".repeat(40);
+    const value = (body: string) =>
+      pullRequestFeedback({
+        deliveryId: "12345678-abcd-4321-abcd-1234567890ab",
+        eventName: "pull_request_review_comment",
+        payloadSha256: "b".repeat(64),
+        payload: {
+          installation: { id: 146147681 },
+          repository: { full_name: "zorkian/roundhouse" },
+          action: "created",
+          pull_request: { number: 31, head: { sha: headCommit } },
+          comment: {
+            id: 9002,
+            body,
+            user: { login: "zorkian" },
+          },
+        },
+      });
+    expect(
+      value(`/rh revise run_source 18 ${"b".repeat(40)}\nFix it.`),
+    ).toBeNull();
+    expect(value(`/rh revise run_source 18 ${headCommit}`)).toBeNull();
+    expect(
+      value(`Please fix it.\n/rh revise run_source 18 ${headCommit}`),
+    ).toBeNull();
   });
 
   it("verifies the exact bytes with HMAC-SHA-256", async () => {
@@ -353,7 +435,7 @@ describe("GitHub-native operator webhook", () => {
         method: "POST",
         headers: {
           "x-github-delivery": "12345678-abcd-4321-abcd-1234567890ab",
-          "x-github-event": "push",
+          "x-github-event": "deployment",
           "x-hub-signature-256": await signature(body, "webhook-test-secret"),
         },
         body,

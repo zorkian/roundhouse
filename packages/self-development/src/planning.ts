@@ -42,9 +42,71 @@ export const qualificationIssueSchema = z.object({
   instructions: z.string().min(1).max(maxPlannedInstructionCharacters),
   baseCommit: sha40,
   requestedPaths: z.array(z.string()).max(maxRequestedPaths),
+  planningAttemptId: z
+    .string()
+    .regex(/^planning_[a-f0-9]{40}$/)
+    .optional(),
+  understanding: z.string().min(1).max(4_000).optional(),
+  acceptanceCriteria: z.array(z.string().min(1).max(500)).max(20).default([]),
+  clarificationQuestions: z
+    .array(z.string().min(1).max(500))
+    .max(5)
+    .default([]),
+  suggestedRisk: z.enum(["low", "medium", "high"]).optional(),
 });
 
-export type QualificationIssue = z.infer<typeof qualificationIssueSchema>;
+export type QualificationIssue = z.input<typeof qualificationIssueSchema>;
+
+export const planningAgentRequestSchema = z.object({
+  schemaVersion: z.literal(1),
+  attemptId: z.string().regex(/^planning_[a-f0-9]{40}$/),
+  repositoryUrl: z.literal("https://github.com/zorkian/roundhouse.git"),
+  baseCommit: sha40,
+  issueNumber: z.number().int().positive(),
+  subject: z.string().min(1).max(500),
+  instructions: z.string().min(1).max(maxPlannedInstructionCharacters),
+  timeoutMs: z
+    .number()
+    .int()
+    .positive()
+    .max(15 * 60_000),
+  maxOutputBytes: z
+    .number()
+    .int()
+    .positive()
+    .max(256 * 1024),
+});
+
+export type PlanningAgentRequest = z.infer<typeof planningAgentRequestSchema>;
+
+export const planningAgentResultSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    attemptId: z.string().regex(/^planning_[a-f0-9]{40}$/),
+    baseCommit: sha40,
+    status: z.enum(["proposed", "clarification"]),
+    summary: z.string().min(1).max(4_000),
+    exactPaths: z.array(repositoryRelativePathSchema).max(50),
+    acceptanceCriteria: z.array(z.string().min(1).max(500)).min(1).max(20),
+    questions: z.array(z.string().min(1).max(500)).max(5),
+    risk: z.enum(["low", "medium", "high"]),
+  })
+  .superRefine((value, context) => {
+    if (value.status === "proposed" && value.exactPaths.length === 0)
+      context.addIssue({
+        code: "custom",
+        path: ["exactPaths"],
+        message: "A proposed plan requires exact paths",
+      });
+    if (value.status === "clarification" && value.questions.length === 0)
+      context.addIssue({
+        code: "custom",
+        path: ["questions"],
+        message: "Clarification requires targeted questions",
+      });
+  });
+
+export type PlanningAgentResult = z.infer<typeof planningAgentResultSchema>;
 
 export const qualificationFindingSchema = z.object({
   code: z.enum([
@@ -53,9 +115,10 @@ export const qualificationFindingSchema = z.object({
     "invalid_path",
     "path_not_enrolled",
     "protected_path",
+    "clarification_required",
   ]),
   path: z.string().optional(),
-  message: z.string().min(1).max(300),
+  message: z.string().min(1).max(500),
 });
 
 export const qualifiedPlanSchema = z.object({
@@ -72,7 +135,13 @@ export const qualifiedPlanSchema = z.object({
   baseCommit: sha40,
   exactPaths: z.array(repositoryRelativePathSchema).min(1).max(12),
   validationLevel: z.literal("full"),
-  risk: z.enum(["low", "medium"]),
+  risk: z.enum(["low", "medium", "high"]),
+  understanding: z.string().min(1).max(4_000).optional(),
+  acceptanceCriteria: z.array(z.string().min(1).max(500)).max(20).default([]),
+  planningAttemptId: z
+    .string()
+    .regex(/^planning_[a-f0-9]{40}$/)
+    .optional(),
   limits: z.object({
     maxPatchBytes: z.number().int().positive(),
     maxFiles: z.number().int().positive(),
@@ -205,10 +274,25 @@ export async function qualifyAndPlan(
     issueNumber: issue.issueNumber,
     issueContentSha256: issue.issueContentSha256,
     baseCommit: issue.baseCommit,
+    planningAttemptId: issue.planningAttemptId,
+    requestedPaths: exactPaths,
+    understanding: issue.understanding,
+    acceptanceCriteria: issue.acceptanceCriteria,
+    clarificationQuestions: issue.clarificationQuestions,
   });
   const planId = `plan_${(await sha256(identity)).slice(0, 40)}`;
   const createdAt = now.toISOString();
-  const findings = pathFindings(exactPaths);
+  const findings = pathFindings(exactPaths).filter(
+    (finding) =>
+      issue.clarificationQuestions.length === 0 ||
+      finding.code !== "missing_scope",
+  );
+  findings.push(
+    ...issue.clarificationQuestions.map((question) => ({
+      code: "clarification_required" as const,
+      message: question,
+    })),
+  );
   if (findings.length > 0) {
     const value = {
       schemaVersion: 1 as const,
@@ -244,11 +328,14 @@ export async function qualifyAndPlan(
     baseCommit: issue.baseCommit,
     exactPaths,
     validationLevel: "full" as const,
-    risk: exactPaths.some((path) =>
-      path.startsWith("apps/control-plane-worker/"),
-    )
-      ? ("medium" as const)
-      : ("low" as const),
+    risk:
+      issue.suggestedRisk ??
+      (exactPaths.some((path) => path.startsWith("apps/control-plane-worker/"))
+        ? ("medium" as const)
+        : ("low" as const)),
+    understanding: issue.understanding,
+    acceptanceCriteria: issue.acceptanceCriteria,
+    planningAttemptId: issue.planningAttemptId,
     limits: {
       maxPatchBytes: roundhouseSelfDevelopmentProfile.maxPatchBytes,
       maxFiles: exactPaths.length,

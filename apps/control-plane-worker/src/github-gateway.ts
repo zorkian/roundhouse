@@ -17,6 +17,8 @@ type GatewayConfig = {
   appId: string;
   installationId: string;
   privateKey: string;
+  repositoryFullName?: "zorkian/roundhouse";
+  userAgent?: string;
 };
 
 type GitHubResponse<T> = { status: number; value: T };
@@ -70,6 +72,14 @@ export class GitHubAppGateway {
     private readonly now: () => Date = () => new Date(),
   ) {}
 
+  private get repositoryFullName(): "zorkian/roundhouse" {
+    return this.config.repositoryFullName ?? "zorkian/roundhouse";
+  }
+
+  private get repositoryPath(): string {
+    return repositoryPath(this.repositoryFullName);
+  }
+
   private async appJwt(): Promise<string> {
     try {
       const now = Math.floor(this.now().getTime() / 1_000);
@@ -119,7 +129,7 @@ export class GitHubAppGateway {
           accept: "application/vnd.github+json",
           authorization: `Bearer ${token ?? (await this.installationToken())}`,
           "content-type": "application/json",
-          "user-agent": "roundhouse-dev-control-plane",
+          "user-agent": this.config.userAgent ?? "roundhouse-control-plane",
           "x-github-api-version": "2022-11-28",
         },
         body: body === undefined ? undefined : JSON.stringify(body),
@@ -199,7 +209,7 @@ export class GitHubAppGateway {
     return (
       await this.api<{ object: { sha: string } }>(
         "GET",
-        "/repos/zorkian/roundhouse/git/ref/heads/main",
+        `${this.repositoryPath}/git/ref/heads/main`,
       )
     ).value.object.sha;
   }
@@ -426,12 +436,12 @@ export class GitHubAppGateway {
     try {
       const fetcher = this.fetcher;
       response = await fetcher(
-        `https://api.github.com/repos/zorkian/roundhouse/git/ref/heads/${encodeURIComponent(branch)}`,
+        `https://api.github.com${this.repositoryPath}/git/ref/heads/${encodeURIComponent(branch)}`,
         {
           headers: {
             accept: "application/vnd.github+json",
             authorization: `Bearer ${await this.installationToken()}`,
-            "user-agent": "roundhouse-dev-control-plane",
+            "user-agent": this.config.userAgent ?? "roundhouse-control-plane",
             "x-github-api-version": "2022-11-28",
           },
         },
@@ -470,7 +480,7 @@ export class GitHubAppGateway {
     const baseCommit = (
       await this.api<{ tree: { sha: string } }>(
         "GET",
-        `/repos/zorkian/roundhouse/git/commits/${manifest.baseCommit}`,
+        `${this.repositoryPath}/git/commits/${manifest.baseCommit}`,
       )
     ).value;
     const entries: Array<{
@@ -492,7 +502,7 @@ export class GitHubAppGateway {
       const blob = (
         await this.api<{ sha: string }>(
           "POST",
-          "/repos/zorkian/roundhouse/git/blobs",
+          `${this.repositoryPath}/git/blobs`,
           { content: file.contentBase64, encoding: "base64" },
         )
       ).value;
@@ -506,7 +516,7 @@ export class GitHubAppGateway {
     const tree = (
       await this.api<{ sha: string }>(
         "POST",
-        "/repos/zorkian/roundhouse/git/trees",
+        `${this.repositoryPath}/git/trees`,
         { base_tree: baseCommit.tree.sha, tree: entries },
       )
     ).value.sha;
@@ -518,7 +528,7 @@ export class GitHubAppGateway {
     const commit = (
       await this.api<{ sha: string }>(
         "POST",
-        "/repos/zorkian/roundhouse/git/commits",
+        `${this.repositoryPath}/git/commits`,
         {
           message: input.commitMessage,
           tree,
@@ -537,7 +547,7 @@ export class GitHubAppGateway {
       if (input.expectedRemoteHead !== null)
         throw new Error("Publication branch expected an existing head");
       try {
-        await this.api("POST", "/repos/zorkian/roundhouse/git/refs", {
+        await this.api("POST", `${this.repositoryPath}/git/refs`, {
           ref: `refs/heads/${input.branch}`,
           sha: commit,
         });
@@ -550,7 +560,7 @@ export class GitHubAppGateway {
       try {
         await this.api(
           "PATCH",
-          `/repos/zorkian/roundhouse/git/refs/heads/${encodeURIComponent(input.branch)}`,
+          `${this.repositoryPath}/git/refs/heads/${encodeURIComponent(input.branch)}`,
           { sha: commit, force: false },
         );
       } catch (error) {
@@ -565,7 +575,7 @@ export class GitHubAppGateway {
         Array<{ number: number; html_url: string; head: { sha: string } }>
       >(
         "GET",
-        `/repos/zorkian/roundhouse/pulls?state=all&head=zorkian:${encodeURIComponent(input.branch)}`,
+        `${this.repositoryPath}/pulls?state=all&head=${encodeURIComponent(this.repositoryFullName.split("/")[0]!)}:${encodeURIComponent(input.branch)}`,
       )
     ).value;
     let pull = existingPulls.find((value) => value.head.sha === commit);
@@ -576,7 +586,7 @@ export class GitHubAppGateway {
             number: number;
             html_url: string;
             head: { sha: string };
-          }>("POST", "/repos/zorkian/roundhouse/pulls", {
+          }>("POST", `${this.repositoryPath}/pulls`, {
             title: input.pullRequestTitle,
             head: input.branch,
             base: "main",
@@ -590,7 +600,7 @@ export class GitHubAppGateway {
             Array<{ number: number; html_url: string; head: { sha: string } }>
           >(
             "GET",
-            `/repos/zorkian/roundhouse/pulls?state=all&head=zorkian:${encodeURIComponent(input.branch)}`,
+            `${this.repositoryPath}/pulls?state=all&head=${encodeURIComponent(this.repositoryFullName.split("/")[0]!)}:${encodeURIComponent(input.branch)}`,
           )
         ).value;
         pull = reconciledPulls.find((value) => value.head.sha === commit);
@@ -603,7 +613,7 @@ export class GitHubAppGateway {
         sha: string;
         tree: { sha: string };
         parents: Array<{ sha: string }>;
-      }>("GET", `/repos/zorkian/roundhouse/git/commits/${commit}`)
+      }>("GET", `${this.repositoryPath}/git/commits/${commit}`)
     ).value;
     if (
       verifiedCommit.sha !== commit ||
@@ -615,7 +625,7 @@ export class GitHubAppGateway {
       throw new Error("Published GitHub objects failed verification");
     return {
       schemaVersion: 1,
-      repository: "zorkian/roundhouse",
+      repository: this.repositoryFullName,
       baseCommit: manifest.baseCommit,
       patchSha256: manifest.patchSha256,
       tree,

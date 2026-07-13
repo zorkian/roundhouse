@@ -6,6 +6,8 @@ import {
   repositoryExecutionResultSchema,
   type IndependentReviewRequest,
   type IndependentReviewResult,
+  type PlanningAgentRequest,
+  type PlanningAgentResult,
   trustedImplementationResultSchema,
   type ExecutionDispatcher,
   type ExecutionDispatchRequest,
@@ -29,6 +31,10 @@ export type ExecutionContainerPort = {
     request: IndependentReviewRequest,
     claudeAuthJson: string,
   ): Promise<IndependentReviewResult>;
+  runPlanningJob?(
+    request: PlanningAgentRequest,
+    codexAuthJson: string,
+  ): Promise<PlanningAgentResult>;
   destroy(): Promise<void>;
 };
 

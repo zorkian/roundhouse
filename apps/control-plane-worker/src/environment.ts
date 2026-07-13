@@ -36,6 +36,10 @@ export type ControlPlaneEnv = {
   GITHUB_APP_ID?: string;
   GITHUB_INSTALLATION_ID?: string;
   GITHUB_API_FETCHER?: typeof fetch;
+  ROUNDHOUSE_ENVIRONMENT?: "development" | "production";
+  ROUNDHOUSE_PUBLIC_ORIGIN?: string;
+  ROUNDHOUSE_REPOSITORY?: "zorkian/roundhouse";
+  ROUNDHOUSE_WORKER_ID?: string;
   ALLOWED_REPOSITORY_PATH: string;
   ALLOWED_REMOTE_URL: string;
 };

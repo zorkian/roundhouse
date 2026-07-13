@@ -8,6 +8,10 @@
     "port": 8787,
   },
   "vars": {
+    "ROUNDHOUSE_ENVIRONMENT": "development",
+    "ROUNDHOUSE_PUBLIC_ORIGIN": "https://roundhouse-dev.rm-rf.rip",
+    "ROUNDHOUSE_REPOSITORY": "zorkian/roundhouse",
+    "ROUNDHOUSE_WORKER_ID": "roundhouse-dev-control-plane",
     "EXECUTION_MODE": "deterministic-local",
     "ALLOWED_REPOSITORY_PATH": "/workspace/roundhouse",
     "ALLOWED_REMOTE_URL": "https://github.com/zorkian/roundhouse.git",
