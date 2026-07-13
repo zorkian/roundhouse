@@ -41,6 +41,7 @@ async function runtime(): Promise<ControlPlaneEnv> {
     ALLOWED_REPOSITORY_PATH: "/workspace/roundhouse",
     ALLOWED_REMOTE_URL: "https://github.com/zorkian/roundhouse.git",
     GITHUB_INSTALLATION_ID: "146147681",
+    GITHUB_APP_ID: "4281837",
     ROUNDHOUSE_GITHUB_WEBHOOK_SECRET: "webhook-test-secret",
   };
 }
@@ -238,6 +239,20 @@ describe("GitHub-native operator webhook", () => {
       code: "unsupported_event",
     });
 
+    const pingBody = JSON.stringify({
+      hook_id: 652140611,
+      hook: {
+        type: "App",
+        id: 652140611,
+        active: true,
+        app_id: 4281837,
+        config: {
+          content_type: "json",
+          insecure_ssl: "0",
+          url: "https://roundhouse-dev.rm-rf.rip/v1/github/webhook",
+        },
+      },
+    });
     const ping = new Request(
       "https://roundhouse-dev.rm-rf.rip/v1/github/webhook",
       {
@@ -245,9 +260,12 @@ describe("GitHub-native operator webhook", () => {
         headers: {
           "x-github-delivery": "87654321-abcd-4321-abcd-1234567890ab",
           "x-github-event": "ping",
-          "x-hub-signature-256": await signature(body, "webhook-test-secret"),
+          "x-hub-signature-256": await signature(
+            pingBody,
+            "webhook-test-secret",
+          ),
         },
-        body,
+        body: pingBody,
       },
     );
     await expect(verifyWebhookRequest(ping, env)).resolves.toMatchObject({

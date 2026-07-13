@@ -43,6 +43,21 @@ const envelopeSchema = z.object({
   sender: z.object({ login: z.string() }).optional(),
 });
 
+const pingSchema = z.object({
+  hook_id: z.number().int().positive(),
+  hook: z.object({
+    type: z.literal("App"),
+    id: z.number().int().positive(),
+    active: z.literal(true),
+    app_id: z.number().int().positive(),
+    config: z.object({
+      content_type: z.literal("json"),
+      insecure_ssl: z.union([z.literal("0"), z.literal(0)]),
+      url: z.literal("https://roundhouse-dev.rm-rf.rip/v1/github/webhook"),
+    }),
+  }),
+});
+
 const issueCommentSchema = envelopeSchema.extend({
   action: z.string(),
   issue: z.object({
@@ -219,6 +234,25 @@ export async function verifyWebhookRequest(
     decoded = JSON.parse(new TextDecoder().decode(bytes));
   } catch {
     throw new GitHubWebhookError(400, "invalid_payload");
+  }
+  if (eventName === "ping") {
+    if (!env.GITHUB_APP_ID)
+      throw new GitHubWebhookError(503, "app_not_configured");
+    const ping = pingSchema.parse(decoded);
+    if (
+      ping.hook_id !== ping.hook.id ||
+      String(ping.hook.app_id) !== env.GITHUB_APP_ID
+    )
+      throw new GitHubWebhookError(403, "unenrolled_source");
+    return {
+      deliveryId,
+      eventName,
+      payloadSha256: await sha256(bytes),
+      payload: {
+        installation: { id: Number(env.GITHUB_INSTALLATION_ID) },
+        repository: { full_name: "zorkian/roundhouse" },
+      },
+    };
   }
   const payload = envelopeSchema.passthrough().parse(decoded);
   if (
