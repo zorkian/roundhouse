@@ -85,6 +85,7 @@ import {
   claimIndependentReview,
   completeIndependentReview,
   failIndependentReview,
+  isIssueRemediationRun,
   markReviewDispatched,
   readIndependentReview,
   readReviewByRemediationRun,
@@ -945,9 +946,17 @@ async function runForIssueCommand(
 ): Promise<string> {
   const bound = await issueRun(env, issueNumber);
   if (!bound) throw new HttpError(409, "Issue does not have a Roundhouse run");
-  if (requested && requested !== bound)
-    throw new HttpError(409, "Command run does not match this issue");
-  return bound;
+  if (!requested || requested === bound) return bound;
+  if (
+    await isIssueRemediationRun(env, {
+      repositoryFullName: "zorkian/roundhouse",
+      issueNumber,
+      sourceRunId: bound,
+      remediationRunId: requested,
+    })
+  )
+    return requested;
+  throw new HttpError(409, "Command run does not match this issue");
 }
 
 async function executeGitHubCommand(

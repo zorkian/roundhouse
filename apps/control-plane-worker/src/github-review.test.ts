@@ -16,6 +16,7 @@ import {
   claimIndependentReview,
   completeIndependentReview,
   failIndependentReview,
+  isIssueRemediationRun,
   markReviewDispatched,
   readIndependentReview,
   readReviewByRemediationRun,
@@ -333,6 +334,22 @@ describe("durable independent review coordination", () => {
     await expect(
       readReviewByRemediationRun(env, "run_remediation_1"),
     ).resolves.toMatchObject({ request: { reviewId: input.reviewId } });
+    await expect(
+      isIssueRemediationRun(env, {
+        repositoryFullName: "zorkian/roundhouse",
+        issueNumber: input.issueNumber,
+        sourceRunId: input.runId,
+        remediationRunId: "run_remediation_1",
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      isIssueRemediationRun(env, {
+        repositoryFullName: "another/roundhouse",
+        issueNumber: input.issueNumber,
+        sourceRunId: input.runId,
+        remediationRunId: "run_remediation_1",
+      }),
+    ).resolves.toBe(false);
   });
 
   it("defers otherwise accepted findings at the bounded second cycle", async () => {
