@@ -12,7 +12,7 @@ import {
 import { Miniflare } from "miniflare";
 import { exportPKCS8, generateKeyPair } from "jose";
 import { readFile } from "node:fs/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import type { ControlPlaneEnv } from "./environment.js";
 import { createControlPlaneHandler } from "./index.js";
@@ -28,7 +28,26 @@ import {
   githubNativeOperatorMigration,
 } from "./github-webhook.js";
 
-const instances: Miniflare[] = [];
+let instance: Miniflare;
+let database: D1Database;
+const resetTables = [
+  "independent_review_findings",
+  "independent_review_events",
+  "independent_reviews",
+  "github_plan_events",
+  "github_issue_plans",
+  "github_check_observations",
+  "github_comment_outbox",
+  "github_issue_runs",
+  "github_webhook_deliveries",
+  "github_publications",
+  "github_issue_snapshots",
+  "recovery_cycles",
+  "operational_alerts",
+  "operator_mutations",
+  "control_plane_submissions",
+  "self_development_runs",
+] as const;
 const token = "local-test-token";
 const repositoryPath = "/workspace/roundhouse";
 const remoteUrl = "https://github.com/zorkian/roundhouse.git";
@@ -221,22 +240,7 @@ async function runtime(): Promise<{
   env: ControlPlaneEnv;
   queued: Queued;
 }> {
-  const mf = new Miniflare({
-    modules: true,
-    script: "export default { fetch() { return new Response('ok') } }",
-    d1Databases: { DB: "roundhouse-control-plane-local" },
-  });
-  instances.push(mf);
-  const db = await mf.getD1Database("DB");
-  const independentReviewMigration = await readFile(
-    new URL("../migrations/0008_independent_review.sql", import.meta.url),
-    "utf8",
-  );
-  for (const statement of `${d1JobStoreMigration}\n${controlPlaneSubmissionMigration}\n${cloudOperationsMigration}\n${githubPocMigration}\n${githubNativeOperatorMigration}\n${githubPlanningMigration}\n${independentReviewMigration}`
-    .split(";")
-    .map((value) => value.trim())
-    .filter(Boolean))
-    await db.prepare(statement).run();
+  const db = database;
   const queued: Queued = { messages: [], failNext: false };
   const queue = {
     send: async (body: unknown) => {
@@ -260,6 +264,42 @@ async function runtime(): Promise<{
     queued,
   };
 }
+
+beforeAll(async () => {
+  instance = new Miniflare({
+    modules: true,
+    script: "export default { fetch() { return new Response('ok') } }",
+    d1Databases: { DB: "roundhouse-control-plane-local" },
+  });
+  database = await instance.getD1Database("DB");
+  const independentReviewMigration = await readFile(
+    new URL("../migrations/0008_independent_review.sql", import.meta.url),
+    "utf8",
+  );
+  for (const statement of `${d1JobStoreMigration}\n${controlPlaneSubmissionMigration}\n${cloudOperationsMigration}\n${githubPocMigration}\n${githubNativeOperatorMigration}\n${githubPlanningMigration}\n${independentReviewMigration}`
+    .split(";")
+    .map((value) => value.trim())
+    .filter(Boolean))
+    await database.prepare(statement).run();
+
+  const tables = await database
+    .prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != '_cf_METADATA' ORDER BY name",
+    )
+    .all<{ name: string }>();
+  expect(tables.results.map(({ name }) => name)).toEqual(
+    [...resetTables].sort(),
+  );
+});
+
+beforeEach(async () => {
+  for (const table of resetTables)
+    await database.prepare(`DELETE FROM ${table}`).run();
+});
+
+afterAll(async () => {
+  await instance.dispose();
+});
 
 function request(
   path: string,
@@ -312,10 +352,6 @@ async function deliver(
   );
   return outcomes;
 }
-
-afterEach(async () => {
-  await Promise.all(instances.splice(0).map((instance) => instance.dispose()));
-});
 
 describe("local control-plane Worker", () => {
   it("keeps the Access-bypassed namespace limited to one exact Worker route", async () => {
