@@ -21,6 +21,16 @@ import type { SelfDevelopmentTask } from "./task.js";
 
 let instance: Miniflare;
 let testDatabase: D1DatabasePort;
+const migrationStatements = d1JobStoreMigration
+  .split(";")
+  .map((value) => value.trim())
+  .filter(Boolean);
+const migrationTables = migrationStatements.flatMap((statement) => {
+  const match = statement.match(
+    /^CREATE TABLE(?: IF NOT EXISTS)?\s+([^\s(]+)/i,
+  );
+  return match ? [match[1]] : [];
+});
 const task: SelfDevelopmentTask = {
   schemaVersion: 1,
   taskId: "task_cloudflare",
@@ -48,15 +58,13 @@ beforeAll(async () => {
     d1Databases: { DB: "roundhouse-local" },
   });
   testDatabase = await instance.getD1Database("DB");
-  for (const statement of d1JobStoreMigration
-    .split(";")
-    .map((value) => value.trim())
-    .filter(Boolean))
+  for (const statement of migrationStatements)
     await testDatabase.prepare(statement).run();
 });
 
 beforeEach(async () => {
-  await testDatabase.prepare("DELETE FROM self_development_runs").run();
+  for (const table of [...migrationTables].reverse())
+    await testDatabase.prepare(`DELETE FROM ${table}`).run();
 });
 
 afterAll(async () => {
