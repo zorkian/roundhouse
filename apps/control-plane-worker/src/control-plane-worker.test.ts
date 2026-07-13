@@ -1306,6 +1306,17 @@ describe("local control-plane Worker", () => {
         )
       ).status,
     ).toBe(404);
+    expect(
+      (
+        await handler.fetch!(
+          request(
+            `/v1/repositories/zorkian/roundhouse/issues/${BigInt(Number.MAX_SAFE_INTEGER) + 1n}`,
+          ),
+          env,
+          {} as ExecutionContext,
+        )
+      ).status,
+    ).toBe(400);
     const enrolledIssue = await handler.fetch!(
       request("/v1/repositories/zorkian/roundhouse/issues/999"),
       env,

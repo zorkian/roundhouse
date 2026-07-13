@@ -1564,9 +1564,10 @@ async function route(
         404,
         "Repository is not enrolled in this development adapter",
       );
-    return json(
-      await issueInspection(env, repositoryFullName, Number(issueMatch[3])),
-    );
+    const issueNumber = Number(issueMatch[3]);
+    if (!Number.isSafeInteger(issueNumber) || issueNumber < 1)
+      throw new HttpError(400, "GitHub issue number is invalid");
+    return json(await issueInspection(env, repositoryFullName, issueNumber));
   }
   const planMatch = /^\/v1\/plans\/([a-zA-Z0-9_-]{1,128})$/.exec(url.pathname);
   if (request.method === "GET" && planMatch?.[1]) {
