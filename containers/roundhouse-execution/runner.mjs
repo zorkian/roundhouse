@@ -220,6 +220,7 @@ function promptFor(request) {
     "Tool network access is disabled.",
     `You may change only: ${request.allowedPaths.join(", ")}`,
     "Keep the patch minimal and include the Apache-2.0 header in new source or documentation files.",
+    "Before finishing, format every changed file and run focused tests or typechecking when applicable.",
     "Finish with a concise public-safe summary. Never include secrets or authentication data.",
     "",
     `Task: ${request.subject}`,
@@ -561,12 +562,18 @@ async function validateImplementation(value) {
     validation.push(skippedValidation("typecheck", "not-applicable", reason));
     validation.push(skippedValidation("test", "not-applicable", reason));
   }
-  if (
-    validation.some(
-      (item) => item.exitCode !== 0 || item.timedOut || item.outputTruncated,
-    )
-  )
-    throw new Error("validation_failed");
+  const failedValidation = validation.filter(
+    (item) => item.exitCode !== 0 || item.timedOut || item.outputTruncated,
+  );
+  if (failedValidation.length > 0)
+    throw new Error(
+      `validation_failed:${failedValidation
+        .map(
+          (item) =>
+            `${item.name}[exit=${item.exitCode},timeout=${item.timedOut},truncated=${item.outputTruncated}]`,
+        )
+        .join(",")}`,
+    );
   const usage = await resourceUsage();
   const publicationManifest = await createPublicationManifest(
     trusted.changedFiles,
