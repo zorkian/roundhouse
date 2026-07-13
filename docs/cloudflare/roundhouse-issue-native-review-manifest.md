@@ -3,7 +3,7 @@
 
 # Issue-native independent review manifest
 
-Status: approved on 2026-07-12 and not yet applied.
+Status: approved on 2026-07-12 and applied on 2026-07-12.
 
 This manifest records the exact external mutation boundary for the independent
 Claude review, bounded remediation, and linked operator-status milestone.
@@ -130,3 +130,17 @@ Rollback is documented but not executed: deploy the prior Worker version and
 prior immutable execution image, and remove the new secret only under fresh
 authorization. No migration, evidence, audit row, demonstration artifact, or
 existing resource is deleted.
+
+## Applied identities
+
+- D1 migration: `0008_independent_review.sql`;
+- Worker version: `512517cc-24ac-4be0-8386-46713eefe93a`;
+- Container application: `roundhouse-dev-execution`, application ID
+  `a030958f-41f0-4ae6-9a68-a33d0876ea72`;
+- immutable image digest:
+  `sha256:ca21a1e03b0e7570c9876232f03a25562d46aa6bef2d124047149c0bf81c879d`;
+- encrypted secret binding: `ROUNDHOUSE_CLAUDE_AUTH_JSON`.
+
+The deployment retained the existing hostname, Access boundary, Worker, D1,
+Queues, R2 bucket, Durable Object class, Container application, cron, routes,
+GitHub installation, and every existing development row and evidence object.
