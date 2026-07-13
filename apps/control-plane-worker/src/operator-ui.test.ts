@@ -13,7 +13,11 @@ describe("operator UI", () => {
       expect(response?.headers.get("content-security-policy")).toContain(
         "frame-ancestors 'none'",
       );
-      expect(await response?.text()).toContain("refreshes every 5s");
+      const html = await response!.text();
+      expect(html).toContain("refreshes every 5s");
+      const script = /<script>([\s\S]+)<\/script>/.exec(html)?.[1];
+      expect(script).toBeDefined();
+      expect(() => new Function(script!)).not.toThrow();
     }
   });
 
