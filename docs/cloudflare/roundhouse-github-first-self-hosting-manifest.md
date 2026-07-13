@@ -97,9 +97,9 @@ other retained artifacts.
 ## Applied resource identities
 
 - additive D1 migration: `0009_github_first_status.sql`;
-- current milestone Worker version: `fb0ad174-4c93-410a-800b-c875dd0bf70f`;
+- current milestone Worker version: `d9aa6c99-d27a-4852-bb61-547b9f5245d2`;
 - current deployment-coupled execution image digest:
-  `sha256:3681338abeba8eb33a2732210b545c7088f9884cfc817cabe806296175675e44`;
+  `sha256:2fd3e4fff0a8affe758f6d15b4f1795cb081e8a24196b3c2c81bc6b49d8b011b`;
 - Container application ID: `a030958f-41f0-4ae6-9a68-a33d0876ea72`.
 
 No resource outside the approved in-place envelope was created or changed.
