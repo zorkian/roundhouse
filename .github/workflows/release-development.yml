@@ -68,11 +68,18 @@ jobs:
 
       - name: Bundle once and record release manifest
         run: |
-          pnpm exec wrangler deploy \
+          pnpm exec esbuild apps/control-plane-worker/src/deploy.ts \
+            --bundle \
+            --format=esm \
+            --platform=browser \
+            --target=es2022 \
+            --external:cloudflare:workers \
+            --outfile=.roundhouse/release/worker.mjs
+          pnpm exec wrangler deploy .roundhouse/release/worker.mjs \
+            --no-bundle \
             --dry-run \
             --containers-rollout none \
-            --config .roundhouse/release/wrangler.development.json \
-            --outfile .roundhouse/release/worker.mjs
+            --config .roundhouse/release/wrangler.development.json
           node scripts/release/roundhouse-release.mjs manifest \
             .roundhouse/release/worker.mjs \
             "${{ steps.image.outputs.digest }}" \
