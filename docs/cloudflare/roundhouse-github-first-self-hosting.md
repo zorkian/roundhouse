@@ -151,9 +151,9 @@ than a reason to withhold these bounded changes.
 - plan and issue-run persistence still has a single-repository adapter beneath
   the repository-qualified boundary;
 - the UI polls every five seconds and does not stream Container output;
-- marker reconciliation is bounded to the newest 100 issue comments; normal
-  updates use the retained exact GitHub comment ID, while unusually noisy
-  issues may require a later paginated recovery improvement;
+- marker reconciliation is bounded to one GitHub API page of up to 100 issue
+  comments; normal updates use the retained exact GitHub comment ID, while
+  unusually noisy issues may require a later paginated recovery improvement;
 - the Codex and Claude subscription credentials remain narrow development
   exceptions rather than the production credential architecture;
 - pilot pull requests require a human merge decision;

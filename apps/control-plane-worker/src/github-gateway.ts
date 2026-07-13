@@ -280,7 +280,7 @@ export class GitHubAppGateway {
       (
         await this.api<Comment[]>(
           "GET",
-          `${base}/issues/${input.issueNumber}/comments?per_page=100&sort=created&direction=desc`,
+          `${base}/issues/${input.issueNumber}/comments?per_page=100`,
         )
       ).value.find((value) => value.body.startsWith(marker));
     const update = async (id: number): Promise<{ id: number; url: string }> =>
