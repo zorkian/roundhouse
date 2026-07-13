@@ -97,18 +97,26 @@ export const promotionApprovalSchema = z.object({
 
 export function assertPromotionBindings(
   release: RoundhouseReleaseManifest,
+  releaseManifestSha256: string,
   development: DeploymentEvidence,
+  developmentEvidenceSha256: string,
   approval: z.infer<typeof promotionApprovalSchema>,
 ): void {
+  const migrationsMatch =
+    JSON.stringify(development.appliedMigrations) ===
+    JSON.stringify(release.migrations);
   if (
     development.environment !== "development" ||
     development.releaseId !== release.releaseId ||
+    development.releaseManifestSha256 !== releaseManifestSha256 ||
     development.sourceCommit !== release.sourceCommit ||
     development.workerBundleSha256 !== release.worker.bundleSha256 ||
     development.containerImageDigest !== release.container.digest ||
+    !migrationsMatch ||
     approval.releaseId !== release.releaseId ||
-    approval.releaseManifestSha256 !== development.releaseManifestSha256 ||
-    approval.developmentWorkerVersionId !== development.workerVersionId
+    approval.releaseManifestSha256 !== releaseManifestSha256 ||
+    approval.developmentWorkerVersionId !== development.workerVersionId ||
+    approval.developmentEvidenceSha256 !== developmentEvidenceSha256
   )
     throw new Error("Production promotion bindings do not match development");
 }

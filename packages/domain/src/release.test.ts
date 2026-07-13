@@ -70,7 +70,7 @@ const approval = promotionApprovalSchema.parse({
 describe("Roundhouse release promotion", () => {
   it("binds production promotion to exact accepted development artifacts", () => {
     expect(() =>
-      assertPromotionBindings(release, development, approval),
+      assertPromotionBindings(release, hash, development, hash, approval),
     ).not.toThrow();
   });
 
@@ -78,7 +78,36 @@ describe("Roundhouse release promotion", () => {
     expect(() =>
       assertPromotionBindings(
         release,
+        hash,
         { ...development, containerImageDigest: `sha256:${"e".repeat(64)}` },
+        hash,
+        approval,
+      ),
+    ).toThrow(/bindings/);
+  });
+
+  it("rejects substituted development evidence", () => {
+    expect(() =>
+      assertPromotionBindings(
+        release,
+        hash,
+        development,
+        "e".repeat(64),
+        approval,
+      ),
+    ).toThrow(/bindings/);
+  });
+
+  it("rejects an incomplete development migration set", () => {
+    expect(() =>
+      assertPromotionBindings(
+        release,
+        hash,
+        {
+          ...development,
+          appliedMigrations: development.appliedMigrations.slice(0, 1),
+        },
+        hash,
         approval,
       ),
     ).toThrow(/bindings/);
