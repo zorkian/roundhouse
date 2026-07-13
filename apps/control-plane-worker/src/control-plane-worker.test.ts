@@ -20,7 +20,10 @@ import {
 } from "./submissions.js";
 import { cloudOperationsMigration } from "./operations.js";
 import { githubPocMigration } from "./github-operations.js";
-import { githubNativeOperatorMigration } from "./github-webhook.js";
+import {
+  enqueueComment,
+  githubNativeOperatorMigration,
+} from "./github-webhook.js";
 
 const instances: Miniflare[] = [];
 const token = "local-test-token";
@@ -303,9 +306,7 @@ describe("local control-plane Worker", () => {
       {} as ExecutionContext,
     );
     expect(child.status).toBe(404);
-    await expect(child.json()).resolves.toEqual({
-      error: { code: "not_found", message: "Not found" },
-    });
+    expect(await child.text()).toBe("");
   });
 
   it("accepts one signed GitHub command and makes duplicate delivery harmless", async () => {
@@ -417,6 +418,67 @@ describe("local control-plane Worker", () => {
     await expect(replay.json()).resolves.toMatchObject({ replayed: true });
     expect(queued.messages).toHaveLength(1);
     expect(comments).toBe(1);
+
+    const rejectedPayload = JSON.stringify({
+      action: "created",
+      installation: { id: 146147681 },
+      repository: { full_name: "zorkian/roundhouse" },
+      sender: { login: "outside-actor" },
+      issue: { number: 17 },
+      comment: {
+        id: 42,
+        body: "/rh status",
+        user: { login: "outside-actor" },
+      },
+    });
+    const rejectedMac = await crypto.subtle.sign(
+      "HMAC",
+      key,
+      new TextEncoder().encode(rejectedPayload),
+    );
+    const rejectedSignature = `sha256=${[...new Uint8Array(rejectedMac)]
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("")}`;
+    const rejectedDelivery = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const rejectedWebhook = () =>
+      new Request("http://roundhouse.local/v1/github/webhook", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-github-delivery": rejectedDelivery,
+          "x-github-event": "issue_comment",
+          "x-hub-signature-256": rejectedSignature,
+        },
+        body: rejectedPayload,
+      }) as Request<unknown, IncomingRequestCfProperties>;
+    const rejected = await handler.fetch!(
+      rejectedWebhook(),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(rejected.status).toBe(202);
+    await expect(rejected.json()).resolves.toMatchObject({
+      accepted: true,
+      ignored: true,
+    });
+    const rejectionReceipt = await env.DB.prepare(
+      "SELECT status, result_json FROM github_webhook_deliveries WHERE delivery_id = ?",
+    )
+      .bind(rejectedDelivery)
+      .first<{ status: string; result_json: string }>();
+    expect(rejectionReceipt).toMatchObject({ status: "ignored" });
+    expect(JSON.parse(rejectionReceipt!.result_json)).toEqual({
+      code: "unauthorized_actor",
+    });
+    const rejectedReplay = await handler.fetch!(
+      rejectedWebhook(),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(rejectedReplay.status).toBe(200);
+    await expect(rejectedReplay.json()).resolves.toMatchObject({
+      replayed: true,
+    });
   });
 
   it("submits an enrolled GitHub issue as a fixed-policy task", async () => {
@@ -1505,5 +1567,32 @@ describe("local control-plane Worker", () => {
     expect(text).toContain("[path]");
     expect(text).not.toContain("internal.example.invalid");
     expect(text).not.toContain("/private/workspace/path");
+  });
+
+  it("does not report deferred GitHub comments as recovery-cycle failures", async () => {
+    const { env } = await runtime();
+    await enqueueComment(
+      env,
+      "scheduled-comment-failure",
+      17,
+      "Deliver me after GitHub recovers",
+    );
+    const handler = createControlPlaneHandler();
+
+    await expect(
+      handler.scheduled!(
+        {} as ScheduledController,
+        env,
+        {} as ExecutionContext,
+      ),
+    ).resolves.toBeUndefined();
+    const row = await env.DB.prepare(
+      "SELECT status FROM github_comment_outbox WHERE comment_key = 'scheduled-comment-failure'",
+    ).first<{ status: string }>();
+    expect(row?.status).toBe("pending");
+    const alert = await env.DB.prepare(
+      "SELECT alert_key FROM operational_alerts WHERE alert_key = 'scheduled_recovery_failed'",
+    ).first<{ alert_key: string }>();
+    expect(alert).toBeNull();
   });
 });

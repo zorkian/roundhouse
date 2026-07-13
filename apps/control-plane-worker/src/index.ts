@@ -312,7 +312,17 @@ async function submitGitHubIssue(
 async function flushGitHubComments(env: ControlPlaneEnv): Promise<void> {
   const comments = await claimPendingComments(env);
   if (comments.length === 0) return;
-  const github = githubGateway(env);
+  let github: ReturnType<typeof githubGateway>;
+  try {
+    github = githubGateway(env);
+  } catch (error) {
+    await Promise.all(
+      comments.map((comment) =>
+        releaseCommentClaim(env, comment.key, comment.claimId),
+      ),
+    );
+    throw error;
+  }
   let firstError: unknown;
   for (const comment of comments) {
     try {
@@ -581,12 +591,15 @@ async function githubWebhook(
     }
     return json({ schemaVersion: 1, accepted: true, ...result }, 202);
   } catch (error) {
+    const permanentlyRejected =
+      error instanceof HttpError ||
+      (error instanceof GitHubWebhookError && error.status < 500);
     try {
       await completeWebhookDelivery(
         env,
         webhook.deliveryId,
         reservation.claimId,
-        "failed",
+        permanentlyRejected ? "ignored" : "failed",
         {
           code:
             error instanceof GitHubWebhookError
@@ -601,6 +614,8 @@ async function githubWebhook(
         reason: redactedReason(completionError),
       });
     }
+    if (permanentlyRejected)
+      return json({ schemaVersion: 1, accepted: true, ignored: true }, 202);
     throw error;
   }
 }
@@ -1114,10 +1129,7 @@ export function createControlPlaneHandler(
           return await githubWebhook(request, env);
         }
         if (url.pathname.startsWith("/v1/github/webhook/"))
-          return json(
-            { error: { code: "not_found", message: "Not found" } },
-            404,
-          );
+          return new Response(null, { status: 404 });
         let actorId = "unauthenticated-health";
         if (url.pathname !== "/health") {
           const decision = await authorizer.authorize(request, env);
@@ -1256,7 +1268,6 @@ export function createControlPlaneHandler(
     async scheduled(_controller, env): Promise<void> {
       try {
         await runRecoveryCycle(env, new Date());
-        await flushGitHubComments(env);
       } catch (error) {
         await recordAlert(env, {
           key: "scheduled_recovery_failed",
@@ -1269,6 +1280,13 @@ export function createControlPlaneHandler(
           now: new Date(),
         });
         throw error;
+      }
+      try {
+        await flushGitHubComments(env);
+      } catch (error) {
+        console.warn("Scheduled GitHub comment delivery deferred", {
+          reason: redactedReason(error),
+        });
       }
     },
   };
