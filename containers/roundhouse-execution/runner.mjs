@@ -10,6 +10,8 @@ import { existsSync } from "node:fs";
 
 const workspace = "/home/runner/workspace";
 const repositoryUrl = "https://github.com/zorkian/roundhouse.git";
+const dependencyArchive = "/opt/roundhouse/dependencies.tar";
+const dependencyLockDigest = "/opt/roundhouse/dependencies.sha256";
 const maxBodyBytes = 128 * 1024;
 const interceptedCa = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
 let prepared;
@@ -220,6 +222,7 @@ function promptFor(request) {
     "Tool network access is disabled.",
     `You may change only: ${request.allowedPaths.join(", ")}`,
     "Keep the patch minimal and include the Apache-2.0 header in new source or documentation files.",
+    "Before finishing, format every changed file and run focused tests or typechecking when applicable.",
     "Finish with a concise public-safe summary. Never include secrets or authentication data.",
     "",
     `Task: ${request.subject}`,
@@ -561,12 +564,18 @@ async function validateImplementation(value) {
     validation.push(skippedValidation("typecheck", "not-applicable", reason));
     validation.push(skippedValidation("test", "not-applicable", reason));
   }
-  if (
-    validation.some(
-      (item) => item.exitCode !== 0 || item.timedOut || item.outputTruncated,
-    )
-  )
-    throw new Error("validation_failed");
+  const failedValidation = validation.filter(
+    (item) => item.exitCode !== 0 || item.timedOut || item.outputTruncated,
+  );
+  if (failedValidation.length > 0)
+    throw new Error(
+      `validation_failed:${failedValidation
+        .map(
+          (item) =>
+            `${item.name}[exit=${item.exitCode},timeout=${item.timedOut},truncated=${item.outputTruncated}]`,
+        )
+        .join(",")}`,
+    );
   const usage = await resourceUsage();
   const publicationManifest = await createPublicationManifest(
     trusted.changedFiles,
@@ -694,6 +703,21 @@ async function prepare(value, mode) {
   const checkoutCommit = head.stdout.trim();
   if (head.exitCode !== 0 || checkoutCommit !== request.baseCommit)
     throw new Error("checkout_binding_mismatch");
+  const expectedLockDigest = (
+    await readFile(dependencyLockDigest, "utf8")
+  ).trim();
+  const actualLockDigest = createHash("sha256")
+    .update(await readFile(`${workspace}/pnpm-lock.yaml`))
+    .digest("hex");
+  if (actualLockDigest !== expectedLockDigest)
+    throw new Error("dependency_lock_mismatch");
+  const dependencies = await command(
+    "tar",
+    ["--extract", `--file=${dependencyArchive}`, `--directory=${workspace}`],
+    { timeoutMs: 60_000 },
+  );
+  if (dependencies.exitCode !== 0 || dependencies.timedOut)
+    throw new Error("dependency_overlay_failed");
   prepared = {
     schemaVersion: 1,
     runId: request.runId,
@@ -705,7 +729,8 @@ async function prepare(value, mode) {
       remote.durationMs +
       fetched.durationMs +
       checkout.durationMs +
-      head.durationMs,
+      head.durationMs +
+      dependencies.durationMs,
   };
   return prepared;
 }

@@ -166,6 +166,92 @@ describe("cloud operator persistence", () => {
     expect(env.queued).toHaveLength(2);
   });
 
+  it("allows an exact operator retry for a validation failure without making it automatic", async () => {
+    const env = await runtime();
+    const jobs = new D1JobStore(env.DB);
+    const start = new Date("2026-07-12T00:00:00Z");
+    await jobs.submit("run_validation_retry", task, start);
+    const claim = await jobs.claim(
+      "run_validation_retry",
+      "worker",
+      start,
+      1_000,
+      1,
+    );
+    await jobs.startAttempt(
+      "run_validation_retry",
+      claim!.token,
+      "prepare",
+      start,
+    );
+    const failed = await jobs.failAttempt(
+      "run_validation_retry",
+      claim!.token,
+      "prepare",
+      {
+        retryable: false,
+        classification: "validation_failed",
+        error: "implementation checks failed",
+      },
+      true,
+      start,
+    );
+
+    const exhausted = {
+      ...failed,
+      attempts: Array.from({ length: 10 }, (_, index) => ({
+        ...failed.attempts.at(-1)!,
+        attemptId: `run_validation_retry-prepare-${index + 1}`,
+        number: index + 1,
+      })),
+    };
+    await env.DB.prepare(
+      "UPDATE self_development_runs SET payload = ? WHERE run_id = 'run_validation_retry'",
+    )
+      .bind(JSON.stringify(exhausted))
+      .run();
+    await expect(
+      retryFailedRun(
+        env,
+        "run_validation_retry",
+        failed.revision,
+        new Date(start.getTime() + 1),
+      ),
+    ).rejects.toThrow("not eligible");
+    await runRecoveryCycle(env, new Date(start.getTime() + 2));
+    const alert = await env.DB.prepare(
+      "SELECT kind, detail_json FROM operational_alerts WHERE alert_key = ?",
+    )
+      .bind(`retries_exhausted:run_validation_retry:${failed.revision}`)
+      .first<{ kind: string; detail_json: string }>();
+    expect(alert?.kind).toBe("retries_exhausted");
+    expect(JSON.parse(alert!.detail_json)).toMatchObject({
+      attempts: 10,
+      limit: 10,
+      classification: "validation_failed",
+    });
+    await env.DB.prepare(
+      "UPDATE self_development_runs SET payload = ? WHERE run_id = 'run_validation_retry'",
+    )
+      .bind(JSON.stringify(failed))
+      .run();
+
+    const retried = await retryFailedRun(
+      env,
+      "run_validation_retry",
+      failed.revision,
+      new Date(start.getTime() + 1),
+    );
+    expect(retried).toMatchObject({ state: "created" });
+    expect(retried.events.at(-1)).toMatchObject({
+      type: "operator.retry_requested",
+      detail: { failedAttemptId: failed.attempts.at(-1)?.attemptId },
+    });
+    await expect(
+      retryFailedRun(env, "run_validation_retry", failed.revision, start),
+    ).rejects.toThrow("not eligible");
+  });
+
   it("deduplicates alerts and keeps retention destructive work empty", async () => {
     const env = await runtime();
     const now = new Date("2026-07-12T00:00:00Z");

@@ -205,8 +205,15 @@ export class CloudflareTrustedImplementationBackend implements TrustedImplementa
       } catch (error) {
         await container.destroy().catch(() => undefined);
         if (error instanceof StageFailure) throw error;
+        const reason = boundedInfrastructureReason(error);
+        if (reason.includes("validation_failed"))
+          throw new StageFailure(
+            `Trusted implementation validation failed: ${reason}`,
+            "validation_failed",
+            false,
+          );
         throw new StageFailure(
-          `Trusted Container execution was interrupted: ${boundedInfrastructureReason(error)}`,
+          `Trusted Container execution was interrupted: ${reason}`,
           "container_interrupted",
           true,
         );

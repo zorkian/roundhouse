@@ -27,6 +27,7 @@ export type ControlPlaneEnv = {
   SUBMISSION_SCENARIO?: "success" | "interrupt-before-delivery";
   ROUNDHOUSE_CODEX_AUTH_JSON?: string;
   ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY?: string;
+  ROUNDHOUSE_GITHUB_WEBHOOK_SECRET?: string;
   GITHUB_APP_ID?: string;
   GITHUB_INSTALLATION_ID?: string;
   GITHUB_API_FETCHER?: typeof fetch;

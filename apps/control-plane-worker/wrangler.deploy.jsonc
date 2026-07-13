@@ -54,6 +54,7 @@
       "name": "roundhouse-dev-execution",
       "class_name": "RoundhouseExecutionContainer",
       "image": "../../containers/roundhouse-execution/Dockerfile",
+      "image_build_context": "../..",
       "max_instances": 1,
       "instance_type": "standard-1",
       "rollout_step_percentage": 100,

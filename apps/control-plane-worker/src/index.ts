@@ -38,6 +38,24 @@ import {
   GitHubPublicationPendingError,
   saveIssueSnapshot,
 } from "./github-operations.js";
+import {
+  bindIssueRun,
+  checkObservation,
+  claimPendingComments,
+  completeWebhookDelivery,
+  enqueueComment,
+  exactPublishedCheckTargets,
+  GitHubWebhookError,
+  issueCommand,
+  issueRun,
+  markCommentSent,
+  recordCheckObservations,
+  releaseCommentClaim,
+  reserveWebhookDelivery,
+  sha256,
+  verifyWebhookRequest,
+  type GitHubCommand,
+} from "./github-webhook.js";
 import { publishApprovedGitHubRun } from "./github-publication.js";
 import { DeterministicLocalDispatcher } from "./local-dispatch.js";
 import {
@@ -263,7 +281,10 @@ async function submitGitHubIssue(
       repositoryPath: env.ALLOWED_REPOSITORY_PATH,
       baseCommit,
       validationLevel: "full",
-      allowedPaths: ["docs/dogfood/github-integrated-poc.md"],
+      allowedPaths: [
+        "apps/control-plane-worker/src/github-gateway.ts",
+        "apps/control-plane-worker/src/github-gateway.test.ts",
+      ],
       source: {
         kind: "github_issue",
         owner: "zorkian",
@@ -286,6 +307,317 @@ async function submitGitHubIssue(
     },
     env,
   );
+}
+
+async function flushGitHubComments(env: ControlPlaneEnv): Promise<void> {
+  const comments = await claimPendingComments(env);
+  if (comments.length === 0) return;
+  let github: ReturnType<typeof githubGateway>;
+  try {
+    github = githubGateway(env);
+  } catch (error) {
+    await Promise.all(
+      comments.map((comment) =>
+        releaseCommentClaim(env, comment.key, comment.claimId),
+      ),
+    );
+    throw error;
+  }
+  let firstError: unknown;
+  for (const comment of comments) {
+    try {
+      const result = await github.createIssueComment(
+        comment.issueNumber,
+        comment.body,
+      );
+      await markCommentSent(env, comment.key, comment.claimId, result);
+    } catch (error) {
+      firstError ??= error;
+      await releaseCommentClaim(env, comment.key, comment.claimId);
+    }
+  }
+  if (firstError) throw firstError;
+}
+
+async function runComment(
+  run: Awaited<ReturnType<D1JobStore["read"]>>,
+): Promise<string> {
+  const lines = [
+    `Roundhouse run \`${run.runId}\` is **${run.state}** at revision \`${run.revision}\`.`,
+    `Status: https://roundhouse-dev.rm-rf.rip/v1/runs/${run.runId}`,
+    `Base: \`${run.task.baseCommit}\``,
+  ];
+  const attempt = run.attempts.at(-1);
+  if (attempt)
+    lines.push(
+      `Latest attempt: \`${attempt.attemptId}\` (${attempt.status}${attempt.classification ? `, ${attempt.classification}` : ""}).`,
+    );
+  if (run.state === "awaiting_approval" && run.implementation) {
+    if (
+      run.evidence.some(
+        (value) => value.evidenceId === run.implementation!.evidenceId,
+      )
+    ) {
+      const evidenceSetSha256 = await sha256(
+        JSON.stringify(
+          run.evidence.map(({ evidenceId, objectKey, sha256, size }) => ({
+            evidenceId,
+            objectKey,
+            sha256,
+            size,
+          })),
+        ),
+      );
+      lines.push(
+        "Approve this exact implementation with:",
+        "```text",
+        `/rh approve ${run.runId} ${run.revision} ${run.task.baseCommit} ${run.implementation.patchSha256} ${evidenceSetSha256}`,
+        "```",
+      );
+    }
+  }
+  if (run.publication?.pullRequestUrl)
+    lines.push(`Draft pull request: ${run.publication.pullRequestUrl}`);
+  return lines.join("\n\n");
+}
+
+async function enqueueRunComment(
+  env: ControlPlaneEnv,
+  issueNumber: number,
+  runId: string,
+): Promise<void> {
+  const run = await new D1JobStore(env.DB).read(runId);
+  await enqueueComment(
+    env,
+    `run-status:${runId}:${run.revision}`,
+    issueNumber,
+    await runComment(run),
+  );
+}
+
+async function runForIssueCommand(
+  env: ControlPlaneEnv,
+  issueNumber: number,
+  requested?: string,
+): Promise<string> {
+  const bound = await issueRun(env, issueNumber);
+  if (!bound) throw new HttpError(409, "Issue does not have a Roundhouse run");
+  if (requested && requested !== bound)
+    throw new HttpError(409, "Command run does not match this issue");
+  return bound;
+}
+
+async function executeGitHubCommand(
+  env: ControlPlaneEnv,
+  deliveryId: string,
+  issueNumber: number,
+  actor: string,
+  command: GitHubCommand,
+): Promise<{ runId: string; state: string; revision: number }> {
+  if (actor !== "zorkian")
+    throw new GitHubWebhookError(403, "unauthorized_actor");
+  const actorId = `github:${actor}`;
+  let runId: string;
+  if (command.kind === "start") {
+    const existing = await issueRun(env, issueNumber);
+    if (existing) {
+      const current = await new D1JobStore(env.DB).read(existing);
+      await enqueueRunComment(env, issueNumber, existing);
+      return {
+        runId: existing,
+        state: current.state,
+        revision: current.revision,
+      };
+    }
+    const request = new Request(
+      `https://roundhouse-dev.rm-rf.rip/v1/github/issues/${issueNumber}/runs`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": `github-issue:${issueNumber}`,
+        },
+        body: JSON.stringify({ schemaVersion: 1 }),
+      },
+    );
+    const response = await submitGitHubIssue(request, issueNumber, env);
+    const body = (await response.json()) as { runId: string };
+    runId = body.runId;
+    await bindIssueRun(env, issueNumber, runId);
+  } else {
+    runId = await runForIssueCommand(env, issueNumber, command.runId);
+    const jobs = new D1JobStore(env.DB);
+    if (command.kind === "cancel")
+      await cancelRun(runId, command.revision, env);
+    else if (command.kind === "retry") {
+      const run = await retryFailedRun(
+        env,
+        runId,
+        command.revision,
+        new Date(),
+      );
+      await env.RUN_QUEUE.send({
+        schemaVersion: 1,
+        runId,
+        deliveryId: `github_retry_${deliveryId}`,
+        expectedRevision: run.revision,
+      });
+    } else if (command.kind === "approve") {
+      let run = await jobs.read(runId);
+      const evidence = run.evidence.map(
+        ({ evidenceId, objectKey, sha256, size }) => ({
+          evidenceId,
+          objectKey,
+          sha256,
+          size,
+        }),
+      );
+      const evidenceSetSha256 = await sha256(JSON.stringify(evidence));
+      if (
+        run.task.baseCommit !== command.baseCommit ||
+        run.implementation?.patchSha256 !== command.patchSha256 ||
+        evidenceSetSha256 !== command.evidenceSetSha256
+      )
+        throw new HttpError(409, "Approval bindings do not match the run");
+      if (!run.approval) {
+        await approveRun(
+          runId,
+          {
+            schemaVersion: 1,
+            expectedRevision: command.revision,
+            patchSha256: command.patchSha256,
+            evidence,
+            approver: actorId,
+          },
+          env,
+          actorId,
+        );
+        run = await jobs.read(runId);
+      } else if (
+        run.approval.approver !== actorId ||
+        run.approval.baseCommit !== command.baseCommit ||
+        run.approval.patchSha256 !== command.patchSha256
+      )
+        throw new HttpError(409, "Existing approval does not match command");
+      if (!run.publication)
+        await publishGitHubRun(
+          runId,
+          { schemaVersion: 1, expectedRevision: run.revision },
+          env,
+          actorId,
+        );
+    }
+  }
+  const current = await new D1JobStore(env.DB).read(runId);
+  await enqueueRunComment(env, issueNumber, runId);
+  return { runId, state: current.state, revision: current.revision };
+}
+
+async function githubWebhook(
+  request: Request,
+  env: ControlPlaneEnv,
+): Promise<Response> {
+  const webhook = await verifyWebhookRequest(request, env);
+  const reservation = await reserveWebhookDelivery(env, webhook);
+  if (reservation.kind === "replay")
+    return json({ schemaVersion: 1, accepted: true, replayed: true });
+  if (reservation.kind === "in_progress")
+    throw new GitHubWebhookError(503, "delivery_in_progress");
+  try {
+    const observations = checkObservation(webhook);
+    if (observations.length > 0) {
+      await recordCheckObservations(env, observations);
+      const targets = await exactPublishedCheckTargets(env, observations);
+      for (const target of targets)
+        await enqueueComment(
+          env,
+          `check:${target.runId}:${target.headSha}:${target.key}:${target.status}:${target.conclusion ?? "pending"}`,
+          target.issueNumber,
+          [
+            `Roundhouse observed CI for exact published head \`${target.headSha}\` on pull request #${target.pullRequestNumber}.`,
+            `Check \`${target.key}\`: **${target.status}**${target.conclusion ? ` / **${target.conclusion}**` : ""}.`,
+          ].join("\n\n"),
+        );
+      await completeWebhookDelivery(
+        env,
+        webhook.deliveryId,
+        reservation.claimId,
+        "completed",
+        {
+          observations: observations.length,
+          exactPublishedTargets: targets.length,
+        },
+      );
+      try {
+        await flushGitHubComments(env);
+      } catch (error) {
+        console.warn("GitHub check comment delivery deferred", {
+          reason: redactedReason(error),
+        });
+      }
+      return json({ schemaVersion: 1, accepted: true });
+    }
+    const value = issueCommand(webhook);
+    if (!value) {
+      await completeWebhookDelivery(
+        env,
+        webhook.deliveryId,
+        reservation.claimId,
+        "ignored",
+        {},
+      );
+      return json({ schemaVersion: 1, accepted: true, ignored: true });
+    }
+    const result = await executeGitHubCommand(
+      env,
+      webhook.deliveryId,
+      value.issueNumber,
+      value.actor,
+      value.command,
+    );
+    await completeWebhookDelivery(
+      env,
+      webhook.deliveryId,
+      reservation.claimId,
+      "completed",
+      result,
+    );
+    try {
+      await flushGitHubComments(env);
+    } catch (error) {
+      console.warn("GitHub comment outbox delivery deferred", {
+        reason: redactedReason(error),
+      });
+    }
+    return json({ schemaVersion: 1, accepted: true, ...result }, 202);
+  } catch (error) {
+    const permanentlyRejected =
+      error instanceof HttpError ||
+      (error instanceof GitHubWebhookError && error.status < 500);
+    try {
+      await completeWebhookDelivery(
+        env,
+        webhook.deliveryId,
+        reservation.claimId,
+        permanentlyRejected ? "ignored" : "failed",
+        {
+          code:
+            error instanceof GitHubWebhookError
+              ? error.code
+              : error instanceof HttpError
+                ? "command_rejected"
+                : "processing_failed",
+        },
+      );
+    } catch (completionError) {
+      console.warn("GitHub webhook failure receipt was not retained", {
+        reason: redactedReason(completionError),
+      });
+    }
+    if (permanentlyRejected)
+      return json({ schemaVersion: 1, accepted: true, ignored: true }, 202);
+    throw error;
+  }
 }
 
 async function cancelRun(
@@ -783,6 +1115,21 @@ export function createControlPlaneHandler(
     async fetch(request, env): Promise<Response> {
       try {
         const url = new URL(request.url);
+        if (url.pathname === "/v1/github/webhook") {
+          if (request.method !== "POST")
+            return json(
+              {
+                error: {
+                  code: "method_not_allowed",
+                  message: "Method not allowed",
+                },
+              },
+              405,
+            );
+          return await githubWebhook(request, env);
+        }
+        if (url.pathname.startsWith("/v1/github/webhook/"))
+          return new Response(null, { status: 404 });
         let actorId = "unauthenticated-health";
         if (url.pathname !== "/health") {
           const decision = await authorizer.authorize(request, env);
@@ -835,6 +1182,11 @@ export function createControlPlaneHandler(
               },
             },
             502,
+          );
+        if (error instanceof GitHubWebhookError)
+          return json(
+            { error: { code: error.code, message: "Webhook rejected" } },
+            error.status,
           );
         if (error instanceof z.ZodError)
           return json(
@@ -894,6 +1246,21 @@ export function createControlPlaneHandler(
                 deliveryId: `retry_${run.runId}_${run.revision}`,
                 expectedRevision: run.revision,
               });
+            if (run.task.source?.kind === "github_issue") {
+              await enqueueRunComment(
+                env,
+                run.task.source.issueNumber,
+                run.runId,
+              );
+              try {
+                await flushGitHubComments(env);
+              } catch (error) {
+                console.warn("GitHub Queue status delivery deferred", {
+                  runId: run.runId,
+                  reason: redactedReason(error),
+                });
+              }
+            }
           },
         );
       }
@@ -913,6 +1280,13 @@ export function createControlPlaneHandler(
           now: new Date(),
         });
         throw error;
+      }
+      try {
+        await flushGitHubComments(env);
+      } catch (error) {
+        console.warn("Scheduled GitHub comment delivery deferred", {
+          reason: redactedReason(error),
+        });
       }
     },
   };

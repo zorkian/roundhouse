@@ -120,6 +120,33 @@ function trustedResult() {
 }
 
 describe("CloudflareTrustedImplementationBackend", () => {
+  it("classifies trusted validation failure as non-retryable", async () => {
+    let destroyed = 0;
+    const backend = new CloudflareTrustedImplementationBackend(
+      {
+        getByName: () => ({
+          runJob: async () => result(),
+          runTrustedJob: async () => {
+            throw new Error(
+              "Container runner /trusted/validate failed with HTTP 400: validation_failed:format[exit=1,timeout=false,truncated=false]",
+            );
+          },
+          destroy: async () => {
+            destroyed += 1;
+          },
+        }),
+      },
+      new MemoryEvidence(),
+      "unused",
+    );
+    await expect(backend.execute(trustedRequest)).rejects.toMatchObject({
+      classification: "validation_failed",
+      retryable: false,
+      message: expect.stringContaining("format[exit=1"),
+    });
+    expect(destroyed).toBe(1);
+  });
+
   it("rejects results exceeding request-scoped limits", async () => {
     const backend = new CloudflareTrustedImplementationBackend(
       {

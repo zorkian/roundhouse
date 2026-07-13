@@ -20,6 +20,10 @@ import {
 } from "./submissions.js";
 import { cloudOperationsMigration } from "./operations.js";
 import { githubPocMigration } from "./github-operations.js";
+import {
+  enqueueComment,
+  githubNativeOperatorMigration,
+} from "./github-webhook.js";
 
 const instances: Miniflare[] = [];
 const token = "local-test-token";
@@ -207,7 +211,7 @@ async function runtime(): Promise<{
   });
   instances.push(mf);
   const db = await mf.getD1Database("DB");
-  for (const statement of `${d1JobStoreMigration}\n${controlPlaneSubmissionMigration}\n${cloudOperationsMigration}\n${githubPocMigration}`
+  for (const statement of `${d1JobStoreMigration}\n${controlPlaneSubmissionMigration}\n${cloudOperationsMigration}\n${githubPocMigration}\n${githubNativeOperatorMigration}`
     .split(";")
     .map((value) => value.trim())
     .filter(Boolean))
@@ -293,6 +297,190 @@ afterEach(async () => {
 });
 
 describe("local control-plane Worker", () => {
+  it("keeps the Access-bypassed namespace limited to one exact Worker route", async () => {
+    const { env } = await runtime();
+    const handler = createControlPlaneHandler();
+    const child = await handler.fetch!(
+      request("/v1/github/webhook/extra", {}, false),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(child.status).toBe(404);
+    expect(await child.text()).toBe("");
+  });
+
+  it("accepts one signed GitHub command and makes duplicate delivery harmless", async () => {
+    const { env, queued } = await runtime();
+    const pair = await generateKeyPair("RS256", { extractable: true });
+    env.GITHUB_APP_ID = "4281837";
+    env.GITHUB_INSTALLATION_ID = "146147681";
+    env.ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY = await exportPKCS8(pair.privateKey);
+    env.ROUNDHOUSE_GITHUB_WEBHOOK_SECRET = "signed-webhook-secret";
+    let comments = 0;
+    env.GITHUB_API_FETCHER = async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/access_tokens"))
+        return new Response(
+          JSON.stringify({
+            token: "installation-token",
+            expires_at: "2026-07-13T00:00:00Z",
+          }),
+          { status: 201 },
+        );
+      if (url.pathname.endsWith("/issues/17") && init?.method !== "POST")
+        return new Response(
+          JSON.stringify({
+            number: 17,
+            node_id: "issue-node-17",
+            html_url: "https://github.com/zorkian/roundhouse/issues/17",
+            title: "Classify GitHub gateway errors",
+            body: "Exercise the reviewed Roundhouse profile.",
+            updated_at: "2026-07-12T00:00:00Z",
+          }),
+        );
+      if (url.pathname.endsWith("/git/ref/heads/main"))
+        return new Response(
+          JSON.stringify({ object: { sha: "e".repeat(40) } }),
+        );
+      if (url.pathname.endsWith("/issues/17/comments")) {
+        comments += 1;
+        return new Response(
+          JSON.stringify({
+            id: 991,
+            html_url:
+              "https://github.com/zorkian/roundhouse/issues/17#issuecomment-991",
+          }),
+          { status: 201 },
+        );
+      }
+      return new Response("{}", { status: 404 });
+    };
+    const payload = JSON.stringify({
+      action: "created",
+      installation: { id: 146147681 },
+      repository: { full_name: "zorkian/roundhouse" },
+      sender: { login: "zorkian" },
+      issue: { number: 17 },
+      comment: { id: 41, body: "/rh start", user: { login: "zorkian" } },
+    });
+    const key = await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode("signed-webhook-secret"),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+    const mac = await crypto.subtle.sign(
+      "HMAC",
+      key,
+      new TextEncoder().encode(payload),
+    );
+    const signature = `sha256=${[...new Uint8Array(mac)]
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("")}`;
+    const webhook = (delivery = "12345678-abcd-4321-abcd-1234567890ab") =>
+      new Request("http://roundhouse.local/v1/github/webhook", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-github-delivery": delivery,
+          "x-github-event": "issue_comment",
+          "x-hub-signature-256": signature,
+        },
+        body: payload,
+      }) as Request<unknown, IncomingRequestCfProperties>;
+    const handler = createControlPlaneHandler();
+    const accepted = await handler.fetch!(
+      webhook(),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(accepted.status).toBe(202);
+    const result = (await accepted.json()) as { runId: string };
+    expect(result.runId).toMatch(/^run_[a-f0-9]{40}$/);
+    expect(queued.messages).toHaveLength(1);
+    expect(comments).toBe(1);
+
+    const repeatedStart = await handler.fetch!(
+      webhook("87654321-abcd-4321-abcd-1234567890ab"),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(repeatedStart.status).toBe(202);
+    await expect(repeatedStart.json()).resolves.toMatchObject({
+      runId: result.runId,
+    });
+    expect(queued.messages).toHaveLength(1);
+    expect(comments).toBe(1);
+
+    const replay = await handler.fetch!(webhook(), env, {} as ExecutionContext);
+    expect(replay.status).toBe(200);
+    await expect(replay.json()).resolves.toMatchObject({ replayed: true });
+    expect(queued.messages).toHaveLength(1);
+    expect(comments).toBe(1);
+
+    const rejectedPayload = JSON.stringify({
+      action: "created",
+      installation: { id: 146147681 },
+      repository: { full_name: "zorkian/roundhouse" },
+      sender: { login: "outside-actor" },
+      issue: { number: 17 },
+      comment: {
+        id: 42,
+        body: "/rh status",
+        user: { login: "outside-actor" },
+      },
+    });
+    const rejectedMac = await crypto.subtle.sign(
+      "HMAC",
+      key,
+      new TextEncoder().encode(rejectedPayload),
+    );
+    const rejectedSignature = `sha256=${[...new Uint8Array(rejectedMac)]
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("")}`;
+    const rejectedDelivery = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const rejectedWebhook = () =>
+      new Request("http://roundhouse.local/v1/github/webhook", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-github-delivery": rejectedDelivery,
+          "x-github-event": "issue_comment",
+          "x-hub-signature-256": rejectedSignature,
+        },
+        body: rejectedPayload,
+      }) as Request<unknown, IncomingRequestCfProperties>;
+    const rejected = await handler.fetch!(
+      rejectedWebhook(),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(rejected.status).toBe(202);
+    await expect(rejected.json()).resolves.toMatchObject({
+      accepted: true,
+      ignored: true,
+    });
+    const rejectionReceipt = await env.DB.prepare(
+      "SELECT status, result_json FROM github_webhook_deliveries WHERE delivery_id = ?",
+    )
+      .bind(rejectedDelivery)
+      .first<{ status: string; result_json: string }>();
+    expect(rejectionReceipt).toMatchObject({ status: "ignored" });
+    expect(JSON.parse(rejectionReceipt!.result_json)).toEqual({
+      code: "unauthorized_actor",
+    });
+    const rejectedReplay = await handler.fetch!(
+      rejectedWebhook(),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(rejectedReplay.status).toBe(200);
+    await expect(rejectedReplay.json()).resolves.toMatchObject({
+      replayed: true,
+    });
+  });
+
   it("submits an enrolled GitHub issue as a fixed-policy task", async () => {
     const { env, queued } = await runtime();
     const pair = await generateKeyPair("RS256", { extractable: true });
@@ -344,7 +532,10 @@ describe("local control-plane Worker", () => {
     const run = await new D1JobStore(env.DB).read(runId);
     expect(run.task).toMatchObject({
       baseCommit: "d".repeat(40),
-      allowedPaths: ["docs/dogfood/github-integrated-poc.md"],
+      allowedPaths: [
+        "apps/control-plane-worker/src/github-gateway.ts",
+        "apps/control-plane-worker/src/github-gateway.test.ts",
+      ],
       source: {
         kind: "github_issue",
         issueNumber: 7,
@@ -1376,5 +1567,32 @@ describe("local control-plane Worker", () => {
     expect(text).toContain("[path]");
     expect(text).not.toContain("internal.example.invalid");
     expect(text).not.toContain("/private/workspace/path");
+  });
+
+  it("does not report deferred GitHub comments as recovery-cycle failures", async () => {
+    const { env } = await runtime();
+    await enqueueComment(
+      env,
+      "scheduled-comment-failure",
+      17,
+      "Deliver me after GitHub recovers",
+    );
+    const handler = createControlPlaneHandler();
+
+    await expect(
+      handler.scheduled!(
+        {} as ScheduledController,
+        env,
+        {} as ExecutionContext,
+      ),
+    ).resolves.toBeUndefined();
+    const row = await env.DB.prepare(
+      "SELECT status FROM github_comment_outbox WHERE comment_key = 'scheduled-comment-failure'",
+    ).first<{ status: string }>();
+    expect(row?.status).toBe("pending");
+    const alert = await env.DB.prepare(
+      "SELECT alert_key FROM operational_alerts WHERE alert_key = 'scheduled_recovery_failed'",
+    ).first<{ alert_key: string }>();
+    expect(alert).toBeNull();
   });
 });
