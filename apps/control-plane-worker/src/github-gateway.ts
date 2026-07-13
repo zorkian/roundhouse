@@ -151,7 +151,11 @@ export class GitHubAppGateway {
         `/repos/${reference.owner}/${reference.repository}/issues/${reference.number}`,
       )
     ).value;
-    if (issue.pull_request) throw new Error("GitHub reference is not an issue");
+    if (issue.pull_request !== undefined)
+      throw new GitHubAppGatewayError(
+        "invalid_response",
+        "GitHub issue response was invalid",
+      );
     const body = issue.body ?? "";
     try {
       return githubIssueSnapshotSchema.parse({
@@ -220,22 +224,39 @@ export class GitHubAppGateway {
   }
 
   private async existingRef(branch: string): Promise<string | null> {
-    const fetcher = this.fetcher;
-    const response = await fetcher(
-      `https://api.github.com/repos/zorkian/roundhouse/git/ref/heads/${encodeURIComponent(branch)}`,
-      {
-        headers: {
-          accept: "application/vnd.github+json",
-          authorization: `Bearer ${await this.installationToken()}`,
-          "user-agent": "roundhouse-dev-control-plane",
-          "x-github-api-version": "2022-11-28",
+    let response: Response;
+    try {
+      const fetcher = this.fetcher;
+      response = await fetcher(
+        `https://api.github.com/repos/zorkian/roundhouse/git/ref/heads/${encodeURIComponent(branch)}`,
+        {
+          headers: {
+            accept: "application/vnd.github+json",
+            authorization: `Bearer ${await this.installationToken()}`,
+            "user-agent": "roundhouse-dev-control-plane",
+            "x-github-api-version": "2022-11-28",
+          },
         },
-      },
-    );
+      );
+    } catch (error) {
+      if (error instanceof GitHubAppGatewayError) throw error;
+      throw new GitHubAppGatewayError(
+        "transport_failed",
+        "GitHub API transport failed",
+      );
+    }
     if (response.status === 404) return null;
     if (!response.ok) throw safeGitHubError(response.status);
-    const value = (await response.json()) as { object: { sha: string } };
-    return value.object.sha;
+    try {
+      const value = (await response.json()) as { object?: { sha?: unknown } };
+      if (typeof value.object?.sha !== "string") throw new Error();
+      return value.object.sha;
+    } catch {
+      throw new GitHubAppGatewayError(
+        "invalid_response",
+        "GitHub API response was invalid",
+      );
+    }
   }
 
   async publish(input: {

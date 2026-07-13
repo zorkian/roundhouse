@@ -102,6 +102,121 @@ describe("GitHub App gateway", () => {
     });
   });
 
+  it("classifies a pull request returned from the issues API", async () => {
+    const fetcher: typeof fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/access_tokens"))
+        return json({
+          token: "installation-token",
+          expires_at: "2026-07-12T02:00:00Z",
+        });
+      return json({
+        number: 7,
+        node_id: "pull-node-7",
+        html_url: "https://example.invalid/sensitive",
+        title: "Not an issue",
+        body: null,
+        updated_at: "2026-07-12T00:30:00Z",
+        pull_request: {},
+      });
+    };
+    const gateway = new GitHubAppGateway(
+      { appId: "1", installationId: "2", privateKey },
+      fetcher,
+    );
+    const failure = await gateway
+      .fetchIssue({
+        schemaVersion: 1,
+        owner: "zorkian",
+        repository: "roundhouse",
+        number: 7,
+      })
+      .then(() => undefined)
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(GitHubAppGatewayError);
+    expect(failure).toMatchObject({
+      code: "invalid_response",
+      message: "GitHub issue response was invalid",
+    });
+    expect(String(failure)).not.toContain("example.invalid");
+  });
+
+  it.each([
+    {
+      name: "transport failure",
+      refResponse: () => {
+        throw new TypeError("secret transport details");
+      },
+      code: "transport_failed",
+      message: "GitHub API transport failed",
+    },
+    {
+      name: "malformed JSON",
+      refResponse: () => new Response("secret response body"),
+      code: "invalid_response",
+      message: "GitHub API response was invalid",
+    },
+    {
+      name: "malformed successful response",
+      refResponse: () => json({ object: {} }),
+      code: "invalid_response",
+      message: "GitHub API response was invalid",
+    },
+  ])("classifies an existing ref $name safely", async (testCase) => {
+    const fetcher: typeof fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/access_tokens"))
+        return json({
+          token: "installation-token",
+          expires_at: "2026-07-12T02:00:00Z",
+        });
+      if (url.pathname.includes("/git/ref/heads/"))
+        return testCase.refResponse();
+      return json({ tree: { sha: "b".repeat(40) } });
+    };
+    const gateway = new GitHubAppGateway(
+      { appId: "1", installationId: "2", privateKey },
+      fetcher,
+    );
+    const failure = await (
+      gateway as unknown as {
+        existingRef(branch: string): Promise<string | null>;
+      }
+    )
+      .existingRef("secret-branch")
+      .then(() => undefined)
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(GitHubAppGatewayError);
+    expect(failure).toMatchObject({
+      code: testCase.code,
+      message: testCase.message,
+    });
+    expect(String(failure)).not.toMatch(/secret|github\.com/);
+  });
+
+  it("preserves a missing existing ref as null", async () => {
+    const fetcher: typeof fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/access_tokens"))
+        return json({
+          token: "installation-token",
+          expires_at: "2026-07-12T02:00:00Z",
+        });
+      return new Response("not JSON", { status: 404 });
+    };
+    const gateway = new GitHubAppGateway(
+      { appId: "1", installationId: "2", privateKey },
+      fetcher,
+    );
+    await expect(
+      (
+        gateway as unknown as {
+          existingRef(branch: string): Promise<string | null>;
+        }
+      ).existingRef("missing-branch"),
+    ).resolves.toBeNull();
+  });
+
   it("reconciles an ambiguous ref response and verifies the published commit", async () => {
     const base = "a".repeat(40);
     const tree = "c".repeat(40);
