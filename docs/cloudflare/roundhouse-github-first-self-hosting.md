@@ -55,6 +55,12 @@ Immutable workflow events, evidence, approvals, exact bases, patch hashes, and
 publication bindings remain in their existing durable stores. Updating a
 status projection never changes or weakens those authoritative records.
 
+The trusted implementation lease is forty minutes: five minutes beyond the
+combined bounded twenty-minute agent and fifteen-minute validation budgets.
+This prevents scheduled recovery from duplicating a still-active Container
+attempt. A future heartbeat lease can shorten crash-recovery latency without
+changing the coordinator or evidence contracts.
+
 ## Pilot procedure
 
 1. Open a bounded issue whose requested paths are accepted by the reviewed

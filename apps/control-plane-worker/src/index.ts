@@ -120,6 +120,10 @@ import {
 const maxBodyBytes = 64 * 1024;
 const jsonHeaders = { "content-type": "application/json; charset=utf-8" };
 const delegatedApprover = "mark-smith-delegated-trusted-loop-dogfood";
+// One trusted stage can spend 20 minutes in the agent and 15 minutes in
+// validation. The exclusive lease must outlive that bounded operation because
+// this Worker cannot safely reclaim the run while its Container RPC is active.
+const trustedImplementationLeaseMs = 40 * 60_000;
 
 function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), { status, headers: jsonHeaders });
@@ -201,7 +205,10 @@ function coordinator(env: ControlPlaneEnv): ResumableCoordinator {
     { now: () => new Date() },
     {
       workerId: "roundhouse-dev-control-plane-queue",
-      leaseMs: 300_000,
+      leaseMs:
+        env.EXECUTION_MODE === "cloudflare-trusted-codex"
+          ? trustedImplementationLeaseMs
+          : 300_000,
       maxAttemptsPerStage: 3,
     },
   );
