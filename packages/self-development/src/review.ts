@@ -208,6 +208,7 @@ export const durableIndependentReviewSchema = z.object({
   status: independentReviewStatusSchema,
   request: independentReviewRequestSchema,
   attemptCount: z.number().int().nonnegative().max(3),
+  reclaimCount: z.number().int().nonnegative().max(2).default(0),
   activeAttemptId: boundedIdentitySchema.optional(),
   lease: z
     .object({

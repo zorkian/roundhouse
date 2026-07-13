@@ -232,10 +232,64 @@ describe("durable independent review coordination", () => {
     expect(first?.review.attemptCount).toBe(1);
     expect(duplicate).toBeNull();
     expect(reclaimed?.review.attemptCount).toBe(1);
+    expect(reclaimed?.review.reclaimCount).toBe(1);
     expect(reclaimed?.review.activeAttemptId).toBe(
       first?.review.activeAttemptId,
     );
     expect(reclaimed?.token).not.toBe(first?.token);
+  });
+
+  it("fails durably after the bounded same-attempt reclaim budget", async () => {
+    const env = await runtime();
+    const input = await request();
+    await reserveIndependentReview(
+      env,
+      input,
+      new Date("2026-07-12T00:00:00Z"),
+    );
+    let claim = await claimIndependentReview(
+      env,
+      input.reviewId,
+      "worker-a",
+      new Date("2026-07-12T00:00:01Z"),
+      1_000,
+    );
+    claim = await claimIndependentReview(
+      env,
+      input.reviewId,
+      "worker-b",
+      new Date("2026-07-12T00:00:03Z"),
+      1_000,
+    );
+    claim = await claimIndependentReview(
+      env,
+      input.reviewId,
+      "worker-c",
+      new Date("2026-07-12T00:00:05Z"),
+      1_000,
+    );
+    expect(claim?.review).toMatchObject({
+      attemptCount: 1,
+      reclaimCount: 2,
+      activeAttemptId: `${input.reviewId}-attempt-1`,
+    });
+    await expect(
+      claimIndependentReview(
+        env,
+        input.reviewId,
+        "worker-d",
+        new Date("2026-07-12T00:00:07Z"),
+        1_000,
+      ),
+    ).resolves.toBeNull();
+    await expect(
+      readIndependentReview(env, input.reviewId),
+    ).resolves.toMatchObject({
+      status: "failed",
+      attemptCount: 1,
+      reclaimCount: 2,
+      failureClassification: "review_lease_reclaim_exhausted",
+    });
   });
 
   it("retains findings, dispositions, evidence, and remediation identity", async () => {

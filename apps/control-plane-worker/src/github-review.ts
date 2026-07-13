@@ -18,6 +18,7 @@ import type { ControlPlaneEnv } from "./environment.js";
 
 const encoder = new TextEncoder();
 const maximumAttempts = 3;
+const maximumReclaims = maximumAttempts - 1;
 
 type ReviewRow = {
   review_id: string;
@@ -253,6 +254,36 @@ export async function claimIndependentReview(
       current.lease !== undefined &&
       new Date(current.lease.expiresAt).getTime() <= now.getTime();
     if (current.status !== "pending" && !expired) return null;
+    if (expired && current.reclaimCount >= maximumReclaims) {
+      const timestamp = now.toISOString();
+      const { lease: _lease, ...withoutLease } = current;
+      const failed = durableIndependentReviewSchema.parse({
+        ...withoutLease,
+        revision: current.revision + 1,
+        status: "failed",
+        retryable: false,
+        failureClassification: "review_lease_reclaim_exhausted",
+        failureReason: "Independent review lease expired too many times",
+        updatedAt: timestamp,
+        events: [
+          ...current.events,
+          {
+            sequence: current.events.length + 1,
+            type: "review.failed",
+            occurredAt: timestamp,
+            detail: {
+              classification: "review_lease_reclaim_exhausted",
+              reclaimCount: current.reclaimCount,
+            },
+          },
+        ],
+      });
+      if (await writeCas(env, currentRow, failed, "sent")) {
+        await insertEvents(env, failed);
+        return null;
+      }
+      continue;
+    }
     const attemptCount = expired
       ? current.attemptCount
       : current.attemptCount + 1;
@@ -266,6 +297,7 @@ export async function claimIndependentReview(
       status: "running",
       request: { ...current.request, attemptId, attemptNumber: attemptCount },
       attemptCount,
+      reclaimCount: expired ? current.reclaimCount + 1 : current.reclaimCount,
       activeAttemptId: attemptId,
       lease: {
         token,
