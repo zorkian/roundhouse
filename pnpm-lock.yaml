@@ -29,6 +29,9 @@ importers:
       '@types/node':
         specifier: ^24.0.14
         version: 24.13.3
+      esbuild:
+        specifier: 0.28.1
+        version: 0.28.1
       miniflare:
         specifier: 4.20260708.1
         version: 4.20260708.1
