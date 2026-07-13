@@ -481,7 +481,11 @@ async function flushGitHubComments(env: ControlPlaneEnv): Promise<void> {
             body: comment.body,
             existingCommentId: comment.githubCommentId,
           })
-        : await github.createIssueComment(comment.issueNumber, comment.body);
+        : await github.createIssueComment(
+            comment.repositoryFullName,
+            comment.issueNumber,
+            comment.body,
+          );
       await markCommentSent(env, comment.key, comment.claimId, result);
     } catch (error) {
       firstError ??= error;

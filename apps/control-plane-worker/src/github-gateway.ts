@@ -205,6 +205,7 @@ export class GitHubAppGateway {
   }
 
   async createIssueComment(
+    repositoryFullName: string,
     issueNumber: number,
     body: string,
   ): Promise<{ id: number; url: string }> {
@@ -213,18 +214,21 @@ export class GitHubAppGateway {
         "invalid_request",
         "GitHub issue number is invalid",
       );
+    const base = repositoryPath(repositoryFullName);
     const value = (
       await this.api<{ id: number; html_url: string }>(
         "POST",
-        `/repos/zorkian/roundhouse/issues/${issueNumber}/comments`,
+        `${base}/issues/${issueNumber}/comments`,
         { body },
       )
     ).value;
+    const url = new URL(value.html_url);
     if (
       !Number.isSafeInteger(value.id) ||
-      !/^https:\/\/github\.com\/zorkian\/roundhouse\/issues\/[1-9][0-9]*#issuecomment-[1-9][0-9]*$/.test(
-        value.html_url,
-      )
+      value.id < 1 ||
+      url.origin !== "https://github.com" ||
+      url.pathname !== `/${repositoryFullName}/issues/${issueNumber}` ||
+      !/^#issuecomment-[1-9][0-9]*$/.test(url.hash)
     )
       throw new GitHubAppGatewayError(
         "invalid_response",

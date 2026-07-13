@@ -102,6 +102,36 @@ describe("GitHub App gateway", () => {
     });
   });
 
+  it("posts an ordinary comment to the explicit repository and issue", async () => {
+    let requestedPath: string | undefined;
+    const fetcher: typeof fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/access_tokens"))
+        return json({
+          token: "installation-token",
+          expires_at: "2026-07-12T02:00:00Z",
+        });
+      requestedPath = url.pathname;
+      return json({
+        id: 41,
+        html_url:
+          "https://github.com/another/roundhouse/issues/9#issuecomment-41",
+      });
+    };
+    const gateway = new GitHubAppGateway(
+      { appId: "1", installationId: "2", privateKey },
+      fetcher,
+      () => new Date("2026-07-12T01:00:00Z"),
+    );
+    await expect(
+      gateway.createIssueComment("another/roundhouse", 9, "Status"),
+    ).resolves.toEqual({
+      id: 41,
+      url: "https://github.com/another/roundhouse/issues/9#issuecomment-41",
+    });
+    expect(requestedPath).toBe("/repos/another/roundhouse/issues/9/comments");
+  });
+
   it("reconciles one repository-qualified rolling status comment", async () => {
     const marker = "<!-- roundhouse-status:zorkian/roundhouse#7 -->";
     const body = `${marker}\nCurrent state`;
