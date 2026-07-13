@@ -167,6 +167,7 @@ const retryState = {
   complete: "pushed",
 } as const;
 const maxStageAttempts = 3;
+const maxOperatorStageAttempts = 10;
 const operatorRetryableClassifications = new Set(["validation_failed"]);
 
 export async function retryFailedRun(
@@ -183,6 +184,9 @@ export async function retryFailedRun(
   if (!row) throw new Error(`Run not found: ${runId}`);
   const run = selfDevelopmentRunSchema.parse(JSON.parse(row.payload));
   const attempt = run.attempts.at(-1);
+  const stageAttempts = attempt
+    ? run.attempts.filter((value) => value.stage === attempt.stage).length
+    : 0;
   if (
     run.revision !== expectedRevision ||
     run.state !== "failed" ||
@@ -190,7 +194,8 @@ export async function retryFailedRun(
     !(
       attempt.retryable ||
       operatorRetryableClassifications.has(attempt.classification ?? "")
-    )
+    ) ||
+    stageAttempts >= maxOperatorStageAttempts
   )
     throw new Error("Run is not eligible for retry at this revision");
   const state = retryState[attempt.stage];
@@ -337,11 +342,15 @@ export async function runRecoveryCycle(
       continue;
     }
     const latest = run.attempts.at(-1);
+    const stageAttempts = latest
+      ? run.attempts.filter((attempt) => attempt.stage === latest.stage).length
+      : 0;
     if (
       run.state === "failed" &&
-      latest?.retryable &&
-      run.attempts.filter((attempt) => attempt.stage === latest.stage).length >=
-        maxStageAttempts
+      latest &&
+      ((latest.retryable && stageAttempts >= maxStageAttempts) ||
+        (operatorRetryableClassifications.has(latest.classification ?? "") &&
+          stageAttempts >= maxOperatorStageAttempts))
     ) {
       await recordAlert(env, {
         key: `retries_exhausted:${run.runId}:${run.revision}`,
@@ -351,7 +360,8 @@ export async function runRecoveryCycle(
         detail: {
           revision: run.revision,
           stage: latest.stage,
-          attempts: maxStageAttempts,
+          attempts: stageAttempts,
+          limit: latest.retryable ? maxStageAttempts : maxOperatorStageAttempts,
           classification: latest.classification,
         },
         now,

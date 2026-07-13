@@ -197,6 +197,45 @@ describe("cloud operator persistence", () => {
       start,
     );
 
+    const exhausted = {
+      ...failed,
+      attempts: Array.from({ length: 10 }, (_, index) => ({
+        ...failed.attempts.at(-1)!,
+        attemptId: `run_validation_retry-prepare-${index + 1}`,
+        number: index + 1,
+      })),
+    };
+    await env.DB.prepare(
+      "UPDATE self_development_runs SET payload = ? WHERE run_id = 'run_validation_retry'",
+    )
+      .bind(JSON.stringify(exhausted))
+      .run();
+    await expect(
+      retryFailedRun(
+        env,
+        "run_validation_retry",
+        failed.revision,
+        new Date(start.getTime() + 1),
+      ),
+    ).rejects.toThrow("not eligible");
+    await runRecoveryCycle(env, new Date(start.getTime() + 2));
+    const alert = await env.DB.prepare(
+      "SELECT kind, detail_json FROM operational_alerts WHERE alert_key = ?",
+    )
+      .bind(`retries_exhausted:run_validation_retry:${failed.revision}`)
+      .first<{ kind: string; detail_json: string }>();
+    expect(alert?.kind).toBe("retries_exhausted");
+    expect(JSON.parse(alert!.detail_json)).toMatchObject({
+      attempts: 10,
+      limit: 10,
+      classification: "validation_failed",
+    });
+    await env.DB.prepare(
+      "UPDATE self_development_runs SET payload = ? WHERE run_id = 'run_validation_retry'",
+    )
+      .bind(JSON.stringify(failed))
+      .run();
+
     const retried = await retryFailedRun(
       env,
       "run_validation_retry",
