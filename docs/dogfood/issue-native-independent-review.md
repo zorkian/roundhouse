@@ -15,5 +15,5 @@ any remediation changes the reviewed commit.
 Remediation is limited to two review-and-fix cycles. If substantive defects
 remain after the second cycle, the loop stops instead of continuing unbounded.
 
-**Deliberately incorrect sentence for independent review:** The Claude reviewer
-receives a GitHub credential and may edit the checkout.
+The Claude reviewer operates in a read-only isolated checkout with no GitHub
+credential and cannot modify any file or invoke any GitHub operation.
