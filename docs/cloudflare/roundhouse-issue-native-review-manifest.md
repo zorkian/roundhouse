@@ -134,11 +134,11 @@ existing resource is deleted.
 ## Applied identities
 
 - D1 migration: `0008_independent_review.sql`;
-- Worker version: `512517cc-24ac-4be0-8386-46713eefe93a`;
+- Worker version: `7bc96da7-2c4f-4598-ba29-cb71cb0f86c5`;
 - Container application: `roundhouse-dev-execution`, application ID
   `a030958f-41f0-4ae6-9a68-a33d0876ea72`;
 - immutable image digest:
-  `sha256:ca21a1e03b0e7570c9876232f03a25562d46aa6bef2d124047149c0bf81c879d`;
+  `sha256:772ae784b250475d2c1963247df9696380341c26bec59cc390aa11d9449548a6`;
 - encrypted secret binding: `ROUNDHOUSE_CLAUDE_AUTH_JSON`.
 
 The deployment retained the existing hostname, Access boundary, Worker, D1,
