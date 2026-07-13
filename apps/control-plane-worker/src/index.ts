@@ -61,6 +61,7 @@ import {
   claimPendingComments,
   completeWebhookDelivery,
   enqueueComment,
+  enqueueStatusComment,
   exactPublishedCheckTargets,
   GitHubWebhookError,
   issueCommand,
@@ -73,11 +74,18 @@ import {
   verifyWebhookRequest,
   type GitHubCommand,
 } from "./github-webhook.js";
+import {
+  claimPendingReviewChecks,
+  enqueueReviewCheck,
+  markReviewCheckSent,
+  releaseReviewCheckClaim,
+} from "./github-status.js";
 import { publishApprovedGitHubRun } from "./github-publication.js";
 import {
   claimIndependentReview,
   completeIndependentReview,
   failIndependentReview,
+  isIssueRemediationRun,
   markReviewDispatched,
   readIndependentReview,
   readReviewByRemediationRun,
@@ -104,6 +112,7 @@ import {
 } from "./operations.js";
 import {
   dashboard,
+  issueInspection,
   operatorPage,
   planInspection,
   reviewInspection,
@@ -112,6 +121,10 @@ import {
 const maxBodyBytes = 64 * 1024;
 const jsonHeaders = { "content-type": "application/json; charset=utf-8" };
 const delegatedApprover = "mark-smith-delegated-trusted-loop-dogfood";
+// One trusted stage can spend 20 minutes in the agent and 15 minutes in
+// validation. The exclusive lease must outlive that bounded operation because
+// this Worker cannot safely reclaim the run while its Container RPC is active.
+const trustedImplementationLeaseMs = 40 * 60_000;
 
 function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), { status, headers: jsonHeaders });
@@ -193,7 +206,10 @@ function coordinator(env: ControlPlaneEnv): ResumableCoordinator {
     { now: () => new Date() },
     {
       workerId: "roundhouse-dev-control-plane-queue",
-      leaseMs: 300_000,
+      leaseMs:
+        env.EXECUTION_MODE === "cloudflare-trusted-codex"
+          ? trustedImplementationLeaseMs
+          : 300_000,
       maxAttemptsPerStage: 3,
     },
   );
@@ -395,6 +411,7 @@ async function materializeGitHubPlan(
 async function planComment(value: DurableIssuePlan): Promise<string> {
   const lines = [
     `Roundhouse plan \`${value.plan.planId}\` is **${value.status}** at revision \`${value.revision}\`.`,
+    `Workflow: https://roundhouse-dev.rm-rf.rip/repositories/zorkian/roundhouse/issues/${value.plan.issueNumber}`,
     `Plan: https://roundhouse-dev.rm-rf.rip/plans/${value.plan.planId}`,
     `Base: \`${value.plan.baseCommit}\``,
     `Profile: \`${value.plan.profileId}@${value.plan.profileVersion}\``,
@@ -433,11 +450,11 @@ async function enqueuePlanComment(
   issueNumber: number,
   value: DurableIssuePlan,
 ): Promise<void> {
-  await enqueueComment(
+  await enqueueStatusComment(
     env,
-    `plan-status:${value.plan.planId}:${value.revision}:${value.status}`,
+    "zorkian/roundhouse",
     issueNumber,
-    await planComment(value),
+    `<!-- roundhouse-status:zorkian/roundhouse#${issueNumber} -->\n\n${await planComment(value)}`,
   );
 }
 
@@ -458,10 +475,18 @@ async function flushGitHubComments(env: ControlPlaneEnv): Promise<void> {
   let firstError: unknown;
   for (const comment of comments) {
     try {
-      const result = await github.createIssueComment(
-        comment.issueNumber,
-        comment.body,
-      );
+      const result = comment.key.startsWith("issue-status:")
+        ? await github.upsertIssueStatusComment({
+            repositoryFullName: comment.repositoryFullName,
+            issueNumber: comment.issueNumber,
+            body: comment.body,
+            existingCommentId: comment.githubCommentId,
+          })
+        : await github.createIssueComment(
+            comment.repositoryFullName,
+            comment.issueNumber,
+            comment.body,
+          );
       await markCommentSent(env, comment.key, comment.claimId, result);
     } catch (error) {
       firstError ??= error;
@@ -471,11 +496,84 @@ async function flushGitHubComments(env: ControlPlaneEnv): Promise<void> {
   if (firstError) throw firstError;
 }
 
+async function flushGitHubReviewChecks(env: ControlPlaneEnv): Promise<void> {
+  if (env.GITHUB_REVIEW_CHECKS_ENABLED !== "true") return;
+  const checks = await claimPendingReviewChecks(env);
+  if (checks.length === 0) return;
+  let github: ReturnType<typeof githubGateway>;
+  try {
+    github = githubGateway(env);
+  } catch (error) {
+    await Promise.all(
+      checks.map((check) =>
+        releaseReviewCheckClaim(
+          env,
+          check.repositoryFullName,
+          check.reviewId,
+          check.revision,
+          check.claimId,
+        ),
+      ),
+    );
+    throw error;
+  }
+  let firstError: unknown;
+  for (const check of checks) {
+    try {
+      const result = await github.upsertReviewCheck({
+        repositoryFullName: check.repositoryFullName,
+        reviewId: check.reviewId,
+        headSha: check.headSha,
+        status: check.status,
+        conclusion: check.conclusion,
+        title: check.title,
+        summary: check.summary,
+        detailsUrl: check.detailsUrl,
+        existingCheckRunId: check.checkRunId,
+      });
+      await markReviewCheckSent(
+        env,
+        check.repositoryFullName,
+        check.reviewId,
+        check.revision,
+        check.claimId,
+        result,
+      );
+    } catch (error) {
+      firstError ??= error;
+      await releaseReviewCheckClaim(
+        env,
+        check.repositoryFullName,
+        check.reviewId,
+        check.revision,
+        check.claimId,
+      );
+    }
+  }
+  if (firstError) throw firstError;
+}
+
+async function flushGitHubOutputs(env: ControlPlaneEnv): Promise<void> {
+  let firstError: unknown;
+  await flushGitHubComments(env).catch((error) => {
+    firstError = error;
+  });
+  await flushGitHubReviewChecks(env).catch((error) => {
+    firstError ??= error;
+  });
+  if (firstError) throw firstError;
+}
+
 async function runComment(
   run: Awaited<ReturnType<D1JobStore["read"]>>,
 ): Promise<string> {
   const lines = [
     `Roundhouse run \`${run.runId}\` is **${run.state}** at revision \`${run.revision}\`.`,
+    ...(run.task.source?.kind === "github_issue"
+      ? [
+          `Workflow: https://roundhouse-dev.rm-rf.rip/repositories/zorkian/roundhouse/issues/${run.task.source.issueNumber}`,
+        ]
+      : []),
     `Status: https://roundhouse-dev.rm-rf.rip/runs/${run.runId}`,
     `Base: \`${run.task.baseCommit}\``,
   ];
@@ -519,11 +617,11 @@ async function enqueueRunComment(
   runId: string,
 ): Promise<void> {
   const run = await new D1JobStore(env.DB).read(runId);
-  await enqueueComment(
+  await enqueueStatusComment(
     env,
-    `run-status:${runId}:${run.revision}`,
+    "zorkian/roundhouse",
     issueNumber,
-    await runComment(run),
+    `<!-- roundhouse-status:zorkian/roundhouse#${issueNumber} -->\n\n${await runComment(run)}`,
   );
 }
 
@@ -533,6 +631,7 @@ async function enqueueReviewComment(
 ): Promise<void> {
   const lines = [
     `Roundhouse independent review \`${review.request.reviewId}\` is **${review.status}** at revision \`${review.revision}\`.`,
+    `Workflow: https://roundhouse-dev.rm-rf.rip/repositories/zorkian/roundhouse/issues/${review.request.issueNumber}`,
     `Status: https://roundhouse-dev.rm-rf.rip/reviews/${review.request.reviewId}`,
     `Exact pull-request head: \`${review.request.headCommit}\``,
   ];
@@ -549,12 +648,55 @@ async function enqueueReviewComment(
     lines.push(
       `Review failed after ${review.attemptCount} bounded attempt(s): \`${review.failureClassification ?? "review_failed"}\`.`,
     );
-  await enqueueComment(
+  const body = lines.join("\n\n");
+  await enqueueStatusComment(
     env,
-    `review-status:${review.request.reviewId}:${review.revision}:${review.status}`,
+    "zorkian/roundhouse",
     review.request.issueNumber,
-    lines.join("\n\n"),
+    `<!-- roundhouse-status:zorkian/roundhouse#${review.request.issueNumber} -->\n\n${body}`,
   );
+  await enqueueStatusComment(
+    env,
+    "zorkian/roundhouse",
+    review.request.pullRequestNumber,
+    `<!-- roundhouse-status:zorkian/roundhouse#${review.request.pullRequestNumber} -->\n\n${body}\n\nSource issue: ${review.request.issueUrl}`,
+  );
+  if (env.GITHUB_REVIEW_CHECKS_ENABLED !== "true") return;
+  const findings = review.execution?.result.findings.length ?? 0;
+  const running = review.status === "pending" || review.status === "running";
+  const failed = review.status === "failed";
+  await enqueueReviewCheck(env, {
+    repositoryFullName: "zorkian/roundhouse",
+    reviewId: review.request.reviewId,
+    pullRequestNumber: review.request.pullRequestNumber,
+    headSha: review.request.headCommit,
+    revision: review.revision,
+    status: running ? "in_progress" : "completed",
+    conclusion: running
+      ? null
+      : failed
+        ? "failure"
+        : findings > 0
+          ? review.status === "remediated"
+            ? "neutral"
+            : "action_required"
+          : "success",
+    title: running
+      ? "Independent review in progress"
+      : failed
+        ? "Independent review failed"
+        : findings === 0
+          ? "Independent review passed"
+          : `Independent review found ${findings} substantive ${findings === 1 ? "finding" : "findings"}`,
+    summary: [
+      `Review: ${review.request.reviewId}`,
+      `Exact head: ${review.request.headCommit}`,
+      `Status: ${review.status}`,
+      `Findings: ${findings}`,
+      `Cycle: ${review.request.cycle} of 2`,
+    ].join("\n"),
+    detailsUrl: `https://roundhouse-dev.rm-rf.rip/reviews/${review.request.reviewId}`,
+  });
 }
 
 function reviewBackend(env: ControlPlaneEnv) {
@@ -761,7 +903,7 @@ async function consumeReviewMessage(
         (await readIndependentReview(env, parsed.data.reviewId)) ?? completed;
     }
     await enqueueReviewComment(env, completed);
-    await flushGitHubComments(env).catch((error) =>
+    await flushGitHubOutputs(env).catch((error) =>
       console.warn("Independent review GitHub status delivery deferred", {
         reviewId: parsed.data.reviewId,
         reason: redactedReason(error),
@@ -785,6 +927,12 @@ async function consumeReviewMessage(
       new Date(),
     );
     await enqueueReviewComment(env, failed);
+    await flushGitHubOutputs(env).catch((deliveryError) =>
+      console.warn("Independent review failure status delivery deferred", {
+        reviewId: parsed.data.reviewId,
+        reason: redactedReason(deliveryError),
+      }),
+    );
     if (failed.status === "pending") message.retry();
     else message.ack();
   }
@@ -793,19 +941,29 @@ async function consumeReviewMessage(
 
 async function runForIssueCommand(
   env: ControlPlaneEnv,
+  repositoryFullName: string,
   issueNumber: number,
   requested?: string,
 ): Promise<string> {
   const bound = await issueRun(env, issueNumber);
   if (!bound) throw new HttpError(409, "Issue does not have a Roundhouse run");
-  if (requested && requested !== bound)
-    throw new HttpError(409, "Command run does not match this issue");
-  return bound;
+  if (!requested || requested === bound) return bound;
+  if (
+    await isIssueRemediationRun(env, {
+      repositoryFullName,
+      issueNumber,
+      sourceRunId: bound,
+      remediationRunId: requested,
+    })
+  )
+    return requested;
+  throw new HttpError(409, "Command run does not match this issue");
 }
 
 async function executeGitHubCommand(
   env: ControlPlaneEnv,
   deliveryId: string,
+  repositoryFullName: string,
   issueNumber: number,
   actor: string,
   command: GitHubCommand,
@@ -871,7 +1029,12 @@ async function executeGitHubCommand(
           revision: plan.revision,
         };
   } else {
-    runId = await runForIssueCommand(env, issueNumber, command.runId);
+    runId = await runForIssueCommand(
+      env,
+      repositoryFullName,
+      issueNumber,
+      command.runId,
+    );
     const jobs = new D1JobStore(env.DB);
     if (command.kind === "cancel")
       await cancelRun(runId, command.revision, env);
@@ -986,7 +1149,7 @@ async function githubWebhook(
         },
       );
       try {
-        await flushGitHubComments(env);
+        await flushGitHubOutputs(env);
       } catch (error) {
         console.warn("GitHub check comment delivery deferred", {
           reason: redactedReason(error),
@@ -1008,6 +1171,7 @@ async function githubWebhook(
     const result = await executeGitHubCommand(
       env,
       webhook.deliveryId,
+      value.repositoryFullName,
       value.issueNumber,
       value.actor,
       value.command,
@@ -1020,7 +1184,7 @@ async function githubWebhook(
       result,
     );
     try {
-      await flushGitHubComments(env);
+      await flushGitHubOutputs(env);
     } catch (error) {
       console.warn("GitHub comment outbox delivery deferred", {
         reason: redactedReason(error),
@@ -1389,6 +1553,22 @@ async function route(
   }
   if (request.method === "GET" && url.pathname === "/v1/dashboard")
     return json(await dashboard(env));
+  const issueMatch =
+    /^\/v1\/repositories\/([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+)\/issues\/([1-9][0-9]*)$/.exec(
+      url.pathname,
+    );
+  if (request.method === "GET" && issueMatch) {
+    const repositoryFullName = `${issueMatch[1]}/${issueMatch[2]}`;
+    if (repositoryFullName !== "zorkian/roundhouse")
+      throw new HttpError(
+        404,
+        "Repository is not enrolled in this development adapter",
+      );
+    const issueNumber = Number(issueMatch[3]);
+    if (!Number.isSafeInteger(issueNumber) || issueNumber < 1)
+      throw new HttpError(400, "GitHub issue number is invalid");
+    return json(await issueInspection(env, repositoryFullName, issueNumber));
+  }
   const planMatch = /^\/v1\/plans\/([a-zA-Z0-9_-]{1,128})$/.exec(url.pathname);
   if (request.method === "GET" && planMatch?.[1]) {
     const value = await planInspection(env, planMatch[1]);
@@ -1813,7 +1993,7 @@ export function createControlPlaneHandler(
                 run.runId,
               );
               try {
-                await flushGitHubComments(env);
+                await flushGitHubOutputs(env);
               } catch (error) {
                 console.warn("GitHub Queue status delivery deferred", {
                   runId: run.runId,
@@ -1842,7 +2022,7 @@ export function createControlPlaneHandler(
         throw error;
       }
       try {
-        await flushGitHubComments(env);
+        await flushGitHubOutputs(env);
       } catch (error) {
         console.warn("Scheduled GitHub comment delivery deferred", {
           reason: redactedReason(error),

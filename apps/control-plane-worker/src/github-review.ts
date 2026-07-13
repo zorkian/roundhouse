@@ -195,6 +195,30 @@ export async function readReviewByRemediationRun(
   return value ? record(value) : null;
 }
 
+export async function isIssueRemediationRun(
+  env: ControlPlaneEnv,
+  input: {
+    repositoryFullName: string;
+    issueNumber: number;
+    sourceRunId: string;
+    remediationRunId: string;
+  },
+): Promise<boolean> {
+  if (!/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(input.repositoryFullName))
+    return false;
+  const row = await env.DB.prepare(
+    "SELECT review_id FROM independent_reviews WHERE run_id = ? AND json_extract(payload, '$.remediationRunId') = ? AND json_extract(payload, '$.request.repositoryUrl') = ? AND json_extract(payload, '$.request.issueNumber') = ? LIMIT 1",
+  )
+    .bind(
+      input.sourceRunId,
+      input.remediationRunId,
+      `https://github.com/${input.repositoryFullName}.git`,
+      input.issueNumber,
+    )
+    .first<{ review_id: string }>();
+  return row !== null;
+}
+
 export async function listIndependentReviews(
   env: ControlPlaneEnv,
   limit = 50,
@@ -205,6 +229,26 @@ export async function listIndependentReviews(
     .bind(Math.max(1, Math.min(limit, 100)))
     .all<ReviewRow>();
   return rows.results.map(record);
+}
+
+export async function listIssueReviews(
+  env: ControlPlaneEnv,
+  repositoryFullName: string,
+  issueNumber: number,
+  limit = 20,
+): Promise<DurableIndependentReview[]> {
+  if (!/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(repositoryFullName))
+    throw new Error("Repository identity is invalid");
+  const rows = await env.DB.prepare(
+    "SELECT review_id, request_hash, revision, status, attempt_count, lease_expires_at, dispatch_state, payload FROM independent_reviews WHERE json_extract(payload, '$.request.repositoryUrl') = ? AND json_extract(payload, '$.request.issueNumber') = ? ORDER BY updated_at DESC LIMIT ?",
+  )
+    .bind(
+      `https://github.com/${repositoryFullName}.git`,
+      issueNumber,
+      Math.max(1, Math.min(limit, 100)),
+    )
+    .all<ReviewRow>();
+  return rows.results.reverse().map(record);
 }
 
 export async function markReviewDispatched(

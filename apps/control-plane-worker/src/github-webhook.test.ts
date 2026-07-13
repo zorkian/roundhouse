@@ -10,8 +10,10 @@ import {
   claimPendingComments,
   completeWebhookDelivery,
   enqueueComment,
+  enqueueStatusComment,
   exactPublishedCheckTargets,
   githubNativeOperatorMigration,
+  issueCommand,
   issueRun,
   parseGitHubCommand,
   reserveWebhookDelivery,
@@ -108,6 +110,30 @@ describe("GitHub-native operator webhook", () => {
         `/rh approve run_123 ${BigInt(Number.MAX_SAFE_INTEGER) + 1n} ${"a".repeat(40)} ${"b".repeat(64)} ${"c".repeat(64)}`,
       ),
     ).toBeNull();
+  });
+
+  it("carries the verified repository into issue command identity", () => {
+    expect(
+      issueCommand({
+        deliveryId: "12345678-abcd-4321-abcd-1234567890ab",
+        eventName: "issue_comment",
+        payloadSha256: "a".repeat(64),
+        payload: {
+          installation: { id: 146147681 },
+          repository: { full_name: "another/roundhouse" },
+          action: "created",
+          issue: { number: 19 },
+          comment: {
+            id: 1900,
+            body: "/rh status",
+            user: { login: "zorkian" },
+          },
+        },
+      }),
+    ).toMatchObject({
+      repositoryFullName: "another/roundhouse",
+      issueNumber: 19,
+    });
   });
 
   it("verifies the exact bytes with HMAC-SHA-256", async () => {
@@ -228,6 +254,9 @@ describe("GitHub-native operator webhook", () => {
     await expect(bindIssueRun(env, 19, "run_other")).rejects.toMatchObject({
       code: "issue_already_bound",
     });
+    await expect(
+      enqueueComment(env, "invalid", 0, "status"),
+    ).rejects.toMatchObject({ code: "invalid_issue_identity" });
     await enqueueComment(env, "run_19:1", 19, "status");
     await enqueueComment(env, "run_19:1", 19, "status");
     await expect(
@@ -243,6 +272,72 @@ describe("GitHub-native operator webhook", () => {
       issueNumber: 19,
       body: "status",
     });
+  });
+
+  it("updates one repository-qualified issue status projection", async () => {
+    const env = await runtime();
+    const marker = "<!-- roundhouse-status:zorkian/roundhouse#19 -->";
+    await enqueueStatusComment(
+      env,
+      "zorkian/roundhouse",
+      19,
+      `${marker}\nFirst state`,
+    );
+    await enqueueStatusComment(
+      env,
+      "zorkian/roundhouse",
+      19,
+      `${marker}\nSecond state`,
+    );
+    await enqueueStatusComment(
+      env,
+      "another/roundhouse",
+      19,
+      "<!-- roundhouse-status:another/roundhouse#19 -->\nIndependent state",
+    );
+    const claims = await claimPendingComments(env);
+    expect(claims).toHaveLength(2);
+    expect(claims).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          repositoryFullName: "zorkian/roundhouse",
+          issueNumber: 19,
+          body: `${marker}\nSecond state`,
+        }),
+        expect.objectContaining({
+          repositoryFullName: "another/roundhouse",
+          issueNumber: 19,
+          body: expect.stringContaining("Independent state"),
+        }),
+      ]),
+    );
+  });
+
+  it("rejects malformed status projections before persistence", async () => {
+    const env = await runtime();
+    await expect(
+      enqueueStatusComment(
+        env,
+        "zorkian/roundhouse",
+        0,
+        "<!-- roundhouse-status:zorkian/roundhouse#0 -->",
+      ),
+    ).rejects.toMatchObject({ code: "invalid_issue_identity" });
+    await expect(
+      enqueueStatusComment(env, "zorkian/roundhouse", 19, "missing marker"),
+    ).rejects.toMatchObject({ code: "invalid_status_marker" });
+    await expect(
+      enqueueStatusComment(
+        env,
+        "zorkian/roundhouse",
+        19,
+        "prefix\n<!-- roundhouse-status:zorkian/roundhouse#19 -->",
+      ),
+    ).rejects.toMatchObject({ code: "invalid_status_marker" });
+    const row = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM github_comment_outbox",
+    ).first<{ count: number }>();
+    expect(row?.count).toBe(0);
   });
 
   it("rejects a correctly signed but unsubscribed event", async () => {

@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS github_issue_runs (
 );
 CREATE TABLE IF NOT EXISTS github_comment_outbox (
   comment_key TEXT PRIMARY KEY, issue_number INTEGER NOT NULL,
+  repository_full_name TEXT NOT NULL DEFAULT 'zorkian/roundhouse',
   body TEXT NOT NULL, body_sha256 TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('pending', 'sending', 'sent')),
   github_comment_id INTEGER, github_comment_url TEXT,
@@ -335,6 +336,7 @@ async function readLimitedBody(
 }
 
 export function issueCommand(value: VerifiedWebhook): {
+  repositoryFullName: string;
   issueNumber: number;
   actor: string;
   command: GitHubCommand;
@@ -345,6 +347,7 @@ export function issueCommand(value: VerifiedWebhook): {
   const command = parseGitHubCommand(payload.comment.body);
   if (!command) return null;
   return {
+    repositoryFullName: payload.repository.full_name,
     issueNumber: payload.issue.number,
     actor: payload.comment.user.login,
     command,
@@ -478,46 +481,117 @@ export async function enqueueComment(
   key: string,
   issueNumber: number,
   body: string,
+  repositoryFullName = "zorkian/roundhouse",
 ): Promise<void> {
+  if (!/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(repositoryFullName))
+    throw new GitHubWebhookError(400, "invalid_repository_identity");
+  if (!Number.isSafeInteger(issueNumber) || issueNumber < 1)
+    throw new GitHubWebhookError(400, "invalid_issue_identity");
   const bodySha256 = await sha256(body);
   await env.DB.prepare(
-    "INSERT OR IGNORE INTO github_comment_outbox(comment_key, issue_number, body, body_sha256, status, created_at) VALUES (?, ?, ?, ?, 'pending', ?)",
+    "INSERT OR IGNORE INTO github_comment_outbox(comment_key, issue_number, repository_full_name, body, body_sha256, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)",
   )
-    .bind(key, issueNumber, body, bodySha256, new Date().toISOString())
+    .bind(
+      key,
+      issueNumber,
+      repositoryFullName,
+      body,
+      bodySha256,
+      new Date().toISOString(),
+    )
     .run();
   const row = await env.DB.prepare(
-    "SELECT issue_number, body_sha256 FROM github_comment_outbox WHERE comment_key = ?",
+    "SELECT issue_number, repository_full_name, body_sha256 FROM github_comment_outbox WHERE comment_key = ?",
   )
     .bind(key)
-    .first<{ issue_number: number; body_sha256: string }>();
+    .first<{
+      issue_number: number;
+      repository_full_name: string;
+      body_sha256: string;
+    }>();
   if (
     !row ||
     row.issue_number !== issueNumber ||
+    row.repository_full_name !== repositoryFullName ||
     row.body_sha256 !== bodySha256
   )
     throw new GitHubWebhookError(409, "comment_intent_conflict");
 }
 
+export async function enqueueStatusComment(
+  env: ControlPlaneEnv,
+  repositoryFullName: string,
+  issueNumber: number,
+  body: string,
+): Promise<void> {
+  if (!/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(repositoryFullName))
+    throw new GitHubWebhookError(400, "invalid_repository_identity");
+  if (!Number.isSafeInteger(issueNumber) || issueNumber < 1)
+    throw new GitHubWebhookError(400, "invalid_issue_identity");
+  const marker = `<!-- roundhouse-status:${repositoryFullName}#${issueNumber} -->`;
+  if (!body.startsWith(marker))
+    throw new GitHubWebhookError(400, "invalid_status_marker");
+  const key = `issue-status:${repositoryFullName}:${issueNumber}`;
+  const bodySha256 = await sha256(body);
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    "INSERT OR IGNORE INTO github_comment_outbox(comment_key, issue_number, repository_full_name, body, body_sha256, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+  )
+    .bind(key, issueNumber, repositoryFullName, body, bodySha256, now)
+    .run();
+  const row = await env.DB.prepare(
+    "SELECT issue_number, repository_full_name, body_sha256 FROM github_comment_outbox WHERE comment_key = ?",
+  )
+    .bind(key)
+    .first<{
+      issue_number: number;
+      repository_full_name: string;
+      body_sha256: string;
+    }>();
+  if (
+    !row ||
+    row.issue_number !== issueNumber ||
+    row.repository_full_name !== repositoryFullName
+  )
+    throw new GitHubWebhookError(409, "comment_intent_conflict");
+  if (row.body_sha256 === bodySha256) return;
+  await env.DB.prepare(
+    "UPDATE github_comment_outbox SET body = ?, body_sha256 = ?, status = 'pending', claim_id = NULL, claim_expires_at = NULL WHERE comment_key = ?",
+  )
+    .bind(body, bodySha256, key)
+    .run();
+}
+
 export async function claimPendingComments(env: ControlPlaneEnv): Promise<
   Array<{
     key: string;
+    repositoryFullName: string;
     issueNumber: number;
     body: string;
     claimId: string;
+    githubCommentId?: number;
   }>
 > {
   const nowValue = new Date();
   const now = nowValue.toISOString();
   const rows = await env.DB.prepare(
-    "SELECT comment_key, issue_number, body FROM github_comment_outbox WHERE status = 'pending' OR (status = 'sending' AND claim_expires_at <= ?) ORDER BY created_at ASC LIMIT 20",
+    "SELECT comment_key, repository_full_name, issue_number, body, github_comment_id FROM github_comment_outbox WHERE status = 'pending' OR (status = 'sending' AND claim_expires_at <= ?) ORDER BY created_at ASC LIMIT 20",
   )
     .bind(now)
-    .all<{ comment_key: string; issue_number: number; body: string }>();
+    .all<{
+      comment_key: string;
+      repository_full_name: string;
+      issue_number: number;
+      body: string;
+      github_comment_id: number | null;
+    }>();
   const claimed: Array<{
     key: string;
+    repositoryFullName: string;
     issueNumber: number;
     body: string;
     claimId: string;
+    githubCommentId?: number;
   }> = [];
   for (const row of rows.results) {
     const claimId = crypto.randomUUID();
@@ -530,9 +604,11 @@ export async function claimPendingComments(env: ControlPlaneEnv): Promise<
     if ((result.meta.changes ?? 0) === 1)
       claimed.push({
         key: row.comment_key,
+        repositoryFullName: row.repository_full_name,
         issueNumber: row.issue_number,
         body: row.body,
         claimId,
+        githubCommentId: row.github_comment_id ?? undefined,
       });
   }
   return claimed;

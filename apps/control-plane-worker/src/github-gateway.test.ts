@@ -102,6 +102,250 @@ describe("GitHub App gateway", () => {
     });
   });
 
+  it("posts an ordinary comment to the explicit repository and issue", async () => {
+    let requestedPath: string | undefined;
+    const fetcher: typeof fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/access_tokens"))
+        return json({
+          token: "installation-token",
+          expires_at: "2026-07-12T02:00:00Z",
+        });
+      requestedPath = url.pathname;
+      return json({
+        id: 41,
+        html_url:
+          "https://github.com/another/roundhouse/pull/9#issuecomment-41",
+      });
+    };
+    const gateway = new GitHubAppGateway(
+      { appId: "1", installationId: "2", privateKey },
+      fetcher,
+      () => new Date("2026-07-12T01:00:00Z"),
+    );
+    await expect(
+      gateway.createIssueComment("another/roundhouse", 9, "Status"),
+    ).resolves.toEqual({
+      id: 41,
+      url: "https://github.com/another/roundhouse/pull/9#issuecomment-41",
+    });
+    expect(requestedPath).toBe("/repos/another/roundhouse/issues/9/comments");
+  });
+
+  it("reconciles one repository-qualified rolling status comment", async () => {
+    const marker = "<!-- roundhouse-status:zorkian/roundhouse#7 -->";
+    const body = `${marker}\nCurrent state`;
+    let retained: { id: number; html_url: string; body: string } | undefined;
+    let creates = 0;
+    const fetcher: typeof fetch = async (input, init) => {
+      const url = new URL(String(input));
+      const method = init?.method ?? "GET";
+      if (url.pathname.endsWith("/access_tokens"))
+        return json({
+          token: "installation-token",
+          expires_at: "2026-07-12T02:00:00Z",
+        });
+      if (url.pathname.endsWith("/issues/7/comments") && method === "GET")
+        return json(retained ? [retained] : []);
+      if (url.pathname.endsWith("/issues/7/comments") && method === "POST") {
+        creates += 1;
+        retained = {
+          id: 71,
+          html_url:
+            "https://github.com/zorkian/roundhouse/pull/7#issuecomment-71",
+          body: JSON.parse(String(init?.body)).body,
+        };
+        throw new TypeError("ambiguous response");
+      }
+      if (url.pathname.endsWith("/issues/comments/71") && method === "PATCH") {
+        retained = { ...retained!, body: JSON.parse(String(init?.body)).body };
+        return json(retained);
+      }
+      return json({}, 404);
+    };
+    const gateway = new GitHubAppGateway(
+      { appId: "1", installationId: "2", privateKey },
+      fetcher,
+      () => new Date("2026-07-12T01:00:00Z"),
+    );
+    await expect(
+      gateway.upsertIssueStatusComment({
+        repositoryFullName: "zorkian/roundhouse",
+        issueNumber: 7,
+        body,
+      }),
+    ).resolves.toEqual({
+      id: 71,
+      url: "https://github.com/zorkian/roundhouse/pull/7#issuecomment-71",
+    });
+    await expect(
+      gateway.upsertIssueStatusComment({
+        repositoryFullName: "zorkian/roundhouse",
+        issueNumber: 7,
+        body: `${marker}\nNext state`,
+        existingCommentId: 71,
+      }),
+    ).resolves.toMatchObject({ id: 71 });
+    expect(creates).toBe(1);
+    expect(retained?.body).toContain("Next state");
+  });
+
+  it("rejects a rolling status comment returned for another issue", async () => {
+    const fetcher: typeof fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/access_tokens"))
+        return json({
+          token: "installation-token",
+          expires_at: "2026-07-12T02:00:00Z",
+        });
+      if (url.pathname.endsWith("/issues/comments/71"))
+        return json({
+          id: 71,
+          html_url:
+            "https://github.com/zorkian/roundhouse/issues/8#issuecomment-71",
+          body: "<!-- roundhouse-status:zorkian/roundhouse#7 -->\nCurrent state",
+        });
+      if (url.pathname.endsWith("/issues/7/comments")) return json([]);
+      return json({}, 404);
+    };
+    const gateway = new GitHubAppGateway(
+      { appId: "1", installationId: "2", privateKey },
+      fetcher,
+      () => new Date("2026-07-12T01:00:00Z"),
+    );
+    await expect(
+      gateway.upsertIssueStatusComment({
+        repositoryFullName: "zorkian/roundhouse",
+        issueNumber: 7,
+        body: "<!-- roundhouse-status:zorkian/roundhouse#7 -->\nCurrent state",
+        existingCommentId: 71,
+      }),
+    ).rejects.toMatchObject({ code: "invalid_response" });
+  });
+
+  it("rejects a rolling status response without a comment identity", async () => {
+    const fetcher: typeof fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/access_tokens"))
+        return json({
+          token: "installation-token",
+          expires_at: "2026-07-12T02:00:00Z",
+        });
+      if (url.pathname.endsWith("/issues/comments/71"))
+        return json({
+          id: 71,
+          html_url: "https://github.com/zorkian/roundhouse/issues/7",
+          body: "<!-- roundhouse-status:zorkian/roundhouse#7 -->\nCurrent state",
+        });
+      if (url.pathname.endsWith("/issues/7/comments")) return json([]);
+      return json({}, 404);
+    };
+    const gateway = new GitHubAppGateway(
+      { appId: "1", installationId: "2", privateKey },
+      fetcher,
+      () => new Date("2026-07-12T01:00:00Z"),
+    );
+    await expect(
+      gateway.upsertIssueStatusComment({
+        repositoryFullName: "zorkian/roundhouse",
+        issueNumber: 7,
+        body: "<!-- roundhouse-status:zorkian/roundhouse#7 -->\nCurrent state",
+        existingCommentId: 71,
+      }),
+    ).rejects.toMatchObject({ code: "invalid_response" });
+  });
+
+  it("reconciles one exact-head review Check by external identity", async () => {
+    const head = "b".repeat(40);
+    const reviewId = `review_${"a".repeat(40)}`;
+    let retained:
+      | {
+          id: number;
+          html_url: string;
+          external_id: string;
+          head_sha: string;
+          status: string;
+          conclusion: string | null;
+          details_url: string;
+          output: { title: string; summary: string };
+        }
+      | undefined;
+    let creates = 0;
+    const fetcher: typeof fetch = async (input, init) => {
+      const url = new URL(String(input));
+      const method = init?.method ?? "GET";
+      if (url.pathname.endsWith("/access_tokens"))
+        return json({
+          token: "installation-token",
+          expires_at: "2026-07-12T02:00:00Z",
+        });
+      if (url.pathname.endsWith(`/commits/${head}/check-runs`))
+        return json({ check_runs: retained ? [retained] : [] });
+      if (url.pathname.endsWith("/check-runs") && method === "POST") {
+        creates += 1;
+        const payload = JSON.parse(String(init?.body));
+        retained = {
+          id: 81,
+          html_url: "https://github.com/zorkian/roundhouse/runs/81",
+          external_id: payload.external_id,
+          head_sha: payload.head_sha,
+          status: payload.status,
+          conclusion: payload.conclusion ?? null,
+          details_url: payload.details_url,
+          output: payload.output,
+        };
+        throw new TypeError("ambiguous response");
+      }
+      if (url.pathname.endsWith("/check-runs/81") && method === "PATCH") {
+        const payload = JSON.parse(String(init?.body));
+        retained = {
+          ...retained!,
+          status: payload.status,
+          conclusion: payload.conclusion ?? null,
+          details_url: payload.details_url,
+          output: payload.output,
+        };
+        return json(retained);
+      }
+      return json({}, 404);
+    };
+    const gateway = new GitHubAppGateway(
+      { appId: "1", installationId: "2", privateKey },
+      fetcher,
+      () => new Date("2026-07-12T01:00:00Z"),
+    );
+    const common = {
+      repositoryFullName: "zorkian/roundhouse",
+      reviewId,
+      headSha: head,
+      title: "Independent review",
+      summary: "Review running.",
+      detailsUrl: `https://roundhouse-dev.rm-rf.rip/reviews/${reviewId}`,
+    };
+    await expect(
+      gateway.upsertReviewCheck({
+        ...common,
+        status: "in_progress",
+        conclusion: null,
+      }),
+    ).resolves.toMatchObject({ id: 81 });
+    await expect(
+      gateway.upsertReviewCheck({
+        ...common,
+        status: "completed",
+        conclusion: "success",
+        summary: "No findings.",
+        existingCheckRunId: 81,
+      }),
+    ).resolves.toMatchObject({ id: 81 });
+    expect(creates).toBe(1);
+    expect(retained).toMatchObject({
+      status: "completed",
+      conclusion: "success",
+      output: { summary: "No findings." },
+    });
+  });
+
   it("classifies a pull request returned from the issues API", async () => {
     const fetcher: typeof fetch = async (input) => {
       const url = new URL(String(input));
