@@ -64,6 +64,38 @@ describe("durable issue planning", () => {
   it("records one immutable issue plan and replays exact writes", async () => {
     const env = await runtime();
     const decision = await proposed();
+    const retained = new Map<string, string>();
+    let puts = 0;
+    env.EXECUTION_EVIDENCE = {
+      put: async (
+        key: string,
+        value: ArrayBuffer | ArrayBufferView | string,
+      ) => {
+        puts += 1;
+        if (retained.has(key)) throw new Error("precondition failed");
+        retained.set(
+          key,
+          typeof value === "string"
+            ? value
+            : new TextDecoder().decode(
+                value instanceof ArrayBuffer
+                  ? value
+                  : new Uint8Array(
+                      value.buffer,
+                      value.byteOffset,
+                      value.byteLength,
+                    ),
+              ),
+        );
+        return {} as R2Object;
+      },
+      get: async (key: string) =>
+        retained.has(key)
+          ? ({
+              text: async () => retained.get(key)!,
+            } as unknown as R2ObjectBody)
+          : null,
+    } as unknown as R2Bucket;
     const first = await recordPlanningDecision(env, decision, "github:zorkian");
     const replay = await recordPlanningDecision(
       env,
@@ -73,6 +105,7 @@ describe("durable issue planning", () => {
     expect(replay).toEqual(first);
     expect(await readIssuePlan(env, 22)).toEqual(first);
     expect(await listIssuePlans(env)).toEqual([first]);
+    expect(puts).toBe(2);
 
     const conflicting = await qualifyAndPlan(
       {

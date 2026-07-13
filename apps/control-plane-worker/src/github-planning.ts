@@ -172,7 +172,7 @@ export async function recordPlanningDecision(
         planSha256: decision.planSha256,
       },
       sha256: digest,
-    });
+    }).catch(() => null);
     if (!stored) {
       const existing = await env.EXECUTION_EVIDENCE.get(objectKey);
       if (!existing || (await existing.text()) !== JSON.stringify(decision))
