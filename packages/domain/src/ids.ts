@@ -28,6 +28,13 @@ export const idSchema = <K extends IdKind>(kind: K) =>
     .regex(ulidPattern, `Expected ${kind} ULID`)
     .transform((value) => value as Id<K>);
 
+export function isId<K extends IdKind>(
+  _kind: K,
+  value: unknown,
+): value is Id<K> {
+  return typeof value === "string" && ulidPattern.test(value);
+}
+
 export function newId<K extends IdKind>(_kind: K): Id<K> {
   return generateUlid() as Id<K>;
 }

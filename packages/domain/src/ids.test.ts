@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { idSchema, newId } from "./ids.js";
+import { idSchema, isId, newId } from "./ids.js";
 
 describe("IDs", () => {
   it("generates lexicographically ordered ULIDs", () => {
@@ -12,5 +12,13 @@ describe("IDs", () => {
 
     expect(idSchema("run").parse(first)).toBe(first);
     expect(second > first).toBe(true);
+  });
+
+  it("identifies IDs of the requested kind", () => {
+    const id = newId("run");
+
+    expect(isId("run", id)).toBe(true);
+    expect(isId("run", "not-an-id")).toBe(false);
+    expect(isId("run", 42)).toBe(false);
   });
 });
