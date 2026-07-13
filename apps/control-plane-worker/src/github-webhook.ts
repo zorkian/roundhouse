@@ -306,6 +306,10 @@ export type VerifiedWebhook = {
   payload: z.infer<typeof envelopeSchema> & Record<string, unknown>;
 };
 
+export function isUnretainedWebhookEvent(value: VerifiedWebhook): boolean {
+  return value.eventName === "push" || value.eventName === "workflow_run";
+}
+
 export async function verifyWebhookRequest(
   request: Request,
   env: ControlPlaneEnv,

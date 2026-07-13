@@ -67,6 +67,7 @@ import {
   GitHubWebhookError,
   issueCommand,
   issueRun,
+  isUnretainedWebhookEvent,
   markCommentSent,
   pullRequestFeedback,
   recordCheckObservations,
@@ -1236,6 +1237,8 @@ async function githubWebhook(
   env: ControlPlaneEnv,
 ): Promise<Response> {
   const webhook = await verifyWebhookRequest(request, env);
+  if (isUnretainedWebhookEvent(webhook))
+    return json({ schemaVersion: 1, accepted: true, ignored: true });
   const reservation = await reserveWebhookDelivery(env, webhook);
   if (reservation.kind === "replay")
     return json({ schemaVersion: 1, accepted: true, replayed: true });

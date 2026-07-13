@@ -40,7 +40,11 @@ describe("runtime identity", () => {
   it.each([
     { ROUNDHOUSE_PUBLIC_ORIGIN: "http://roundhouse.rm-rf.rip" },
     { ROUNDHOUSE_PUBLIC_ORIGIN: "https://roundhouse.rm-rf.rip/path" },
+    { ROUNDHOUSE_PUBLIC_ORIGIN: "https://roundhouse.rm-rf.rip" },
+    { ROUNDHOUSE_ENVIRONMENT: "staging" },
     { ROUNDHOUSE_REPOSITORY: "roundhouse" },
+    { ROUNDHOUSE_REPOSITORY: "another/roundhouse" },
+    { ROUNDHOUSE_WORKER_ID: "../another-worker" },
   ])("rejects unsafe identity configuration %#", (value) => {
     expect(() =>
       runtimeIdentity(env(value as Partial<ControlPlaneEnv>)),

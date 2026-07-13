@@ -3,7 +3,10 @@
 
 import type { ControlPlaneEnv } from "./environment.js";
 
-const repositoryPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const environmentOrigins = {
+  development: "https://roundhouse-dev.rm-rf.rip",
+  production: "https://roundhouse.rm-rf.rip",
+} as const;
 
 export type RuntimeIdentity = {
   environment: "development" | "production";
@@ -21,6 +24,8 @@ export function runtimeIdentity(env: ControlPlaneEnv): RuntimeIdentity {
   const repositoryFullName = env.ROUNDHOUSE_REPOSITORY ?? "zorkian/roundhouse";
   const workerId =
     env.ROUNDHOUSE_WORKER_ID ?? `roundhouse-${environment}-control-plane`;
+  if (environment !== "development" && environment !== "production")
+    throw new Error("Roundhouse environment identity is invalid");
   let parsed: URL;
   try {
     parsed = new URL(origin);
@@ -36,8 +41,12 @@ export function runtimeIdentity(env: ControlPlaneEnv): RuntimeIdentity {
     parsed.hash
   )
     throw new Error("Roundhouse public origin must be an HTTPS origin");
-  if (!repositoryPattern.test(repositoryFullName))
-    throw new Error("Roundhouse repository identity is invalid");
+  if (parsed.origin !== environmentOrigins[environment])
+    throw new Error("Roundhouse public origin does not match its environment");
+  if (repositoryFullName !== "zorkian/roundhouse")
+    throw new Error("Roundhouse repository is not enrolled");
+  if (!/^roundhouse-[a-z0-9-]{1,52}$/.test(workerId))
+    throw new Error("Roundhouse Worker identity is invalid");
   return {
     environment,
     origin: parsed.origin,

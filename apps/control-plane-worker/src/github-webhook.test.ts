@@ -15,6 +15,7 @@ import {
   githubNativeOperatorMigration,
   issueCommand,
   issueRun,
+  isUnretainedWebhookEvent,
   parseGitHubCommand,
   pullRequestFeedback,
   reserveWebhookDelivery,
@@ -170,6 +171,23 @@ describe("GitHub-native operator webhook", () => {
       headCommit,
       feedback: "Please fix the dashboard link.",
     });
+  });
+
+  it("identifies verified high-volume events that must not grow delivery storage", () => {
+    const value = (eventName: string) =>
+      isUnretainedWebhookEvent({
+        deliveryId: "12345678-abcd-4321-abcd-1234567890ab",
+        eventName,
+        payloadSha256: "b".repeat(64),
+        payload: {
+          installation: { id: 146147681 },
+          repository: { full_name: "zorkian/roundhouse" },
+        },
+      });
+    expect(value("push")).toBe(true);
+    expect(value("workflow_run")).toBe(true);
+    expect(value("issue_comment")).toBe(false);
+    expect(value("check_run")).toBe(false);
   });
 
   it("rejects stale or unbounded pull-request feedback commands", () => {
