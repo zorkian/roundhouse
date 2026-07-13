@@ -167,6 +167,7 @@ const retryState = {
   complete: "pushed",
 } as const;
 const maxStageAttempts = 3;
+const operatorRetryableClassifications = new Set(["validation_failed"]);
 
 export async function retryFailedRun(
   env: ControlPlaneEnv,
@@ -186,7 +187,10 @@ export async function retryFailedRun(
     run.revision !== expectedRevision ||
     run.state !== "failed" ||
     attempt?.status !== "failed" ||
-    !attempt.retryable
+    !(
+      attempt.retryable ||
+      operatorRetryableClassifications.has(attempt.classification ?? "")
+    )
   )
     throw new Error("Run is not eligible for retry at this revision");
   const state = retryState[attempt.stage];

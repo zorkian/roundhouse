@@ -77,6 +77,11 @@ records the returned comment identity. A transient GitHub failure does not undo
 the workflow mutation; the existing five-minute scheduled recovery flushes the
 outbox after Worker restart or redeployment.
 
+Every run status comment includes an Access-protected inspection URL keyed by
+run ID. The current target is the structured JSON inspection endpoint. A richer
+human-readable live timeline is intentionally left to the next operator-UI
+milestone without changing the durable run API.
+
 Queue consumers post status after durable stage transitions. Awaiting-approval
 status includes the exact copyable command. Completed publication status
 includes the draft PR URL. Check-run and check-suite events are stored by pull

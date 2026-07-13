@@ -166,6 +166,53 @@ describe("cloud operator persistence", () => {
     expect(env.queued).toHaveLength(2);
   });
 
+  it("allows an exact operator retry for a validation failure without making it automatic", async () => {
+    const env = await runtime();
+    const jobs = new D1JobStore(env.DB);
+    const start = new Date("2026-07-12T00:00:00Z");
+    await jobs.submit("run_validation_retry", task, start);
+    const claim = await jobs.claim(
+      "run_validation_retry",
+      "worker",
+      start,
+      1_000,
+      1,
+    );
+    await jobs.startAttempt(
+      "run_validation_retry",
+      claim!.token,
+      "prepare",
+      start,
+    );
+    const failed = await jobs.failAttempt(
+      "run_validation_retry",
+      claim!.token,
+      "prepare",
+      {
+        retryable: false,
+        classification: "validation_failed",
+        error: "implementation checks failed",
+      },
+      true,
+      start,
+    );
+
+    const retried = await retryFailedRun(
+      env,
+      "run_validation_retry",
+      failed.revision,
+      new Date(start.getTime() + 1),
+    );
+    expect(retried).toMatchObject({ state: "created" });
+    expect(retried.events.at(-1)).toMatchObject({
+      type: "operator.retry_requested",
+      detail: { failedAttemptId: failed.attempts.at(-1)?.attemptId },
+    });
+    await expect(
+      retryFailedRun(env, "run_validation_retry", failed.revision, start),
+    ).rejects.toThrow("not eligible");
+  });
+
   it("deduplicates alerts and keeps retention destructive work empty", async () => {
     const env = await runtime();
     const now = new Date("2026-07-12T00:00:00Z");

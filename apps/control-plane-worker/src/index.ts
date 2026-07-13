@@ -334,6 +334,7 @@ async function runComment(
 ): Promise<string> {
   const lines = [
     `Roundhouse run \`${run.runId}\` is **${run.state}** at revision \`${run.revision}\`.`,
+    `Status: https://roundhouse-dev.rm-rf.rip/v1/runs/${run.runId}`,
     `Base: \`${run.task.baseCommit}\``,
   ];
   const attempt = run.attempts.at(-1);
