@@ -5,6 +5,7 @@ export * from "./cloudflare-job-store.js";
 export * from "./execution-dispatch.js";
 export * from "./github-integration.js";
 export * from "./job-ports.js";
+export * from "./planning.js";
 export * from "./queue-delivery.js";
 export * from "./resumable-coordinator.js";
 export * from "./task.js";
