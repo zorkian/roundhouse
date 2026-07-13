@@ -294,6 +294,20 @@ afterEach(async () => {
 });
 
 describe("local control-plane Worker", () => {
+  it("keeps the Access-bypassed namespace limited to one exact Worker route", async () => {
+    const { env } = await runtime();
+    const handler = createControlPlaneHandler();
+    const child = await handler.fetch!(
+      request("/v1/github/webhook/extra", {}, false),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(child.status).toBe(404);
+    await expect(child.json()).resolves.toEqual({
+      error: { code: "not_found", message: "Not found" },
+    });
+  });
+
   it("accepts one signed GitHub command and makes duplicate delivery harmless", async () => {
     const { env, queued } = await runtime();
     const pair = await generateKeyPair("RS256", { extractable: true });

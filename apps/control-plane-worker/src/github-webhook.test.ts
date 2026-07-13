@@ -237,6 +237,22 @@ describe("GitHub-native operator webhook", () => {
       status: 400,
       code: "unsupported_event",
     });
+
+    const ping = new Request(
+      "https://roundhouse-dev.rm-rf.rip/v1/github/webhook",
+      {
+        method: "POST",
+        headers: {
+          "x-github-delivery": "87654321-abcd-4321-abcd-1234567890ab",
+          "x-github-event": "ping",
+          "x-hub-signature-256": await signature(body, "webhook-test-secret"),
+        },
+        body,
+      },
+    );
+    await expect(verifyWebhookRequest(ping, env)).resolves.toMatchObject({
+      eventName: "ping",
+    });
   });
 
   it("stops reading a webhook after the bounded body limit", async () => {

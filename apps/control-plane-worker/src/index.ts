@@ -1110,6 +1110,11 @@ export function createControlPlaneHandler(
             );
           return await githubWebhook(request, env);
         }
+        if (url.pathname.startsWith("/v1/github/webhook/"))
+          return json(
+            { error: { code: "not_found", message: "Not found" } },
+            404,
+          );
         let actorId = "unauthenticated-health";
         if (url.pathname !== "/health") {
           const decision = await authorizer.authorize(request, env);

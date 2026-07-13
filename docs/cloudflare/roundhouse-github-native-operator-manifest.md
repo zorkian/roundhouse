@@ -51,15 +51,17 @@ Incremental Cloudflare usage is bounded to USD 10.
 
 Add one self-hosted Access application named `Roundhouse GitHub webhook` with
 destination `roundhouse-dev.rm-rf.rip/v1/github/webhook` and one policy that
-bypasses everyone. Cloudflare's most-specific-path matching applies this
-application only to that route. The existing `Roundhouse development control
-plane` Access application remains unchanged and protects every other path on
-the hostname.
+bypasses everyone. Cloudflare applies path applications to their inherited
+child-path namespace. The Worker therefore exposes only the exact endpoint and
+returns a content-free `404` for every child path before authentication or
+routing. The existing `Roundhouse development control plane` Access application
+remains unchanged and protects every path outside that namespace.
 
-The bypassed route accepts only `POST`; all other methods fail. The Worker
+The exact endpoint accepts only `POST`; all other methods fail. The Worker
 verifies the GitHub HMAC-SHA-256 signature over the exact request bytes before
 parsing, then verifies event, delivery, installation, repository, and actor
-policy. No second hostname, DNS record, or broader public route is created.
+policy. No second hostname, DNS record, child-path Access application, or
+broader functional route is created.
 
 ## Data and rollback
 

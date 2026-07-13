@@ -201,6 +201,7 @@ export async function verifyWebhookRequest(
       "pull_request",
       "check_run",
       "check_suite",
+      "ping",
     ].includes(eventName)
   )
     throw new GitHubWebhookError(400, "unsupported_event");

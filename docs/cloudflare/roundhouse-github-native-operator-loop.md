@@ -13,8 +13,9 @@ creates a draft pull request through its GitHub App.
 
 GitHub sends webhooks to
 `https://roundhouse-dev.rm-rf.rip/v1/github/webhook`. Cloudflare Access bypasses
-only that exact path because GitHub cannot complete an interactive Access login.
-The Worker accepts only `POST` there and authenticates GitHub independently:
+that path namespace because GitHub cannot complete an interactive Access login.
+The Worker exposes only the exact endpoint, returns `404` for child paths, and
+accepts only `POST` there before authenticating GitHub independently:
 
 1. Read at most 1 MiB of exact request bytes.
 2. Verify `X-Hub-Signature-256` with HMAC-SHA-256 before JSON parsing.
@@ -23,6 +24,11 @@ The Worker accepts only `POST` there and authenticates GitHub independently:
    sender before effects.
 5. Grant operator authority only to the configured development maintainer
    (`zorkian`). Other issue prose remains untrusted input.
+
+The five configured GitHub subscriptions are `issues`, `issue_comment`,
+`pull_request`, `check_run`, and `check_suite`. GitHub's implicit signed `ping`
+event is also accepted for webhook health verification and has no workflow
+effect.
 
 Every other path on the hostname remains behind Access. The GitHub App private
 key and webhook secret remain Worker secrets. Neither enters the execution
