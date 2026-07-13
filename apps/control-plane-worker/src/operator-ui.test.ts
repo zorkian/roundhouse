@@ -126,6 +126,44 @@ describe("operator UI", () => {
     );
   });
 
+  it("keeps the source pull request linked while remediation is unpublished", async () => {
+    const response = operatorPage(
+      "/repositories/zorkian/roundhouse/issues/24",
+    )!;
+    const script = /<script[^>]*>([\s\S]+)<\/script>/.exec(
+      await response.text(),
+    )![1];
+    const app = { innerHTML: "Loading…" };
+    vi.stubGlobal("document", {
+      getElementById: (id: string) => (id === "app" ? app : null),
+    });
+    vi.stubGlobal("setInterval", () => 0);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          schemaVersion: 1,
+          repositoryFullName: "zorkian/roundhouse",
+          issueNumber: 24,
+          plan: null,
+          sourceRun: {
+            runId: "run_source",
+            publication: {
+              pullRequestUrl: "https://github.com/zorkian/roundhouse/pull/27",
+            },
+          },
+          activeRun: { runId: "run_remediation" },
+          reviews: [],
+        }),
+      ),
+    );
+    new Function(script!)();
+    await vi.waitFor(() => expect(app.innerHTML).toContain("run_remediation"));
+    expect(app.innerHTML).toContain(
+      "https://github.com/zorkian/roundhouse/pull/27",
+    );
+  });
+
   it("renders linked independent-review evidence and findings", async () => {
     const reviewId = `review_${"a".repeat(40)}`;
     const response = operatorPage(`/reviews/${reviewId}`)!;
