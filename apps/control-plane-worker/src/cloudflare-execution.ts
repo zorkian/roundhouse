@@ -4,6 +4,8 @@
 import {
   repositoryExecutionRequestSchema,
   repositoryExecutionResultSchema,
+  type IndependentReviewRequest,
+  type IndependentReviewResult,
   trustedImplementationResultSchema,
   type ExecutionDispatcher,
   type ExecutionDispatchRequest,
@@ -23,6 +25,10 @@ export type ExecutionContainerPort = {
     request: TrustedImplementationRequest,
     codexAuthJson: string,
   ): Promise<unknown>;
+  runReviewJob?(
+    request: IndependentReviewRequest,
+    claudeAuthJson: string,
+  ): Promise<IndependentReviewResult>;
   destroy(): Promise<void>;
 };
 

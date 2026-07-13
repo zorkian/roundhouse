@@ -103,6 +103,7 @@ export const independentReviewResultSchema = z.object({
   patchSha256: sha256Schema,
   startedAt: z.iso.datetime(),
   completedAt: z.iso.datetime(),
+  startupDurationMs: z.number().int().nonnegative().default(0),
   provider: z.literal("claude-subscription"),
   model: z.string().min(1).max(200),
   summary: z.string().max(20_000),
@@ -140,6 +141,21 @@ export type IndependentReviewResult = z.infer<
   typeof independentReviewResultSchema
 >;
 
+export const retainedReviewEvidenceSchema = reviewEvidenceBindingSchema.extend({
+  attemptId: boundedIdentitySchema,
+  mediaType: z.literal("application/json"),
+  createdAt: z.iso.datetime(),
+});
+
+export const independentReviewExecutionSchema = z.object({
+  result: independentReviewResultSchema,
+  evidence: retainedReviewEvidenceSchema,
+});
+
+export type IndependentReviewExecution = z.infer<
+  typeof independentReviewExecutionSchema
+>;
+
 export const reviewFindingDispositionSchema = z.object({
   schemaVersion: z.literal(1),
   reviewId: z.string().regex(/^review_[a-f0-9]{40}$/),
@@ -169,8 +185,65 @@ export const remediationBindingSchema = z.object({
 
 export type RemediationBinding = z.infer<typeof remediationBindingSchema>;
 
+export const independentReviewStatusSchema = z.enum([
+  "pending",
+  "running",
+  "completed",
+  "failed",
+  "remediation_pending",
+  "remediated",
+]);
+
+export const independentReviewEventSchema = z.object({
+  sequence: z.number().int().positive(),
+  type: z.string().min(1).max(100),
+  occurredAt: z.iso.datetime(),
+  detail: z.record(z.string(), z.unknown()).default({}),
+});
+
+export const durableIndependentReviewSchema = z.object({
+  schemaVersion: z.literal(1),
+  revision: z.number().int().positive(),
+  status: independentReviewStatusSchema,
+  request: independentReviewRequestSchema,
+  attemptCount: z.number().int().nonnegative().max(3),
+  activeAttemptId: boundedIdentitySchema.optional(),
+  lease: z
+    .object({
+      token: boundedIdentitySchema,
+      workerId: boundedIdentitySchema,
+      acquiredAt: z.iso.datetime(),
+      expiresAt: z.iso.datetime(),
+    })
+    .optional(),
+  execution: independentReviewExecutionSchema.optional(),
+  dispositions: z.array(reviewFindingDispositionSchema).max(50).default([]),
+  remediationRunId: boundedIdentitySchema.optional(),
+  retryable: z.boolean().optional(),
+  failureClassification: z.string().min(1).max(100).optional(),
+  failureReason: z.string().min(1).max(500).optional(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+  events: z.array(independentReviewEventSchema).min(1),
+});
+
+export type DurableIndependentReview = z.infer<
+  typeof durableIndependentReviewSchema
+>;
+
+export const reviewDeliverySchema = z.object({
+  schemaVersion: z.literal(1),
+  kind: z.literal("independent_review"),
+  reviewId: z.string().regex(/^review_[a-f0-9]{40}$/),
+  deliveryId: boundedIdentitySchema,
+});
+
+export type ReviewDelivery = z.infer<typeof reviewDeliverySchema>;
+
 export interface IndependentReviewBackend {
-  execute(request: IndependentReviewRequest): Promise<IndependentReviewResult>;
+  execute(
+    request: IndependentReviewRequest,
+  ): Promise<IndependentReviewExecution>;
 }
 
 const encoder = new TextEncoder();
