@@ -41,6 +41,18 @@ The custom-domain operation may create the normal Cloudflare-managed DNS
 record for `roundhouse.rm-rf.rip`. No other hostname, DNS record, route,
 certificate, Access application, or policy may be changed.
 
+Provisioned on 2026-07-13 from this approved manifest:
+
+- D1 `roundhouse-prod-coordination` (`4dad8f65-56ed-4925-8333-7b0c0c59cd66`);
+- Queue `roundhouse-prod-runs` (`602a122c996d4cea879e29933faed1f6`);
+- dead-letter Queue `roundhouse-prod-runs-dlq`
+  (`dc8f4e5dce7a4c3f90ad03b28c448a62`);
+- R2 bucket `roundhouse-prod-evidence`.
+
+The Worker, Container application, custom hostname, managed DNS record, and
+Access applications remain unapplied until their deployable configuration and
+access policies pass review.
+
 ## Production runtime configuration
 
 - `ROUNDHOUSE_ENVIRONMENT=production`;

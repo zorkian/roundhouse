@@ -1,0 +1,134 @@
+name: Release development
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: roundhouse-development-release
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy immutable release to development
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: roundhouse-development
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+
+    steps:
+      - name: Check out exact merged source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.4.1
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.13.1 --activate
+
+      - name: Install and verify
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm check
+          pnpm build
+
+      - name: Build and push one commit-tagged Container image
+        id: image
+        run: |
+          set -euo pipefail
+          tag="roundhouse-release:${GITHUB_SHA}"
+          docker build --platform linux/amd64 --tag "$tag" --file containers/roundhouse-execution/Dockerfile .
+          push_output="$(pnpm exec wrangler containers push "$tag" 2>&1 | tee /dev/stderr)"
+          digest="$(printf '%s\n' "$push_output" | sed -nE 's/.*(sha256:[a-f0-9]{64}).*/\1/p' | tail -1)"
+          test -n "$digest"
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          printf 'reference=registry.cloudflare.com/%s/roundhouse-release:%s@%s\n' "$CLOUDFLARE_ACCOUNT_ID" "$GITHUB_SHA" "$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Render exact development configuration
+        run: |
+          mkdir -p .roundhouse/release
+          node scripts/release/render-wrangler-config.mjs \
+            development \
+            "${{ vars.CLOUDFLARE_D1_DATABASE_ID }}" \
+            "${{ vars.CLOUDFLARE_ACCESS_AUD }}" \
+            "${{ steps.image.outputs.reference }}" \
+            .roundhouse/release/wrangler.development.json
+
+      - name: Bundle once and record release manifest
+        run: |
+          pnpm exec wrangler deploy \
+            --dry-run \
+            --containers-rollout none \
+            --config .roundhouse/release/wrangler.development.json \
+            --outfile .roundhouse/release/worker.mjs
+          node scripts/release/roundhouse-release.mjs manifest \
+            .roundhouse/release/worker.mjs \
+            "${{ steps.image.outputs.digest }}" \
+            .roundhouse/release/manifest.json
+
+      - name: Apply exact additive development migrations
+        run: |
+          pnpm exec wrangler d1 migrations apply DB \
+            --remote \
+            --config .roundhouse/release/wrangler.development.json
+
+      - name: Deploy the exact Worker bundle and bindings
+        id: worker
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler deploy .roundhouse/release/worker.mjs \
+            --no-bundle \
+            --config .roundhouse/release/wrangler.development.json \
+            --tag "release-${GITHUB_SHA}" \
+            --message "Roundhouse development ${GITHUB_SHA}" \
+            --containers-rollout immediate
+          pnpm exec wrangler versions list \
+            --name roundhouse-dev-control-plane \
+            --json > .roundhouse/release/development-versions.json
+          version_id="$(jq -r 'last.id' .roundhouse/release/development-versions.json)"
+          test "$version_id" != null
+          printf 'version_id=%s\n' "$version_id" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke-test development
+        run: |
+          set -euo pipefail
+          health="$(curl --fail --silent --show-error --retry 8 --retry-all-errors --retry-delay 3 https://roundhouse-dev.rm-rf.rip/health)"
+          jq -n \
+            --arg origin https://roundhouse-dev.rm-rf.rip \
+            --arg response "$health" \
+            --arg checked_at "$(date --utc +%Y-%m-%dT%H:%M:%S.000Z)" \
+            '{schemaVersion:1,origin:$origin,healthResponse:$response,checkedAt:$checked_at}' \
+            > .roundhouse/release/development-smoke.json
+          node scripts/release/roundhouse-release.mjs evidence \
+            development \
+            .roundhouse/release/manifest.json \
+            roundhouse-dev-control-plane \
+            "${{ steps.worker.outputs.version_id }}" \
+            roundhouse-dev-execution \
+            .roundhouse/release/development-smoke.json \
+            "github:${GITHUB_ACTOR}" \
+            .roundhouse/release/development-evidence.json
+
+      - name: Retain immutable development release evidence
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: roundhouse-development-${{ github.sha }}
+          path: |
+            .roundhouse/release/manifest.json
+            .roundhouse/release/worker.mjs
+            .roundhouse/release/development-smoke.json
+            .roundhouse/release/development-evidence.json
+          if-no-files-found: error
+          retention-days: 90

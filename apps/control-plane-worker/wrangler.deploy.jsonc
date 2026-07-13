@@ -24,6 +24,7 @@
     "INDEPENDENT_REVIEW_SCENARIO": "success",
     "GITHUB_APP_ID": "4281837",
     "GITHUB_INSTALLATION_ID": "146147681",
+    "GITHUB_REVIEW_CHECKS_ENABLED": "true",
     "ALLOWED_REPOSITORY_PATH": "/workspace/roundhouse",
     "ALLOWED_REMOTE_URL": "https://github.com/zorkian/roundhouse.git",
   },

@@ -1,0 +1,152 @@
+name: Promote production
+
+on:
+  workflow_dispatch:
+    inputs:
+      development_run_id:
+        description: Successful Release development workflow run ID
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: roundhouse-production-promotion
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Promote accepted development bytes to production
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: roundhouse-production
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+
+    steps:
+      - name: Download exact development evidence
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          run-id: ${{ inputs.development_run_id }}
+          github-token: ${{ github.token }}
+          path: .roundhouse/release
+          merge-multiple: true
+
+      - name: Read accepted source identity
+        id: release
+        run: |
+          set -euo pipefail
+          source_commit="$(jq -r .sourceCommit .roundhouse/release/manifest.json)"
+          digest="$(jq -r .container.digest .roundhouse/release/manifest.json)"
+          test "${#source_commit}" -eq 40
+          printf 'source_commit=%s\n' "$source_commit" >> "$GITHUB_OUTPUT"
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Check out exact accepted source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ steps.release.outputs.source_commit }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.4.1
+
+      - name: Enable pnpm and build release verifier
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.13.1 --activate
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Restore downloaded immutable artifacts after checkout
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          run-id: ${{ inputs.development_run_id }}
+          github-token: ${{ github.token }}
+          path: .roundhouse/release
+          merge-multiple: true
+
+      - name: Record exact human promotion approval
+        run: |
+          node scripts/release/roundhouse-release.mjs approval \
+            .roundhouse/release/manifest.json \
+            .roundhouse/release/development-evidence.json \
+            "github:${GITHUB_ACTOR}" \
+            .roundhouse/release/promotion-approval.json
+          node scripts/release/roundhouse-release.mjs verify-promotion \
+            .roundhouse/release/manifest.json \
+            .roundhouse/release/development-evidence.json \
+            .roundhouse/release/promotion-approval.json
+
+      - name: Render exact production configuration
+        run: |
+          node scripts/release/render-wrangler-config.mjs \
+            production \
+            "${{ vars.CLOUDFLARE_D1_DATABASE_ID }}" \
+            "${{ vars.CLOUDFLARE_ACCESS_AUD }}" \
+            "registry.cloudflare.com/${CLOUDFLARE_ACCOUNT_ID}/roundhouse-release:${{ steps.release.outputs.source_commit }}@${{ steps.release.outputs.digest }}" \
+            .roundhouse/release/wrangler.production.json
+          test "$(sha256sum .roundhouse/release/worker.mjs | cut -d' ' -f1)" = \
+            "$(jq -r .worker.bundleSha256 .roundhouse/release/manifest.json)"
+
+      - name: Apply the exact additive production migrations
+        run: |
+          pnpm exec wrangler d1 migrations apply DB \
+            --remote \
+            --config .roundhouse/release/wrangler.production.json
+
+      - name: Deploy the accepted Worker bundle and production bindings
+        id: worker
+        run: |
+          set -euo pipefail
+          source_commit="${{ steps.release.outputs.source_commit }}"
+          pnpm exec wrangler deploy .roundhouse/release/worker.mjs \
+            --no-bundle \
+            --config .roundhouse/release/wrangler.production.json \
+            --tag "release-${source_commit}" \
+            --message "Roundhouse production ${source_commit}" \
+            --containers-rollout immediate
+          pnpm exec wrangler versions list \
+            --name roundhouse-prod-control-plane \
+            --json > .roundhouse/release/production-versions.json
+          version_id="$(jq -r 'last.id' .roundhouse/release/production-versions.json)"
+          test "$version_id" != null
+          printf 'version_id=%s\n' "$version_id" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke-test production and record evidence
+        run: |
+          set -euo pipefail
+          health="$(curl --fail --silent --show-error --retry 8 --retry-all-errors --retry-delay 3 https://roundhouse.rm-rf.rip/health)"
+          jq -n \
+            --arg origin https://roundhouse.rm-rf.rip \
+            --arg response "$health" \
+            --arg checked_at "$(date --utc +%Y-%m-%dT%H:%M:%S.000Z)" \
+            '{schemaVersion:1,origin:$origin,healthResponse:$response,checkedAt:$checked_at}' \
+            > .roundhouse/release/production-smoke.json
+          node scripts/release/roundhouse-release.mjs evidence \
+            production \
+            .roundhouse/release/manifest.json \
+            roundhouse-prod-control-plane \
+            "${{ steps.worker.outputs.version_id }}" \
+            roundhouse-prod-execution \
+            .roundhouse/release/production-smoke.json \
+            "github:${GITHUB_ACTOR}" \
+            .roundhouse/release/production-evidence.json
+
+      - name: Retain production promotion evidence
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: roundhouse-production-${{ steps.release.outputs.source_commit }}
+          path: |
+            .roundhouse/release/manifest.json
+            .roundhouse/release/development-evidence.json
+            .roundhouse/release/promotion-approval.json
+            .roundhouse/release/production-smoke.json
+            .roundhouse/release/production-evidence.json
+          if-no-files-found: error
+          retention-days: 90

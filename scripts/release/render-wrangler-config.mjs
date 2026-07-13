@@ -22,7 +22,14 @@ if (
   )
 )
   fail("Container image reference must bind an exact commit and digest");
-if (!output) fail("Output path is required");
+if (
+  !/^\.roundhouse\/release\/wrangler\.(development|production)\.json$/.test(
+    output ?? "",
+  )
+)
+  fail("Output must be the matching generated release configuration path");
+if (output !== `.roundhouse/release/wrangler.${environment}.json`)
+  fail("Output environment does not match configuration environment");
 
 const production = environment === "production";
 const prefix = production ? "roundhouse-prod" : "roundhouse-dev";
@@ -33,7 +40,7 @@ const origin = production
 const config = {
   $schema: "../../node_modules/wrangler/config-schema.json",
   name: `${prefix}-control-plane`,
-  main: "src/deploy.ts",
+  main: "../../apps/control-plane-worker/src/deploy.ts",
   compatibility_date: "2026-07-11",
   workers_dev: false,
   preview_urls: false,
@@ -66,7 +73,7 @@ const config = {
       binding: "DB",
       database_name: `${prefix}-coordination`,
       database_id: databaseId,
-      migrations_dir: "migrations",
+      migrations_dir: "../../apps/control-plane-worker/migrations",
     },
   ],
   r2_buckets: [
