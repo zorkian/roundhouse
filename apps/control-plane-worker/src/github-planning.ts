@@ -164,6 +164,7 @@ export async function recordPlanningDecision(
   const objectKey = `plans/${decision.planId}/plan.json`;
   if (env.EXECUTION_EVIDENCE) {
     const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+    let writeError: unknown;
     const stored = await env.EXECUTION_EVIDENCE.put(objectKey, bytes, {
       onlyIf: { etagDoesNotMatch: "*" },
       httpMetadata: { contentType: "application/json" },
@@ -172,11 +173,19 @@ export async function recordPlanningDecision(
         planSha256: decision.planSha256,
       },
       sha256: digest,
-    }).catch(() => null);
+    }).catch((error: unknown) => {
+      writeError = error;
+      return null;
+    });
     if (!stored) {
       const existing = await env.EXECUTION_EVIDENCE.get(objectKey);
-      if (!existing || (await existing.text()) !== JSON.stringify(decision))
+      if (existing && (await existing.text()) === JSON.stringify(decision)) {
+        // An exact concurrent immutable write is a successful replay.
+      } else if (writeError && !existing) {
+        throw writeError;
+      } else {
         throw new Error("Immutable plan evidence conflict");
+      }
     }
   }
   await env.DB.prepare(

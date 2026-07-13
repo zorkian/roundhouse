@@ -123,6 +123,22 @@ describe("durable issue planning", () => {
     ).rejects.toThrow("different immutable plan");
   });
 
+  it("preserves an evidence upload failure when no replay exists", async () => {
+    const env = await runtime();
+    const uploadFailure = new Error("simulated R2 outage");
+    env.EXECUTION_EVIDENCE = {
+      put: async () => {
+        throw uploadFailure;
+      },
+      get: async () => null,
+    } as unknown as R2Bucket;
+
+    await expect(
+      recordPlanningDecision(env, await proposed(), "github:zorkian"),
+    ).rejects.toBe(uploadFailure);
+    await expect(readIssuePlan(env, 22)).resolves.toBeNull();
+  });
+
   it("binds approval and materialization to exact revisions", async () => {
     const env = await runtime();
     const decision = await proposed();

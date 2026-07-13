@@ -70,4 +70,51 @@ describe("operator UI", () => {
       expect(app.innerHTML).toContain("Public inspection subject"),
     );
   });
+
+  it("shows the offending path for a rejected plan", async () => {
+    const response = operatorPage("/plans/plan_rejected")!;
+    const script = /<script[^>]*>([\s\S]+)<\/script>/.exec(
+      await response.text(),
+    )![1];
+    const app = { innerHTML: "Loading…" };
+    vi.stubGlobal("document", {
+      getElementById: (id: string) => (id === "app" ? app : null),
+    });
+    vi.stubGlobal("setInterval", () => 0);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          schemaVersion: 1,
+          plan: {
+            status: "rejected",
+            revision: 1,
+            evidence: {
+              objectKey: "plans/plan_rejected/plan.json",
+              sha256: "a".repeat(64),
+            },
+            plan: {
+              planId: "plan_rejected",
+              issueNumber: 17,
+              status: "rejected",
+              baseCommit: "b".repeat(40),
+              planSha256: "c".repeat(64),
+              findings: [
+                {
+                  code: "protected_path",
+                  path: ".github/workflows/ci.yml",
+                  message: "Protected repository path",
+                },
+              ],
+            },
+          },
+        }),
+      ),
+    );
+
+    new Function(script!)();
+    await vi.waitFor(() =>
+      expect(app.innerHTML).toContain(".github/workflows/ci.yml"),
+    );
+  });
 });
