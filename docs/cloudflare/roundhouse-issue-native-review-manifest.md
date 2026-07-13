@@ -56,13 +56,13 @@ logged, baked into an image, stored in D1 or R2, retained as evidence, included
 in process arguments, or exposed to Claude tools. This is a development
 exception, not the accepted production credential architecture.
 
-A measured tools-disabled Claude Code `2.1.142` request requires HTTPS model
-transport to `api.anthropic.com` and subscription identity transport to
-`platform.claude.com`. Those are the only Claude hosts allowed. Optional
-telemetry and MCP destinations, including `http-intake.logs.us5.datadoghq.com`
-and `mcp-proxy.anthropic.com`, remain blocked. The reviewer receives no GitHub,
-Cloudflare, Codex, or other credential. Its tools and arbitrary network access
-remain disabled.
+A measured tools-disabled Claude Code `2.1.142` request using the dedicated
+setup token and an isolated empty home requires HTTPS transport only to
+`api.anthropic.com`. Subscription identity host `platform.claude.com` and
+optional telemetry and MCP destinations, including
+`http-intake.logs.us5.datadoghq.com` and `mcp-proxy.anthropic.com`, remain
+blocked. The reviewer receives no GitHub, Cloudflare, Codex, or other
+credential. Its tools and arbitrary network access remain disabled.
 
 ## Review and remediation boundary
 
