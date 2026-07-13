@@ -23,11 +23,14 @@ evidence links. Detailed plan, run, revision-history, review, and evidence
 pages remain available for diagnosis. Successful CI observations stay quiet;
 they do not create issue comments merely because a check was observed.
 
-Independent review is also projected as a GitHub Check named
-`Roundhouse independent review` on the exact pull-request head. The Check links
-to the authenticated review page and reports running, success, failure,
-action-required, or neutral-after-remediation state. Durable D1 outboxes make
-duplicate delivery and ambiguous GitHub responses reconcilable.
+Independent review is projected as one rolling comment on the generated pull
+request. It names the exact reviewed head, links to the authenticated review
+page, and reports running, success, failure, findings, and remediation state.
+The existing GitHub App installation has read-only Checks permission, and this
+milestone does not expand app scope. The exact-head Check adapter therefore
+remains contract-tested but disabled until a future permission review. Durable
+D1 outboxes make duplicate delivery and ambiguous GitHub responses
+reconcilable.
 
 ## Repository identity and future tenancy
 

@@ -38,10 +38,12 @@ Cloudflare and bounded model usage is capped at USD 15.
 ## GitHub pilot operations
 
 The existing GitHub App may maintain one rolling issue-status comment for each
-authorized pilot issue and one repository-qualified GitHub Check per
-independent review. Each status comment links to the Access-protected aggregate
-workflow page. Each Check is bound to the exact reviewed repository, pull
-request head, review ID, and durable revision.
+authorized pilot issue and one rolling review-status comment on each generated
+pull request. Each status comment links to the Access-protected aggregate
+workflow or exact review page and names the exact reviewed head. A
+repository-qualified GitHub Check adapter may be recorded and contract-tested,
+but it remains disabled because the installation has read-only Checks
+permission and this milestone does not expand app scope.
 
 Create at most one milestone pull request and three pilot issues with their
 generated pull requests. At least two pilots must make useful source or test

@@ -905,6 +905,7 @@ describe("local control-plane Worker", () => {
     env.GITHUB_INSTALLATION_ID = "2";
     env.ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY = await exportPKCS8(pair.privateKey);
     env.INDEPENDENT_REVIEW_ENABLED = "true";
+    env.GITHUB_REVIEW_CHECKS_ENABLED = "true";
     const tree = "c".repeat(40);
     const commit = "e".repeat(40);
     let branch: string | null = null;
@@ -923,6 +924,8 @@ describe("local control-plane Worker", () => {
       | undefined;
     let checkWrites = 0;
     let issueStatusComment:
+      { id: number; html_url: string; body: string } | undefined;
+    let pullRequestStatusComment:
       { id: number; html_url: string; body: string } | undefined;
     env.GITHUB_API_FETCHER = async (input, init) => {
       const url = new URL(String(input));
@@ -1014,6 +1017,30 @@ describe("local control-plane Worker", () => {
           body: String(body?.body),
         };
         return new Response(JSON.stringify(issueStatusComment));
+      }
+      if (url.pathname.endsWith("/issues/11/comments") && method === "GET")
+        return new Response(
+          JSON.stringify(
+            pullRequestStatusComment ? [pullRequestStatusComment] : [],
+          ),
+        );
+      if (url.pathname.endsWith("/issues/11/comments") && method === "POST") {
+        pullRequestStatusComment = {
+          id: 52,
+          html_url:
+            "https://github.com/zorkian/roundhouse/issues/11#issuecomment-52",
+          body: String(body?.body),
+        };
+        return new Response(JSON.stringify(pullRequestStatusComment), {
+          status: 201,
+        });
+      }
+      if (url.pathname.endsWith("/issues/comments/52") && method === "PATCH") {
+        pullRequestStatusComment = {
+          ...pullRequestStatusComment!,
+          body: String(body?.body),
+        };
+        return new Response(JSON.stringify(pullRequestStatusComment));
       }
       if (
         url.pathname.endsWith(`/commits/${commit}/check-runs`) &&
@@ -1184,6 +1211,9 @@ describe("local control-plane Worker", () => {
     });
     expect(issueStatusComment?.body).toContain(
       `Workflow: https://roundhouse-dev.rm-rf.rip/repositories/zorkian/roundhouse/issues/7`,
+    );
+    expect(pullRequestStatusComment?.body).toContain(
+      `Exact pull-request head: \`${commit}\``,
     );
     const reviewEvidence = await handler.fetch!(
       request(`/v1/reviews/${firstBody.review.request.reviewId}/evidence`),

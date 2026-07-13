@@ -496,6 +496,7 @@ async function flushGitHubComments(env: ControlPlaneEnv): Promise<void> {
 }
 
 async function flushGitHubReviewChecks(env: ControlPlaneEnv): Promise<void> {
+  if (env.GITHUB_REVIEW_CHECKS_ENABLED !== "true") return;
   const checks = await claimPendingReviewChecks(env);
   if (checks.length === 0) return;
   let github: ReturnType<typeof githubGateway>;
@@ -646,12 +647,20 @@ async function enqueueReviewComment(
     lines.push(
       `Review failed after ${review.attemptCount} bounded attempt(s): \`${review.failureClassification ?? "review_failed"}\`.`,
     );
+  const body = lines.join("\n\n");
   await enqueueStatusComment(
     env,
     "zorkian/roundhouse",
     review.request.issueNumber,
-    `<!-- roundhouse-status:zorkian/roundhouse#${review.request.issueNumber} -->\n\n${lines.join("\n\n")}`,
+    `<!-- roundhouse-status:zorkian/roundhouse#${review.request.issueNumber} -->\n\n${body}`,
   );
+  await enqueueStatusComment(
+    env,
+    "zorkian/roundhouse",
+    review.request.pullRequestNumber,
+    `<!-- roundhouse-status:zorkian/roundhouse#${review.request.pullRequestNumber} -->\n\n${body}\n\nSource issue: ${review.request.issueUrl}`,
+  );
+  if (env.GITHUB_REVIEW_CHECKS_ENABLED !== "true") return;
   const findings = review.execution?.result.findings.length ?? 0;
   const running = review.status === "pending" || review.status === "running";
   const failed = review.status === "failed";
