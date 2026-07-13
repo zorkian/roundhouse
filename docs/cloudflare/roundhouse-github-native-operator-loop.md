@@ -104,7 +104,7 @@ record, Worker, D1 database, Queue, R2 bucket, or Container application:
   `47c28288-e6d1-4625-9df6-5b1ca8216621`;
 - additive migration: `0006_github_native_operator.sql`;
 - Worker `roundhouse-dev-control-plane` version
-  `e4450372-0f5c-4229-ace5-aeffd5b232f4`;
+  `0a18e2e1-b4ce-4ae8-bed4-ba874dcd0be7`;
 - Container application version `21`, immutable image
   `sha256:1d62376c2d19ac11040ae4ca57402a51f270b1a8676d52a28bdb005f3596330a`.
 
