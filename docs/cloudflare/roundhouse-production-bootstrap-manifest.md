@@ -15,6 +15,8 @@ tokens, credential paths, and private keys must never be committed or printed.
 - R2 bucket `roundhouse-dev-evidence`;
 - Container application `roundhouse-dev-execution`;
 - hostname `roundhouse-dev.rm-rf.rip` and its existing Access applications;
+- development GitHub App `roundhouse-dev` (App `4281837`, installation
+  `146147681`) with Checks read/write enabled;
 - all retained development rows, evidence, secrets, and deployment history.
 
 Merged `main` releases may update these existing resources only through the
@@ -45,7 +47,8 @@ certificate, Access application, or policy may be changed.
 - `ROUNDHOUSE_PUBLIC_ORIGIN=https://roundhouse.rm-rf.rip`;
 - `ROUNDHOUSE_REPOSITORY=zorkian/roundhouse`;
 - `ROUNDHOUSE_WORKER_ID=roundhouse-prod-control-plane`;
-- GitHub App and installation identifiers matching the existing installation;
+- production GitHub App ID `4290654` and installation ID `146381255`, installed
+  only on `zorkian/roundhouse`;
 - Access team and production application audience identifiers assigned during
   creation;
 - the same bounded execution and independent-review modes used by development.
@@ -63,6 +66,15 @@ verified:
 - `ROUNDHOUSE_GITHUB_WEBHOOK_SECRET`;
 - `ROUNDHOUSE_CODEX_AUTH_JSON`;
 - `ROUNDHOUSE_CLAUDE_AUTH_JSON`.
+
+The production GitHub App is distinct from the development App. Its callback,
+user authorization, device flow, setup URL, organization permissions,
+Administration, Environments, Secrets, Workflows, and Deployments permissions
+remain disabled. Its repository permissions are Metadata read, Actions read,
+Commit statuses read, Contents read/write, Issues read/write, Pull requests
+read/write, and Checks read/write. Its subscribed events are Issues, Issue
+comment, Pull request, Pull request review, Pull request review comment, Check
+run, Check suite, Push, and Workflow run.
 
 The two model secrets use the explicitly accepted bootstrap exception from ADR 0007. Each is supplied independently to production; promotion never copies or
 reads a secret from development. The GitHub and Cloudflare credentials never
@@ -111,13 +123,12 @@ differ; the release contract verifies identical Worker bundle bytes.
 
 ## GitHub webhook cutover
 
-After production health and Access checks pass, change the existing GitHub App
-webhook URL from
-`https://roundhouse-dev.rm-rf.rip/v1/github/webhook` to
-`https://roundhouse.rm-rf.rip/v1/github/webhook`. Retain the existing event
-subscriptions, repository installation scope, permissions, and webhook secret.
-Verify a signed ping before accepting an issue command. Keep development
-running but do not deliver duplicate live webhooks to it.
+The production App is configured with
+`https://roundhouse.rm-rf.rip/v1/github/webhook` and an independent webhook
+secret. After production health and Access checks pass, verify its signed ping,
+then disable live webhook delivery on the development App before accepting a
+production issue command. Keep the development App installed for bounded
+acceptance work, but do not deliver duplicate live issue commands to it.
 
 ## Cost and retention
 

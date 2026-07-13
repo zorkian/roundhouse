@@ -63,9 +63,11 @@ non-secret bootstrap-exception audit event. A future broker must replace this
 adapter without changing coordinator, approval, evidence, or publication
 contracts.
 
-The existing GitHub App webhook moves to production only after production is
-healthy. Development then uses contract gateways and authenticated acceptance
-operations rather than receiving duplicate live webhook deliveries.
+Production uses a separate GitHub App installation and private key. Its webhook
+becomes authoritative only after production is healthy, at which point live
+webhook delivery on the development App is disabled. Development then uses
+contract gateways and authenticated acceptance operations rather than
+receiving duplicate live issue commands.
 
 ## Consequences
 
