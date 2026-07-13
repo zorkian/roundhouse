@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS github_plan_events (
   UNIQUE(plan_id, sequence)
 );
 CREATE INDEX IF NOT EXISTS github_plan_events_plan ON github_plan_events(plan_id, sequence);
+CREATE INDEX IF NOT EXISTS self_development_runs_dashboard ON self_development_runs(updated_at DESC, state);
 `;
 
 type PlanStatus = "proposed" | "rejected" | "approved" | "materialized";
@@ -240,11 +241,12 @@ export async function approvePlan(
   if (row.status === "rejected") throw new Error("Rejected plan cannot run");
   if (row.status === "approved" || row.status === "materialized") {
     const plan = parseDecision(row.plan_json);
-    if (
-      row.approved_by !== input.actorId ||
-      input.expectedRevision !== plan.revision
-    )
+    if (row.approved_by !== input.actorId)
       throw new Error("Existing plan approval actor does not match");
+    // Replay must preserve the immutable revision embedded in the original
+    // approval command, even though the durable row has advanced since then.
+    if (input.expectedRevision !== plan.revision)
+      throw new Error("Plan approval binding does not match");
     return durable(row);
   }
   if (row.revision !== input.expectedRevision)

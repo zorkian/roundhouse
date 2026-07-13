@@ -1019,7 +1019,8 @@ describe("local control-plane Worker", () => {
     const text = await inspected.text();
     expect(inspected.status).toBe(200);
     expect(text).not.toContain(task.instructions);
-    expect(text).not.toContain(task.subject);
+    expect(text).toContain(task.subject);
+    expect(text).toContain(task.baseCommit);
     expect(text).not.toContain(task.repositoryPath);
     expect(text).not.toContain("lease");
     expect(text).not.toContain("workspacePath");

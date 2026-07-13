@@ -15,6 +15,7 @@ describe("operator UI", () => {
       expect(response?.headers.get("content-security-policy")).toContain(
         "frame-ancestors 'none'",
       );
+      expect(response?.headers.get("cache-control")).toBe("no-store");
       const html = await response!.text();
       expect(html).toContain("refreshes every 5s");
       const script = /<script>([\s\S]+)<\/script>/.exec(html)?.[1];

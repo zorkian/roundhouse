@@ -1,7 +1,10 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import { qualifyAndPlan } from "@roundhouse/self-development/cloudflare";
+import {
+  d1JobStoreMigration,
+  qualifyAndPlan,
+} from "@roundhouse/self-development/cloudflare";
 import { Miniflare } from "miniflare";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -25,7 +28,7 @@ async function runtime(): Promise<ControlPlaneEnv> {
   });
   instances.push(instance);
   const db = await instance.getD1Database("DB");
-  for (const statement of githubPlanningMigration
+  for (const statement of `${d1JobStoreMigration}\n${githubPlanningMigration}`
     .split(";")
     .map((value) => value.trim())
     .filter(Boolean))

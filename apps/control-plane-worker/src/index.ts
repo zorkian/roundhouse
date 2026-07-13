@@ -283,7 +283,7 @@ async function planGitHubIssue(
       baseCommit,
       requestedPaths: extractExactPaths(snapshot.body),
     },
-    new Date(),
+    new Date(snapshot.updatedAt),
   );
   return recordPlanningDecision(env, decision, actorId);
 }
