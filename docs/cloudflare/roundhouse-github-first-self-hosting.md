@@ -49,10 +49,14 @@ second repository is enrolled.
 ## Recovery semantics
 
 Status projections are latest-state records, not event logs. A newer revision
-supersedes an older pending projection; stale delivery cannot overwrite it.
-Only one expiring delivery claim is valid at a time. A failed or interrupted
-delivery returns to pending, while the next attempt reconciles by the stable
-HTML marker or GitHub Check external ID before creating anything.
+supersedes an older pending projection, and a stale durable claim cannot mark
+itself sent. Only one expiring delivery claim is valid at a time. A failed or
+interrupted delivery returns to pending, while the next attempt reconciles by
+the stable HTML marker or GitHub Check external ID before creating anything.
+There remains a bounded race in which an already-claimed older projection can
+briefly reach GitHub before the durable CAS rejects it; the next projection
+self-corrects the display. Closing that external display race is deferred to
+post-POC hardening because it does not change authoritative workflow state.
 
 Immutable workflow events, evidence, approvals, exact bases, patch hashes, and
 publication bindings remain in their existing durable stores. Updating a
@@ -77,7 +81,38 @@ changing the coordinator or evidence contracts.
 5. Let Roundhouse publish the approved commit and run independent review on
    the exact pull-request head.
 6. If substantive in-scope findings are accepted, approve the bounded
-   remediation patch and inspect the final exact-head Check.
+   remediation patch and inspect the final exact-head review projection.
+
+## Demonstration record
+
+Pilot issue `zorkian/roundhouse#23` exercised implementation, exact approval,
+publication, independent review, bounded remediation, a second exact approval,
+and final independent review entirely through the GitHub-first path:
+
+- plan `plan_a218e7a92e18d6df75a70753532319cae8af9b36`, based on
+  `0529c8ba3b172b02c676961af7fbf0602a07c879`;
+- source run `run_a4a3df825bc5b9887be497dfcc14dcf23be6b22f`, patch
+  `158a10ec121e947d84527c504974049966dba975462d3da24418cc9b610f4732`;
+- source commit `9e8e6edfc4a8bfca5c6ed35ac243f064cec4cd53` on generated
+  pull request `zorkian/roundhouse#26`;
+- first review `review_d94b36a97cc07f86b3119cfcfb3564a21e4fedba`
+  accepted one test-isolation finding for bounded remediation;
+- remediation run `run_265a0efe5b9474f5cdb92eb17d2b8b9cd89972f1`, patch
+  `159af16c8b5bd350d4643be5f986b5e441a294c5bcf0350fccdb131f7099877f`;
+- remediated head `2f568676da87a3ee9aa3a8666d74b113548fe1fe`, with
+  GitHub CI successful;
+- final review `review_ffab993a726341d9d61768582e937a4141eabedd`
+  completed with zero findings. Its retained review evidence is
+  `reviews/review_ffab993a726341d9d61768582e937a4141eabedd/attempts/review_ffab993a726341d9d61768582e937a4141eabedd-attempt-1/review.json`,
+  SHA-256
+  `47154c9d66f5e5fe64220b87b0cf7a59bae455c43150bd6ec24ee8797b24aac7`.
+
+The first source attempt also exposed that a five-minute coordinator lease was
+shorter than the bounded agent-plus-validation budget. The corrected
+forty-minute lease then allowed the exact retry to finish without concurrent
+ownership. A transient GitHub publication failure after remediation approval
+left the run safely at `awaiting_publication`; replaying the exact idempotent
+command published only the already-approved patch.
 
 ## Current V1 limitations
 

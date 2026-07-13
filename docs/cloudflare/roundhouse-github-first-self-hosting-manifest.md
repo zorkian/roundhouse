@@ -3,7 +3,7 @@
 
 # GitHub-first self-hosting pilot manifest
 
-Status: approved on 2026-07-13 and not yet applied.
+Status: approved and applied on 2026-07-13.
 
 This manifest records the exact mutation boundary for making GitHub issues and
 generated pull requests the practical development operator surface. Secret
@@ -82,8 +82,10 @@ evidence, baked into an image, or left after Container teardown.
 3. Apply additive migration `0009_github_first_status.sql` to the existing D1
    database.
 4. Deploy only the existing Worker and any deployment-coupled image digest.
-5. Demonstrate rolling status, exact-head review Checks, repository-qualified
-   workflow inspection, and at least two complete pilot changes.
+5. Demonstrate rolling status, exact-head review comments,
+   repository-qualified workflow inspection, and at least two complete pilot
+   changes. Keep the contract-tested Check adapter disabled until a future App
+   permission review.
 6. Leave no active Container and retain the development evidence and pilot
    artifacts.
 
@@ -91,3 +93,13 @@ Rollback is documented but not executed: deploy the prior Worker version and
 prior immutable image under fresh authorization. Do not reverse the additive
 migration or delete rows, evidence, issues, pull requests, branches, checks, or
 other retained artifacts.
+
+## Applied resource identities
+
+- additive D1 migration: `0009_github_first_status.sql`;
+- current milestone Worker version: `e440b0f2-a74c-499f-bb3f-911fec45ffe6`;
+- current deployment-coupled execution image digest:
+  `sha256:8e1b1e2de98485c41b29bd4a0b3462e19ecf1fa6600fe3a63f526fdeb5e5a2f8`;
+- Container application ID: `a030958f-41f0-4ae6-9a68-a33d0876ea72`.
+
+No resource outside the approved in-place envelope was created or changed.

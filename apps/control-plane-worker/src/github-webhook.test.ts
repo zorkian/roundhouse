@@ -310,6 +310,25 @@ describe("GitHub-native operator webhook", () => {
     );
   });
 
+  it("rejects malformed status projections before persistence", async () => {
+    const env = await runtime();
+    await expect(
+      enqueueStatusComment(
+        env,
+        "zorkian/roundhouse",
+        0,
+        "<!-- roundhouse-status:zorkian/roundhouse#0 -->",
+      ),
+    ).rejects.toMatchObject({ code: "invalid_issue_identity" });
+    await expect(
+      enqueueStatusComment(env, "zorkian/roundhouse", 19, "missing marker"),
+    ).rejects.toMatchObject({ code: "invalid_status_marker" });
+    const row = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM github_comment_outbox",
+    ).first<{ count: number }>();
+    expect(row?.count).toBe(0);
+  });
+
   it("rejects a correctly signed but unsubscribed event", async () => {
     const env = await runtime();
     const body = JSON.stringify({

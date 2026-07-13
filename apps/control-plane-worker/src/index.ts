@@ -1556,21 +1556,21 @@ async function route(
   const issueMatch =
     /^\/v1\/repositories\/([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+)\/issues\/([1-9][0-9]*)$/.exec(
       url.pathname,
-    );
+  );
   if (request.method === "GET" && issueMatch) {
-    try {
-      return json(
-        await issueInspection(
-          env,
-          `${issueMatch[1]}/${issueMatch[2]}`,
-          Number(issueMatch[3]),
-        ),
+    const repositoryFullName = `${issueMatch[1]}/${issueMatch[2]}`;
+    if (repositoryFullName !== "zorkian/roundhouse")
+      throw new HttpError(
+        404,
+        "Repository is not enrolled in this development adapter",
       );
-    } catch (error) {
-      if (error instanceof Error && error.message.includes("not enrolled"))
-        throw new HttpError(404, error.message);
-      throw error;
-    }
+    return json(
+      await issueInspection(
+        env,
+        repositoryFullName,
+        Number(issueMatch[3]),
+      ),
+    );
   }
   const planMatch = /^\/v1\/plans\/([a-zA-Z0-9_-]{1,128})$/.exec(url.pathname);
   if (request.method === "GET" && planMatch?.[1]) {

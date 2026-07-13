@@ -524,6 +524,11 @@ export async function enqueueStatusComment(
 ): Promise<void> {
   if (!/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(repositoryFullName))
     throw new GitHubWebhookError(400, "invalid_repository_identity");
+  if (!Number.isSafeInteger(issueNumber) || issueNumber < 1)
+    throw new GitHubWebhookError(400, "invalid_issue_identity");
+  const marker = `<!-- roundhouse-status:${repositoryFullName}#${issueNumber} -->`;
+  if (!body.includes(marker))
+    throw new GitHubWebhookError(400, "invalid_status_marker");
   const key = `issue-status:${repositoryFullName}:${issueNumber}`;
   const bodySha256 = await sha256(body);
   const now = new Date().toISOString();
