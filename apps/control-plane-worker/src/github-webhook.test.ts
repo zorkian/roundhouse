@@ -132,7 +132,7 @@ describe("GitHub-native operator webhook", () => {
     const initial = await reserveWebhookDelivery(env, verified);
     expect(initial).toMatchObject({ kind: "new" });
     await expect(reserveWebhookDelivery(env, verified)).resolves.toEqual({
-      kind: "replay",
+      kind: "in_progress",
     });
     if (initial.kind !== "new") throw new Error("expected delivery claim");
     await completeWebhookDelivery(
@@ -147,7 +147,7 @@ describe("GitHub-native operator webhook", () => {
       reserveWebhookDelivery(env, verified),
     ]);
     expect(retries.map((value) => value.kind)).toEqual(
-      expect.arrayContaining(["new", "replay"]),
+      expect.arrayContaining(["new", "in_progress"]),
     );
     const retryClaim = retries.find((value) => value.kind === "new");
     if (!retryClaim || retryClaim.kind !== "new")
@@ -157,8 +157,18 @@ describe("GitHub-native operator webhook", () => {
     )
       .bind("1970-01-01T00:00:00.000Z", verified.deliveryId)
       .run();
-    await expect(reserveWebhookDelivery(env, verified)).resolves.toMatchObject({
-      kind: "new",
+    const reclaimed = await reserveWebhookDelivery(env, verified);
+    expect(reclaimed).toMatchObject({ kind: "new" });
+    if (reclaimed.kind !== "new") throw new Error("expected stale reclaim");
+    await completeWebhookDelivery(
+      env,
+      verified.deliveryId,
+      reclaimed.claimId,
+      "completed",
+      {},
+    );
+    await expect(reserveWebhookDelivery(env, verified)).resolves.toEqual({
+      kind: "replay",
     });
 
     const wrong = JSON.stringify({

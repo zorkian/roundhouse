@@ -510,6 +510,8 @@ async function githubWebhook(
   const reservation = await reserveWebhookDelivery(env, webhook);
   if (reservation.kind === "replay")
     return json({ schemaVersion: 1, accepted: true, replayed: true });
+  if (reservation.kind === "in_progress")
+    throw new GitHubWebhookError(503, "delivery_in_progress");
   try {
     const observations = checkObservation(webhook);
     if (observations.length > 0) {

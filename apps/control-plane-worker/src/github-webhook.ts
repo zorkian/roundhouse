@@ -348,7 +348,11 @@ export function checkObservation(value: VerifiedWebhook): Array<{
 export async function reserveWebhookDelivery(
   env: ControlPlaneEnv,
   value: VerifiedWebhook,
-): Promise<{ kind: "new"; claimId: string } | { kind: "replay" }> {
+): Promise<
+  | { kind: "new"; claimId: string }
+  | { kind: "replay" }
+  | { kind: "in_progress" }
+> {
   const nowValue = new Date();
   const now = nowValue.toISOString();
   await env.DB.prepare(
@@ -385,7 +389,7 @@ export async function reserveWebhookDelivery(
     .run();
   return (claimed.meta.changes ?? 0) === 1
     ? { kind: "new", claimId }
-    : { kind: "replay" };
+    : { kind: "in_progress" };
 }
 
 export async function completeWebhookDelivery(
