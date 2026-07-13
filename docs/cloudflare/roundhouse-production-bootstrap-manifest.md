@@ -1,0 +1,140 @@
+<!-- Copyright 2026 Mark Smith -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
+# Proposed Roundhouse production bootstrap manifest
+
+This manifest is intentionally unapplied. It is the human approval gate for
+the production half of the two-environment self-hosting cutover. Secret values,
+tokens, credential paths, and private keys must never be committed or printed.
+
+## Existing development resources retained
+
+- Worker `roundhouse-dev-control-plane`;
+- D1 database `roundhouse-dev-coordination`;
+- Queues `roundhouse-dev-runs` and `roundhouse-dev-runs-dlq`;
+- R2 bucket `roundhouse-dev-evidence`;
+- Container application `roundhouse-dev-execution`;
+- hostname `roundhouse-dev.rm-rf.rip` and its existing Access applications;
+- all retained development rows, evidence, secrets, and deployment history.
+
+Merged `main` releases may update these existing resources only through the
+reviewed development deployment workflow. No development resource is renamed,
+deleted, or reused as production.
+
+## Production resources to create
+
+| Resource              | Exact name                             | Initial limit or behavior                   |
+| --------------------- | -------------------------------------- | ------------------------------------------- |
+| Worker                | `roundhouse-prod-control-plane`        | Scheduled recovery every five minutes       |
+| D1                    | `roundhouse-prod-coordination`         | Fresh schema; additive migrations only      |
+| Queue                 | `roundhouse-prod-runs`                 | One-message consumer batches; three retries |
+| Dead-letter Queue     | `roundhouse-prod-runs-dlq`             | Retained for inspection                     |
+| R2                    | `roundhouse-prod-evidence`             | Immutable run, review, and release evidence |
+| Container application | `roundhouse-prod-execution`            | `standard-1`, `max_instances: 1`            |
+| Custom hostname       | `roundhouse.rm-rf.rip`                 | Worker custom domain in the existing zone   |
+| Access application    | `Roundhouse production control plane`  | Protect all production paths                |
+| Access application    | `Roundhouse production GitHub webhook` | Exact `/v1/github/webhook` bypass only      |
+
+The custom-domain operation may create the normal Cloudflare-managed DNS
+record for `roundhouse.rm-rf.rip`. No other hostname, DNS record, route,
+certificate, Access application, or policy may be changed.
+
+## Production runtime configuration
+
+- `ROUNDHOUSE_ENVIRONMENT=production`;
+- `ROUNDHOUSE_PUBLIC_ORIGIN=https://roundhouse.rm-rf.rip`;
+- `ROUNDHOUSE_REPOSITORY=zorkian/roundhouse`;
+- `ROUNDHOUSE_WORKER_ID=roundhouse-prod-control-plane`;
+- GitHub App and installation identifiers matching the existing installation;
+- Access team and production application audience identifiers assigned during
+  creation;
+- the same bounded execution and independent-review modes used by development.
+
+The final D1, Queue, Worker, Container, Access, and deployment identifiers are
+recorded after creation. An identifier differing from the exact named resource
+above stops the bootstrap.
+
+## Production secrets
+
+Create encrypted Worker bindings only after their names and destinations are
+verified:
+
+- `ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY`;
+- `ROUNDHOUSE_GITHUB_WEBHOOK_SECRET`;
+- `ROUNDHOUSE_CODEX_AUTH_JSON`;
+- `ROUNDHOUSE_CLAUDE_AUTH_JSON`.
+
+The two model secrets use the explicitly accepted bootstrap exception from ADR 0007. Each is supplied independently to production; promotion never copies or
+reads a secret from development. The GitHub and Cloudflare credentials never
+enter an execution Container.
+
+## GitHub deployment environments
+
+Create two GitHub environments:
+
+- `roundhouse-development`, used automatically only by a successful `main`
+  release workflow;
+- `roundhouse-production`, requiring human approval and accepting only an
+  exact development deployment evidence identity.
+
+Each environment contains its own `CLOUDFLARE_API_TOKEN` secret and
+`CLOUDFLARE_ACCOUNT_ID` variable. The tokens are separate, restricted to the
+one Cloudflare account, and carry only permissions Wrangler proves necessary
+for Worker scripts, Containers, D1 migrations, Queues, and R2 bindings. Current
+Cloudflare token scope is account-level rather than per-Worker; the GitHub
+environment and reviewed workflow are therefore part of the security boundary.
+No token is available to pull-request jobs or Roundhouse agent Containers.
+
+## Release and promotion sequence
+
+1. CI passes for the exact merged commit.
+2. Build and push one commit-tagged Container image; resolve its immutable
+   digest.
+3. Bundle Worker code once and hash the exact bundle.
+4. Record the release manifest and its SHA-256.
+5. Apply the exact additive migration set to development.
+6. Upload a development Worker version binding that bundle hash and image
+   digest, deploy it, and record its Cloudflare version ID.
+7. Run authenticated health, storage, Container, model-transport, and
+   no-credential-retention smoke checks against development.
+8. Record immutable development deployment evidence.
+9. Require human promotion approval bound to the release manifest and
+   development evidence hashes and version ID.
+10. Apply the same migration hashes to production.
+11. Upload the exact Worker bundle for production bindings and the same image
+    digest, then deploy and smoke-test the resulting production version.
+12. Record immutable production deployment evidence.
+
+Promotion never rebuilds source or the Container image. Cloudflare necessarily
+creates a distinct production Worker version because bindings and Worker names
+differ; the release contract verifies identical Worker bundle bytes.
+
+## GitHub webhook cutover
+
+After production health and Access checks pass, change the existing GitHub App
+webhook URL from
+`https://roundhouse-dev.rm-rf.rip/v1/github/webhook` to
+`https://roundhouse.rm-rf.rip/v1/github/webhook`. Retain the existing event
+subscriptions, repository installation scope, permissions, and webhook secret.
+Verify a signed ping before accepting an issue command. Keep development
+running but do not deliver duplicate live webhooks to it.
+
+## Cost and retention
+
+The bootstrap may incur at most USD 20 of incremental Cloudflare usage. Both
+environments retain D1 audit rows, R2 evidence, deployment manifests, Worker
+versions, and bounded demonstration evidence. Only temporary local build files
+and failed unpublished image tags may be cleaned up automatically.
+
+## Rollback
+
+Before each deployment, record the currently active Worker version and
+Container image digest. A failed development deployment rolls development back
+without affecting production. A failed production smoke test immediately
+deploys the previously recorded production Worker version and image digest.
+D1 migrations are not reversed. The GitHub webhook returns to development only
+through a separate explicit human decision; an automated rollback must not
+move webhook authority between environments.
+
+No retained database, Queue, R2 object, Worker, Access application, DNS record,
+or secret is deleted by rollback.

@@ -9,6 +9,10 @@
     "crons": ["*/5 * * * *"],
   },
   "vars": {
+    "ROUNDHOUSE_ENVIRONMENT": "development",
+    "ROUNDHOUSE_PUBLIC_ORIGIN": "https://roundhouse-dev.rm-rf.rip",
+    "ROUNDHOUSE_REPOSITORY": "zorkian/roundhouse",
+    "ROUNDHOUSE_WORKER_ID": "roundhouse-dev-control-plane",
     "AUTH_MODE": "access",
     "ACCESS_TEAM_DOMAIN": "zorkian",
     "ACCESS_POLICY_AUD": "93175877f79ccfad4f2d7b0ed35f9df6ec1901269474150486076320a74f141a",
