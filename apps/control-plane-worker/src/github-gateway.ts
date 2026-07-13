@@ -262,7 +262,8 @@ export class GitHubAppGateway {
         !Number.isSafeInteger(value.id) ||
         value.id < 1 ||
         url.origin !== "https://github.com" ||
-        !url.pathname.startsWith(`/${input.repositoryFullName}/issues/`)
+        url.pathname !==
+          `/${input.repositoryFullName}/issues/${input.issueNumber}`
       )
         throw new GitHubAppGatewayError(
           "invalid_response",
