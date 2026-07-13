@@ -223,11 +223,14 @@ export class GitHubAppGateway {
       )
     ).value;
     const url = new URL(value.html_url);
+    const expectedIssuePath = `/${repositoryFullName}/issues/${issueNumber}`;
+    const expectedPullPath = `/${repositoryFullName}/pull/${issueNumber}`;
     if (
       !Number.isSafeInteger(value.id) ||
       value.id < 1 ||
       url.origin !== "https://github.com" ||
-      url.pathname !== `/${repositoryFullName}/issues/${issueNumber}` ||
+      (url.pathname !== expectedIssuePath &&
+        url.pathname !== expectedPullPath) ||
       !/^#issuecomment-[1-9][0-9]*$/.test(url.hash)
     )
       throw new GitHubAppGatewayError(
@@ -262,12 +265,14 @@ export class GitHubAppGateway {
     };
     const validate = (value: Comment): { id: number; url: string } => {
       const url = new URL(value.html_url);
+      const expectedIssuePath = `/${input.repositoryFullName}/issues/${input.issueNumber}`;
+      const expectedPullPath = `/${input.repositoryFullName}/pull/${input.issueNumber}`;
       if (
         !Number.isSafeInteger(value.id) ||
         value.id < 1 ||
         url.origin !== "https://github.com" ||
-        url.pathname !==
-          `/${input.repositoryFullName}/issues/${input.issueNumber}` ||
+        (url.pathname !== expectedIssuePath &&
+          url.pathname !== expectedPullPath) ||
         !/^#issuecomment-[1-9][0-9]*$/.test(url.hash)
       )
         throw new GitHubAppGatewayError(

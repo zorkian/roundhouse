@@ -115,7 +115,7 @@ describe("GitHub App gateway", () => {
       return json({
         id: 41,
         html_url:
-          "https://github.com/another/roundhouse/issues/9#issuecomment-41",
+          "https://github.com/another/roundhouse/pull/9#issuecomment-41",
       });
     };
     const gateway = new GitHubAppGateway(
@@ -127,7 +127,7 @@ describe("GitHub App gateway", () => {
       gateway.createIssueComment("another/roundhouse", 9, "Status"),
     ).resolves.toEqual({
       id: 41,
-      url: "https://github.com/another/roundhouse/issues/9#issuecomment-41",
+      url: "https://github.com/another/roundhouse/pull/9#issuecomment-41",
     });
     expect(requestedPath).toBe("/repos/another/roundhouse/issues/9/comments");
   });
@@ -152,7 +152,7 @@ describe("GitHub App gateway", () => {
         retained = {
           id: 71,
           html_url:
-            "https://github.com/zorkian/roundhouse/issues/7#issuecomment-71",
+            "https://github.com/zorkian/roundhouse/pull/7#issuecomment-71",
           body: JSON.parse(String(init?.body)).body,
         };
         throw new TypeError("ambiguous response");
@@ -176,7 +176,7 @@ describe("GitHub App gateway", () => {
       }),
     ).resolves.toEqual({
       id: 71,
-      url: "https://github.com/zorkian/roundhouse/issues/7#issuecomment-71",
+      url: "https://github.com/zorkian/roundhouse/pull/7#issuecomment-71",
     });
     await expect(
       gateway.upsertIssueStatusComment({
