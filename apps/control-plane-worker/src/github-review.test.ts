@@ -9,7 +9,7 @@ import {
 } from "@roundhouse/self-development/cloudflare";
 import { readFile } from "node:fs/promises";
 import { Miniflare } from "miniflare";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import type { ControlPlaneEnv } from "./environment.js";
 import {
@@ -24,15 +24,24 @@ import {
   reserveIndependentReview,
 } from "./github-review.js";
 
-const instances: Miniflare[] = [];
+let instance: Miniflare;
+let env: ControlPlaneEnv;
+const resetTables = [
+  "independent_review_findings",
+  "independent_review_events",
+  "independent_reviews",
+] as const;
 
 async function runtime(): Promise<ControlPlaneEnv> {
-  const instance = new Miniflare({
+  return env;
+}
+
+beforeAll(async () => {
+  instance = new Miniflare({
     modules: true,
     script: "export default { fetch() { return new Response('ok') } }",
     d1Databases: { DB: "independent-review-test" },
   });
-  instances.push(instance);
   const db = await instance.getD1Database("DB");
   const migration = await readFile(
     new URL("../migrations/0008_independent_review.sql", import.meta.url),
@@ -43,17 +52,22 @@ async function runtime(): Promise<ControlPlaneEnv> {
     .map((value) => value.trim())
     .filter(Boolean))
     await db.prepare(statement).run();
-  return {
+  env = {
     DB: db,
     RUN_QUEUE: { send: async () => undefined } as unknown as Queue<unknown>,
     EXECUTION_MODE: "deterministic-local",
     ALLOWED_REPOSITORY_PATH: "/workspace/roundhouse",
     ALLOWED_REMOTE_URL: "https://github.com/zorkian/roundhouse.git",
   };
-}
+});
 
-afterEach(async () => {
-  await Promise.all(instances.splice(0).map((value) => value.dispose()));
+beforeEach(async () => {
+  for (const table of resetTables)
+    await env.DB.prepare(`DELETE FROM ${table}`).run();
+});
+
+afterAll(async () => {
+  await instance.dispose();
 });
 
 async function request(): Promise<IndependentReviewRequest> {
