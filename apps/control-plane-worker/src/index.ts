@@ -28,6 +28,7 @@ import {
   CloudflareTrustedImplementationBackend,
 } from "./cloudflare-execution.js";
 import { CloudflareIndependentReviewBackend } from "./cloudflare-review.js";
+import { CloudflarePlanningBackend } from "./cloudflare-planning.js";
 import {
   approveRunSchema,
   idempotencyKeySchema,
@@ -319,6 +320,35 @@ async function planGitHubIssue(
     0,
     maxPlannedInstructionCharacters,
   );
+  const declaredPaths = extractExactPaths(snapshot.body);
+  const agentPlan =
+    declaredPaths.length === 0 &&
+    env.EXECUTION_MODE === "cloudflare-trusted-codex" &&
+    env.EXECUTION_CONTAINERS &&
+    env.ROUNDHOUSE_CODEX_AUTH_JSON
+      ? await new CloudflarePlanningBackend(
+          env.EXECUTION_CONTAINERS,
+          env.ROUNDHOUSE_CODEX_AUTH_JSON,
+        ).execute({
+          schemaVersion: 1,
+          attemptId: `planning_${(
+            await sha256(
+              JSON.stringify({
+                issueNumber,
+                issueContentSha256: snapshot.contentSha256,
+                baseCommit,
+              }),
+            )
+          ).slice(0, 40)}`,
+          repositoryUrl: "https://github.com/zorkian/roundhouse.git",
+          baseCommit,
+          issueNumber,
+          subject: snapshot.title,
+          instructions: plannedInstructions,
+          timeoutMs: 15 * 60_000,
+          maxOutputBytes: 256 * 1024,
+        })
+      : undefined;
   const decision = await qualifyAndPlan(
     {
       issueNumber,
@@ -326,7 +356,12 @@ async function planGitHubIssue(
       subject: snapshot.title,
       instructions: plannedInstructions,
       baseCommit,
-      requestedPaths: extractExactPaths(snapshot.body),
+      requestedPaths: agentPlan?.exactPaths ?? declaredPaths,
+      planningAttemptId: agentPlan?.attemptId,
+      understanding: agentPlan?.summary,
+      acceptanceCriteria: agentPlan?.acceptanceCriteria ?? [],
+      clarificationQuestions: agentPlan?.questions ?? [],
+      suggestedRisk: agentPlan?.risk,
     },
     new Date(snapshot.updatedAt),
   );
@@ -433,6 +468,13 @@ async function planComment(
       ),
     );
   } else {
+    if (value.plan.understanding)
+      lines.push(`Understanding: ${value.plan.understanding}`);
+    if (value.plan.acceptanceCriteria.length > 0)
+      lines.push(
+        "Acceptance criteria:",
+        ...value.plan.acceptanceCriteria.map((criterion) => `- ${criterion}`),
+      );
     lines.push(
       `Risk: **${value.plan.risk}**`,
       "Exact approved scope:",
@@ -1003,7 +1045,9 @@ async function executeGitHubCommand(
     }
     const existingPlan = await readIssuePlan(env, issueNumber);
     const plan =
-      existingPlan ?? (await planGitHubIssue(issueNumber, env, actorId));
+      existingPlan?.status === "rejected"
+        ? await planGitHubIssue(issueNumber, env, actorId)
+        : (existingPlan ?? (await planGitHubIssue(issueNumber, env, actorId)));
     await enqueuePlanComment(env, issueNumber, plan);
     return plan.runId
       ? {

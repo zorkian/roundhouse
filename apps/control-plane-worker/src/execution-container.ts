@@ -7,12 +7,16 @@ import {
   repositoryExecutionResultSchema,
   independentReviewRequestSchema,
   independentReviewResultSchema,
+  planningAgentRequestSchema,
+  planningAgentResultSchema,
   trustedImplementationRequestSchema,
   trustedImplementationResultSchema,
   type RepositoryExecutionRequest,
   type RepositoryExecutionResult,
   type IndependentReviewRequest,
   type IndependentReviewResult,
+  type PlanningAgentRequest,
+  type PlanningAgentResult,
   type TrustedImplementationRequest,
   type TrustedImplementationResult,
 } from "@roundhouse/self-development/cloudflare";
@@ -247,6 +251,65 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
         console.warn("Trusted Container cleanup was incomplete", {
           attemptId: request.attemptId,
           failures: failures.length,
+        });
+    }
+  }
+
+  async runPlanningJob(
+    input: PlanningAgentRequest,
+    codexAuthJson: string,
+  ): Promise<PlanningAgentResult> {
+    const request = planningAgentRequestSchema.parse(input);
+    try {
+      await this.setAllowedHosts(allowedCheckoutHosts);
+      await this.setOutboundByHosts({
+        "github.com": {
+          method: "auditedCheckout",
+          params: { attemptId: request.attemptId },
+        },
+      });
+      await this.startAndWaitForPorts({
+        ports: 8080,
+        startOptions: {
+          enableInternet: false,
+          envVars: {},
+          labels: { attemptId: request.attemptId, mode: "planning-agent" },
+        },
+        cancellationOptions: {
+          instanceGetTimeoutMS: 30_000,
+          portReadyTimeoutMS: 60_000,
+          waitInterval: 250,
+        },
+      });
+      await this.post("/planning/prepare", request);
+      await this.setAllowedHosts(modelHosts);
+      await this.setOutboundByHosts(
+        Object.fromEntries(
+          modelHosts.map((host) => [
+            host,
+            {
+              method: "auditedModelTransport",
+              params: { attemptId: request.attemptId },
+            },
+          ]),
+        ),
+      );
+      await this.post("/planning/credential", {
+        request,
+        authJson: codexAuthJson,
+      });
+      return planningAgentResultSchema.parse(
+        await this.post("/planning/run", request),
+      );
+    } finally {
+      const cleanup = await Promise.allSettled([
+        this.setOutboundByHosts({}),
+        this.setAllowedHosts([]),
+        this.destroy(),
+      ]);
+      if (cleanup.some((result) => result.status === "rejected"))
+        console.warn("Planning Container cleanup was incomplete", {
+          attemptId: request.attemptId,
         });
     }
   }

@@ -220,4 +220,54 @@ describe("durable issue planning", () => {
       }),
     ).rejects.toThrow("Rejected plan cannot run");
   });
+
+  it("revises a clarification after the issue content changes", async () => {
+    const env = await runtime();
+    const clarification = await qualifyAndPlan(
+      {
+        issueNumber: 24,
+        issueContentSha256: "d".repeat(64),
+        subject: "Improve status",
+        instructions: "Improve the status experience.",
+        baseCommit: "b".repeat(40),
+        requestedPaths: [],
+        planningAttemptId: `planning_${"e".repeat(40)}`,
+        understanding: "The intended status surface is ambiguous.",
+        acceptanceCriteria: ["The selected status surface is improved."],
+        clarificationQuestions: ["Should this change the issue or run page?"],
+        suggestedRisk: "low",
+      },
+      new Date("2026-07-12T00:00:00Z"),
+    );
+    const first = await recordPlanningDecision(
+      env,
+      clarification,
+      "github:zorkian",
+    );
+    expect(first).toMatchObject({ revision: 1, status: "rejected" });
+
+    const revised = await qualifyAndPlan(
+      {
+        issueNumber: 24,
+        issueContentSha256: "f".repeat(64),
+        subject: "Improve issue status",
+        instructions: "Improve the issue status page.",
+        baseCommit: "b".repeat(40),
+        requestedPaths: ["apps/control-plane-worker/src/operator-ui.ts"],
+        planningAttemptId: `planning_${"a".repeat(40)}`,
+        understanding: "Improve the issue status page.",
+        acceptanceCriteria: ["The issue status page shows the new detail."],
+        clarificationQuestions: [],
+        suggestedRisk: "medium",
+      },
+      new Date("2026-07-12T00:05:00Z"),
+    );
+    await expect(
+      recordPlanningDecision(env, revised, "github:zorkian"),
+    ).resolves.toMatchObject({ revision: 2, status: "proposed" });
+    await expect(readIssuePlan(env, 24)).resolves.toMatchObject({
+      revision: 2,
+      plan: { issueContentSha256: "f".repeat(64) },
+    });
+  });
 });

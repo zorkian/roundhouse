@@ -1,0 +1,75 @@
+// Copyright 2026 Mark Smith
+// SPDX-License-Identifier: Apache-2.0
+
+import { describe, expect, it } from "vitest";
+
+import { CloudflarePlanningBackend } from "./cloudflare-planning.js";
+
+const request = {
+  schemaVersion: 1 as const,
+  attemptId: `planning_${"a".repeat(40)}`,
+  repositoryUrl: "https://github.com/zorkian/roundhouse.git" as const,
+  baseCommit: "b".repeat(40),
+  issueNumber: 31,
+  subject: "Expose release identity",
+  instructions: "Show the exact release on the status page.",
+  timeoutMs: 900_000,
+  maxOutputBytes: 256 * 1024,
+};
+
+describe("Cloudflare planning backend", () => {
+  it("binds a structured result to the exact planning attempt", async () => {
+    const backend = new CloudflarePlanningBackend(
+      {
+        getByName: () => ({
+          runJob: async () => ({}),
+          runPlanningJob: async () => ({
+            schemaVersion: 1,
+            attemptId: request.attemptId,
+            baseCommit: request.baseCommit,
+            status: "proposed",
+            summary: "Expose existing release metadata.",
+            exactPaths: ["apps/control-plane-worker/src/operator-ui.ts"],
+            acceptanceCriteria: ["The status page names the exact release."],
+            questions: [],
+            risk: "low",
+          }),
+          destroy: async () => undefined,
+        }),
+      },
+      "credential",
+    );
+    await expect(backend.execute(request)).resolves.toMatchObject({
+      status: "proposed",
+      attemptId: request.attemptId,
+    });
+  });
+
+  it("destroys the Container after a binding mismatch", async () => {
+    let destroyed = false;
+    const backend = new CloudflarePlanningBackend(
+      {
+        getByName: () => ({
+          runJob: async () => ({}),
+          runPlanningJob: async () => ({
+            schemaVersion: 1,
+            attemptId: `planning_${"c".repeat(40)}`,
+            baseCommit: request.baseCommit,
+            status: "clarification",
+            summary: "Clarification is required.",
+            exactPaths: [],
+            acceptanceCriteria: ["The behavior is specified."],
+            questions: ["Which status surface should change?"],
+            risk: "medium",
+          }),
+          destroy: async () => {
+            destroyed = true;
+          },
+        }),
+      },
+      "credential",
+    );
+    await expect(backend.execute(request)).rejects.toThrow();
+    expect(destroyed).toBe(true);
+  });
+});
