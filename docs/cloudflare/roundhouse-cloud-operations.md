@@ -45,16 +45,18 @@ export ROUNDHOUSE_IDEMPOTENCY_KEY='operator-cancel-20260712-01'
 node scripts/roundhouse-operator.mjs cancel RUN_ID /tmp/cancel.json
 ```
 
-GitHub-integrated development uses the same authenticated boundary:
+GitHub-integrated publication uses the same authenticated boundary:
 
 ```zsh
-node scripts/roundhouse-operator.mjs issue ISSUE_NUMBER /tmp/schema-v1.json
 node scripts/roundhouse-operator.mjs github-publish RUN_ID /tmp/revision.json
 ```
 
-The issue supplies untrusted requirements only. Repository identity, base,
-profile, allowed path, validation, branch, and publication policy are selected
-by the deployed Roundhouse configuration.
+Issue-native development starts through the signed GitHub webhook by posting
+`/rh start` on the issue. The retired direct issue-to-run administration route
+is intentionally not exposed by the operator CLI. Issue text supplies untrusted
+requirements only; repository identity, base, profile, allowed path,
+validation, branch, and publication policy are selected by the deployed
+Roundhouse configuration.
 
 Tokens and request files containing credentials must remain outside the
 repository. The CLI never persists them.

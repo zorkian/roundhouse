@@ -413,8 +413,12 @@ describe("local control-plane Worker", () => {
       {} as ExecutionContext,
     );
     expect(accepted.status).toBe(202);
-    const result = (await accepted.json()) as { runId: string };
-    expect(result.runId).toMatch(/^plan_[a-f0-9]{40}$/);
+    const result = (await accepted.json()) as {
+      kind: string;
+      planId: string;
+    };
+    expect(result).toMatchObject({ kind: "plan" });
+    expect(result.planId).toMatch(/^plan_[a-f0-9]{40}$/);
     expect(queued.messages).toHaveLength(0);
     expect(comments).toBe(1);
     const plan = await readIssuePlan(env, 17);
@@ -446,7 +450,8 @@ describe("local control-plane Worker", () => {
     );
     expect(repeatedStart.status).toBe(202);
     await expect(repeatedStart.json()).resolves.toMatchObject({
-      runId: result.runId,
+      kind: "plan",
+      planId: result.planId,
     });
     expect(queued.messages).toHaveLength(0);
     expect(comments).toBe(1);

@@ -525,7 +525,12 @@ async function executeGitHubCommand(
   issueNumber: number,
   actor: string,
   command: GitHubCommand,
-): Promise<{ runId: string; state: string; revision: number }> {
+): Promise<
+  ({ kind: "plan"; planId: string } | { kind: "run"; runId: string }) & {
+    state: string;
+    revision: number;
+  }
+> {
   if (actor !== "zorkian")
     throw new GitHubWebhookError(403, "unauthorized_actor");
   const actorId = `github:${actor}`;
@@ -536,6 +541,7 @@ async function executeGitHubCommand(
       const current = await new D1JobStore(env.DB).read(existing);
       await enqueueRunComment(env, issueNumber, existing);
       return {
+        kind: "run",
         runId: existing,
         state: current.state,
         revision: current.revision,
@@ -545,11 +551,19 @@ async function executeGitHubCommand(
     const plan =
       existingPlan ?? (await planGitHubIssue(issueNumber, env, actorId));
     await enqueuePlanComment(env, issueNumber, plan);
-    return {
-      runId: plan.runId ?? plan.plan.planId,
-      state: plan.status,
-      revision: plan.revision,
-    };
+    return plan.runId
+      ? {
+          kind: "run",
+          runId: plan.runId,
+          state: plan.status,
+          revision: plan.revision,
+        }
+      : {
+          kind: "plan",
+          planId: plan.plan.planId,
+          state: plan.status,
+          revision: plan.revision,
+        };
   } else if (command.kind === "implement") {
     runId = await materializeGitHubPlan(env, issueNumber, command, actorId);
   } else if (command.kind === "status" && !(await issueRun(env, issueNumber))) {
@@ -559,11 +573,19 @@ async function executeGitHubCommand(
     if (command.runId && command.runId !== plan.plan.planId)
       throw new HttpError(409, "Command plan does not match this issue");
     await enqueuePlanComment(env, issueNumber, plan);
-    return {
-      runId: plan.runId ?? plan.plan.planId,
-      state: plan.status,
-      revision: plan.revision,
-    };
+    return plan.runId
+      ? {
+          kind: "run",
+          runId: plan.runId,
+          state: plan.status,
+          revision: plan.revision,
+        }
+      : {
+          kind: "plan",
+          planId: plan.plan.planId,
+          state: plan.status,
+          revision: plan.revision,
+        };
   } else {
     runId = await runForIssueCommand(env, issueNumber, command.runId);
     const jobs = new D1JobStore(env.DB);
@@ -630,7 +652,12 @@ async function executeGitHubCommand(
   }
   const current = await new D1JobStore(env.DB).read(runId);
   await enqueueRunComment(env, issueNumber, runId);
-  return { runId, state: current.state, revision: current.revision };
+  return {
+    kind: "run",
+    runId,
+    state: current.state,
+    revision: current.revision,
+  };
 }
 
 async function githubWebhook(
