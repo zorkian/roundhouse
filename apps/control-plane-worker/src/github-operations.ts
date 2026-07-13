@@ -1,7 +1,11 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import type { GitHubPublicationResult } from "@roundhouse/self-development/cloudflare";
+import {
+  githubIssueSnapshotSchema,
+  type GitHubIssueSnapshot,
+  type GitHubPublicationResult,
+} from "@roundhouse/self-development/cloudflare";
 
 import type { ControlPlaneEnv } from "./environment.js";
 
@@ -67,6 +71,20 @@ export async function saveIssueSnapshot(
       snapshot.fetchedAt,
     )
     .run();
+}
+
+export async function readIssueSnapshot(
+  env: ControlPlaneEnv,
+  issueNumber: number,
+  contentSha256: string,
+): Promise<GitHubIssueSnapshot> {
+  const row = await env.DB.prepare(
+    "SELECT snapshot_json FROM github_issue_snapshots WHERE issue_number = ? AND content_sha256 = ?",
+  )
+    .bind(issueNumber, contentSha256)
+    .first<{ snapshot_json: string }>();
+  if (!row) throw new Error("Immutable issue snapshot not found");
+  return githubIssueSnapshotSchema.parse(JSON.parse(row.snapshot_json));
 }
 
 export async function durableGitHubPublication(
