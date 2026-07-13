@@ -77,6 +77,9 @@ retain the additive tables, R2 evidence, runs, issues, and pull requests.
 - Planning is deterministic repository policy, not a separate planning model.
 - The UI is intentionally small and polling-based; it is an operator console,
   not a multi-tenant product interface.
+- Most displayed identities are not yet navigable. A follow-up should link
+  issues, commits, plans, revision history, full evidence, actors, pull requests,
+  and check observations to their authenticated or public detail views.
 - Issue edits do not mutate an existing plan. The operator starts a new plan.
 - The reviewed profile supports Roundhouse's public repository only.
 - The subscription-backed Codex credential is a development exception, not the
@@ -84,3 +87,45 @@ retain the additive tables, R2 evidence, runs, issues, and pull requests.
 - Destructive retention and cleanup remain disabled.
 - Reliability hardening beyond demonstrated restart, replay, leases, and exact
   bindings is deferred so V1 functionality can be evaluated first.
+
+## Demonstration record
+
+The approved manifest was applied to the existing development resources. D1
+migration `0007_issue_native_planning.sql` completed successfully. The final
+demonstrated Worker version was `9ce124c4-1e4c-484b-8ac9-df4caaeccc55`; later
+milestone-scoped review fixes may supersede this version without changing the
+resource envelope. No Container rollout was performed.
+
+Successful issue [#16](https://github.com/zorkian/roundhouse/issues/16)
+produced:
+
+- plan `plan_83b84097fb5a0a242134e0c22e686213882d16b7` at immutable plan
+  SHA-256 `4653c48d581cbe20234448fc4f1a20666ac34bdd47d3c9e8b7726f903cb4ea36`;
+- exact base `f2ddd29b7b9eedc0104a79cf8f46d36858da3376` and exact-path-set
+  SHA-256 `28c2c3ca083d8e8a2adba03e8bc5a232b0a61d4070a0f1c380b26c179107d7a4`;
+- run `run_b11a44d0296a4d7eae86488f10c77d6700f041da`, one successful
+  Container attempt, and immutable evidence object
+  `runs/run_b11a44d0296a4d7eae86488f10c77d6700f041da/attempts/run_b11a44d0296a4d7eae86488f10c77d6700f041da-prepare-1/trusted-implementation.json`;
+- independently verified evidence SHA-256
+  `fbe5b20ff2395736e6270892ec88b117df7972010d0861ab1135fa3a1e21ed32`
+  over 27,037 retained bytes;
+- approved patch SHA-256
+  `c44c5527030c0bf0aa1103b4e0eee8a21174fa820a398f24e0492b5a9bd8247e`;
+- one verified commit `bc87ca4525f1d43208274cf19b98c2dab1dc6bfa`, whose sole parent is the
+  exact base and whose canonical full-index binary diff matches the approved
+  patch SHA-256;
+- draft dogfood pull request
+  [#19](https://github.com/zorkian/roundhouse/pull/19), containing exactly the
+  two approved files with its exact-head GitHub check successful.
+
+Negative-policy issue [#17](https://github.com/zorkian/roundhouse/issues/17)
+produced rejected plan `plan_0f4cabd2039990f00960393a85637e3f4367a41a` for the protected
+workflow path. It created no run. Its 696-byte retained plan evidence at
+`plans/plan_0f4cabd2039990f00960393a85637e3f4367a41a/plan.json` independently
+matched SHA-256
+`fb957e956ad3003d1da6dfb3494acf05daf4bfba6d811ff37e853f3c58082ba1`.
+
+The Access-authenticated dashboard and JSON APIs survived repeated Worker
+deployments with D1 and R2 state intact. The deployed HTML was independently
+verified to bind its script and style to a per-response CSP nonce, omit
+`unsafe-inline`, parse successfully, and poll durable state every five seconds.

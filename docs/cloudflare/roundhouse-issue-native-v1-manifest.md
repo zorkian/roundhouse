@@ -3,7 +3,8 @@
 
 # Issue-native V1 loop manifest
 
-Status: approved, unapplied.
+Status: approved and applied on 2026-07-12. The additive migration and Worker
+versions are recorded in the issue-native V1 loop demonstration document.
 
 This manifest records the exact external mutation boundary authorized for the
 issue-native V1 self-development and live operator-UI milestone. Secret values
