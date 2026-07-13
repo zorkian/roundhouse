@@ -114,6 +114,37 @@ ownership. A transient GitHub publication failure after remediation approval
 left the run safely at `awaiting_publication`; replaying the exact idempotent
 command published only the already-approved patch.
 
+Pilot issue `zorkian/roundhouse#24` exercised an interrupted retry followed by
+the complete implementation, approval, publication, CI, and independent-review
+path:
+
+- plan `plan_2d09e909f75963b83b22b84a0dfc0873ac836611`, based on
+  `0529c8ba3b172b02c676961af7fbf0602a07c879`;
+- source run `run_583a5d82f2f82a6600a579e48c422b82f9bb6f60`, whose first
+  three attempts durably retained their `container_interrupted` failures;
+- successful attempt `run_583a5d82f2f82a6600a579e48c422b82f9bb6f60-prepare-4`,
+  patch `dbaec29e091c21f5fb36268ee9298b5ef26fd51c4fd031937c809d46978220fd`;
+- implementation evidence
+  `runs/run_583a5d82f2f82a6600a579e48c422b82f9bb6f60/attempts/run_583a5d82f2f82a6600a579e48c422b82f9bb6f60-prepare-4/trusted-implementation.json`,
+  48,708 bytes with SHA-256
+  `b9e798f0cc4109c2bb7beacaea76ec3e57a34b2fbb34fde975a9564f151396a0`;
+- source commit `98e184b4887402e71148ff2093c8850da6a0e485` on generated
+  pull request `zorkian/roundhouse#27`, with GitHub CI successful;
+- review `review_33cd79f0501f095878ff2aad99e87f9e4f2c2e5c` completed on
+  that exact head. Its one low-severity test-diagnostic suggestion was deferred
+  under the functionality-first V1 policy; no security, correctness, or
+  production finding remained;
+- review evidence
+  `reviews/review_33cd79f0501f095878ff2aad99e87f9e4f2c2e5c/attempts/review_33cd79f0501f095878ff2aad99e87f9e4f2c2e5c-attempt-1/review.json`,
+  2,677 bytes with SHA-256
+  `f90408e8b9b9b54fd757a688c0b3af02adf92cd62a7c8b2af7e7d474d28bbd7e`.
+
+Both pilots kept their requested change to one predeclared test path. Reusing
+Miniflare removes repeated lifecycle setup inside those files, but cold test
+process startup, D1 calls, and whole-repository validation still dominate wall
+clock time. Further harness profiling remains useful V1 follow-up work rather
+than a reason to withhold these bounded changes.
+
 ## Current V1 limitations
 
 - only the public `zorkian/roundhouse` installation is enrolled;

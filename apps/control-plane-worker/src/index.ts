@@ -1556,7 +1556,7 @@ async function route(
   const issueMatch =
     /^\/v1\/repositories\/([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+)\/issues\/([1-9][0-9]*)$/.exec(
       url.pathname,
-  );
+    );
   if (request.method === "GET" && issueMatch) {
     const repositoryFullName = `${issueMatch[1]}/${issueMatch[2]}`;
     if (repositoryFullName !== "zorkian/roundhouse")
@@ -1565,11 +1565,7 @@ async function route(
         "Repository is not enrolled in this development adapter",
       );
     return json(
-      await issueInspection(
-        env,
-        repositoryFullName,
-        Number(issueMatch[3]),
-      ),
+      await issueInspection(env, repositoryFullName, Number(issueMatch[3])),
     );
   }
   const planMatch = /^\/v1\/plans\/([a-zA-Z0-9_-]{1,128})$/.exec(url.pathname);
