@@ -417,7 +417,7 @@ describe("GitHub-native operator webhook", () => {
         method: "POST",
         headers: {
           "x-github-delivery": "12345678-abcd-4321-abcd-1234567890ab",
-          "x-github-event": "push",
+          "x-github-event": "deployment",
           "x-hub-signature-256": await signature(body, "webhook-test-secret"),
         },
         body,
