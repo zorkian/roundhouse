@@ -64,6 +64,10 @@ describe("operator UI", () => {
               pullRequestUrl: "https://github.com/zorkian/roundhouse/pull/25",
             },
           },
+          pullRequestLifecycle: {
+            state: "merged",
+            mergeCommitSha: "c".repeat(40),
+          },
           reviews: [
             {
               status: "completed",
@@ -84,6 +88,48 @@ describe("operator UI", () => {
     expect(app.innerHTML).toContain(
       "https://github.com/zorkian/roundhouse/pull/25",
     );
+    expect(app.innerHTML).toContain("development release and checks");
+    expect(app.innerHTML).toContain(`${"c".repeat(40)}/checks`);
+  });
+
+  it("renders live Container phases on a run page", async () => {
+    const response = operatorPage("/runs/run_live")!;
+    const script = /<script[^>]*>([\s\S]+)<\/script>/.exec(
+      await response.text(),
+    )![1];
+    const app = { innerHTML: "Loading…" };
+    vi.stubGlobal("document", {
+      getElementById: (id: string) => (id === "app" ? app : null),
+    });
+    vi.stubGlobal("setInterval", () => 0);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          schemaVersion: 1,
+          runId: "run_live",
+          taskId: "task_live",
+          state: "implementing",
+          revision: 3,
+          attempts: [],
+          evidence: [],
+          events: [],
+          progress: [
+            {
+              attemptId: "run_live-prepare-1",
+              phase: "agent.implement",
+              status: "running",
+              startedAt: "2026-07-14T00:00:00.000Z",
+              updatedAt: "2026-07-14T00:00:00.000Z",
+            },
+          ],
+        }),
+      ),
+    );
+    new Function(script!)();
+    await vi.waitFor(() => expect(app.innerHTML).toContain("Live execution"));
+    expect(app.innerHTML).toContain("agent.implement");
+    expect(app.innerHTML).toContain("running");
   });
 
   it("does not label the source run as an active remediation", async () => {

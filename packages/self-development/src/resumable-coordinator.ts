@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { JobStage, SelfDevelopmentRun } from "./task.js";
-import type { Clock, JobStageExecutor, JobStore } from "./job-ports.js";
+import type {
+  Clock,
+  JobStageExecutor,
+  JobStore,
+  StageResult,
+} from "./job-ports.js";
 
 export class StageFailure extends Error {
   constructor(
@@ -42,6 +47,7 @@ function stageFor(run: SelfDevelopmentRun): JobStage | null {
 export type ResumableCoordinatorOptions = {
   workerId: string;
   leaseMs?: number;
+  leaseHeartbeatMs?: number;
   maxAttemptsPerStage?: number;
 };
 
@@ -120,7 +126,11 @@ export class ResumableCoordinator {
       (attempt) => attempt.stage === stage,
     ).length;
     try {
-      const result = await this.executor.execute(stage, started);
+      const result = await this.executeWithLeaseHeartbeat(
+        stage,
+        started,
+        claim.token,
+      );
       const completed = await this.store.completeAttempt(
         started.runId,
         claim.token,
@@ -160,5 +170,51 @@ export class ResumableCoordinator {
       await this.store.release(started.runId, claim.token, this.clock.now());
       return this.store.read(failed.runId);
     }
+  }
+
+  private async executeWithLeaseHeartbeat(
+    stage: JobStage,
+    run: SelfDevelopmentRun,
+    token: string,
+  ): Promise<StageResult> {
+    const heartbeatMs = this.options.leaseHeartbeatMs;
+    if (heartbeatMs === undefined) return this.executor.execute(stage, run);
+    const leaseMs = this.options.leaseMs ?? 30_000;
+    if (
+      !Number.isSafeInteger(heartbeatMs) ||
+      heartbeatMs <= 0 ||
+      heartbeatMs >= leaseMs
+    )
+      throw new Error("Lease heartbeat must be shorter than the lease");
+
+    let renewal = Promise.resolve();
+    let renewalFailure: unknown;
+    const timer = setInterval(() => {
+      renewal = renewal
+        .then(() =>
+          this.store.renew(run.runId, token, this.clock.now(), leaseMs),
+        )
+        .catch((error: unknown) => {
+          renewalFailure ??= error;
+        });
+    }, heartbeatMs);
+    let result: StageResult | undefined;
+    let executionFailure: unknown;
+    try {
+      result = await this.executor.execute(stage, run);
+    } catch (error) {
+      executionFailure = error;
+    } finally {
+      clearInterval(timer);
+      await renewal;
+    }
+    if (executionFailure) throw executionFailure;
+    if (renewalFailure)
+      throw new StageFailure(
+        "Worker lease heartbeat failed during stage execution",
+        "lease_heartbeat_failed",
+        true,
+      );
+    return result!;
   }
 }

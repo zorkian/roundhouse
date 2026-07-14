@@ -70,6 +70,29 @@ afterEach(async () => {
 });
 
 describe("ResumableCoordinator", () => {
+  it("renews a long-running stage without changing its logical revision", async () => {
+    const root = await mkdtemp(join(tmpdir(), "roundhouse-heartbeat-"));
+    paths.push(root);
+    const store = new FileRunStore(root);
+    const clock = new MutableClock(new Date("2026-07-12T00:00:00Z"));
+    const executor: JobStageExecutor = {
+      async execute() {
+        await new Promise((resolve) => setTimeout(resolve, 35));
+        return { state: "workspace_ready" };
+      },
+    };
+    const worker = new ResumableCoordinator(store, executor, clock, {
+      workerId: "worker-heartbeat",
+      leaseMs: 1_000,
+      leaseHeartbeatMs: 10,
+    });
+    await worker.submit("run_heartbeat", task);
+    const completed = await worker.workOnce();
+    expect(completed?.state).toBe("workspace_ready");
+    expect(completed?.revision).toBe(5);
+    expect(completed?.events).toHaveLength(2);
+  });
+
   it("records bounded retries, stops for approval, and resumes afterward", async () => {
     const root = await mkdtemp(join(tmpdir(), "roundhouse-coordinator-"));
     paths.push(root);

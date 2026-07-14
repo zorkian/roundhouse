@@ -28,10 +28,20 @@ import {
   githubNativeOperatorMigration,
 } from "./github-webhook.js";
 import { githubReviewCheckMigration } from "./github-status.js";
+import {
+  executionProgressMigration,
+  recordExecutionPhase,
+} from "./execution-progress.js";
+import {
+  readPullRequestLifecycle,
+  recordPullRequestLifecycle,
+} from "./github-lifecycle.js";
 
 let instance: Miniflare;
 let database: D1Database;
 const resetTables = [
+  "execution_attempt_phases",
+  "github_pull_request_lifecycle",
   "github_review_check_outbox",
   "independent_review_findings",
   "independent_review_events",
@@ -279,7 +289,7 @@ beforeAll(async () => {
     new URL("../migrations/0008_independent_review.sql", import.meta.url),
     "utf8",
   );
-  for (const statement of `${d1JobStoreMigration}\n${controlPlaneSubmissionMigration}\n${cloudOperationsMigration}\n${githubPocMigration}\n${githubNativeOperatorMigration}\n${githubPlanningMigration}\n${independentReviewMigration}\n${githubReviewCheckMigration}`
+  for (const statement of `${d1JobStoreMigration}\n${controlPlaneSubmissionMigration}\n${cloudOperationsMigration}\n${githubPocMigration}\n${githubNativeOperatorMigration}\n${githubPlanningMigration}\n${independentReviewMigration}\n${githubReviewCheckMigration}\n${executionProgressMigration}`
     .split(";")
     .map((value) => value.trim())
     .filter(Boolean))
@@ -1188,6 +1198,38 @@ describe("local control-plane Worker", () => {
     expect(await replay.json()).toEqual(firstBody);
     expect(pullWrites).toBe(1);
     await expect(
+      recordPullRequestLifecycle(env, {
+        deliveryId: "lifecycle-test",
+        eventName: "pull_request",
+        payloadSha256: "a".repeat(64),
+        payload: {
+          action: "closed",
+          installation: { id: 2 },
+          repository: { full_name: "zorkian/roundhouse" },
+          pull_request: {
+            number: 11,
+            html_url: "https://github.com/zorkian/roundhouse/pull/11",
+            state: "closed",
+            merged: true,
+            merged_at: "2026-07-14T00:00:00.000Z",
+            merge_commit_sha: "f".repeat(40),
+            head: { sha: commit },
+          },
+        },
+      }),
+    ).resolves.toMatchObject({
+      runId: value.runId,
+      issueNumber: 7,
+      state: "merged",
+      mergeCommitSha: "f".repeat(40),
+    });
+    await expect(
+      readPullRequestLifecycle(env, value.runId),
+    ).resolves.toMatchObject({
+      state: "merged",
+      mergeCommitSha: "f".repeat(40),
+    });
+    await expect(
       env.DB.prepare(
         "SELECT head_sha, check_status, conclusion, status FROM github_review_check_outbox WHERE repository_full_name = ? AND review_id = ?",
       )
@@ -1456,6 +1498,14 @@ describe("local control-plane Worker", () => {
     expect((await new D1JobStore(env.DB).read(response.runId)).state).toBe(
       "workspace_ready",
     );
+    await recordExecutionPhase(env, {
+      runId: response.runId,
+      attemptId: `${response.runId}-prepare-1`,
+      phase: "agent.implement",
+      status: "running",
+      occurredAt: "2026-07-14T00:00:00.000Z",
+      detail: {},
+    });
 
     const inspected = await handler.fetch!(
       request(`/v1/runs/${response.runId}`),
@@ -1470,6 +1520,8 @@ describe("local control-plane Worker", () => {
     expect(text).not.toContain(task.repositoryPath);
     expect(text).not.toContain("lease");
     expect(text).not.toContain("workspacePath");
+    expect(text).toContain("agent.implement");
+    expect(text).toContain('"status":"running"');
   });
 
   it("repairs interruption between submission reservation and run creation", async () => {

@@ -39,6 +39,7 @@ import {
   submitRunSchema,
 } from "./contracts.js";
 import type { ControlPlaneEnv } from "./environment.js";
+import { readExecutionProgress } from "./execution-progress.js";
 import { inspectRun } from "./inspection.js";
 import { GitHubAppGateway, GitHubAppGatewayError } from "./github-gateway.js";
 import {
@@ -86,6 +87,10 @@ import {
 } from "./github-status.js";
 import { publishApprovedGitHubRun } from "./github-publication.js";
 import {
+  readPullRequestLifecycle,
+  recordPullRequestLifecycle,
+} from "./github-lifecycle.js";
+import {
   claimIndependentReview,
   completeIndependentReview,
   failIndependentReview,
@@ -126,10 +131,10 @@ import { runtimeIdentity } from "./runtime-config.js";
 const maxBodyBytes = 64 * 1024;
 const jsonHeaders = { "content-type": "application/json; charset=utf-8" };
 const delegatedApprover = "mark-smith-delegated-trusted-loop-dogfood";
-// One trusted stage can spend 20 minutes in the agent and 15 minutes in
-// validation. The exclusive lease must outlive that bounded operation because
-// this Worker cannot safely reclaim the run while its Container RPC is active.
-const trustedImplementationLeaseMs = 40 * 60_000;
+// Healthy work renews a short lease. A terminated Worker therefore becomes
+// reclaimable promptly without allowing a long-running healthy agent to overlap.
+const trustedImplementationLeaseMs = 5 * 60_000;
+const trustedImplementationHeartbeatMs = 60_000;
 
 function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), { status, headers: jsonHeaders });
@@ -215,6 +220,10 @@ function coordinator(env: ControlPlaneEnv): ResumableCoordinator {
         env.EXECUTION_MODE === "cloudflare-trusted-codex"
           ? trustedImplementationLeaseMs
           : 300_000,
+      leaseHeartbeatMs:
+        env.EXECUTION_MODE === "cloudflare-trusted-codex"
+          ? trustedImplementationHeartbeatMs
+          : undefined,
       maxAttemptsPerStage: 3,
     },
   );
@@ -722,7 +731,7 @@ export async function runComment(
           `Workflow: ${identity.origin}/repositories/${identity.repositoryFullName}/issues/${run.task.source.issueNumber}`,
         ]
       : []),
-    `Status: ${identity.origin}/runs/${run.runId}`,
+    `[Open live status →](${identity.origin}/runs/${run.runId}) (refreshes every 5 seconds).`,
     `Base: \`${run.task.baseCommit}\``,
   ];
   const attempt = run.attempts.at(-1);
@@ -856,11 +865,17 @@ async function enqueueRunComment(
 ): Promise<void> {
   const identity = runtimeIdentity(env);
   const run = await new D1JobStore(env.DB).read(runId);
+  const lifecycle = await readPullRequestLifecycle(env, runId);
+  const lifecycleSummary = lifecycle
+    ? lifecycle.state === "merged" && lifecycle.mergeCommitSha
+      ? `\n\nPull request: **merged** as [\`${lifecycle.mergeCommitSha}\`](https://github.com/${identity.repositoryFullName}/commit/${lifecycle.mergeCommitSha}). [Development release and checks](https://github.com/${identity.repositoryFullName}/commit/${lifecycle.mergeCommitSha}/checks).`
+      : `\n\nPull request lifecycle: **${lifecycle.state}** at exact head \`${lifecycle.headSha}\`.`
+    : "";
   await enqueueStatusComment(
     env,
     identity.repositoryFullName,
     issueNumber,
-    `<!-- roundhouse-status:${identity.repositoryFullName}#${issueNumber} -->\n\n${await runComment(run, identity)}`,
+    `<!-- roundhouse-status:${identity.repositoryFullName}#${issueNumber} -->\n\n${await runComment(run, identity)}${lifecycleSummary}`,
   );
 }
 
@@ -1516,6 +1531,25 @@ async function githubWebhook(
       }
       return json({ schemaVersion: 1, accepted: true });
     }
+    const lifecycle = await recordPullRequestLifecycle(env, webhook);
+    if (lifecycle) {
+      await enqueueRunComment(env, lifecycle.issueNumber, lifecycle.runId);
+      await completeWebhookDelivery(
+        env,
+        webhook.deliveryId,
+        reservation.claimId,
+        "completed",
+        lifecycle,
+      );
+      try {
+        await flushGitHubOutputs(env);
+      } catch (error) {
+        console.warn("GitHub pull-request status delivery deferred", {
+          reason: redactedReason(error),
+        });
+      }
+      return json({ schemaVersion: 1, accepted: true });
+    }
     const feedback = pullRequestFeedback(webhook);
     if (feedback) {
       const result = await startPullRequestFeedbackRemediation(env, feedback);
@@ -2083,7 +2117,10 @@ async function route(
   );
   if (request.method === "GET" && match?.[1]) {
     try {
-      return json(inspectRun(await new D1JobStore(env.DB).read(match[1])));
+      return json({
+        ...inspectRun(await new D1JobStore(env.DB).read(match[1])),
+        progress: await readExecutionProgress(env, match[1]),
+      });
     } catch (error) {
       if (error instanceof Error && error.message.startsWith("Run not found:"))
         throw new HttpError(404, "Run not found");

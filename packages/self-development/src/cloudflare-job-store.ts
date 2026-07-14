@@ -391,20 +391,24 @@ export class D1JobStore implements JobStore {
   ): Promise<void> {
     if (!Number.isSafeInteger(leaseMs) || leaseMs <= 0)
       throw new Error("Lease duration must be a positive integer");
-    await this.mutate(runId, (run) => {
-      this.assertLease(run, token, now);
-      return {
-        run: {
-          ...run,
-          updatedAt: now.toISOString(),
-          lease: {
-            ...run.lease!,
-            expiresAt: new Date(now.getTime() + leaseMs).toISOString(),
-          },
-        },
-        result: undefined,
-      };
+    const run = await this.read(runId);
+    this.assertLease(run, token, now);
+    const next = selfDevelopmentRunSchema.parse({
+      ...run,
+      updatedAt: now.toISOString(),
+      lease: {
+        ...run.lease!,
+        expiresAt: new Date(now.getTime() + leaseMs).toISOString(),
+      },
     });
+    const renewed = await this.db
+      .prepare(
+        "UPDATE self_development_runs SET updated_at = ?, payload = ? WHERE run_id = ? AND revision = ? AND json_extract(payload, '$.lease.token') = ?",
+      )
+      .bind(next.updatedAt, JSON.stringify(next), runId, run.revision, token)
+      .run();
+    if ((renewed.meta.changes ?? 0) !== 1)
+      throw new Error("Run lease changed while it was being renewed");
   }
 
   async release(runId: string, token: string, now: Date): Promise<void> {

@@ -27,6 +27,7 @@ import {
   isCheckoutRequestAllowed,
   modelRequestAuditAccepted,
 } from "./execution-egress.js";
+import { recordExecutionPhase } from "./execution-progress.js";
 
 const modelHosts = ["chatgpt.com", "auth.openai.com"];
 const reviewModelHosts = ["api.anthropic.com"];
@@ -135,20 +136,53 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
   ): Promise<T> {
     const started = Date.now();
     lifecycle("info", "phase.started", request, { phase });
+    await this.observePhase(request, phase, "running", {});
     try {
       const result = await action();
+      await this.observePhase(request, phase, "completed", {
+        durationMs: Date.now() - started,
+      });
       lifecycle("info", "phase.completed", request, {
         phase,
         durationMs: Date.now() - started,
       });
       return result;
     } catch (error) {
+      await this.observePhase(request, phase, "failed", {
+        durationMs: Date.now() - started,
+      });
       lifecycle("error", "phase.failed", request, {
         phase,
         durationMs: Date.now() - started,
         reason: boundedReason(error),
       });
       throw error;
+    }
+  }
+
+  private async observePhase(
+    request: ObservableRequest,
+    phase: string,
+    status: "running" | "completed" | "failed",
+    detail: Record<string, string | number | boolean>,
+  ): Promise<void> {
+    if (!request.runId) return;
+    try {
+      await recordExecutionPhase(this.env, {
+        runId: request.runId,
+        attemptId: request.attemptId,
+        phase,
+        status,
+        occurredAt: new Date().toISOString(),
+        detail,
+      });
+    } catch (error) {
+      console.warn("Container progress recording was deferred", {
+        runId: request.runId,
+        attemptId: request.attemptId,
+        phase,
+        reason: boundedReason(error),
+      });
     }
   }
 
