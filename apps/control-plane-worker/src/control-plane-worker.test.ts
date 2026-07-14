@@ -761,6 +761,134 @@ describe("local control-plane Worker", () => {
     );
   });
 
+  it("retains and reports a bounded planning failure on the source issue", async () => {
+    const { env } = await runtime();
+    const pair = await generateKeyPair("RS256", { extractable: true });
+    env.GITHUB_APP_ID = "4281837";
+    env.GITHUB_INSTALLATION_ID = "146147681";
+    env.ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY = await exportPKCS8(pair.privateKey);
+    env.ROUNDHOUSE_GITHUB_WEBHOOK_SECRET = "signed-webhook-secret";
+    env.EXECUTION_MODE = "cloudflare-trusted-codex";
+    env.ROUNDHOUSE_CODEX_AUTH_JSON = JSON.stringify({ token: "x".repeat(64) });
+    env.EXECUTION_CONTAINERS = {
+      getByName: () => ({
+        runPlanningJob: async () => {
+          throw new Error(
+            "planning agent failed at /private/runner/output.json after https://chatgpt.com/request",
+          );
+        },
+        destroy: async () => undefined,
+      }),
+    } as unknown as ControlPlaneEnv["EXECUTION_CONTAINERS"];
+    let failureComment = "";
+    env.GITHUB_API_FETCHER = async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/access_tokens"))
+        return new Response(
+          JSON.stringify({
+            token: "installation-token",
+            expires_at: "2026-07-15T00:00:00Z",
+          }),
+          { status: 201 },
+        );
+      if (url.pathname.endsWith("/issues/49") && init?.method !== "POST")
+        return new Response(
+          JSON.stringify({
+            number: 49,
+            node_id: "issue-node-49",
+            html_url: "https://github.com/zorkian/roundhouse/issues/49",
+            title: "Plan one bounded change",
+            body: "Determine the smallest implementation scope.",
+            updated_at: "2026-07-14T16:00:00Z",
+          }),
+        );
+      if (url.pathname.endsWith("/git/ref/heads/main"))
+        return new Response(
+          JSON.stringify({ object: { sha: "e".repeat(40) } }),
+        );
+      if (
+        url.pathname.endsWith("/issues/49/comments") &&
+        (init?.method ?? "GET") === "GET"
+      )
+        return new Response("[]");
+      if (
+        url.pathname.endsWith("/issues/49/comments") &&
+        init?.method === "POST"
+      ) {
+        failureComment = (JSON.parse(String(init.body)) as { body: string })
+          .body;
+        return new Response(
+          JSON.stringify({
+            id: 994,
+            html_url:
+              "https://github.com/zorkian/roundhouse/issues/49#issuecomment-994",
+            body: failureComment,
+          }),
+          { status: 201 },
+        );
+      }
+      return new Response("{}", { status: 404 });
+    };
+    const payload = JSON.stringify({
+      action: "created",
+      installation: { id: 146147681 },
+      repository: { full_name: "zorkian/roundhouse" },
+      sender: { login: "zorkian" },
+      issue: { number: 49 },
+      comment: {
+        id: 49,
+        body: "/rh start",
+        user: { login: "zorkian" },
+      },
+    });
+    const key = await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode("signed-webhook-secret"),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+    const mac = await crypto.subtle.sign(
+      "HMAC",
+      key,
+      new TextEncoder().encode(payload),
+    );
+    const deliveryId = "cccccccc-dddd-4eee-8fff-000000000049";
+    const response = await createControlPlaneHandler().fetch!(
+      new Request("http://roundhouse.local/v1/github/webhook", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-github-delivery": deliveryId,
+          "x-github-event": "issue_comment",
+          "x-hub-signature-256": `sha256=${[...new Uint8Array(mac)]
+            .map((byte) => byte.toString(16).padStart(2, "0"))
+            .join("")}`,
+        },
+        body: payload,
+      }) as Request<unknown, IncomingRequestCfProperties>,
+      env,
+      {} as ExecutionContext,
+    );
+    expect(response.status).toBe(500);
+    const receipt = await env.DB.prepare(
+      "SELECT status, result_json FROM github_webhook_deliveries WHERE delivery_id = ?",
+    )
+      .bind(deliveryId)
+      .first<{ status: string; result_json: string }>();
+    expect(receipt?.status).toBe("failed");
+    expect(JSON.parse(receipt!.result_json)).toEqual({
+      code: "processing_failed",
+      reason: "planning agent failed at [path] after [url]",
+    });
+    expect(failureComment).toContain("could not complete `/rh start`");
+    expect(failureComment).toContain(
+      "Failure: `planning agent failed at [path] after [url]`",
+    );
+    expect(failureComment).not.toContain("/private/runner");
+    expect(failureComment).not.toContain("chatgpt.com");
+  });
+
   it("does not expose the retired direct issue-to-run administration route", async () => {
     const { env, queued } = await runtime();
     const handler = createControlPlaneHandler();
