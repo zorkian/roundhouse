@@ -451,6 +451,35 @@ async function materializeGitHubPlan(
   return body.runId;
 }
 
+function lowRiskPlan(value: DurableIssuePlan): boolean {
+  return (
+    value.status === "proposed" &&
+    value.plan.status === "proposed" &&
+    value.plan.risk === "low"
+  );
+}
+
+async function materializeLowRiskPlan(
+  env: ControlPlaneEnv,
+  issueNumber: number,
+  plan: DurableIssuePlan,
+  actorId: string,
+): Promise<string> {
+  if (!lowRiskPlan(plan))
+    throw new Error("Plan is not eligible for automatic materialization");
+  return materializeGitHubPlan(
+    env,
+    issueNumber,
+    {
+      kind: "implement",
+      planId: plan.plan.planId,
+      revision: plan.revision,
+      planSha256: plan.plan.planSha256,
+    },
+    actorId,
+  );
+}
+
 async function planComment(
   value: DurableIssuePlan,
   identity: ReturnType<typeof runtimeIdentity>,
@@ -1183,6 +1212,17 @@ async function executeGitHubCommand(
       existingPlan?.status === "rejected"
         ? await planGitHubIssue(issueNumber, env, actorId)
         : (existingPlan ?? (await planGitHubIssue(issueNumber, env, actorId)));
+    if (lowRiskPlan(plan)) {
+      runId = await materializeLowRiskPlan(env, issueNumber, plan, actorId);
+      const current = await new D1JobStore(env.DB).read(runId);
+      await enqueueRunComment(env, issueNumber, runId);
+      return {
+        kind: "run",
+        runId,
+        state: current.state,
+        revision: current.revision,
+      };
+    }
     await enqueuePlanComment(env, issueNumber, plan);
     return plan.runId
       ? {
@@ -1747,6 +1787,62 @@ async function publishGitHubRun(
   });
 }
 
+async function publishEligibleLowRiskRun(
+  env: ControlPlaneEnv,
+  value: Awaited<ReturnType<D1JobStore["read"]>>,
+): Promise<Awaited<ReturnType<D1JobStore["read"]>>> {
+  let run = value;
+  if (
+    !run.task.planning ||
+    !run.implementation ||
+    !["awaiting_approval", "awaiting_publication"].includes(run.state)
+  )
+    return run;
+  const plan = await readPlanById(env, run.task.planning.planId);
+  if (
+    !plan ||
+    plan.status !== "materialized" ||
+    plan.plan.status !== "proposed" ||
+    plan.plan.risk !== "low" ||
+    plan.approvedBy !== run.task.planning.approvedBy
+  )
+    return run;
+  const actorId = run.task.planning.approvedBy;
+  if (!run.approval) {
+    const evidence = run.evidence
+      .filter((item) => item.approvalEligible !== false)
+      .map(({ evidenceId, objectKey, sha256, size }) => ({
+        evidenceId,
+        objectKey,
+        sha256,
+        size,
+      }));
+    await approveRun(
+      run.runId,
+      {
+        schemaVersion: 1,
+        expectedRevision: run.revision,
+        patchSha256: run.implementation.patchSha256,
+        evidence,
+        approver: actorId,
+      },
+      env,
+      actorId,
+    );
+    run = await new D1JobStore(env.DB).read(run.runId);
+  }
+  if (!run.publication) {
+    await publishGitHubRun(
+      run.runId,
+      { schemaVersion: 1, expectedRevision: run.revision },
+      env,
+      actorId,
+    );
+    run = await new D1JobStore(env.DB).read(run.runId);
+  }
+  return run;
+}
+
 async function route(
   request: Request,
   env: ControlPlaneEnv,
@@ -2198,6 +2294,7 @@ export function createControlPlaneHandler(
                 deliveryId: `retry_${run.runId}_${run.revision}`,
                 expectedRevision: run.revision,
               });
+            run = await publishEligibleLowRiskRun(env, run);
             if (run.task.source?.kind === "github_issue") {
               await enqueueRunComment(
                 env,
