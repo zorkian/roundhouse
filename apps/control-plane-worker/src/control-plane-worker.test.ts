@@ -149,6 +149,7 @@ async function awaitingImplementation(env: ControlPlaneEnv) {
     patchSha256: await sha256(patch),
     patchBytes: new TextEncoder().encode(patch).byteLength,
     changedFiles: ["docs/dogfood/trusted-self-development-loop.md"],
+    validationOutcome: "passed",
     publicationManifest: {
       ...manifestValue,
       sha256: await sha256(JSON.stringify(manifestValue)),
@@ -1612,7 +1613,19 @@ describe("local control-plane Worker", () => {
       ]),
     ).toEqual(["ack:0"]);
     const submitted = await handler.fetch!(
-      submission("terminal-failure-01"),
+      submission("terminal-failure-01", {
+        ...task,
+        source: {
+          kind: "github_issue",
+          owner: "zorkian",
+          repository: "roundhouse",
+          issueNumber: 33,
+          issueUrl: "https://github.com/zorkian/roundhouse/issues/33",
+          nodeId: "I_kwDOFailureDiagnostic",
+          contentSha256: "a".repeat(64),
+          updatedAt: "2026-07-13T00:00:00.000Z",
+        },
+      }),
       env,
       {} as ExecutionContext,
     );
@@ -1636,6 +1649,14 @@ describe("local control-plane Worker", () => {
     expect(await inspection.text()).not.toContain(
       "No authorized execution dispatcher",
     );
+    const failureComment = await env.DB.prepare(
+      "SELECT body FROM github_comment_outbox WHERE comment_key LIKE 'run-failure:%'",
+    ).first<{ body: string }>();
+    expect(failureComment?.body).toContain("failed during `prepare`");
+    expect(failureComment?.body).toContain(
+      "Failure classification: `unexpected`",
+    );
+    expect(failureComment?.body).toContain(`/rh retry ${runId}`);
   });
 
   it("emits revision-bound retries and stops at the attempt limit", async () => {

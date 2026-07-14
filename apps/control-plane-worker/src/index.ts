@@ -618,7 +618,7 @@ async function flushGitHubOutputs(env: ControlPlaneEnv): Promise<void> {
   if (firstError) throw firstError;
 }
 
-async function runComment(
+export async function runComment(
   run: Awaited<ReturnType<D1JobStore["read"]>>,
   identity: ReturnType<typeof runtimeIdentity>,
 ): Promise<string> {
@@ -633,10 +633,26 @@ async function runComment(
     `Base: \`${run.task.baseCommit}\``,
   ];
   const attempt = run.attempts.at(-1);
-  if (attempt)
+  if (attempt) {
     lines.push(
       `Latest attempt: \`${attempt.attemptId}\` (${attempt.status}${attempt.classification ? `, ${attempt.classification}` : ""}).`,
     );
+    if (attempt.classification === "validation_failed" && attempt.error)
+      lines.push(
+        "Failure diagnostics:",
+        attempt.error
+          .split("\n")
+          .map((line) => `    ${line}`)
+          .join("\n"),
+      );
+    const attemptEvidence = run.evidence.find(
+      (value) => value.attemptId === attempt.attemptId,
+    );
+    if (attemptEvidence)
+      lines.push(
+        `Evidence: ${identity.origin}/v1/runs/${run.runId}/evidence/${attemptEvidence.evidenceId}`,
+      );
+  }
   if (run.state === "awaiting_approval" && run.implementation) {
     if (
       run.evidence.some(
@@ -645,12 +661,14 @@ async function runComment(
     ) {
       const evidenceSetSha256 = await sha256(
         JSON.stringify(
-          run.evidence.map(({ evidenceId, objectKey, sha256, size }) => ({
-            evidenceId,
-            objectKey,
-            sha256,
-            size,
-          })),
+          run.evidence
+            .filter((value) => value.approvalEligible !== false)
+            .map(({ evidenceId, objectKey, sha256, size }) => ({
+              evidenceId,
+              objectKey,
+              sha256,
+              size,
+            })),
         ),
       );
       lines.push(
@@ -664,6 +682,52 @@ async function runComment(
   if (run.publication?.pullRequestUrl)
     lines.push(`Draft pull request: ${run.publication.pullRequestUrl}`);
   return lines.join("\n\n");
+}
+
+async function enqueueRunFailureComment(
+  env: ControlPlaneEnv,
+  issueNumber: number,
+  run: Awaited<ReturnType<D1JobStore["read"]>>,
+): Promise<void> {
+  const attempt = run.attempts.at(-1);
+  if (run.state !== "failed" || attempt?.status !== "failed") return;
+  const identity = runtimeIdentity(env);
+  const evidence = run.evidence.find(
+    (value) => value.attemptId === attempt.attemptId,
+  );
+  const lines = [
+    `Roundhouse run \`${run.runId}\` failed during \`${attempt.stage}\` attempt \`${attempt.number}\`.`,
+    `Status: ${identity.origin}/runs/${run.runId}`,
+  ];
+  if (attempt.classification === "validation_failed" && attempt.error)
+    lines.push(
+      "Failure diagnostics:",
+      attempt.error
+        .split("\n")
+        .map((line) => `    ${line}`)
+        .join("\n"),
+    );
+  else
+    lines.push(
+      `Failure classification: \`${attempt.classification ?? "unexpected"}\`. See the status page for the durable attempt record.`,
+    );
+  if (evidence)
+    lines.push(
+      `Retained evidence: ${identity.origin}/v1/runs/${run.runId}/evidence/${evidence.evidenceId}`,
+    );
+  lines.push(
+    "Retry this exact failed revision after reviewing the diagnostics with:",
+    "```text",
+    `/rh retry ${run.runId} ${run.revision}`,
+    "```",
+  );
+  await enqueueComment(
+    env,
+    `run-failure:${identity.repositoryFullName}:${run.runId}:${attempt.attemptId}`,
+    issueNumber,
+    lines.join("\n\n"),
+    identity.repositoryFullName,
+  );
 }
 
 async function enqueueRunComment(
@@ -835,12 +899,14 @@ async function reservePublicationReview(
         planRevision: 1,
         planSha256: run.task.planning.planSha256,
       },
-      evidence: run.evidence.map(({ evidenceId, objectKey, sha256, size }) => ({
-        evidenceId,
-        objectKey,
-        sha256,
-        size,
-      })),
+      evidence: run.evidence
+        .filter((value) => value.approvalEligible !== false)
+        .map(({ evidenceId, objectKey, sha256, size }) => ({
+          evidenceId,
+          objectKey,
+          sha256,
+          size,
+        })),
       timeoutMs: 15 * 60_000,
       maxOutputBytes: 256 * 1024,
       maxFindings: 50,
@@ -1178,14 +1244,14 @@ async function executeGitHubCommand(
       });
     } else if (command.kind === "approve") {
       let run = await jobs.read(runId);
-      const evidence = run.evidence.map(
-        ({ evidenceId, objectKey, sha256, size }) => ({
+      const evidence = run.evidence
+        .filter((value) => value.approvalEligible !== false)
+        .map(({ evidenceId, objectKey, sha256, size }) => ({
           evidenceId,
           objectKey,
           sha256,
           size,
-        }),
-      );
+        }));
       const evidenceSetSha256 = await sha256(JSON.stringify(evidence));
       if (
         run.task.baseCommit !== command.baseCommit ||
@@ -2137,6 +2203,11 @@ export function createControlPlaneHandler(
                 env,
                 run.task.source.issueNumber,
                 run.runId,
+              );
+              await enqueueRunFailureComment(
+                env,
+                run.task.source.issueNumber,
+                run,
               );
               try {
                 await flushGitHubOutputs(env);

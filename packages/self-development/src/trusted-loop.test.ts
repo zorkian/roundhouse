@@ -54,6 +54,12 @@ describe("trusted self-development contracts", () => {
     expect(trustedImplementationRequestSchema.parse(request)).toMatchObject({
       allowedPaths: ["docs/dogfood/trusted-self-development-loop.md"],
     });
+    expect(
+      trustedImplementationRequestSchema.parse({
+        ...request,
+        retryContext: "format failed on the preceding attempt",
+      }).retryContext,
+    ).toContain("format failed");
     for (const path of ["../secret", "/etc/passwd", "docs\\file.md"])
       expect(() =>
         trustedImplementationRequestSchema.parse({

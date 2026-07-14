@@ -48,29 +48,33 @@ export async function publishApprovedGitHubRun(input: {
       runId: run.runId,
       baseCommit: run.task.baseCommit,
       patchSha256: run.implementation.patchSha256,
-      evidence: run.evidence.map((value) => ({
-        evidenceId: value.evidenceId,
-        objectKey: value.objectKey,
-        sha256: value.sha256,
-        size: value.size,
-      })),
+      evidence: run.evidence
+        .filter((value) => value.approvalEligible !== false)
+        .map((value) => ({
+          evidenceId: value.evidenceId,
+          objectKey: value.objectKey,
+          sha256: value.sha256,
+          size: value.size,
+        })),
     })
   )
     throw new Error("Durable approval does not match complete evidence");
 
   const retained = await Promise.all(
-    run.evidence.map(async (binding) => {
-      const object = await input.evidence.get(binding.objectKey);
-      if (!object) throw new Error("Approval-bound evidence is unavailable");
-      const text = await object.text();
-      const bytes = encoder.encode(text);
-      if (
-        bytes.byteLength !== binding.size ||
-        (await hash(bytes)) !== binding.sha256
-      )
-        throw new Error("Approval-bound evidence failed verification");
-      return { binding, text };
-    }),
+    run.evidence
+      .filter((binding) => binding.approvalEligible !== false)
+      .map(async (binding) => {
+        const object = await input.evidence.get(binding.objectKey);
+        if (!object) throw new Error("Approval-bound evidence is unavailable");
+        const text = await object.text();
+        const bytes = encoder.encode(text);
+        if (
+          bytes.byteLength !== binding.size ||
+          (await hash(bytes)) !== binding.sha256
+        )
+          throw new Error("Approval-bound evidence failed verification");
+        return { binding, text };
+      }),
   );
   const implementation = retained.find(
     (value) => value.binding.evidenceId === run.implementation?.evidenceId,

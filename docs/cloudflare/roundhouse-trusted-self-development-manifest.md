@@ -73,10 +73,13 @@ add indexes but may not alter or delete existing rows or tables.
    paths outside the submitted allowlist, then revokes model egress and removes
    the credential file before validation.
 7. Fixed repository-profile commands perform diff-aware formatting, license,
-   type, and test validation. Immutable evidence is conditionally written to
-   R2 and hash-bound to D1.
-8. Approval binds run ID, base commit, patch SHA-256, and the complete evidence
-   set. Any mutation invalidates approval.
+   type, and test validation. Successful and failed validation results retain
+   the complete bounded patch and command output immutably in R2 and bind the
+   exact object identity and hash into D1. Failed evidence is inspectable but
+   explicitly ineligible for approval.
+8. An explicit retry receives the preceding same-stage validation diagnostic.
+   Approval binds run ID, base commit, patch SHA-256, and the complete
+   approval-eligible evidence set. Any mutation invalidates approval.
 9. Publication is performed outside the coding agent. It reconstructs only the
    approved patch, verifies the expected GitHub repository and remote base,
    creates one commit, pushes one new branch, and may create one draft PR.

@@ -271,6 +271,58 @@ describe("operator UI", () => {
     );
   });
 
+  it("links retained failed-validation diagnostics without making them approval eligible", async () => {
+    const runId = "run_failed_validation";
+    const evidenceId = "evidence_run_failed_validation-prepare-1";
+    const response = operatorPage(`/runs/${runId}`)!;
+    const script = /<script[^>]*>([\s\S]+)<\/script>/.exec(
+      await response.text(),
+    )![1];
+    const app = { innerHTML: "Loading…" };
+    vi.stubGlobal("document", {
+      getElementById: (id: string) => (id === "app" ? app : null),
+    });
+    vi.stubGlobal("setInterval", () => 0);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          runId,
+          subject: "Repair formatting",
+          state: "failed",
+          revision: 5,
+          attempts: [
+            {
+              attemptId: `${runId}-prepare-1`,
+              stage: "prepare",
+              number: 1,
+              status: "failed",
+              classification: "validation_failed",
+              error: "format failed: packages/example.ts needs formatting",
+            },
+          ],
+          evidence: [
+            {
+              evidenceId,
+              attemptId: `${runId}-prepare-1`,
+              objectKey: `runs/${runId}/attempts/prepare-1/result.json`,
+              sha256: "a".repeat(64),
+              size: 123,
+              approvalEligible: false,
+            },
+          ],
+          events: [],
+        }),
+      ),
+    );
+
+    new Function(script!)();
+    await vi.waitFor(() => expect(app.innerHTML).toContain("needs formatting"));
+    expect(app.innerHTML).toContain(`/v1/runs/${runId}/evidence/${evidenceId}`);
+    expect(app.innerHTML).toContain("approval eligible");
+    expect(app.innerHTML).toContain("no");
+  });
+
   it("shows the offending path for a rejected plan", async () => {
     const response = operatorPage("/plans/plan_rejected")!;
     const script = /<script[^>]*>([\s\S]+)<\/script>/.exec(

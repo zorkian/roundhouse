@@ -312,6 +312,14 @@ export function jobStoreContract(
         mediaType: "application/json" as const,
         createdAt: start.toISOString(),
       };
+      const failedEvidence = {
+        ...evidence,
+        evidenceId: "evidence_failed_validation",
+        attemptId: `${runId}-prepare-0`,
+        objectKey: `runs/${runId}/attempts/prepare-0/result.json`,
+        sha256: "a".repeat(64),
+        approvalEligible: false,
+      };
       const awaiting = await store.completeAttempt(
         runId,
         claim!.token,
@@ -319,7 +327,7 @@ export function jobStoreContract(
         "awaiting_approval",
         {},
         {
-          evidence: [evidence],
+          evidence: [failedEvidence, evidence],
           implementation: {
             patchSha256: "c".repeat(64),
             patchBytes: 100,

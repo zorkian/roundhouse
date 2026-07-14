@@ -73,6 +73,7 @@ export type ExecutionDispatchRequest = {
   taskId: string;
   subject: string;
   instructions: string;
+  retryContext?: string;
   allowedPaths: string[];
   baseCommit: string;
   validationLevel: "quick" | "full";
@@ -89,6 +90,13 @@ export class DispatchingStageExecutor implements JobStageExecutor {
     const attempt = run.attempts.at(-1);
     if (!attempt || attempt.stage !== stage || attempt.status !== "running")
       throw new Error("Execution dispatch requires a running stage attempt");
+    const priorFailure = run.attempts.findLast(
+      (value) =>
+        value.stage === stage &&
+        value.status === "failed" &&
+        value.classification === "validation_failed" &&
+        value.attemptId !== attempt.attemptId,
+    );
     return this.dispatcher.dispatch({
       schemaVersion: 1,
       runId: run.runId,
@@ -98,6 +106,7 @@ export class DispatchingStageExecutor implements JobStageExecutor {
       taskId: run.task.taskId,
       subject: run.task.subject,
       instructions: run.task.instructions,
+      retryContext: priorFailure?.error,
       allowedPaths: run.task.allowedPaths,
       baseCommit: run.task.baseCommit,
       validationLevel: run.task.validationLevel,

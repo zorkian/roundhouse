@@ -237,14 +237,14 @@ export class FileRunStore implements JobStore {
       if (run.approval) throw new Error("Run approval is immutable");
       if (run.state !== "awaiting_approval" || !run.implementation)
         throw new Error("Run is not awaiting an implementation approval");
-      const evidence = run.evidence.map(
-        ({ evidenceId, objectKey, sha256, size }) => ({
+      const evidence = run.evidence
+        .filter((value) => value.approvalEligible !== false)
+        .map(({ evidenceId, objectKey, sha256, size }) => ({
           evidenceId,
           objectKey,
           sha256,
           size,
-        }),
-      );
+        }));
       if (
         !approvalMatches(approval, {
           runId,
