@@ -78,6 +78,18 @@ export const trustedImplementationRequestSchema = z.object({
   subject: z.string().min(1).max(500),
   instructions: z.string().min(1).max(20_000),
   retryContext: z.string().min(1).max(20_000).optional(),
+  retryFromAttemptId: boundedIdentity.optional(),
+  retryCandidate: z
+    .object({
+      attemptId: boundedIdentity,
+      patch: z
+        .string()
+        .min(1)
+        .max(512 * 1024),
+      patchSha256: sha256,
+      changedFiles: z.array(repositoryRelativePathSchema).min(1).max(50),
+    })
+    .optional(),
   allowedPaths: z.array(repositoryRelativePathSchema).min(1).max(50),
   validationLevel: z.enum(["quick", "full"]),
   agentTimeoutMs: z
@@ -117,7 +129,14 @@ export type TrustedImplementationRequest = z.infer<
 >;
 
 export const validationCommandEvidenceSchema = z.object({
-  name: z.enum(["diff-check", "format", "license", "typecheck", "test"]),
+  name: z.enum([
+    "plan-compliance",
+    "diff-check",
+    "format",
+    "license",
+    "typecheck",
+    "test",
+  ]),
   command: z.string().min(1).max(500),
   exitCode: z.number().int().nullable(),
   timedOut: z.boolean(),
@@ -144,6 +163,14 @@ export const trustedImplementationResultSchema = z.object({
     .positive()
     .max(512 * 1024),
   changedFiles: z.array(repositoryRelativePathSchema).min(1).max(50),
+  retryLineage: z
+    .object({
+      priorAttemptId: boundedIdentity,
+      priorPatchSha256: sha256,
+      priorChangedFiles: z.array(repositoryRelativePathSchema).min(1).max(50),
+      retainedAllPriorPaths: z.boolean(),
+    })
+    .optional(),
   validationOutcome: z.enum(["passed", "failed"]).default("passed"),
   publicationManifest: trustedPublicationManifestSchema.optional(),
   startedAt: z.iso.datetime(),
@@ -165,7 +192,7 @@ export const trustedImplementationResultSchema = z.object({
       .nonnegative()
       .max(5 * 1024 * 1024),
   }),
-  validation: z.array(validationCommandEvidenceSchema).min(1).max(5),
+  validation: z.array(validationCommandEvidenceSchema).min(1).max(6),
   network: z.object({
     checkoutHosts: z.array(z.literal("github.com")),
     modelHosts: z.array(z.string().min(1).max(253)).max(10),

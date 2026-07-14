@@ -8,6 +8,7 @@ import {
   type IndependentReviewResult,
   type PlanningAgentRequest,
   type PlanningAgentResult,
+  trustedImplementationRequestSchema,
   trustedImplementationResultSchema,
   type ExecutionDispatcher,
   type ExecutionDispatchRequest,
@@ -119,6 +120,15 @@ async function validateTrustedResult(
     await crypto.subtle.digest("SHA-256", patchBytes),
   );
   const publicationManifest = result.publicationManifest;
+  const retryBindingValid = request.retryCandidate
+    ? result.retryLineage?.priorAttemptId ===
+        request.retryCandidate.attemptId &&
+      result.retryLineage.priorPatchSha256 ===
+        request.retryCandidate.patchSha256 &&
+      result.retryLineage.retainedAllPriorPaths &&
+      [...result.retryLineage.priorChangedFiles].sort().join("\0") ===
+        [...request.retryCandidate.changedFiles].sort().join("\0")
+    : result.retryLineage === undefined;
   let manifestBindingValid = true;
   let publicationBytes = 0;
   if (publicationManifest) {
@@ -180,6 +190,7 @@ async function validateTrustedResult(
     (result.validationOutcome === "failed" &&
       result.publicationManifest !== undefined) ||
     !manifestBindingValid ||
+    !retryBindingValid ||
     publicationBytes > request.maxPatchBytes ||
     result.changedFiles.length > request.maxChangedFiles ||
     !result.changedFiles.every((path) => request.allowedPaths.includes(path))
@@ -216,7 +227,45 @@ export class CloudflareTrustedImplementationBackend implements TrustedImplementa
     private readonly codexAuthJson: string,
   ) {}
 
-  async execute(request: TrustedImplementationRequest): Promise<StageResult> {
+  async execute(input: TrustedImplementationRequest): Promise<StageResult> {
+    const request = trustedImplementationRequestSchema.parse(input);
+    let boundRequest = request;
+    if (request.retryFromAttemptId) {
+      const priorRequest = trustedImplementationRequestSchema.parse({
+        ...request,
+        attemptId: request.retryFromAttemptId,
+        retryFromAttemptId: undefined,
+        retryCandidate: undefined,
+      });
+      const priorObject = await this.evidence.get(
+        trustedEvidenceKey(priorRequest),
+      );
+      if (!priorObject)
+        throw new StageFailure(
+          "Prior retry candidate evidence is unavailable",
+          "evidence_unavailable",
+          false,
+        );
+      const prior = await parseTrustedEvidence(
+        priorRequest,
+        await priorObject.text(),
+      );
+      if (prior.validationOutcome !== "failed")
+        throw new StageFailure(
+          "Retry predecessor is not a failed candidate",
+          "implementation_binding_mismatch",
+          false,
+        );
+      boundRequest = trustedImplementationRequestSchema.parse({
+        ...request,
+        retryCandidate: {
+          attemptId: prior.attemptId,
+          patch: prior.patch,
+          patchSha256: prior.patchSha256,
+          changedFiles: prior.changedFiles,
+        },
+      });
+    }
     const key = trustedEvidenceKey(request);
     let result: TrustedImplementationResult;
     let evidenceBytes: Uint8Array<ArrayBuffer>;
@@ -225,7 +274,7 @@ export class CloudflareTrustedImplementationBackend implements TrustedImplementa
       try {
         const text = await existing.text();
         evidenceBytes = encoder.encode(text);
-        result = await parseTrustedEvidence(request, text);
+        result = await parseTrustedEvidence(boundRequest, text);
       } catch (error) {
         if (error instanceof StageFailure) throw error;
         throw new StageFailure(
@@ -244,8 +293,8 @@ export class CloudflareTrustedImplementationBackend implements TrustedImplementa
             false,
           );
         result = await validateTrustedResult(
-          request,
-          await container.runTrustedJob(request, this.codexAuthJson),
+          boundRequest,
+          await container.runTrustedJob(boundRequest, this.codexAuthJson),
         );
       } catch (error) {
         await container.destroy().catch(() => undefined);
@@ -292,7 +341,7 @@ export class CloudflareTrustedImplementationBackend implements TrustedImplementa
         try {
           const text = await raced.text();
           evidenceBytes = encoder.encode(text);
-          result = await parseTrustedEvidence(request, text);
+          result = await parseTrustedEvidence(boundRequest, text);
         } catch (error) {
           if (error instanceof StageFailure) throw error;
           throw new StageFailure(
@@ -577,6 +626,7 @@ export class CloudflareTrustedExecutionDispatcher implements ExecutionDispatcher
       subject: request.subject,
       instructions: request.instructions,
       retryContext: request.retryContext,
+      retryFromAttemptId: request.retryFromAttemptId,
       allowedPaths: request.allowedPaths,
       validationLevel: request.validationLevel,
       agentTimeoutMs: 20 * 60_000,

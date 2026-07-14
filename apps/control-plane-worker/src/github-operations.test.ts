@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Miniflare } from "miniflare";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import type { ControlPlaneEnv } from "./environment.js";
 import {
@@ -11,7 +11,8 @@ import {
   githubPocMigration,
 } from "./github-operations.js";
 
-const instances: Miniflare[] = [];
+let instance: Miniflare;
+let sharedEnv: ControlPlaneEnv;
 const publication = {
   schemaVersion: 1 as const,
   repository: "zorkian/roundhouse" as const,
@@ -27,24 +28,30 @@ const publication = {
 };
 
 async function runtime(): Promise<{ env: ControlPlaneEnv }> {
-  const mf = new Miniflare({
+  return { env: sharedEnv };
+}
+
+beforeAll(async () => {
+  instance = new Miniflare({
     modules: true,
     script: "export default { fetch() { return new Response('ok') } }",
-    d1Databases: { DB: `github-publication-${crypto.randomUUID()}` },
+    d1Databases: { DB: "github-publication-test" },
   });
-  instances.push(mf);
-  const db = await mf.getD1Database("DB");
+  const db = await instance.getD1Database("DB");
   for (const statement of githubPocMigration
     .split(";")
     .map((value) => value.trim())
     .filter(Boolean))
     await db.prepare(statement).run();
-  return { env: { DB: db } as ControlPlaneEnv };
-}
-
-afterEach(async () => {
-  await Promise.all(instances.splice(0).map((value) => value.dispose()));
+  sharedEnv = { DB: db } as ControlPlaneEnv;
 });
+
+beforeEach(async () => {
+  await sharedEnv.DB.prepare("DELETE FROM github_publications").run();
+  await sharedEnv.DB.prepare("DELETE FROM github_issue_snapshots").run();
+});
+
+afterAll(async () => instance.dispose());
 
 describe("durable GitHub publication intent", () => {
   it("replays the retained result without repeating GitHub writes", async () => {

@@ -7,7 +7,7 @@ import {
   type SelfDevelopmentTask,
 } from "@roundhouse/self-development/cloudflare";
 import { Miniflare } from "miniflare";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import type { ControlPlaneEnv } from "./environment.js";
 import {
@@ -20,27 +20,13 @@ import {
   runRecoveryCycle,
 } from "./operations.js";
 
-const instances: Miniflare[] = [];
+let instance: Miniflare;
+let sharedDb: D1Database;
 
 async function runtime(): Promise<ControlPlaneEnv & { queued: unknown[] }> {
-  const mf = new Miniflare({
-    modules: true,
-    script: "export default { fetch() { return new Response('ok') } }",
-    d1Databases: { DB: "roundhouse-operations-local" },
-  });
-  instances.push(mf);
-  const db = await mf.getD1Database("DB");
-  for (const statement of `${d1JobStoreMigration}
-    ${cloudOperationsMigration}
-    CREATE TABLE control_plane_submissions(idempotency_key TEXT PRIMARY KEY, request_hash TEXT, run_id TEXT, delivery_id TEXT, delivery_state TEXT, created_at TEXT, delivered_at TEXT);
-    CREATE TABLE execution_evidence(evidence_id TEXT PRIMARY KEY);`
-    .split(";")
-    .map((value) => value.trim())
-    .filter(Boolean))
-    await db.prepare(statement).run();
   const queued: unknown[] = [];
   return {
-    DB: db,
+    DB: sharedDb,
     RUN_QUEUE: {
       send: async (value: unknown) => void queued.push(value),
     } as unknown as Queue<unknown>,
@@ -50,6 +36,23 @@ async function runtime(): Promise<ControlPlaneEnv & { queued: unknown[] }> {
     queued,
   };
 }
+
+beforeAll(async () => {
+  instance = new Miniflare({
+    modules: true,
+    script: "export default { fetch() { return new Response('ok') } }",
+    d1Databases: { DB: "roundhouse-operations-local" },
+  });
+  sharedDb = await instance.getD1Database("DB");
+  for (const statement of `${d1JobStoreMigration}
+    ${cloudOperationsMigration}
+    CREATE TABLE control_plane_submissions(idempotency_key TEXT PRIMARY KEY, request_hash TEXT, run_id TEXT, delivery_id TEXT, delivery_state TEXT, created_at TEXT, delivered_at TEXT);
+    CREATE TABLE execution_evidence(evidence_id TEXT PRIMARY KEY);`
+    .split(";")
+    .map((value) => value.trim())
+    .filter(Boolean))
+    await sharedDb.prepare(statement).run();
+});
 
 const task: SelfDevelopmentTask = {
   schemaVersion: 1,
@@ -71,9 +74,19 @@ const task: SelfDevelopmentTask = {
   },
 };
 
-afterEach(async () => {
-  await Promise.all(instances.splice(0).map((value) => value.dispose()));
+beforeEach(async () => {
+  for (const table of [
+    "operator_mutations",
+    "operational_alerts",
+    "recovery_cycles",
+    "control_plane_submissions",
+    "execution_evidence",
+    "self_development_runs",
+  ])
+    await sharedDb.prepare(`DELETE FROM ${table}`).run();
 });
+
+afterAll(async () => instance.dispose());
 
 describe("cloud operator persistence", () => {
   it("replays an identical mutation and rejects conflicting reuse", async () => {
