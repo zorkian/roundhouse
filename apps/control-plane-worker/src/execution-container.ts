@@ -36,9 +36,11 @@ const maximumModelRequestsPerAttempt = 256;
 type ObservableRequest = { runId?: string; attemptId: string };
 
 function boundedReason(error: unknown): string {
-  return (error instanceof Error ? error.message : "unknown error")
+  return (error instanceof Error ? `${error.name}: ${error.message}` : "Error")
+    .replace(/https?:\/\/\S+/g, "[url]")
+    .replace(/\/(?:[^\s/:]+\/)+[^\s:]+/g, "[path]")
     .replace(/[\u0000-\u001f\u007f]+/g, " ")
-    .slice(0, 1_000);
+    .slice(0, 240);
 }
 
 function lifecycle(
@@ -217,13 +219,13 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
       };
       await this.setOutboundByHosts({});
       await this.setAllowedHosts([]);
-      const result = repositoryExecutionResultSchema.parse({
-        ...((await this.phase(request, "profile.execute", () =>
-          this.post("/execute", request),
-        )) as object),
-        startupDurationMs,
-        checkoutDurationMs: prepared.checkoutDurationMs,
-      });
+      const result = await this.phase(request, "profile.execute", async () =>
+        repositoryExecutionResultSchema.parse({
+          ...((await this.post("/execute", request)) as object),
+          startupDurationMs,
+          checkoutDurationMs: prepared.checkoutDurationMs,
+        }),
+      );
       lifecycle("info", "attempt.completed", request, { mode: "profile" });
       return result;
     } finally {
@@ -305,13 +307,13 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
       );
       await this.setOutboundByHosts({});
       await this.setAllowedHosts([]);
-      const result = trustedImplementationResultSchema.parse({
-        ...((await this.phase(request, "validation", () =>
-          this.post("/trusted/validate", request),
-        )) as object),
-        startupDurationMs,
-        checkoutDurationMs: prepared.checkoutDurationMs,
-      });
+      const result = await this.phase(request, "validation", async () =>
+        trustedImplementationResultSchema.parse({
+          ...((await this.post("/trusted/validate", request)) as object),
+          startupDurationMs,
+          checkoutDurationMs: prepared.checkoutDurationMs,
+        }),
+      );
       lifecycle("info", "attempt.completed", request, {
         mode: "trusted-agent",
         validationOutcome: result.validationOutcome,
@@ -391,9 +393,9 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
           authJson: codexAuthJson,
         }),
       );
-      const result = planningAgentResultSchema.parse(
-        await this.phase(request, "agent.plan", () =>
-          this.post("/planning/run", request),
+      const result = await this.phase(request, "agent.plan", async () =>
+        planningAgentResultSchema.parse(
+          await this.post("/planning/run", request),
         ),
       );
       lifecycle("info", "attempt.completed", request, {
@@ -479,12 +481,12 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
       );
       await this.setOutboundByHosts({});
       await this.setAllowedHosts([]);
-      const result = independentReviewResultSchema.parse({
-        ...((await this.phase(request, "review.finalize", () =>
-          this.post("/review/result", request),
-        )) as object),
-        startupDurationMs,
-      });
+      const result = await this.phase(request, "review.finalize", async () =>
+        independentReviewResultSchema.parse({
+          ...((await this.post("/review/result", request)) as object),
+          startupDurationMs,
+        }),
+      );
       lifecycle("info", "attempt.completed", request, {
         mode: "independent-review",
         findings: result.findings.length,

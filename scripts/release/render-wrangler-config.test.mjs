@@ -27,30 +27,32 @@ describe("release Wrangler configuration", () => {
   it("explicitly retains complete Worker and Container logs", async () => {
     const root = await mkdtemp(join(tmpdir(), "roundhouse-wrangler-"));
     temporaryDirectories.push(root);
-    const output = ".roundhouse/release/wrangler.development.json";
-    await mkdir(dirname(join(root, output)), { recursive: true });
-    await execute(
-      process.execPath,
-      [
-        script,
-        "development",
-        "a0000000-0000-0000-0000-000000000000",
-        "b".repeat(64),
-        `registry.cloudflare.com/${"c".repeat(32)}/roundhouse-release:${"d".repeat(40)}@sha256:${"e".repeat(64)}`,
-        output,
-      ],
-      { cwd: root },
-    );
+    for (const environment of ["development", "production"]) {
+      const output = `.roundhouse/release/wrangler.${environment}.json`;
+      await mkdir(dirname(join(root, output)), { recursive: true });
+      await execute(
+        process.execPath,
+        [
+          script,
+          environment,
+          "a0000000-0000-0000-0000-000000000000",
+          "b".repeat(64),
+          `registry.cloudflare.com/${"c".repeat(32)}/roundhouse-release:${"d".repeat(40)}@sha256:${"e".repeat(64)}`,
+          output,
+        ],
+        { cwd: root },
+      );
 
-    const config = JSON.parse(await readFile(join(root, output), "utf8"));
-    expect(config.observability).toEqual({
-      enabled: true,
-      logs: {
+      const config = JSON.parse(await readFile(join(root, output), "utf8"));
+      expect(config.observability).toEqual({
         enabled: true,
-        head_sampling_rate: 1,
-        invocation_logs: true,
-        persist: true,
-      },
-    });
+        logs: {
+          enabled: true,
+          head_sampling_rate: 1,
+          invocation_logs: true,
+          persist: true,
+        },
+      });
+    }
   });
 });
