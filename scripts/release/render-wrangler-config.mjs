@@ -44,6 +44,15 @@ const config = {
   compatibility_date: "2026-07-11",
   workers_dev: false,
   preview_urls: false,
+  observability: {
+    enabled: true,
+    logs: {
+      enabled: true,
+      head_sampling_rate: 1,
+      invocation_logs: true,
+      persist: true,
+    },
+  },
   routes: production
     ? [{ pattern: "roundhouse.rm-rf.rip", custom_domain: true }]
     : undefined,

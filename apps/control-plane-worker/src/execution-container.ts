@@ -33,6 +33,29 @@ const reviewModelHosts = ["api.anthropic.com"];
 const allModelHosts = [...modelHosts, ...reviewModelHosts];
 const maximumModelRequestsPerAttempt = 256;
 
+type ObservableRequest = { runId?: string; attemptId: string };
+
+function boundedReason(error: unknown): string {
+  return (error instanceof Error ? error.message : "unknown error")
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .slice(0, 1_000);
+}
+
+function lifecycle(
+  level: "info" | "error",
+  event: string,
+  request: ObservableRequest,
+  details: Record<string, unknown> = {},
+): void {
+  console[level]("Roundhouse Container lifecycle", {
+    event,
+    runId: request.runId,
+    attemptId: request.attemptId,
+    occurredAt: new Date().toISOString(),
+    ...details,
+  });
+}
+
 export { ContainerProxy };
 
 async function auditedCheckout(
@@ -103,6 +126,30 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
   override interceptHttps = true;
   override allowedHosts: string[] = [];
 
+  private async phase<T>(
+    request: ObservableRequest,
+    phase: string,
+    action: () => Promise<T>,
+  ): Promise<T> {
+    const started = Date.now();
+    lifecycle("info", "phase.started", request, { phase });
+    try {
+      const result = await action();
+      lifecycle("info", "phase.completed", request, {
+        phase,
+        durationMs: Date.now() - started,
+      });
+      return result;
+    } catch (error) {
+      lifecycle("error", "phase.failed", request, {
+        phase,
+        durationMs: Date.now() - started,
+        reason: boundedReason(error),
+      });
+      throw error;
+    }
+  }
+
   private async post(path: string, request: unknown) {
     const response = await this.containerFetch(`http://container${path}`, {
       method: "POST",
@@ -138,6 +185,7 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
   ): Promise<RepositoryExecutionResult> {
     const request = repositoryExecutionRequestSchema.parse(input);
     const startupStarted = Date.now();
+    lifecycle("info", "attempt.started", request, { mode: "profile" });
     try {
       await this.setAllowedHosts(allowedCheckoutHosts);
       await this.setOutboundByHosts({
@@ -146,31 +194,40 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
           params: { attemptId: request.attemptId },
         },
       });
-      await this.startAndWaitForPorts({
-        ports: 8080,
-        startOptions: {
-          enableInternet: false,
-          envVars: {},
-          labels: { attemptId: request.attemptId },
-        },
-        cancellationOptions: {
-          instanceGetTimeoutMS: 30_000,
-          portReadyTimeoutMS: 60_000,
-          waitInterval: 250,
-        },
-      });
+      await this.phase(request, "container.start", () =>
+        this.startAndWaitForPorts({
+          ports: 8080,
+          startOptions: {
+            enableInternet: false,
+            envVars: {},
+            labels: { attemptId: request.attemptId },
+          },
+          cancellationOptions: {
+            instanceGetTimeoutMS: 30_000,
+            portReadyTimeoutMS: 60_000,
+            waitInterval: 250,
+          },
+        }),
+      );
       const startupDurationMs = Date.now() - startupStarted;
-      const prepared = (await this.post("/prepare", request)) as {
+      const prepared = (await this.phase(request, "checkout", () =>
+        this.post("/prepare", request),
+      )) as {
         checkoutDurationMs?: unknown;
       };
       await this.setOutboundByHosts({});
       await this.setAllowedHosts([]);
-      return repositoryExecutionResultSchema.parse({
-        ...((await this.post("/execute", request)) as object),
+      const result = repositoryExecutionResultSchema.parse({
+        ...((await this.phase(request, "profile.execute", () =>
+          this.post("/execute", request),
+        )) as object),
         startupDurationMs,
         checkoutDurationMs: prepared.checkoutDurationMs,
       });
+      lifecycle("info", "attempt.completed", request, { mode: "profile" });
+      return result;
     } finally {
+      lifecycle("info", "cleanup.started", request, { mode: "profile" });
       const cleanup = await Promise.allSettled([
         this.setOutboundByHosts({}),
         this.setAllowedHosts([]),
@@ -182,6 +239,10 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
           attemptId: request.attemptId,
           failures: failures.length,
         });
+      lifecycle("info", "cleanup.completed", request, {
+        mode: "profile",
+        failures: failures.length,
+      });
     }
   }
 
@@ -191,6 +252,7 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
   ): Promise<TrustedImplementationResult> {
     const request = trustedImplementationRequestSchema.parse(input);
     const startupStarted = Date.now();
+    lifecycle("info", "attempt.started", request, { mode: "trusted-agent" });
     try {
       await this.setAllowedHosts(allowedCheckoutHosts);
       await this.setOutboundByHosts({
@@ -199,21 +261,25 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
           params: { attemptId: request.attemptId },
         },
       });
-      await this.startAndWaitForPorts({
-        ports: 8080,
-        startOptions: {
-          enableInternet: false,
-          envVars: {},
-          labels: { attemptId: request.attemptId, mode: "trusted-agent" },
-        },
-        cancellationOptions: {
-          instanceGetTimeoutMS: 30_000,
-          portReadyTimeoutMS: 60_000,
-          waitInterval: 250,
-        },
-      });
+      await this.phase(request, "container.start", () =>
+        this.startAndWaitForPorts({
+          ports: 8080,
+          startOptions: {
+            enableInternet: false,
+            envVars: {},
+            labels: { attemptId: request.attemptId, mode: "trusted-agent" },
+          },
+          cancellationOptions: {
+            instanceGetTimeoutMS: 30_000,
+            portReadyTimeoutMS: 60_000,
+            waitInterval: 250,
+          },
+        }),
+      );
       const startupDurationMs = Date.now() - startupStarted;
-      const prepared = (await this.post("/trusted/prepare", request)) as {
+      const prepared = (await this.phase(request, "checkout", () =>
+        this.post("/trusted/prepare", request),
+      )) as {
         checkoutDurationMs?: unknown;
       };
       await this.setAllowedHosts(modelHosts);
@@ -228,19 +294,35 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
           ]),
         ),
       );
-      await this.post("/trusted/credential", {
-        request,
-        authJson: codexAuthJson,
-      });
-      await this.post("/trusted/implement", request);
+      await this.phase(request, "credential.install", () =>
+        this.post("/trusted/credential", {
+          request,
+          authJson: codexAuthJson,
+        }),
+      );
+      await this.phase(request, "agent.implement", () =>
+        this.post("/trusted/implement", request),
+      );
       await this.setOutboundByHosts({});
       await this.setAllowedHosts([]);
-      return trustedImplementationResultSchema.parse({
-        ...((await this.post("/trusted/validate", request)) as object),
+      const result = trustedImplementationResultSchema.parse({
+        ...((await this.phase(request, "validation", () =>
+          this.post("/trusted/validate", request),
+        )) as object),
         startupDurationMs,
         checkoutDurationMs: prepared.checkoutDurationMs,
       });
+      lifecycle("info", "attempt.completed", request, {
+        mode: "trusted-agent",
+        validationOutcome: result.validationOutcome,
+        patchBytes: result.patchBytes,
+        changedFiles: result.changedFiles.length,
+      });
+      return result;
     } finally {
+      lifecycle("info", "cleanup.started", request, {
+        mode: "trusted-agent",
+      });
       const cleanup = await Promise.allSettled([
         this.setOutboundByHosts({}),
         this.setAllowedHosts([]),
@@ -252,6 +334,10 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
           attemptId: request.attemptId,
           failures: failures.length,
         });
+      lifecycle("info", "cleanup.completed", request, {
+        mode: "trusted-agent",
+        failures: failures.length,
+      });
     }
   }
 
@@ -260,6 +346,7 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
     codexAuthJson: string,
   ): Promise<PlanningAgentResult> {
     const request = planningAgentRequestSchema.parse(input);
+    lifecycle("info", "attempt.started", request, { mode: "planning-agent" });
     try {
       await this.setAllowedHosts(allowedCheckoutHosts);
       await this.setOutboundByHosts({
@@ -268,20 +355,24 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
           params: { attemptId: request.attemptId },
         },
       });
-      await this.startAndWaitForPorts({
-        ports: 8080,
-        startOptions: {
-          enableInternet: false,
-          envVars: {},
-          labels: { attemptId: request.attemptId, mode: "planning-agent" },
-        },
-        cancellationOptions: {
-          instanceGetTimeoutMS: 30_000,
-          portReadyTimeoutMS: 60_000,
-          waitInterval: 250,
-        },
-      });
-      await this.post("/planning/prepare", request);
+      await this.phase(request, "container.start", () =>
+        this.startAndWaitForPorts({
+          ports: 8080,
+          startOptions: {
+            enableInternet: false,
+            envVars: {},
+            labels: { attemptId: request.attemptId, mode: "planning-agent" },
+          },
+          cancellationOptions: {
+            instanceGetTimeoutMS: 30_000,
+            portReadyTimeoutMS: 60_000,
+            waitInterval: 250,
+          },
+        }),
+      );
+      await this.phase(request, "checkout", () =>
+        this.post("/planning/prepare", request),
+      );
       await this.setAllowedHosts(modelHosts);
       await this.setOutboundByHosts(
         Object.fromEntries(
@@ -294,14 +385,26 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
           ]),
         ),
       );
-      await this.post("/planning/credential", {
-        request,
-        authJson: codexAuthJson,
-      });
-      return planningAgentResultSchema.parse(
-        await this.post("/planning/run", request),
+      await this.phase(request, "credential.install", () =>
+        this.post("/planning/credential", {
+          request,
+          authJson: codexAuthJson,
+        }),
       );
+      const result = planningAgentResultSchema.parse(
+        await this.phase(request, "agent.plan", () =>
+          this.post("/planning/run", request),
+        ),
+      );
+      lifecycle("info", "attempt.completed", request, {
+        mode: "planning-agent",
+        status: result.status,
+      });
+      return result;
     } finally {
+      lifecycle("info", "cleanup.started", request, {
+        mode: "planning-agent",
+      });
       const cleanup = await Promise.allSettled([
         this.setOutboundByHosts({}),
         this.setAllowedHosts([]),
@@ -311,6 +414,11 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
         console.warn("Planning Container cleanup was incomplete", {
           attemptId: request.attemptId,
         });
+      lifecycle("info", "cleanup.completed", request, {
+        mode: "planning-agent",
+        failures: cleanup.filter((result) => result.status === "rejected")
+          .length,
+      });
     }
   }
 
@@ -320,6 +428,9 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
   ): Promise<IndependentReviewResult> {
     const request = independentReviewRequestSchema.parse(input);
     const startupStarted = Date.now();
+    lifecycle("info", "attempt.started", request, {
+      mode: "independent-review",
+    });
     try {
       await this.setAllowedHosts(allowedCheckoutHosts);
       await this.setOutboundByHosts({
@@ -328,21 +439,28 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
           params: { attemptId: request.attemptId },
         },
       });
-      await this.startAndWaitForPorts({
-        ports: 8080,
-        startOptions: {
-          enableInternet: false,
-          envVars: {},
-          labels: { attemptId: request.attemptId, mode: "independent-review" },
-        },
-        cancellationOptions: {
-          instanceGetTimeoutMS: 30_000,
-          portReadyTimeoutMS: 60_000,
-          waitInterval: 250,
-        },
-      });
+      await this.phase(request, "container.start", () =>
+        this.startAndWaitForPorts({
+          ports: 8080,
+          startOptions: {
+            enableInternet: false,
+            envVars: {},
+            labels: {
+              attemptId: request.attemptId,
+              mode: "independent-review",
+            },
+          },
+          cancellationOptions: {
+            instanceGetTimeoutMS: 30_000,
+            portReadyTimeoutMS: 60_000,
+            waitInterval: 250,
+          },
+        }),
+      );
       const startupDurationMs = Date.now() - startupStarted;
-      await this.post("/review/prepare", request);
+      await this.phase(request, "checkout", () =>
+        this.post("/review/prepare", request),
+      );
       await this.setAllowedHosts(reviewModelHosts);
       await this.setOutboundByHosts({
         "api.anthropic.com": {
@@ -350,18 +468,32 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
           params: { attemptId: request.attemptId },
         },
       });
-      await this.post("/review/credential", {
-        request,
-        authJson: claudeAuthJson,
-      });
-      await this.post("/review/run", request);
+      await this.phase(request, "credential.install", () =>
+        this.post("/review/credential", {
+          request,
+          authJson: claudeAuthJson,
+        }),
+      );
+      await this.phase(request, "agent.review", () =>
+        this.post("/review/run", request),
+      );
       await this.setOutboundByHosts({});
       await this.setAllowedHosts([]);
-      return independentReviewResultSchema.parse({
-        ...((await this.post("/review/result", request)) as object),
+      const result = independentReviewResultSchema.parse({
+        ...((await this.phase(request, "review.finalize", () =>
+          this.post("/review/result", request),
+        )) as object),
         startupDurationMs,
       });
+      lifecycle("info", "attempt.completed", request, {
+        mode: "independent-review",
+        findings: result.findings.length,
+      });
+      return result;
     } finally {
+      lifecycle("info", "cleanup.started", request, {
+        mode: "independent-review",
+      });
       const cleanup = await Promise.allSettled([
         this.setOutboundByHosts({}),
         this.setAllowedHosts([]),
@@ -373,6 +505,10 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
           attemptId: request.attemptId,
           failures: failures.length,
         });
+      lifecycle("info", "cleanup.completed", request, {
+        mode: "independent-review",
+        failures: failures.length,
+      });
     }
   }
 }

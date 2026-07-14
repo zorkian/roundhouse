@@ -46,6 +46,25 @@ function json(response, status, value) {
   response.end(JSON.stringify(value));
 }
 
+export function boundedLogExcerpt(value, maximum = 2_000) {
+  return (typeof value === "string" ? value : "")
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]+/g, " ")
+    .slice(-maximum);
+}
+
+function lifecycle(event, request, details = {}) {
+  console.log(
+    JSON.stringify({
+      source: "roundhouse-execution-container",
+      event,
+      runId: request.runId,
+      attemptId: request.attemptId,
+      occurredAt: new Date().toISOString(),
+      ...details,
+    }),
+  );
+}
+
 async function body(request) {
   const chunks = [];
   let size = 0;
@@ -1102,9 +1121,19 @@ export function skippedValidation(name, commandName, reason) {
 }
 
 async function validationCommand(name, executable, args, request) {
+  lifecycle("validation.command.started", request, { name });
   const result = await command(executable, args, {
     timeoutMs: request.validationTimeoutMs,
     maxOutputBytes: Math.min(request.maxOutputBytes, 512 * 1024),
+  });
+  lifecycle("validation.command.completed", request, {
+    name,
+    exitCode: result.exitCode,
+    timedOut: result.timedOut,
+    durationMs: result.durationMs,
+    outputTruncated: result.outputTruncated,
+    stdoutExcerpt: boundedLogExcerpt(result.stdout),
+    stderrExcerpt: boundedLogExcerpt(result.stderr),
   });
   return {
     name,
