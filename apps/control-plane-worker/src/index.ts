@@ -96,6 +96,7 @@ import {
   completeIndependentReview,
   failIndependentReview,
   isIssueRemediationRun,
+  listRunReviews,
   markReviewDispatched,
   readIndependentReview,
   readReviewByRemediationRun,
@@ -2270,6 +2271,7 @@ async function route(
       return json({
         ...inspectRun(await new D1JobStore(env.DB).read(match[1])),
         progress: await readExecutionProgress(env, match[1]),
+        reviews: await listRunReviews(env, match[1]),
       });
     } catch (error) {
       if (error instanceof Error && error.message.startsWith("Run not found:"))

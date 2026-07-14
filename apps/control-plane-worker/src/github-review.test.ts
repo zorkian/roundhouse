@@ -18,6 +18,7 @@ import {
   failIndependentReview,
   isIssueRemediationRun,
   listIssueReviews,
+  listRunReviews,
   markReviewDispatched,
   readIndependentReview,
   readReviewByRemediationRun,
@@ -215,6 +216,9 @@ describe("durable independent review coordination", () => {
       { request: { runId: "run_issue_review_2" } },
       { request: { runId: "run_issue_review_3" } },
     ]);
+    await expect(
+      listRunReviews(env, "run_issue_review_2"),
+    ).resolves.toMatchObject([{ request: { runId: "run_issue_review_2" } }]);
   });
 
   it("reserves and replays one exact review intent", async () => {

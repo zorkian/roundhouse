@@ -168,6 +168,33 @@ describe("operator UI", () => {
           attempts: [],
           evidence: [],
           events: [],
+          reviews: [
+            {
+              status: "completed",
+              attemptCount: 1,
+              request: {
+                reviewId: "review_45406706e161b9dbdebd8485dea2f19bf7995bb4",
+                attemptId:
+                  "review_45406706e161b9dbdebd8485dea2f19bf7995bb4-attempt-1",
+                cycle: 1,
+              },
+              execution: {
+                evidence: { objectKey: "reviews/result.json" },
+                result: {
+                  summary: "The implementation is ready.",
+                  findings: [
+                    {
+                      severity: "low",
+                      path: "apps/control-plane-worker/src/operator-ui.ts",
+                      title: "Keep the timeline readable",
+                      rationale: "Operators scan phases before attempts.",
+                      recommendation: "Keep phase in the first column.",
+                    },
+                  ],
+                },
+              },
+            },
+          ],
           progress: [
             {
               attemptId: "run_live-prepare-1",
@@ -184,20 +211,41 @@ describe("operator UI", () => {
               completedAt: "2026-07-14T00:00:05.000Z",
               updatedAt: "2026-07-14T00:00:05.000Z",
             },
+            {
+              attemptId:
+                "review_45406706e161b9dbdebd8485dea2f19bf7995bb4-attempt-1",
+              phase: "agent.review",
+              status: "completed",
+              startedAt: "2026-07-14T00:00:00.000Z",
+              completedAt: "2026-07-14T00:00:03.000Z",
+              updatedAt: "2026-07-14T00:00:03.000Z",
+            },
           ],
         }),
       ),
     );
     new Function(script!)();
-    await vi.waitFor(() => expect(app.innerHTML).toContain("Live execution"));
+    await vi.waitFor(() => expect(app.innerHTML).toContain("Timeline"));
     expect(app.innerHTML).toContain("prepare #1");
     expect(app.innerHTML).toContain("attempt #2");
+    expect(app.innerHTML).toContain("attempt #1");
     expect(app.innerHTML).toContain("agent.implement");
     expect(app.innerHTML).toContain("validation.test");
+    expect(app.innerHTML).toContain("The implementation is ready.");
+    expect(app.innerHTML).toContain("Keep the timeline readable");
     expect(app.innerHTML).toContain("running");
     expect(app.innerHTML).toContain("5s");
     expect(app.innerHTML).not.toContain("run_live-prepare-1");
-    expect(app.innerHTML.match(/class="event-row"/g)).toHaveLength(2);
+    expect(app.innerHTML).not.toContain(
+      '<strong class="event-attempt">review_45406706e161b9dbdebd8485dea2f19bf7995bb4',
+    );
+    expect(app.innerHTML).toContain("<details");
+    expect(app.innerHTML.indexOf("Phase")).toBeLessThan(
+      app.innerHTML.indexOf("Attempt"),
+    );
+    expect(app.innerHTML).not.toContain("<h2>Attempts</h2>");
+    expect(app.innerHTML).not.toContain("<h2>Evidence</h2>");
+    expect(app.innerHTML.match(/class="event-row"/g)).toHaveLength(3);
   });
 
   it("does not label the source run as an active remediation", async () => {
@@ -493,7 +541,8 @@ describe("operator UI", () => {
     expect(app.innerHTML).toContain("Implemented the approved behavior");
     expect(app.innerHTML).toContain("plan-compliance");
     expect(app.innerHTML).toContain("reviewable");
-    expect(app.innerHTML).toContain(`${runId}-prepare-1`);
+    expect(app.innerHTML).toContain("agent.implement");
+    expect(app.innerHTML).not.toContain(`${runId}-prepare-1`);
   });
 
   it("renders a clarification plan without assuming rejection findings", async () => {

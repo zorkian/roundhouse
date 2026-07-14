@@ -251,6 +251,18 @@ export async function listIssueReviews(
   return rows.results.reverse().map(record);
 }
 
+export async function listRunReviews(
+  env: ControlPlaneEnv,
+  runId: string,
+): Promise<DurableIndependentReview[]> {
+  const rows = await env.DB.prepare(
+    "SELECT review_id, request_hash, revision, status, attempt_count, lease_expires_at, dispatch_state, payload FROM independent_reviews WHERE run_id = ? ORDER BY updated_at",
+  )
+    .bind(runId)
+    .all<ReviewRow>();
+  return rows.results.map(record);
+}
+
 export async function markReviewDispatched(
   env: ControlPlaneEnv,
   reviewId: string,
