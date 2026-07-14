@@ -459,14 +459,16 @@ export class FileRunStore implements JobStore {
     await this.locked(runId, async () => {
       const run = await this.read(runId);
       this.assertLease(run, token, now);
-      await this.replace({
-        ...run,
-        updatedAt: now.toISOString(),
-        lease: {
-          ...run.lease!,
-          expiresAt: new Date(now.getTime() + leaseMs).toISOString(),
-        },
-      });
+      await this.write(
+        selfDevelopmentRunSchema.parse({
+          ...run,
+          updatedAt: now.toISOString(),
+          lease: {
+            ...run.lease!,
+            expiresAt: new Date(now.getTime() + leaseMs).toISOString(),
+          },
+        }),
+      );
     });
   }
 

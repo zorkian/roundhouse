@@ -94,9 +94,9 @@ export function jobStoreContract(
         store.renew("run_contract_renew", claim!.token, renewedAt, 0),
       ).rejects.toThrow("Lease duration must be a positive integer");
       await store.renew("run_contract_renew", claim!.token, renewedAt, 10_000);
-      expect((await store.read("run_contract_renew")).updatedAt).toBe(
-        renewedAt.toISOString(),
-      );
+      const renewed = await store.read("run_contract_renew");
+      expect(renewed.updatedAt).toBe(renewedAt.toISOString());
+      expect(renewed.revision).toBe(claim!.run.revision);
       await store.release("run_contract_renew", claim!.token, releasedAt);
       const released = await (await createStore()).read("run_contract_renew");
       expect(released.updatedAt).toBe(releasedAt.toISOString());
