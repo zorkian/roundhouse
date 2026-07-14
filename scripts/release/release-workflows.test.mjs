@@ -29,6 +29,10 @@ describe("release workflow handoff", () => {
     expect(production).toContain("/v1/releases/${source_commit}/canary");
     expect(development).toContain("development-canary.json");
     expect(production).toContain("production-canary.json");
+    expect(development).toContain("--retry 60");
+    expect(production).toContain("--retry 60");
+    expect(development).toContain("after waiting for the gradual rollout");
+    expect(production).toContain("after waiting for the gradual rollout");
     expect(dockerfile).toContain("ARG ROUNDHOUSE_RELEASE_COMMIT=unknown");
     expect(dockerfile).toContain(
       "ENV ROUNDHOUSE_RELEASE_COMMIT=${ROUNDHOUSE_RELEASE_COMMIT}",

@@ -123,10 +123,9 @@ jobs:
         run: |
           set -euo pipefail
           canary_status="$(curl \
-            --fail-with-body \
             --silent \
             --show-error \
-            --retry 12 \
+            --retry 60 \
             --retry-all-errors \
             --retry-delay 10 \
             --retry-max-time 900 \
@@ -137,7 +136,11 @@ jobs:
             --output .roundhouse/release/development-canary.json \
             --write-out '%{http_code}' \
             "https://roundhouse-dev.rm-rf.rip/v1/releases/${GITHUB_SHA}/canary")"
-          test "$canary_status" = 200
+          if test "$canary_status" != 200; then
+            echo "::error::Development Container canary returned HTTP ${canary_status} after waiting for the gradual rollout"
+            jq . .roundhouse/release/development-canary.json >&2 || true
+            exit 1
+          fi
           jq --exit-status \
             --arg commit "$GITHUB_SHA" \
             '.schemaVersion == 1 and .ok == true and .releaseCommit == $commit and .environment == "development" and .workerId == "roundhouse-dev-control-plane"' \
