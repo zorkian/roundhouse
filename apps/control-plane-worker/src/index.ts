@@ -63,6 +63,7 @@ import {
   claimPendingComments,
   completeWebhookDelivery,
   enqueueComment,
+  enqueueProgressComment,
   enqueueStatusComment,
   exactPublishedCheckTargets,
   GitHubWebhookError,
@@ -490,7 +491,14 @@ async function materializeGitHubPlan(
   );
   const body = (await response.json()) as { runId: string };
   await bindIssueRun(env, issueNumber, body.runId);
-  await materializePlan(env, plan.planId, body.runId, actorId, new Date());
+  const materialized = await materializePlan(
+    env,
+    plan.planId,
+    body.runId,
+    actorId,
+    new Date(),
+  );
+  await enqueuePlanComment(env, issueNumber, materialized);
   return body.runId;
 }
 
@@ -527,7 +535,16 @@ async function planComment(
   value: DurableIssuePlan,
   identity: ReturnType<typeof runtimeIdentity>,
 ): Promise<string> {
+  const heading =
+    value.plan.status === "needs_clarification"
+      ? "## ❓ Roundhouse needs clarification"
+      : value.plan.status === "rejected"
+        ? "## ⛔ Roundhouse stopped before implementation"
+        : value.status === "materialized"
+          ? "## 🛠️ Roundhouse started implementation"
+          : "## 📋 Roundhouse prepared a plan";
   const lines = [
+    heading,
     `Roundhouse plan \`${value.plan.planId}\` is **${value.status}** at revision \`${value.revision}\`.`,
     `Workflow: ${identity.origin}/repositories/${identity.repositoryFullName}/issues/${value.plan.issueNumber}`,
     `Plan: ${identity.origin}/plans/${value.plan.planId}`,
@@ -606,11 +623,13 @@ async function enqueuePlanComment(
   value: DurableIssuePlan,
 ): Promise<void> {
   const identity = runtimeIdentity(env);
-  await enqueueStatusComment(
+  const marker = `<!-- roundhouse-progress:${identity.repositoryFullName}#${issueNumber}:${value.plan.planId} -->`;
+  await enqueueProgressComment(
     env,
     identity.repositoryFullName,
     issueNumber,
-    `<!-- roundhouse-status:${identity.repositoryFullName}#${issueNumber} -->\n\n${await planComment(value, identity)}`,
+    value.plan.planId,
+    `${marker}\n\n${await planComment(value, identity)}`,
   );
 }
 
@@ -631,18 +650,20 @@ async function flushGitHubComments(env: ControlPlaneEnv): Promise<void> {
   let firstError: unknown;
   for (const comment of comments) {
     try {
-      const result = comment.key.startsWith("issue-status:")
-        ? await github.upsertIssueStatusComment({
-            repositoryFullName: comment.repositoryFullName,
-            issueNumber: comment.issueNumber,
-            body: comment.body,
-            existingCommentId: comment.githubCommentId,
-          })
-        : await github.createIssueComment(
-            comment.repositoryFullName,
-            comment.issueNumber,
-            comment.body,
-          );
+      const result =
+        comment.key.startsWith("issue-status:") ||
+        comment.key.startsWith("issue-progress:")
+          ? await github.upsertIssueStatusComment({
+              repositoryFullName: comment.repositoryFullName,
+              issueNumber: comment.issueNumber,
+              body: comment.body,
+              existingCommentId: comment.githubCommentId,
+            })
+          : await github.createIssueComment(
+              comment.repositoryFullName,
+              comment.issueNumber,
+              comment.body,
+            );
       await markCommentSent(env, comment.key, comment.claimId, result);
     } catch (error) {
       firstError ??= error;
@@ -724,7 +745,17 @@ export async function runComment(
   run: Awaited<ReturnType<D1JobStore["read"]>>,
   identity: ReturnType<typeof runtimeIdentity>,
 ): Promise<string> {
+  const heading = run.publication?.pullRequestUrl
+    ? "## 🚀 Draft pull request opened"
+    : run.state === "failed"
+      ? "## ❌ Roundhouse implementation failed"
+      : run.state === "cancelled"
+        ? "## ⏹️ Roundhouse stopped"
+        : run.state === "awaiting_approval"
+          ? "## 👀 Implementation ready for review"
+          : "## 🛠️ Roundhouse is implementing this issue";
   const lines = [
+    heading,
     `Roundhouse run \`${run.runId}\` is **${run.state}** at revision \`${run.revision}\`.`,
     ...(run.task.source?.kind === "github_issue"
       ? [
@@ -732,16 +763,18 @@ export async function runComment(
         ]
       : []),
     `[Open live status →](${identity.origin}/runs/${run.runId}) (refreshes every 5 seconds).`,
-    `Base: \`${run.task.baseCommit}\``,
+    run.publication?.pullRequestUrl
+      ? `Open the draft pull request: ${run.publication.pullRequestUrl}`
+      : "No action is needed unless Roundhouse posts a separate request below.",
   ];
   const attempt = run.attempts.at(-1);
   if (attempt) {
     lines.push(
       `Latest attempt: \`${attempt.attemptId}\` (${attempt.status}${attempt.classification ? `, ${attempt.classification}` : ""}).`,
     );
-    if (attempt.classification === "validation_failed" && attempt.error)
+    if (attempt.status === "failed" && attempt.error)
       lines.push(
-        "Failure diagnostics:",
+        "Failure summary:",
         attempt.error
           .split("\n")
           .map((line) => `    ${line}`)
@@ -752,41 +785,9 @@ export async function runComment(
     );
     if (attemptEvidence)
       lines.push(
-        `Evidence: ${identity.origin}/v1/runs/${run.runId}/evidence/${attemptEvidence.evidenceId}`,
+        `Retained evidence: ${identity.origin}/v1/runs/${run.runId}/evidence/${attemptEvidence.evidenceId}`,
       );
   }
-  if (run.state === "awaiting_approval" && run.implementation) {
-    lines.push(
-      `Review exact patch: ${identity.origin}/runs/${run.runId}`,
-      `Changed files: ${run.implementation.changedFiles.length}; patch bytes: ${run.implementation.patchBytes}; patch SHA-256: \`${run.implementation.patchSha256}\`.`,
-    );
-    if (
-      run.evidence.some(
-        (value) => value.evidenceId === run.implementation!.evidenceId,
-      )
-    ) {
-      const evidenceSetSha256 = await sha256(
-        JSON.stringify(
-          run.evidence
-            .filter((value) => value.approvalEligible !== false)
-            .map(({ evidenceId, objectKey, sha256, size }) => ({
-              evidenceId,
-              objectKey,
-              sha256,
-              size,
-            })),
-        ),
-      );
-      lines.push(
-        "Approve this exact implementation with:",
-        "```text",
-        `/rh approve ${run.runId} ${run.revision} ${run.task.baseCommit} ${run.implementation.patchSha256} ${evidenceSetSha256}`,
-        "```",
-      );
-    }
-  }
-  if (run.publication?.pullRequestUrl)
-    lines.push(`Draft pull request: ${run.publication.pullRequestUrl}`);
   return lines.join("\n\n");
 }
 
@@ -799,14 +800,31 @@ async function enqueueRunActionComment(
   const attempt = run.attempts.at(-1);
   if (!attempt || attempt.status !== "succeeded") return;
   const identity = runtimeIdentity(env);
+  const evidence = run.evidence
+    .filter((value) => value.approvalEligible !== false)
+    .map(({ evidenceId, objectKey, sha256, size }) => ({
+      evidenceId,
+      objectKey,
+      sha256,
+      size,
+    }));
+  const evidenceSetSha256 = await sha256(JSON.stringify(evidence));
   await enqueueComment(
     env,
     `run-action:${identity.repositoryFullName}:${run.runId}:${attempt.attemptId}:approval`,
     issueNumber,
     [
-      `Roundhouse needs implementation approval for run \`${run.runId}\`.`,
-      `Review the exact retained patch, validation, retry lineage, and approval bindings: ${identity.origin}/runs/${run.runId}`,
-      `Changed files: ${run.implementation.changedFiles.length}; patch bytes: ${run.implementation.patchBytes}; patch SHA-256: \`${run.implementation.patchSha256}\`.`,
+      "## 👀 Your review is needed",
+      "Roundhouse finished the implementation and its configured validation passed.",
+      `**[Review the complete patch and validation →](${identity.origin}/runs/${run.runId})**`,
+      "Changed files:",
+      ...run.implementation.changedFiles.map((path) => `- \`${path}\``),
+      `${run.implementation.changedFiles.length} changed files; ${run.implementation.patchBytes} patch bytes; SHA-256 \`${run.implementation.patchSha256}\`.`,
+      "Approving opens a **draft pull request** and starts independent Claude review. It does **not** merge the change.",
+      "If the implementation matches the issue, approve these exact retained bytes:",
+      "```text",
+      `/rh approve ${run.runId} ${run.revision} ${run.task.baseCommit} ${run.implementation.patchSha256} ${evidenceSetSha256}`,
+      "```",
     ].join("\n\n"),
     identity.repositoryFullName,
   );
@@ -824,6 +842,7 @@ async function enqueueRunFailureComment(
     (value) => value.attemptId === attempt.attemptId,
   );
   const lines = [
+    "## ❌ Roundhouse could not complete the implementation",
     `Roundhouse run \`${run.runId}\` failed during \`${attempt.stage}\` attempt \`${attempt.number}\`.`,
     `Status: ${identity.origin}/runs/${run.runId}`,
   ];
@@ -858,6 +877,54 @@ async function enqueueRunFailureComment(
   );
 }
 
+async function enqueuePublicationComment(
+  env: ControlPlaneEnv,
+  run: Awaited<ReturnType<D1JobStore["read"]>>,
+): Promise<void> {
+  if (
+    run.task.source?.kind !== "github_issue" ||
+    !run.publication?.pullRequestUrl
+  )
+    return;
+  const identity = runtimeIdentity(env);
+  await enqueueComment(
+    env,
+    `publication:${identity.repositoryFullName}:${run.runId}:${run.publication.commit}`,
+    run.task.source.issueNumber,
+    [
+      "## 🚀 Draft pull request opened",
+      `**[Review pull request #${run.publication.pullRequestUrl.split("/").at(-1)} →](${run.publication.pullRequestUrl})**`,
+      "The approved implementation is now a draft pull request. Independent Claude review has started and will report its verdict in a separate comment.",
+      "**What you need to do:** wait for the independent-review result, then review and merge the pull request if it looks right.",
+      `Live workflow: ${identity.origin}/repositories/${identity.repositoryFullName}/issues/${run.task.source.issueNumber}`,
+    ].join("\n\n"),
+    identity.repositoryFullName,
+  );
+}
+
+async function enqueueMergedComment(
+  env: ControlPlaneEnv,
+  lifecycle: NonNullable<
+    Awaited<ReturnType<typeof recordPullRequestLifecycle>>
+  >,
+): Promise<void> {
+  if (lifecycle.state !== "merged" || !lifecycle.mergeCommitSha) return;
+  const identity = runtimeIdentity(env);
+  await enqueueComment(
+    env,
+    `merged:${lifecycle.repositoryFullName}:${lifecycle.pullRequestNumber}:${lifecycle.mergeCommitSha}`,
+    lifecycle.issueNumber,
+    [
+      "## ✅ Merged — this issue is complete",
+      `Pull request [#${lifecycle.pullRequestNumber}](https://github.com/${lifecycle.repositoryFullName}/pull/${lifecycle.pullRequestNumber}) was merged as [\`${lifecycle.mergeCommitSha}\`](https://github.com/${lifecycle.repositoryFullName}/commit/${lifecycle.mergeCommitSha}).`,
+      `[Follow the development release and checks →](https://github.com/${lifecycle.repositoryFullName}/commit/${lifecycle.mergeCommitSha}/checks)`,
+      "Roundhouse is closing this issue. Reopen it if the merged result needs follow-up.",
+      `Final workflow record: ${identity.origin}/repositories/${identity.repositoryFullName}/issues/${lifecycle.issueNumber}`,
+    ].join("\n\n"),
+    lifecycle.repositoryFullName,
+  );
+}
+
 async function enqueueRunComment(
   env: ControlPlaneEnv,
   issueNumber: number,
@@ -882,43 +949,103 @@ async function enqueueRunComment(
 async function enqueueReviewComment(
   env: ControlPlaneEnv,
   review: DurableIndependentReview,
+  readyForHumanReview = false,
 ): Promise<void> {
   const identity = runtimeIdentity(env);
-  const lines = [
-    `Roundhouse independent review \`${review.request.reviewId}\` is **${review.status}** at revision \`${review.revision}\`.`,
-    `Workflow: ${identity.origin}/repositories/${identity.repositoryFullName}/issues/${review.request.issueNumber}`,
-    `Status: ${identity.origin}/reviews/${review.request.reviewId}`,
-    `Exact pull-request head: \`${review.request.headCommit}\``,
+  const findings = review.execution?.result.findings ?? [];
+  const accepted = review.dispositions.filter(
+    (value) => value.disposition === "accepted",
+  ).length;
+  const running = review.status === "pending" || review.status === "running";
+  const heading = running
+    ? "## 🔍 Independent review in progress"
+    : review.status === "failed"
+      ? "## ❌ Independent review could not complete"
+      : findings.length === 0
+        ? "## ✅ Independent review passed"
+        : accepted > 0 || review.status === "remediated"
+          ? "## 🧰 Independent review found issues; remediation started"
+          : "## ⚠️ Independent review completed with findings";
+  const common = [
+    heading,
+    running
+      ? `Claude is independently reviewing the exact pull-request head \`${review.request.headCommit}\`. This comment will update when the review finishes.`
+      : `Claude independently reviewed exact pull-request head \`${review.request.headCommit}\`.`,
+    `**[Open the complete retained review →](${identity.origin}/reviews/${review.request.reviewId})**`,
+    `Cycle ${review.request.cycle} of 2 · review \`${review.request.reviewId}\``,
   ];
   if (review.execution) {
-    const accepted = review.dispositions.filter(
-      (value) => value.disposition === "accepted",
-    ).length;
-    lines.push(
-      `Findings: ${review.execution.result.findings.length}; accepted for bounded remediation: ${accepted}.`,
-      `Evidence SHA-256: \`${review.execution.evidence.sha256}\``,
+    common.push(
+      findings.length === 0
+        ? "**Verdict: no substantive findings.**"
+        : `**Verdict: ${findings.length} substantive ${findings.length === 1 ? "finding" : "findings"}; ${accepted} accepted for bounded remediation.**`,
+      `> ${review.execution.result.summary || "Review completed."}`,
     );
   }
-  if (review.status === "failed")
-    lines.push(
-      `Review failed after ${review.attemptCount} bounded attempt(s): \`${review.failureClassification ?? "review_failed"}\`.`,
+  if (readyForHumanReview)
+    common.push(
+      "**The draft flag has been removed. This pull request is ready for human review and a merge decision.**",
     );
-  const body = lines.join("\n\n");
-  await enqueueStatusComment(
+  if (review.status === "failed")
+    common.push(
+      `The review failed after ${review.attemptCount} bounded attempt(s) with classification \`${review.failureClassification ?? "review_failed"}\`. The implementation is not presented as review-ready.`,
+    );
+  const issueLines = [
+    ...common,
+    `Draft pull request: ${review.request.pullRequestUrl}`,
+  ];
+  if (findings.length > 0)
+    issueLines.push(
+      "Finding summary:",
+      ...findings
+        .slice(0, 5)
+        .map(
+          (finding) =>
+            `- **${finding.severity.toUpperCase()}** — ${finding.title} (\`${finding.path}${finding.line ? `:${finding.line}` : ""}\`)`,
+        ),
+      ...(findings.length > 5
+        ? [`- …and ${findings.length - 5} more in the complete review.`]
+        : []),
+    );
+  const disposition = new Map(
+    review.dispositions.map((value) => [value.findingId, value]),
+  );
+  const pullLines = [...common, `Source issue: ${review.request.issueUrl}`];
+  if (findings.length > 0) {
+    pullLines.push("### Findings");
+    for (const finding of findings.slice(0, 10)) {
+      const decision = disposition.get(finding.findingId);
+      pullLines.push(
+        `#### ${finding.severity.toUpperCase()} — ${finding.title}`,
+        `**Location:** \`${finding.path}${finding.line ? `:${finding.line}` : ""}\``,
+        finding.rationale,
+        `**Recommendation:** ${finding.recommendation}`,
+        `**Roundhouse disposition:** ${decision?.disposition ?? "recorded"}${decision?.rationale ? ` — ${decision.rationale}` : ""}`,
+      );
+    }
+    if (findings.length > 10)
+      pullLines.push(
+        `_${findings.length - 10} additional findings are available in the complete retained review._`,
+      );
+  }
+  const issueMarker = `<!-- roundhouse-progress:${identity.repositoryFullName}#${review.request.issueNumber}:${review.request.reviewId} -->`;
+  const pullMarker = `<!-- roundhouse-progress:${identity.repositoryFullName}#${review.request.pullRequestNumber}:${review.request.reviewId} -->`;
+  await enqueueProgressComment(
     env,
     identity.repositoryFullName,
     review.request.issueNumber,
-    `<!-- roundhouse-status:${identity.repositoryFullName}#${review.request.issueNumber} -->\n\n${body}`,
+    review.request.reviewId,
+    `${issueMarker}\n\n${issueLines.join("\n\n")}`,
   );
-  await enqueueStatusComment(
+  await enqueueProgressComment(
     env,
     identity.repositoryFullName,
     review.request.pullRequestNumber,
-    `<!-- roundhouse-status:${identity.repositoryFullName}#${review.request.pullRequestNumber} -->\n\n${body}\n\nSource issue: ${review.request.issueUrl}`,
+    review.request.reviewId,
+    `${pullMarker}\n\n${pullLines.join("\n\n")}`,
   );
   if (env.GITHUB_REVIEW_CHECKS_ENABLED !== "true") return;
-  const findings = review.execution?.result.findings.length ?? 0;
-  const running = review.status === "pending" || review.status === "running";
+  const findingCount = findings.length;
   const failed = review.status === "failed";
   await enqueueReviewCheck(env, {
     repositoryFullName: identity.repositoryFullName,
@@ -931,7 +1058,7 @@ async function enqueueReviewComment(
       ? null
       : failed
         ? "failure"
-        : findings > 0
+        : findingCount > 0
           ? review.status === "remediated"
             ? "neutral"
             : "action_required"
@@ -940,14 +1067,14 @@ async function enqueueReviewComment(
       ? "Independent review in progress"
       : failed
         ? "Independent review failed"
-        : findings === 0
+        : findingCount === 0
           ? "Independent review passed"
-          : `Independent review found ${findings} substantive ${findings === 1 ? "finding" : "findings"}`,
+          : `Independent review found ${findingCount} substantive ${findingCount === 1 ? "finding" : "findings"}`,
     summary: [
       `Review: ${review.request.reviewId}`,
       `Exact head: ${review.request.headCommit}`,
       `Status: ${review.status}`,
-      `Findings: ${findings}`,
+      `Findings: ${findingCount}`,
       `Cycle: ${review.request.cycle} of 2`,
     ].join("\n"),
     detailsUrl: `${identity.origin}/reviews/${review.request.reviewId}`,
@@ -1225,7 +1352,22 @@ async function consumeReviewMessage(
       completed =
         (await readIndependentReview(env, parsed.data.reviewId)) ?? completed;
     }
-    await enqueueReviewComment(env, completed);
+    let readyForHumanReview = false;
+    if (completed.status === "completed")
+      try {
+        await githubGateway(env).markPullRequestReady({
+          repositoryFullName: runtimeIdentity(env).repositoryFullName,
+          pullRequestNumber: completed.request.pullRequestNumber,
+          expectedHeadSha: completed.request.headCommit,
+        });
+        readyForHumanReview = true;
+      } catch (error) {
+        console.warn("GitHub pull request readiness update deferred", {
+          reviewId: parsed.data.reviewId,
+          reason: redactedReason(error),
+        });
+      }
+    await enqueueReviewComment(env, completed, readyForHumanReview);
     await flushGitHubOutputs(env).catch((error) =>
       console.warn("Independent review GitHub status delivery deferred", {
         reviewId: parsed.data.reviewId,
@@ -1534,6 +1676,13 @@ async function githubWebhook(
     const lifecycle = await recordPullRequestLifecycle(env, webhook);
     if (lifecycle) {
       await enqueueRunComment(env, lifecycle.issueNumber, lifecycle.runId);
+      if (lifecycle.state === "merged") {
+        await enqueueMergedComment(env, lifecycle);
+        await githubGateway(env).closeIssue(
+          lifecycle.repositoryFullName,
+          lifecycle.issueNumber,
+        );
+      }
       await completeWebhookDelivery(
         env,
         webhook.deliveryId,
@@ -1939,6 +2088,7 @@ async function publishGitHubRun(
       run = current;
     }
   }
+  await enqueuePublicationComment(env, run);
   const review =
     env.INDEPENDENT_REVIEW_ENABLED === "true"
       ? await reservePublicationReview(env, run)

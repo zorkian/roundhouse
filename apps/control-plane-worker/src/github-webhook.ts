@@ -713,14 +713,49 @@ export async function enqueueStatusComment(
   issueNumber: number,
   body: string,
 ): Promise<void> {
+  return enqueueMutableComment(
+    env,
+    repositoryFullName,
+    issueNumber,
+    `issue-status:${repositoryFullName}:${issueNumber}`,
+    `<!-- roundhouse-status:${repositoryFullName}#${issueNumber} -->`,
+    body,
+  );
+}
+
+export async function enqueueProgressComment(
+  env: ControlPlaneEnv,
+  repositoryFullName: string,
+  issueNumber: number,
+  scope: string,
+  body: string,
+): Promise<void> {
+  if (!/^[a-zA-Z0-9:_-]{1,200}$/.test(scope))
+    throw new GitHubWebhookError(400, "invalid_comment_scope");
+  return enqueueMutableComment(
+    env,
+    repositoryFullName,
+    issueNumber,
+    `issue-progress:${repositoryFullName}:${issueNumber}:${scope}`,
+    `<!-- roundhouse-progress:${repositoryFullName}#${issueNumber}:${scope} -->`,
+    body,
+  );
+}
+
+async function enqueueMutableComment(
+  env: ControlPlaneEnv,
+  repositoryFullName: string,
+  issueNumber: number,
+  key: string,
+  marker: string,
+  body: string,
+): Promise<void> {
   if (!/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(repositoryFullName))
     throw new GitHubWebhookError(400, "invalid_repository_identity");
   if (!Number.isSafeInteger(issueNumber) || issueNumber < 1)
     throw new GitHubWebhookError(400, "invalid_issue_identity");
-  const marker = `<!-- roundhouse-status:${repositoryFullName}#${issueNumber} -->`;
   if (!body.startsWith(marker))
     throw new GitHubWebhookError(400, "invalid_status_marker");
-  const key = `issue-status:${repositoryFullName}:${issueNumber}`;
   const bodySha256 = await sha256(body);
   const now = new Date().toISOString();
   await env.DB.prepare(

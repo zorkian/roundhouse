@@ -190,6 +190,99 @@ describe("GitHub App gateway", () => {
     expect(retained?.body).toContain("Next state");
   });
 
+  it("updates a scoped milestone comment and closes its source issue", async () => {
+    const scope = `review_${"a".repeat(40)}`;
+    const marker = `<!-- roundhouse-progress:zorkian/roundhouse#7:${scope} -->`;
+    let retained: { id: number; html_url: string; body: string } | undefined;
+    const fetcher: typeof fetch = async (input, init) => {
+      const url = new URL(String(input));
+      const method = init?.method ?? "GET";
+      if (url.pathname.endsWith("/access_tokens"))
+        return json({
+          token: "installation-token",
+          expires_at: "2026-07-12T02:00:00Z",
+        });
+      if (url.pathname.endsWith("/issues/7/comments") && method === "GET")
+        return json(retained ? [retained] : []);
+      if (url.pathname.endsWith("/issues/7/comments") && method === "POST") {
+        retained = {
+          id: 71,
+          html_url:
+            "https://github.com/zorkian/roundhouse/issues/7#issuecomment-71",
+          body: JSON.parse(String(init?.body)).body,
+        };
+        return json(retained, 201);
+      }
+      if (url.pathname.endsWith("/issues/comments/71") && method === "PATCH") {
+        retained = { ...retained!, body: JSON.parse(String(init?.body)).body };
+        return json(retained);
+      }
+      if (url.pathname.endsWith("/issues/7") && method === "PATCH") {
+        expect(JSON.parse(String(init?.body))).toEqual({
+          state: "closed",
+          state_reason: "completed",
+        });
+        return json({
+          number: 7,
+          state: "closed",
+          html_url: "https://github.com/zorkian/roundhouse/issues/7",
+        });
+      }
+      if (url.pathname.endsWith("/pulls/7") && method === "GET")
+        return json({
+          number: 7,
+          node_id: "PR_node_7",
+          html_url: "https://github.com/zorkian/roundhouse/pull/7",
+          draft: true,
+          head: { sha: "b".repeat(40) },
+        });
+      if (url.pathname === "/graphql" && method === "POST") {
+        const request = JSON.parse(String(init?.body)) as {
+          variables: { id: string };
+        };
+        expect(request.variables).toEqual({ id: "PR_node_7" });
+        return json({
+          data: {
+            markPullRequestReadyForReview: {
+              pullRequest: {
+                number: 7,
+                url: "https://github.com/zorkian/roundhouse/pull/7",
+                isDraft: false,
+              },
+            },
+          },
+        });
+      }
+      return json({}, 404);
+    };
+    const gateway = new GitHubAppGateway(
+      { appId: "1", installationId: "2", privateKey },
+      fetcher,
+    );
+    await gateway.upsertIssueStatusComment({
+      repositoryFullName: "zorkian/roundhouse",
+      issueNumber: 7,
+      body: `${marker}\nReview started`,
+    });
+    await gateway.upsertIssueStatusComment({
+      repositoryFullName: "zorkian/roundhouse",
+      issueNumber: 7,
+      body: `${marker}\nReview passed`,
+      existingCommentId: 71,
+    });
+    expect(retained?.body).toContain("Review passed");
+    await expect(
+      gateway.closeIssue("zorkian/roundhouse", 7),
+    ).resolves.toMatchObject({ state: "closed", number: 7 });
+    await expect(
+      gateway.markPullRequestReady({
+        repositoryFullName: "zorkian/roundhouse",
+        pullRequestNumber: 7,
+        expectedHeadSha: "b".repeat(40),
+      }),
+    ).resolves.toMatchObject({ ready: true, number: 7 });
+  });
+
   it("rejects a rolling status comment returned for another issue", async () => {
     const fetcher: typeof fetch = async (input) => {
       const url = new URL(String(input));
@@ -467,6 +560,7 @@ describe("GitHub App gateway", () => {
     const commit = "d".repeat(40);
     let branch: string | null = null;
     let pullCreated = false;
+    let pullBody = "";
     const fetcher: typeof fetch = async (input, init) => {
       const url = new URL(String(input));
       const method = init?.method ?? "GET";
@@ -503,6 +597,9 @@ describe("GitHub App gateway", () => {
         );
       if (url.pathname.endsWith("/pulls") && method === "POST") {
         pullCreated = true;
+        pullBody = String(
+          (JSON.parse(String(init?.body)) as { body?: string }).body,
+        );
         return json({
           number: 11,
           html_url: "https://github.com/zorkian/roundhouse/pull/11",
@@ -551,6 +648,8 @@ describe("GitHub App gateway", () => {
       pullRequestNumber: 11,
       reconciled: true,
     });
+    expect(pullBody).toContain("Closes #7");
+    expect(pullBody).toContain("independent Claude review");
   });
 
   it("advances an existing branch only from the exact expected head", async () => {

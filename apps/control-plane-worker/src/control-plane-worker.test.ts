@@ -623,7 +623,7 @@ describe("local control-plane Worker", () => {
     };
     expect(implementationResult.runId).toMatch(/^run_[a-f0-9]{40}$/);
     expect(queued.messages).toHaveLength(1);
-    expect(comments).toBe(1);
+    expect(comments).toBe(2);
     expect(statusComment?.body).toContain(
       `https://roundhouse-dev.rm-rf.rip/runs/${implementationResult.runId}`,
     );
@@ -1335,10 +1335,16 @@ describe("local control-plane Worker", () => {
       output: { title: "Independent review found 1 substantive finding" },
     });
     expect(issueStatusComment?.body).toContain(
-      `Workflow: https://roundhouse-dev.rm-rf.rip/repositories/zorkian/roundhouse/issues/7`,
+      `Open the complete retained review`,
+    );
+    expect(issueStatusComment?.body).toContain(
+      "Correct the exact implementation",
     );
     expect(pullRequestStatusComment?.body).toContain(
-      `Exact pull-request head: \`${commit}\``,
+      `independently reviewed exact pull-request head \`${commit}\``,
+    );
+    expect(pullRequestStatusComment?.body).toContain(
+      "**Recommendation:** Handle the requested case.",
     );
     const reviewEvidence = await handler.fetch!(
       request(`/v1/reviews/${firstBody.review.request.reviewId}/evidence`),
