@@ -53,6 +53,18 @@ export const qualificationIssueSchema = z.object({
     .max(5)
     .default([]),
   suggestedRisk: z.enum(["low", "medium", "high"]).optional(),
+  outcome: z
+    .enum([
+      "proposed",
+      "needs_clarification",
+      "already_satisfied",
+      "duplicate",
+      "rejected",
+    ])
+    .optional(),
+  evidence: z.array(z.string().min(1).max(1_000)).max(20).default([]),
+  duplicateOf: z.string().min(1).max(1_000).optional(),
+  planningEvidence: z.array(z.string().min(1).max(10_000)).max(20).default([]),
 });
 
 export type QualificationIssue = z.input<typeof qualificationIssueSchema>;
@@ -84,12 +96,21 @@ export const planningAgentResultSchema = z
     schemaVersion: z.literal(1),
     attemptId: z.string().regex(/^planning_[a-f0-9]{40}$/),
     baseCommit: sha40,
-    status: z.enum(["proposed", "clarification"]),
+    status: z.enum([
+      "proposed",
+      "needs_clarification",
+      "already_satisfied",
+      "duplicate",
+      "rejected",
+      "clarification",
+    ]),
     summary: z.string().min(1).max(4_000),
     exactPaths: z.array(repositoryRelativePathSchema).max(50),
     acceptanceCriteria: z.array(z.string().min(1).max(500)).min(1).max(20),
     questions: z.array(z.string().min(1).max(500)).max(5),
     risk: z.enum(["low", "medium", "high"]),
+    evidence: z.array(z.string().min(1).max(1_000)).max(20).optional(),
+    duplicateOf: z.string().min(1).max(1_000).optional(),
   })
   .superRefine((value, context) => {
     if (value.status === "proposed" && value.exactPaths.length === 0)
@@ -98,11 +119,29 @@ export const planningAgentResultSchema = z
         path: ["exactPaths"],
         message: "A proposed plan requires exact paths",
       });
-    if (value.status === "clarification" && value.questions.length === 0)
+    if (
+      ["clarification", "needs_clarification"].includes(value.status) &&
+      value.questions.length === 0
+    )
       context.addIssue({
         code: "custom",
         path: ["questions"],
         message: "Clarification requires targeted questions",
+      });
+    if (
+      value.status === "already_satisfied" &&
+      (value.evidence?.length ?? 0) === 0
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["evidence"],
+        message: "Already satisfied requires concrete repository evidence",
+      });
+    if (value.status === "duplicate" && !value.duplicateOf)
+      context.addIssue({
+        code: "custom",
+        path: ["duplicateOf"],
+        message: "Duplicate requires a durable repository-qualified identity",
       });
   });
 
@@ -142,6 +181,7 @@ export const qualifiedPlanSchema = z.object({
     .string()
     .regex(/^planning_[a-f0-9]{40}$/)
     .optional(),
+  planningEvidence: z.array(z.string().min(1).max(10_000)).max(20).default([]),
   limits: z.object({
     maxPatchBytes: z.number().int().positive(),
     maxFiles: z.number().int().positive(),
@@ -169,12 +209,62 @@ export const rejectedQualificationSchema = z.object({
   baseCommit: sha40,
   requestedPaths: z.array(z.string()).max(maxRequestedPaths),
   findings: z.array(qualificationFindingSchema).min(1),
+  planningEvidence: z.array(z.string().min(1).max(10_000)).max(20).default([]),
   createdAt: z.iso.datetime(),
   planSha256: sha64,
 });
 
+export const nonImplementationQualificationSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    planId: z.string().regex(/^plan_[a-f0-9]{40}$/),
+    revision: z.literal(1),
+    status: z.enum(["needs_clarification", "already_satisfied", "duplicate"]),
+    profileId: z.literal(roundhouseSelfDevelopmentProfile.profileId),
+    profileVersion: z.literal(roundhouseSelfDevelopmentProfile.profileVersion),
+    issueNumber: z.number().int().positive(),
+    issueContentSha256: sha64,
+    subject: z.string().min(1).max(500),
+    baseCommit: sha40,
+    understanding: z.string().min(1).max(4_000),
+    questions: z.array(z.string().min(1).max(500)).max(5).default([]),
+    evidence: z.array(z.string().min(1).max(1_000)).max(20).default([]),
+    duplicateOf: z.string().min(1).max(1_000).optional(),
+    planningEvidence: z
+      .array(z.string().min(1).max(10_000))
+      .max(20)
+      .default([]),
+    createdAt: z.iso.datetime(),
+    planSha256: sha64,
+  })
+  .superRefine((value, context) => {
+    if (value.status === "needs_clarification" && value.questions.length === 0)
+      context.addIssue({
+        code: "custom",
+        path: ["questions"],
+        message: "Clarification requires targeted questions",
+      });
+    if (value.status === "already_satisfied" && value.evidence.length === 0)
+      context.addIssue({
+        code: "custom",
+        path: ["evidence"],
+        message: "Already satisfied requires concrete repository evidence",
+      });
+    if (value.status === "duplicate" && !value.duplicateOf)
+      context.addIssue({
+        code: "custom",
+        path: ["duplicateOf"],
+        message: "Duplicate requires a durable repository-qualified identity",
+      });
+  });
+
+export type NonImplementationQualification = z.infer<
+  typeof nonImplementationQualificationSchema
+>;
+
 export type RejectedQualification = z.infer<typeof rejectedQualificationSchema>;
-export type PlanningDecision = QualifiedPlan | RejectedQualification;
+export type PlanningDecision =
+  QualifiedPlan | RejectedQualification | NonImplementationQualification;
 
 const encoder = new TextEncoder();
 
@@ -296,9 +386,47 @@ export async function qualifyAndPlan(
     understanding: issue.understanding,
     acceptanceCriteria: issue.acceptanceCriteria,
     clarificationQuestions: issue.clarificationQuestions,
+    outcome: issue.outcome,
+    evidence: issue.evidence,
+    duplicateOf: issue.duplicateOf,
+    planningEvidence: issue.planningEvidence,
   });
   const planId = `plan_${(await sha256(identity)).slice(0, 40)}`;
   const createdAt = now.toISOString();
+  const outcome =
+    issue.outcome ??
+    (issue.clarificationQuestions.length > 0
+      ? "needs_clarification"
+      : "proposed");
+  if (
+    outcome === "needs_clarification" ||
+    outcome === "already_satisfied" ||
+    outcome === "duplicate"
+  ) {
+    const value = {
+      schemaVersion: 1 as const,
+      planId,
+      revision: 1 as const,
+      status: outcome,
+      profileId: roundhouseSelfDevelopmentProfile.profileId,
+      profileVersion: roundhouseSelfDevelopmentProfile.profileVersion,
+      issueNumber: issue.issueNumber,
+      issueContentSha256: issue.issueContentSha256,
+      subject: issue.subject,
+      baseCommit: issue.baseCommit,
+      understanding:
+        issue.understanding ?? "Roundhouse needs more information to proceed.",
+      questions: issue.clarificationQuestions,
+      evidence: issue.evidence,
+      duplicateOf: issue.duplicateOf,
+      planningEvidence: issue.planningEvidence,
+      createdAt,
+    };
+    return nonImplementationQualificationSchema.parse({
+      ...value,
+      planSha256: await sha256(JSON.stringify(value)),
+    });
+  }
   const findings = pathFindings(exactPaths).filter(
     (finding) =>
       issue.clarificationQuestions.length === 0 ||
@@ -324,6 +452,7 @@ export async function qualifyAndPlan(
       baseCommit: issue.baseCommit,
       requestedPaths: exactPaths,
       findings,
+      planningEvidence: issue.planningEvidence,
       createdAt,
     };
     return rejectedQualificationSchema.parse({
@@ -349,6 +478,7 @@ export async function qualifyAndPlan(
     understanding: issue.understanding,
     acceptanceCriteria: issue.acceptanceCriteria,
     planningAttemptId: issue.planningAttemptId,
+    planningEvidence: issue.planningEvidence,
     limits: {
       maxPatchBytes: roundhouseSelfDevelopmentProfile.maxPatchBytes,
       maxFiles: exactPaths.length,

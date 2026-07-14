@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import {
+  nonImplementationQualificationSchema,
   qualifiedPlanSchema,
   rejectedQualificationSchema,
   type PlanningDecision,
@@ -43,6 +44,8 @@ CREATE INDEX IF NOT EXISTS self_development_runs_dashboard ON self_development_r
 `;
 
 type PlanStatus = "proposed" | "rejected" | "approved" | "materialized";
+type DurablePlanStatus =
+  PlanStatus | "needs_clarification" | "already_satisfied" | "duplicate";
 
 type PlanRow = {
   plan_id: string;
@@ -64,7 +67,7 @@ type PlanRow = {
 export type DurableIssuePlan = {
   plan: PlanningDecision;
   revision: number;
-  status: PlanStatus;
+  status: DurablePlanStatus;
   evidence: { objectKey: string; sha256: string; size: number };
   approvedBy?: string;
   approvedAt?: string;
@@ -81,16 +84,23 @@ function hex(value: ArrayBuffer): string {
 
 function parseDecision(value: string): PlanningDecision {
   const decoded = JSON.parse(value) as { status?: unknown };
-  return decoded.status === "proposed"
-    ? qualifiedPlanSchema.parse(decoded)
-    : rejectedQualificationSchema.parse(decoded);
+  if (decoded.status === "proposed") return qualifiedPlanSchema.parse(decoded);
+  if (decoded.status === "rejected")
+    return rejectedQualificationSchema.parse(decoded);
+  return nonImplementationQualificationSchema.parse(decoded);
 }
 
 function durable(row: PlanRow): DurableIssuePlan {
+  const plan = parseDecision(row.plan_json);
   return {
-    plan: parseDecision(row.plan_json),
+    plan,
     revision: row.revision,
-    status: row.status,
+    status:
+      plan.status === "needs_clarification" ||
+      plan.status === "already_satisfied" ||
+      plan.status === "duplicate"
+        ? plan.status
+        : row.status,
     evidence: {
       objectKey: row.evidence_object_key,
       sha256: row.evidence_sha256,
@@ -100,6 +110,10 @@ function durable(row: PlanRow): DurableIssuePlan {
     approvedAt: row.approved_at ?? undefined,
     runId: row.run_id ?? undefined,
   };
+}
+
+function storedStatus(decision: PlanningDecision): "proposed" | "rejected" {
+  return decision.status === "proposed" ? "proposed" : "rejected";
 }
 
 async function planRow(
@@ -158,6 +172,12 @@ export async function recordPlanningDecision(
   env: ControlPlaneEnv,
   decision: PlanningDecision,
   actorId: string,
+  revisionBinding?: {
+    planId: string;
+    revision: number;
+    planSha256: string;
+    allowSameIssueContent?: boolean;
+  },
 ): Promise<DurableIssuePlan> {
   const bytes = encoder.encode(JSON.stringify(decision));
   const evidenceSha256 = hex(await crypto.subtle.digest("SHA-256", bytes));
@@ -196,17 +216,26 @@ export async function recordPlanningDecision(
       prior.plan_json !== JSON.stringify(decision))
   ) {
     const previousDecision = parseDecision(prior.plan_json);
+    const previousReplannable =
+      (prior.status === "proposed" && previousDecision.status === "proposed") ||
+      (prior.status === "rejected" &&
+        ["rejected", "needs_clarification"].includes(previousDecision.status));
     if (
-      prior.status !== "rejected" ||
-      previousDecision.issueContentSha256 === decision.issueContentSha256
+      !revisionBinding ||
+      revisionBinding.planId !== prior.plan_id ||
+      revisionBinding.revision !== prior.revision ||
+      revisionBinding.planSha256 !== prior.plan_sha256 ||
+      !previousReplannable ||
+      (previousDecision.issueContentSha256 === decision.issueContentSha256 &&
+        !revisionBinding.allowSameIssueContent)
     )
       throw new Error("Issue already has a different immutable plan");
     const revised = await env.DB.prepare(
-      "UPDATE github_issue_plans SET plan_id = ?, revision = revision + 1, status = ?, plan_sha256 = ?, plan_json = ?, evidence_object_key = ?, evidence_sha256 = ?, evidence_size = ?, approved_by = NULL, approved_at = NULL, run_id = NULL, created_at = ?, updated_at = ? WHERE issue_number = ? AND plan_id = ? AND revision = ? AND status = 'rejected'",
+      "UPDATE github_issue_plans SET plan_id = ?, revision = revision + 1, status = ?, plan_sha256 = ?, plan_json = ?, evidence_object_key = ?, evidence_sha256 = ?, evidence_size = ?, approved_by = NULL, approved_at = NULL, run_id = NULL, created_at = ?, updated_at = ? WHERE issue_number = ? AND plan_id = ? AND revision = ? AND status IN ('rejected', 'proposed')",
     )
       .bind(
         decision.planId,
-        decision.status,
+        storedStatus(decision),
         decision.planSha256,
         JSON.stringify(decision),
         objectKey,
@@ -228,7 +257,7 @@ export async function recordPlanningDecision(
     .bind(
       decision.planId,
       decision.issueNumber,
-      decision.status,
+      storedStatus(decision),
       decision.planSha256,
       JSON.stringify(decision),
       objectKey,
@@ -251,7 +280,7 @@ export async function recordPlanningDecision(
     env,
     decision.planId,
     row.revision,
-    decision.status === "proposed" ? "plan.proposed" : "plan.rejected",
+    `plan.${decision.status}`,
     actorId,
     { planSha256: decision.planSha256 },
     decision.createdAt,
@@ -273,7 +302,9 @@ export async function approvePlan(
   if (!row) throw new Error("Plan not found");
   if (row.plan_sha256 !== input.planSha256)
     throw new Error("Plan approval binding does not match");
-  if (row.status === "rejected") throw new Error("Rejected plan cannot run");
+  const decision = parseDecision(row.plan_json);
+  if (decision.status !== "proposed")
+    throw new Error("Qualification cannot run");
   if (row.status === "approved" || row.status === "materialized") {
     const plan = parseDecision(row.plan_json);
     if (row.approved_by !== input.actorId)

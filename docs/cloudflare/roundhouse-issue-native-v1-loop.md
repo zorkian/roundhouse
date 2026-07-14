@@ -10,17 +10,26 @@ and produces a repository-policy-qualified plan before it can create a run.
 
 ## Operator path
 
-1. Write an issue with a `Scope is exactly:` section containing one literal
-   repository-relative path per bullet.
-2. Post `/rh start`. Roundhouse stores the issue snapshot, plan JSON, and
-   immutable R2 plan evidence. It posts a link to the live plan page.
-3. Review the base commit, exact paths, profile, limits, risk, plan SHA-256, and
-   evidence identity. Approve from the Access-protected plan page or post the
-   exact `/rh implement PLAN REVISION SHA256` command shown by Roundhouse.
-4. Follow the run link. The page polls every five seconds and displays durable
+1. Write the desired outcome in an issue. An optional `Scope is exactly:`
+   section can supply literal repository-relative paths when the scope is
+   already known.
+2. Post `/rh start`. The bounded read-only planning agent classifies the issue
+   as proposed, needing clarification, already satisfied, duplicate, or
+   rejected. Roundhouse stores the issue snapshot, plan JSON, and immutable R2
+   plan evidence, then posts a link to the live plan page.
+3. If clarification is needed, answer the targeted questions beneath the exact
+   `/rh clarify PLAN REVISION SHA256` command. After editing an issue, use the
+   displayed `/rh replan PLAN REVISION SHA256` command. Both operations require
+   the current durable revision binding; prior commands cannot replace a plan.
+4. For a medium- or high-risk proposal, review the base commit, exact paths,
+   profile, limits, risk, plan SHA-256, and evidence identity, then approve from
+   the Access-protected plan page or post the exact
+   `/rh implement PLAN REVISION SHA256` command shown by Roundhouse. A low-risk
+   proposal by the verified maintainer proceeds directly toward a draft PR.
+5. Follow the run link. The page polls every five seconds and displays durable
    state, revision, attempts, classifications, evidence objects, patch identity,
    and publication state. Cancel and retry use the exact displayed revision.
-5. At `awaiting_approval`, independently review the patch and evidence. Existing
+6. At `awaiting_approval`, independently review the patch and evidence. Existing
    `/rh approve` and `/rh publish` commands retain their exact base, patch,
    evidence-set, revision, actor, and verified-publication bindings.
 
@@ -37,12 +46,13 @@ container definitions, D1 migrations, and paths outside the enrolled prefixes.
 The current bounded limits are a 512 KiB patch, 900 seconds, 256 model requests,
 three automatic attempts, and ten explicit operator attempts.
 
-Plan identity is a SHA-256 binding over the issue snapshot, base commit, exact
-paths, profile, validation level, risk, and limits. D1 holds the durable plan
-state and R2 object identity; R2 holds the immutable plan bytes. Approval uses a
-compare-and-swap revision and records the authenticated actor. A rejected plan
-cannot run. A changed issue requires a new plan. Duplicate webhooks, commands,
-UI requests, and Queue deliveries are idempotent.
+Plan identity is a SHA-256 binding over the issue snapshot, base commit, planning
+attempt, exact paths, qualification outcome and evidence, operator clarification,
+profile, validation level, risk, and limits. D1 holds the durable plan state and
+R2 object identity; R2 holds every immutable plan revision under its plan ID.
+Approval uses a compare-and-swap revision and records the authenticated actor.
+Only a proposal can run. Duplicate webhooks, commands, UI requests, and Queue
+deliveries are idempotent.
 
 ## Execution and security boundary
 
@@ -74,13 +84,15 @@ retain the additive tables, R2 evidence, runs, issues, and pull requests.
 
 ## Current V1 limitations
 
-- Planning is deterministic repository policy, not a separate planning model.
+- Planning is bounded to the existing Roundhouse repository and reviewed profile;
+  it is not yet a configurable multi-repository qualification service.
 - The UI is intentionally small and polling-based; it is an operator console,
   not a multi-tenant product interface.
 - Most displayed identities are not yet navigable. A follow-up should link
   issues, commits, plans, revision history, full evidence, actors, pull requests,
   and check observations to their authenticated or public detail views.
-- Issue edits do not mutate an existing plan. The operator starts a new plan.
+- Plan history is retained as immutable evidence but the dashboard does not yet
+  present a navigable revision timeline.
 - The reviewed profile supports Roundhouse's public repository only.
 - The subscription-backed Codex credential is a development exception, not the
   production identity architecture.

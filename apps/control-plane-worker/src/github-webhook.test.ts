@@ -99,6 +99,27 @@ describe("GitHub-native operator webhook", () => {
       revision: 2,
       planSha256: "b".repeat(64),
     });
+    expect(
+      parseGitHubCommand(
+        `/rh clarify plan_${"a".repeat(40)} 2 ${"b".repeat(64)}\n1. The issue page.`,
+      ),
+    ).toEqual({
+      kind: "clarify",
+      planId: `plan_${"a".repeat(40)}`,
+      revision: 2,
+      planSha256: "b".repeat(64),
+      answers: "1. The issue page.",
+    });
+    expect(
+      parseGitHubCommand(
+        `/rh replan plan_${"a".repeat(40)} 2 ${"b".repeat(64)}`,
+      ),
+    ).toMatchObject({ kind: "replan", revision: 2 });
+    expect(
+      parseGitHubCommand(
+        `/rh clarify plan_${"a".repeat(40)} 2 ${"b".repeat(64)}`,
+      ),
+    ).toBeNull();
     expect(parseGitHubCommand("please /rh start")).toBeNull();
     expect(parseGitHubCommand("/rh shell rm -rf /")).toBeNull();
     expect(parseGitHubCommand("/rh retry run_123 latest")).toBeNull();

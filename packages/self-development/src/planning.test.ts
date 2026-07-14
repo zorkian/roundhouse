@@ -66,6 +66,54 @@ describe("issue qualification and planning", () => {
     expect(raised).toMatchObject({ status: "proposed", risk: "high" });
   });
 
+  it("distinguishes non-implementation qualification outcomes", async () => {
+    const clarification = await qualifyAndPlan(
+      {
+        ...input,
+        requestedPaths: [],
+        understanding: "The desired surface is ambiguous.",
+        clarificationQuestions: ["Which status surface should change?"],
+      },
+      new Date("2026-07-12T00:00:00Z"),
+    );
+    expect(clarification).toMatchObject({
+      status: "needs_clarification",
+      questions: ["Which status surface should change?"],
+    });
+
+    await expect(
+      qualifyAndPlan(
+        {
+          ...input,
+          requestedPaths: [],
+          outcome: "already_satisfied",
+          understanding: "The behavior exists.",
+          evidence: ["packages/domain/src/ids.ts is contract-tested."],
+        },
+        new Date("2026-07-12T00:00:00Z"),
+      ),
+    ).resolves.toMatchObject({
+      status: "already_satisfied",
+      evidence: ["packages/domain/src/ids.ts is contract-tested."],
+    });
+
+    await expect(
+      qualifyAndPlan(
+        {
+          ...input,
+          requestedPaths: [],
+          outcome: "duplicate",
+          understanding: "Another issue represents this work.",
+          duplicateOf: "zorkian/roundhouse#20",
+        },
+        new Date("2026-07-12T00:00:00Z"),
+      ),
+    ).resolves.toMatchObject({
+      status: "duplicate",
+      duplicateOf: "zorkian/roundhouse#20",
+    });
+  });
+
   it.each([
     [".github/workflows/ci.yml", "protected_path"],
     ["containers/roundhouse-execution/Dockerfile", "protected_path"],

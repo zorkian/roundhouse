@@ -137,6 +137,19 @@ const checkSchema = envelopeSchema.extend({
 
 export type GitHubCommand =
   | { kind: "start" }
+  | {
+      kind: "clarify";
+      planId: string;
+      revision: number;
+      planSha256: string;
+      answers: string;
+    }
+  | {
+      kind: "replan";
+      planId: string;
+      revision: number;
+      planSha256: string;
+    }
   | { kind: "status"; runId?: string }
   | {
       kind: "implement";
@@ -179,7 +192,8 @@ function parseRevision(value: string | undefined): number | null {
 }
 
 export function parseGitHubCommand(body: string): GitHubCommand | null {
-  const line = body.trim().split(/\r?\n/, 1)[0]?.trim();
+  const [firstLine, ...remainingLines] = body.trim().split(/\r?\n/);
+  const line = firstLine?.trim();
   if (!line?.startsWith("/rh")) return null;
   const parts = line.split(/\s+/);
   if (parts[0] !== "/rh") return null;
@@ -189,6 +203,36 @@ export function parseGitHubCommand(body: string): GitHubCommand | null {
     return { kind: "status", runId: parts[2] };
   }
   const revision = parseRevision(parts[3]);
+  if (
+    parts[1] === "clarify" &&
+    parts.length === 5 &&
+    planId.test(parts[2] ?? "") &&
+    revision !== null &&
+    sha64.test(parts[4] ?? "")
+  ) {
+    const answers = remainingLines.join("\n").trim();
+    if (answers.length < 1 || answers.length > 10_000) return null;
+    return {
+      kind: "clarify",
+      planId: parts[2]!,
+      revision,
+      planSha256: parts[4]!,
+      answers,
+    };
+  }
+  if (
+    parts[1] === "replan" &&
+    parts.length === 5 &&
+    planId.test(parts[2] ?? "") &&
+    revision !== null &&
+    sha64.test(parts[4] ?? "")
+  )
+    return {
+      kind: "replan",
+      planId: parts[2]!,
+      revision,
+      planSha256: parts[4]!,
+    };
   if (
     parts[1] === "implement" &&
     parts.length === 5 &&

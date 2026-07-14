@@ -23,11 +23,22 @@ const claudeHome = "/home/runner/.roundhouse-claude";
 const planningOutputSchema = JSON.stringify({
   type: "object",
   properties: {
-    status: { type: "string", enum: ["proposed", "clarification"] },
+    status: {
+      type: "string",
+      enum: [
+        "proposed",
+        "needs_clarification",
+        "already_satisfied",
+        "duplicate",
+        "rejected",
+      ],
+    },
     summary: { type: "string" },
     exactPaths: { type: "array", items: { type: "string" } },
     acceptanceCriteria: { type: "array", items: { type: "string" } },
     questions: { type: "array", items: { type: "string" } },
+    evidence: { type: "array", items: { type: "string" } },
+    duplicateOf: { type: "string" },
     risk: { type: "string", enum: ["low", "medium", "high"] },
   },
   required: [
@@ -36,6 +47,8 @@ const planningOutputSchema = JSON.stringify({
     "exactPaths",
     "acceptanceCriteria",
     "questions",
+    "evidence",
+    "duplicateOf",
     "risk",
   ],
   additionalProperties: false,
@@ -253,8 +266,11 @@ export function planningPrompt(request) {
     "Do not modify files, install packages, access external services, or inspect credentials.",
     "Inspect only enough repository content to propose the smallest implementation scope.",
     "Never include .github/workflows, containers, migrations, lockfiles, licensing files, or secrets in an ordinary proposal.",
-    "If a material requirement is ambiguous, return clarification with at most five targeted questions.",
-    "Otherwise return proposed with literal existing or new repository-relative file paths and testable acceptance criteria.",
+    "Classify the request as proposed, needs_clarification, already_satisfied, duplicate, or rejected.",
+    "Use needs_clarification only for material ambiguity and ask at most five targeted questions.",
+    "Use already_satisfied only with concrete repository evidence, and duplicate only with a concrete issue or work-item identity.",
+    "Use rejected only when the requested work cannot safely fit the bounded development policy.",
+    "For proposed, return literal existing or new repository-relative file paths and testable acceptance criteria.",
     "Return only the required structured output.",
     "",
     `Issue #${request.issueNumber}: ${request.subject}`,
@@ -690,7 +706,13 @@ export function parsePlanningOutput(value, request) {
   if (
     !value ||
     typeof value !== "object" ||
-    !["proposed", "clarification"].includes(value.status) ||
+    ![
+      "proposed",
+      "needs_clarification",
+      "already_satisfied",
+      "duplicate",
+      "rejected",
+    ].includes(value.status) ||
     typeof value.summary !== "string" ||
     value.summary.length < 1 ||
     value.summary.length > 4_000 ||
@@ -711,9 +733,19 @@ export function parsePlanningOutput(value, request) {
       (item) =>
         typeof item === "string" && item.length > 0 && item.length <= 500,
     ) ||
+    !Array.isArray(value.evidence) ||
+    value.evidence.length > 20 ||
+    !value.evidence.every(
+      (item) =>
+        typeof item === "string" && item.length > 0 && item.length <= 1_000,
+    ) ||
+    typeof value.duplicateOf !== "string" ||
+    value.duplicateOf.length > 1_000 ||
     !["low", "medium", "high"].includes(value.risk) ||
     (value.status === "proposed" && value.exactPaths.length === 0) ||
-    (value.status === "clarification" && value.questions.length === 0)
+    (value.status === "needs_clarification" && value.questions.length === 0) ||
+    (value.status === "already_satisfied" && value.evidence.length === 0) ||
+    (value.status === "duplicate" && value.duplicateOf.length === 0)
   )
     throw new Error("planning_invalid_structured_output");
   return {
@@ -725,6 +757,8 @@ export function parsePlanningOutput(value, request) {
     exactPaths: [...value.exactPaths].sort(),
     acceptanceCriteria: value.acceptanceCriteria,
     questions: value.questions,
+    evidence: value.evidence,
+    duplicateOf: value.duplicateOf,
     risk: value.risk,
   };
 }
