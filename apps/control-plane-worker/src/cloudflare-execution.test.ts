@@ -542,6 +542,72 @@ describe("CloudflareRepositoryExecutionBackend", () => {
     expect(evidence.objects.size).toBe(1);
   });
 
+  it("rehydrates the complete failed candidate into an exact retry", async () => {
+    const evidence = new MemoryEvidence();
+    const prior = {
+      ...trustedResult(),
+      validationOutcome: "failed" as const,
+      validation: [
+        {
+          name: "format" as const,
+          command:
+            "prettier --check -- docs/dogfood/trusted-self-development-loop.md",
+          exitCode: 1,
+          timedOut: false,
+          durationMs: 1,
+          stdout: "",
+          stderr: "formatting failed",
+          outputTruncated: false,
+        },
+      ],
+    };
+    evidence.objects.set(
+      `runs/${trustedRequest.runId}/attempts/${trustedRequest.attemptId}/trusted-implementation.json`,
+      new TextEncoder().encode(JSON.stringify(prior)),
+    );
+    const retryRequest = {
+      ...trustedRequest,
+      attemptId: "run_trusted_container_contract-prepare-2",
+      attemptNumber: 2,
+      retryFromAttemptId: trustedRequest.attemptId,
+      retryContext: "formatting failed",
+    };
+    let received: TrustedImplementationRequest | undefined;
+    const backend = new CloudflareTrustedImplementationBackend(
+      {
+        getByName: () => ({
+          runJob: async () => result(),
+          runTrustedJob: async (request) => {
+            received = request;
+            return {
+              ...trustedResult(),
+              attemptId: retryRequest.attemptId,
+              retryLineage: {
+                priorAttemptId: prior.attemptId,
+                priorPatchSha256: prior.patchSha256,
+                priorChangedFiles: prior.changedFiles,
+                retainedAllPriorPaths: true,
+              },
+            };
+          },
+          destroy: async () => undefined,
+        }),
+      },
+      evidence,
+      "unused",
+    );
+
+    await expect(backend.execute(retryRequest)).resolves.toMatchObject({
+      state: "awaiting_approval",
+    });
+    expect(received?.retryCandidate).toEqual({
+      attemptId: prior.attemptId,
+      patch: prior.patch,
+      patchSha256: prior.patchSha256,
+      changedFiles: prior.changedFiles,
+    });
+  });
+
   it("classifies an interrupted evidence upload as retryable", async () => {
     const evidence = new MemoryEvidence();
     evidence.put = async () => {

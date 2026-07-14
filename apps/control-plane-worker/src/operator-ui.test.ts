@@ -323,6 +323,109 @@ describe("operator UI", () => {
     expect(app.innerHTML).toContain("no");
   });
 
+  it("renders the exact retained implementation review", async () => {
+    const runId = "run_exact_review";
+    const response = operatorPage(`/runs/${runId}`)!;
+    const script = /<script[^>]*>([\s\S]+)<\/script>/.exec(
+      await response.text(),
+    )![1];
+    const app = { innerHTML: "Loading…" };
+    vi.stubGlobal("document", {
+      getElementById: (id: string) => (id === "app" ? app : null),
+    });
+    vi.stubGlobal("setInterval", () => 0);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path: string) =>
+        path.endsWith("/implementation")
+          ? Response.json({
+              runId,
+              patch: "diff --git a/docs/a.md b/docs/a.md\n+reviewable",
+              patchSha256: "a".repeat(64),
+              patchBytes: 52,
+              changedFiles: ["docs/a.md"],
+              summary: "Implemented the approved behavior.",
+              validation: [
+                {
+                  name: "plan-compliance",
+                  command: "internal: exact approved and retry path coverage",
+                  exitCode: 0,
+                  stdout: "Final patch covers 1 approved path(s).",
+                  stderr: "",
+                },
+              ],
+              retryLineage: {
+                priorAttemptId: `${runId}-prepare-1`,
+                priorPatchSha256: "b".repeat(64),
+              },
+            })
+          : Response.json({
+              runId,
+              subject: "Review this implementation",
+              state: "awaiting_approval",
+              revision: 7,
+              implementation: { patchSha256: "a".repeat(64) },
+              attempts: [],
+              evidence: [],
+              events: [],
+            }),
+      ),
+    );
+
+    new Function(script!)();
+    await vi.waitFor(() =>
+      expect(app.innerHTML).toContain("Exact retained diff"),
+    );
+    expect(app.innerHTML).toContain("Implemented the approved behavior");
+    expect(app.innerHTML).toContain("plan-compliance");
+    expect(app.innerHTML).toContain("reviewable");
+    expect(app.innerHTML).toContain(`${runId}-prepare-1`);
+  });
+
+  it("renders a clarification plan without assuming rejection findings", async () => {
+    const response = operatorPage("/plans/plan_clarify")!;
+    const script = /<script[^>]*>([\s\S]+)<\/script>/.exec(
+      await response.text(),
+    )![1];
+    const app = { innerHTML: "Loading…" };
+    vi.stubGlobal("document", {
+      getElementById: (id: string) => (id === "app" ? app : null),
+    });
+    vi.stubGlobal("setInterval", () => 0);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          plan: {
+            status: "needs_clarification",
+            revision: 1,
+            evidence: {
+              objectKey: "plans/plan_clarify/plan.json",
+              sha256: "a".repeat(64),
+            },
+            plan: {
+              planId: "plan_clarify",
+              issueNumber: 33,
+              status: "needs_clarification",
+              baseCommit: "b".repeat(40),
+              planSha256: "c".repeat(64),
+              understanding: "The interaction surface is ambiguous.",
+              questions: ["Should this change the issue or run page?"],
+              evidence: [],
+            },
+          },
+        }),
+      ),
+    );
+
+    new Function(script!)();
+    await vi.waitFor(() =>
+      expect(app.innerHTML).toContain(
+        "Should this change the issue or run page?",
+      ),
+    );
+  });
+
   it("shows the offending path for a rejected plan", async () => {
     const response = operatorPage("/plans/plan_rejected")!;
     const script = /<script[^>]*>([\s\S]+)<\/script>/.exec(

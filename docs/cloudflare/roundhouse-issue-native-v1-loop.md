@@ -78,6 +78,20 @@ Existing alert, recovery, retention, evidence, cancellation, retry, approval,
 and publication APIs remain available. Scheduled recovery repairs stranded
 outbox delivery and expired leases without duplicating completed stages.
 
+An explicit retry of a failed trusted implementation does not begin again with
+only error text. The Worker retrieves the exact immutable failed evidence from
+R2, verifies its binding, and supplies the complete prior patch and changed-file
+inventory to the new attempt. The Container applies that patch to the exact base
+before invoking the agent. Plan-compliance validation requires the final patch
+to retain every prior candidate path and cover every exact approved path; retry
+lineage and the prior patch SHA-256 are retained in the new evidence.
+
+When a run needs implementation approval, Roundhouse creates one idempotent
+timeline notification in addition to updating the rolling status comment. The
+run page verifies and renders the exact retained diff, implementation summary,
+changed files, validation results, retry lineage, and approval hashes. Raw JSON
+evidence remains available for independent verification.
+
 The additive migration is `0007_issue_native_planning.sql`. Rollback for this
 development milestone is dry-run only: redeploy the prior Worker version and
 retain the additive tables, R2 evidence, runs, issues, and pull requests.

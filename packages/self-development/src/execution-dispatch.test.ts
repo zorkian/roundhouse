@@ -9,9 +9,11 @@ import type { SelfDevelopmentRun } from "./task.js";
 describe("DispatchingStageExecutor retry diagnostics", () => {
   it("passes the latest same-stage failure into an explicit retry", async () => {
     let retryContext: string | undefined;
+    let retryFromAttemptId: string | undefined;
     const executor = new DispatchingStageExecutor({
       dispatch: async (request) => {
         retryContext = request.retryContext;
+        retryFromAttemptId = request.retryFromAttemptId;
         return { state: "awaiting_approval" };
       },
     });
@@ -47,5 +49,6 @@ describe("DispatchingStageExecutor retry diagnostics", () => {
     await executor.execute("prepare", run);
 
     expect(retryContext).toBe("format: packages/example.ts needs formatting");
+    expect(retryFromAttemptId).toBe("run_retry_context-prepare-1");
   });
 });

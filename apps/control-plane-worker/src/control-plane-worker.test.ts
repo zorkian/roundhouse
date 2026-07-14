@@ -811,6 +811,9 @@ describe("local control-plane Worker", () => {
       runId: value.runId,
       patchSha256: value.result.patchSha256,
       changedFiles: value.result.changedFiles,
+      patchBytes: value.result.patchBytes,
+      summary: value.result.agent.summary,
+      validation: value.result.validation,
     });
     value.objects.delete(value.evidence.objectKey);
     expect(

@@ -74,6 +74,7 @@ export type ExecutionDispatchRequest = {
   subject: string;
   instructions: string;
   retryContext?: string;
+  retryFromAttemptId?: string;
   allowedPaths: string[];
   baseCommit: string;
   validationLevel: "quick" | "full";
@@ -107,6 +108,7 @@ export class DispatchingStageExecutor implements JobStageExecutor {
       subject: run.task.subject,
       instructions: run.task.instructions,
       retryContext: priorFailure?.error,
+      retryFromAttemptId: priorFailure?.attemptId,
       allowedPaths: run.task.allowedPaths,
       baseCommit: run.task.baseCommit,
       validationLevel: run.task.validationLevel,

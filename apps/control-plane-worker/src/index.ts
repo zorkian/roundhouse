@@ -747,6 +747,10 @@ export async function runComment(
       );
   }
   if (run.state === "awaiting_approval" && run.implementation) {
+    lines.push(
+      `Review exact patch: ${identity.origin}/runs/${run.runId}`,
+      `Changed files: ${run.implementation.changedFiles.length}; patch bytes: ${run.implementation.patchBytes}; patch SHA-256: \`${run.implementation.patchSha256}\`.`,
+    );
     if (
       run.evidence.some(
         (value) => value.evidenceId === run.implementation!.evidenceId,
@@ -775,6 +779,28 @@ export async function runComment(
   if (run.publication?.pullRequestUrl)
     lines.push(`Draft pull request: ${run.publication.pullRequestUrl}`);
   return lines.join("\n\n");
+}
+
+async function enqueueRunActionComment(
+  env: ControlPlaneEnv,
+  issueNumber: number,
+  run: Awaited<ReturnType<D1JobStore["read"]>>,
+): Promise<void> {
+  if (run.state !== "awaiting_approval" || !run.implementation) return;
+  const attempt = run.attempts.at(-1);
+  if (!attempt || attempt.status !== "succeeded") return;
+  const identity = runtimeIdentity(env);
+  await enqueueComment(
+    env,
+    `run-action:${identity.repositoryFullName}:${run.runId}:${attempt.attemptId}:approval`,
+    issueNumber,
+    [
+      `Roundhouse needs implementation approval for run \`${run.runId}\`.`,
+      `Review the exact retained patch, validation, retry lineage, and approval bindings: ${identity.origin}/runs/${run.runId}`,
+      `Changed files: ${run.implementation.changedFiles.length}; patch bytes: ${run.implementation.patchBytes}; patch SHA-256: \`${run.implementation.patchSha256}\`.`,
+    ].join("\n\n"),
+    identity.repositoryFullName,
+  );
 }
 
 async function enqueueRunFailureComment(
@@ -1740,6 +1766,10 @@ async function implementationEvidence(
     patch: result.patch,
     patchSha256: result.patchSha256,
     changedFiles: result.changedFiles,
+    patchBytes: result.patchBytes,
+    summary: result.agent.summary,
+    validation: result.validation,
+    retryLineage: result.retryLineage,
     evidence: reference,
   });
 }
@@ -2402,6 +2432,11 @@ export function createControlPlaneHandler(
                 run.runId,
               );
               await enqueueRunFailureComment(
+                env,
+                run.task.source.issueNumber,
+                run,
+              );
+              await enqueueRunActionComment(
                 env,
                 run.task.source.issueNumber,
                 run,
