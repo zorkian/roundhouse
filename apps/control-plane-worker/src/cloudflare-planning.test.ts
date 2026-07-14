@@ -32,6 +32,7 @@ describe("Cloudflare planning backend", () => {
             exactPaths: ["apps/control-plane-worker/src/operator-ui.ts"],
             acceptanceCriteria: ["The status page names the exact release."],
             questions: [],
+            duplicateOf: "",
             risk: "low",
           }),
           destroy: async () => undefined,

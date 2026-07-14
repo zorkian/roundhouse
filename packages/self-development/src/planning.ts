@@ -110,7 +110,7 @@ export const planningAgentResultSchema = z
     questions: z.array(z.string().min(1).max(500)).max(5),
     risk: z.enum(["low", "medium", "high"]),
     evidence: z.array(z.string().min(1).max(1_000)).max(20).optional(),
-    duplicateOf: z.string().min(1).max(1_000).optional(),
+    duplicateOf: z.string().max(1_000).optional(),
   })
   .superRefine((value, context) => {
     if (value.status === "proposed" && value.exactPaths.length === 0)
