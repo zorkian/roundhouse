@@ -262,6 +262,23 @@ function pathFindings(paths: string[]) {
   return findings;
 }
 
+function effectiveRisk(
+  paths: string[],
+  suggested: "low" | "medium" | "high" | undefined,
+): "low" | "medium" | "high" {
+  const topLevelPrefixes = new Set(paths.map((path) => path.split("/", 1)[0]));
+  const policyRisk =
+    paths.length > 4 ||
+    topLevelPrefixes.size > 1 ||
+    paths.some((path) => path.startsWith("apps/control-plane-worker/"))
+      ? "medium"
+      : "low";
+  const rank = { low: 0, medium: 1, high: 2 } as const;
+  return suggested && rank[suggested] > rank[policyRisk]
+    ? suggested
+    : policyRisk;
+}
+
 export async function qualifyAndPlan(
   input: QualificationIssue,
   now: Date,
@@ -328,11 +345,7 @@ export async function qualifyAndPlan(
     baseCommit: issue.baseCommit,
     exactPaths,
     validationLevel: "full" as const,
-    risk:
-      issue.suggestedRisk ??
-      (exactPaths.some((path) => path.startsWith("apps/control-plane-worker/"))
-        ? ("medium" as const)
-        : ("low" as const)),
+    risk: effectiveRisk(exactPaths, issue.suggestedRisk),
     understanding: issue.understanding,
     acceptanceCriteria: issue.acceptanceCriteria,
     planningAttemptId: issue.planningAttemptId,

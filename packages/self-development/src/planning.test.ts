@@ -46,6 +46,26 @@ describe("issue qualification and planning", () => {
     });
   });
 
+  it("allows planning advice to raise but never lower policy risk", async () => {
+    const attemptedDowngrade = await qualifyAndPlan(
+      { ...input, suggestedRisk: "low" },
+      new Date("2026-07-12T00:00:00Z"),
+    );
+    expect(attemptedDowngrade).toMatchObject({
+      status: "proposed",
+      risk: "medium",
+    });
+    const raised = await qualifyAndPlan(
+      {
+        ...input,
+        requestedPaths: ["docs/v1-plan.md"],
+        suggestedRisk: "high",
+      },
+      new Date("2026-07-12T00:00:00Z"),
+    );
+    expect(raised).toMatchObject({ status: "proposed", risk: "high" });
+  });
+
   it.each([
     [".github/workflows/ci.yml", "protected_path"],
     ["containers/roundhouse-execution/Dockerfile", "protected_path"],

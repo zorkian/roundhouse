@@ -379,6 +379,8 @@ describe("local control-plane Worker", () => {
     let comments = 0;
     let statusComment:
       { id: number; html_url: string; body: string } | undefined;
+    let lowRiskStatusComment:
+      { id: number; html_url: string; body: string } | undefined;
     env.GITHUB_API_FETCHER = async (input, init) => {
       const url = new URL(String(input));
       if (url.pathname.endsWith("/access_tokens"))
@@ -403,6 +405,23 @@ describe("local control-plane Worker", () => {
               "",
               "- `apps/control-plane-worker/src/github-gateway.ts`",
               "- `apps/control-plane-worker/src/github-gateway.test.ts`",
+            ].join("\n"),
+            updated_at: "2026-07-12T00:00:00Z",
+          }),
+        );
+      if (url.pathname.endsWith("/issues/18") && init?.method !== "POST")
+        return new Response(
+          JSON.stringify({
+            number: 18,
+            node_id: "issue-node-18",
+            html_url: "https://github.com/zorkian/roundhouse/issues/18",
+            title: "Clarify one operator guide",
+            body: [
+              "Make the operator guide easier to follow.",
+              "",
+              "Scope is exactly:",
+              "",
+              "- `docs/cloudflare/roundhouse-cloud-operations.md`",
             ].join("\n"),
             updated_at: "2026-07-12T00:00:00Z",
           }),
@@ -432,6 +451,28 @@ describe("local control-plane Worker", () => {
         return new Response(JSON.stringify(statusComment), { status: 201 });
       }
       if (
+        url.pathname.endsWith("/issues/18/comments") &&
+        (init?.method ?? "GET") === "GET"
+      )
+        return new Response(
+          JSON.stringify(lowRiskStatusComment ? [lowRiskStatusComment] : []),
+        );
+      if (
+        url.pathname.endsWith("/issues/18/comments") &&
+        init?.method === "POST"
+      ) {
+        comments += 1;
+        lowRiskStatusComment = {
+          id: 992,
+          html_url:
+            "https://github.com/zorkian/roundhouse/issues/18#issuecomment-992",
+          body: (JSON.parse(String(init.body)) as { body: string }).body,
+        };
+        return new Response(JSON.stringify(lowRiskStatusComment), {
+          status: 201,
+        });
+      }
+      if (
         url.pathname.endsWith("/issues/comments/991") &&
         init?.method === "PATCH"
       ) {
@@ -440,6 +481,16 @@ describe("local control-plane Worker", () => {
           body: (JSON.parse(String(init.body)) as { body: string }).body,
         };
         return new Response(JSON.stringify(statusComment));
+      }
+      if (
+        url.pathname.endsWith("/issues/comments/992") &&
+        init?.method === "PATCH"
+      ) {
+        lowRiskStatusComment = {
+          ...lowRiskStatusComment!,
+          body: (JSON.parse(String(init.body)) as { body: string }).body,
+        };
+        return new Response(JSON.stringify(lowRiskStatusComment));
       }
       return new Response("{}", { status: 404 });
     };
@@ -454,13 +505,14 @@ describe("local control-plane Worker", () => {
       command: string,
       commentId: number,
       delivery: string,
+      issueNumber = 17,
     ) => {
       const payload = JSON.stringify({
         action: "created",
         installation: { id: 146147681 },
         repository: { full_name: "zorkian/roundhouse" },
         sender: { login: "zorkian" },
-        issue: { number: 17 },
+        issue: { number: issueNumber },
         comment: {
           id: commentId,
           body: command,
@@ -670,6 +722,33 @@ describe("local control-plane Worker", () => {
     await expect(rejectedReplay.json()).resolves.toMatchObject({
       replayed: true,
     });
+
+    const lowRisk = await handler.fetch!(
+      await webhook(
+        "/rh start",
+        44,
+        "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff",
+        18,
+      ),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(lowRisk.status).toBe(202);
+    const lowRiskResult = (await lowRisk.json()) as {
+      kind: string;
+      runId: string;
+    };
+    expect(lowRiskResult).toMatchObject({ kind: "run" });
+    expect(lowRiskResult.runId).toMatch(/^run_[a-f0-9]{40}$/);
+    expect(await readIssuePlan(env, 18)).toMatchObject({
+      status: "materialized",
+      runId: lowRiskResult.runId,
+      approvedBy: "github:zorkian",
+    });
+    expect(queued.messages).toHaveLength(2);
+    expect(lowRiskStatusComment?.body).toContain(
+      `https://roundhouse-dev.rm-rf.rip/runs/${lowRiskResult.runId}`,
+    );
   });
 
   it("does not expose the retired direct issue-to-run administration route", async () => {
