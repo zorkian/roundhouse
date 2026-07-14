@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Miniflare } from "miniflare";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import type { ControlPlaneEnv } from "./environment.js";
 import {
@@ -23,22 +23,26 @@ import {
   verifyWebhookRequest,
 } from "./github-webhook.js";
 
-const instances: Miniflare[] = [];
+let instance: Miniflare;
+let sharedEnv: ControlPlaneEnv;
 
 async function runtime(): Promise<ControlPlaneEnv> {
-  const instance = new Miniflare({
+  return sharedEnv;
+}
+
+beforeAll(async () => {
+  instance = new Miniflare({
     modules: true,
     script: "export default { fetch() { return new Response('ok') } }",
     d1Databases: { DB: "github-webhook-test" },
   });
-  instances.push(instance);
   const db = await instance.getD1Database("DB");
   for (const statement of githubNativeOperatorMigration
     .split(";")
     .map((value) => value.trim())
     .filter(Boolean))
     await db.prepare(statement).run();
-  return {
+  sharedEnv = {
     DB: db,
     RUN_QUEUE: { send: async () => undefined } as unknown as Queue<unknown>,
     EXECUTION_MODE: "deterministic-local",
@@ -48,7 +52,7 @@ async function runtime(): Promise<ControlPlaneEnv> {
     GITHUB_APP_ID: "4281837",
     ROUNDHOUSE_GITHUB_WEBHOOK_SECRET: "webhook-test-secret",
   };
-}
+});
 
 async function signature(body: string, secret: string): Promise<string> {
   const key = await crypto.subtle.importKey(
@@ -68,9 +72,17 @@ async function signature(body: string, secret: string): Promise<string> {
     .join("")}`;
 }
 
-afterEach(async () => {
-  await Promise.all(instances.splice(0).map((value) => value.dispose()));
+beforeEach(async () => {
+  for (const table of [
+    "github_check_observations",
+    "github_comment_outbox",
+    "github_issue_runs",
+    "github_webhook_deliveries",
+  ])
+    await sharedEnv.DB.prepare(`DELETE FROM ${table}`).run();
 });
+
+afterAll(async () => instance.dispose());
 
 describe("GitHub-native operator webhook", () => {
   it("parses only exact bounded commands", () => {

@@ -6,7 +6,7 @@ import {
   qualifyAndPlan,
 } from "@roundhouse/self-development/cloudflare";
 import { Miniflare } from "miniflare";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import type { ControlPlaneEnv } from "./environment.js";
 import {
@@ -18,33 +18,41 @@ import {
   recordPlanningDecision,
 } from "./github-planning.js";
 
-const instances: Miniflare[] = [];
+let instance: Miniflare;
+let sharedEnv: ControlPlaneEnv;
 
 async function runtime(): Promise<ControlPlaneEnv> {
-  const instance = new Miniflare({
+  return sharedEnv;
+}
+
+beforeAll(async () => {
+  instance = new Miniflare({
     modules: true,
     script: "export default { fetch() { return new Response('ok') } }",
     d1Databases: { DB: "github-planning-test" },
   });
-  instances.push(instance);
   const db = await instance.getD1Database("DB");
   for (const statement of `${d1JobStoreMigration}\n${githubPlanningMigration}`
     .split(";")
     .map((value) => value.trim())
     .filter(Boolean))
     await db.prepare(statement).run();
-  return {
+  sharedEnv = {
     DB: db,
     RUN_QUEUE: { send: async () => undefined } as unknown as Queue<unknown>,
     EXECUTION_MODE: "deterministic-local",
     ALLOWED_REPOSITORY_PATH: "/workspace/roundhouse",
     ALLOWED_REMOTE_URL: "https://github.com/zorkian/roundhouse.git",
   };
-}
-
-afterEach(async () => {
-  await Promise.all(instances.splice(0).map((value) => value.dispose()));
 });
+
+beforeEach(async () => {
+  await sharedEnv.DB.prepare("DELETE FROM github_plan_events").run();
+  await sharedEnv.DB.prepare("DELETE FROM github_issue_plans").run();
+  delete sharedEnv.EXECUTION_EVIDENCE;
+});
+
+afterAll(async () => instance.dispose());
 
 async function proposed(issueNumber = 22) {
   return qualifyAndPlan(
