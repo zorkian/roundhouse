@@ -84,12 +84,66 @@ describe("operator UI", () => {
     );
     new Function(script!)();
     await vi.waitFor(() => expect(app.innerHTML).toContain("run_remediation"));
+    expect(app.innerHTML).toContain("What happens next");
+    expect(app.innerHTML).toContain("This issue is complete");
     expect(app.innerHTML).toContain(`/reviews/${reviewId}`);
     expect(app.innerHTML).toContain(
       "https://github.com/zorkian/roundhouse/pull/25",
     );
     expect(app.innerHTML).toContain("development release and checks");
     expect(app.innerHTML).toContain(`${"c".repeat(40)}/checks`);
+  });
+
+  it("puts the operator's next action ahead of workflow internals", async () => {
+    const reviewId = `review_${"b".repeat(40)}`;
+    const response = operatorPage(
+      "/repositories/zorkian/roundhouse/issues/24",
+    )!;
+    const script = /<script[^>]*>([\s\S]+)<\/script>/.exec(
+      await response.text(),
+    )![1];
+    const app = { innerHTML: "Loading…" };
+    vi.stubGlobal("document", {
+      getElementById: (id: string) => (id === "app" ? app : null),
+    });
+    vi.stubGlobal("setInterval", () => 0);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          schemaVersion: 1,
+          repositoryFullName: "zorkian/roundhouse",
+          issueNumber: 24,
+          plan: null,
+          sourceRun: {
+            runId: "run_source",
+            state: "completed",
+            publication: {
+              pullRequestUrl: "https://github.com/zorkian/roundhouse/pull/25",
+            },
+          },
+          reviews: [
+            {
+              status: "running",
+              request: {
+                cycle: 1,
+                reviewId,
+                headCommit: "b".repeat(40),
+              },
+            },
+          ],
+        }),
+      ),
+    );
+    new Function(script!)();
+    await vi.waitFor(() =>
+      expect(app.innerHTML).toContain("Independent review is running"),
+    );
+    expect(app.innerHTML.indexOf("What happens next")).toBeLessThan(
+      app.innerHTML.indexOf("GitHub issue workflow"),
+    );
+    expect(app.innerHTML).toContain("No action needed");
+    expect(app.innerHTML).toContain(`/reviews/${reviewId}`);
   });
 
   it("renders live Container phases on a run page", async () => {
@@ -122,14 +176,28 @@ describe("operator UI", () => {
               startedAt: "2026-07-14T00:00:00.000Z",
               updatedAt: "2026-07-14T00:00:00.000Z",
             },
+            {
+              attemptId: "run_live-attempt-2",
+              phase: "validation.test",
+              status: "completed",
+              startedAt: "2026-07-14T00:00:00.000Z",
+              completedAt: "2026-07-14T00:00:05.000Z",
+              updatedAt: "2026-07-14T00:00:05.000Z",
+            },
           ],
         }),
       ),
     );
     new Function(script!)();
     await vi.waitFor(() => expect(app.innerHTML).toContain("Live execution"));
+    expect(app.innerHTML).toContain("prepare #1");
+    expect(app.innerHTML).toContain("attempt #2");
     expect(app.innerHTML).toContain("agent.implement");
+    expect(app.innerHTML).toContain("validation.test");
     expect(app.innerHTML).toContain("running");
+    expect(app.innerHTML).toContain("5s");
+    expect(app.innerHTML).not.toContain("run_live-prepare-1");
+    expect(app.innerHTML.match(/class="event-row"/g)).toHaveLength(2);
   });
 
   it("does not label the source run as an active remediation", async () => {
