@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertCompleteAgentOutput,
   boundedAgentFailure,
+  boundedLogExcerpt,
   changedPaths,
   createPublicationManifest,
   command,
@@ -32,6 +33,23 @@ describe("execution runner command", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
     expect(Date.now() - started).toBeLessThan(1_000);
   });
+});
+
+describe("execution runner observability", () => {
+  it("bounds log excerpts and removes unsafe control characters", () => {
+    expect(boundedLogExcerpt(`prefix\u0000${"x".repeat(2_100)}`)).toBe(
+      "x".repeat(2_000),
+    );
+  });
+
+  it.each([0, Number.NaN, Number.POSITIVE_INFINITY, 10_000])(
+    "fails closed for unsafe excerpt bound %s",
+    (maximum) => {
+      expect(boundedLogExcerpt("x".repeat(2_100), maximum)).toBe(
+        "x".repeat(2_000),
+      );
+    },
+  );
 });
 
 describe("trusted agent output boundary", () => {
