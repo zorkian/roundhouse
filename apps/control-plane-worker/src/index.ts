@@ -1634,6 +1634,13 @@ async function githubWebhook(
     return json({ schemaVersion: 1, accepted: true, replayed: true });
   if (reservation.kind === "in_progress")
     throw new GitHubWebhookError(503, "delivery_in_progress");
+  let commandFailureTarget:
+    | {
+        issueNumber: number;
+        repositoryFullName: string;
+        command: GitHubCommand;
+      }
+    | undefined;
   try {
     const observations = checkObservation(webhook);
     if (observations.length > 0) {
@@ -1730,6 +1737,11 @@ async function githubWebhook(
       );
       return json({ schemaVersion: 1, accepted: true, ignored: true });
     }
+    commandFailureTarget = {
+      issueNumber: value.issueNumber,
+      repositoryFullName: value.repositoryFullName,
+      command: value.command,
+    };
     const result = await executeGitHubCommand(
       env,
       webhook.deliveryId,
@@ -1754,9 +1766,17 @@ async function githubWebhook(
     }
     return json({ schemaVersion: 1, accepted: true, ...result }, 202);
   } catch (error) {
+    const reason = redactedReason(error);
     const permanentlyRejected =
       error instanceof HttpError ||
       (error instanceof GitHubWebhookError && error.status < 500);
+    console.error("GitHub webhook processing failed", {
+      deliveryId: webhook.deliveryId,
+      eventName: webhook.eventName,
+      command: commandFailureTarget?.command.kind,
+      issueNumber: commandFailureTarget?.issueNumber,
+      reason,
+    });
     try {
       await completeWebhookDelivery(
         env,
@@ -1770,12 +1790,34 @@ async function githubWebhook(
               : error instanceof HttpError
                 ? "command_rejected"
                 : "processing_failed",
+          ...(permanentlyRejected ? {} : { reason }),
         },
       );
     } catch (completionError) {
       console.warn("GitHub webhook failure receipt was not retained", {
         reason: redactedReason(completionError),
       });
+    }
+    if (!permanentlyRejected && commandFailureTarget) {
+      try {
+        await enqueueComment(
+          env,
+          `github-command-failure-${webhook.deliveryId}`,
+          commandFailureTarget.issueNumber,
+          [
+            `Roundhouse could not complete \`/rh ${commandFailureTarget.command.kind}\`.`,
+            `Failure: \`${reason}\``,
+            "No new plan or run was created. You can retry the command after the failure is addressed.",
+          ].join("\n\n"),
+          commandFailureTarget.repositoryFullName,
+        );
+        await flushGitHubOutputs(env);
+      } catch (deliveryError) {
+        console.warn("GitHub command failure status delivery deferred", {
+          deliveryId: webhook.deliveryId,
+          reason: redactedReason(deliveryError),
+        });
+      }
     }
     if (permanentlyRejected)
       return json({ schemaVersion: 1, accepted: true, ignored: true }, 202);
