@@ -262,8 +262,16 @@ export class GitHubAppGateway {
         "GitHub issue number is invalid",
       );
     const base = repositoryPath(input.repositoryFullName);
-    const marker = `<!-- roundhouse-status:${input.repositoryFullName}#${input.issueNumber} -->`;
-    if (!input.body.startsWith(marker))
+    const marker = input.body.split("\n", 1)[0] ?? "";
+    const statusMarker = `<!-- roundhouse-status:${input.repositoryFullName}#${input.issueNumber} -->`;
+    const progressPrefix = `<!-- roundhouse-progress:${input.repositoryFullName}#${input.issueNumber}:`;
+    if (
+      marker !== statusMarker &&
+      (!marker.startsWith(progressPrefix) ||
+        !/^[a-zA-Z0-9:_-]{1,200} -->$/.test(
+          marker.slice(progressPrefix.length),
+        ))
+    )
       throw new GitHubAppGatewayError(
         "invalid_request",
         "GitHub status comment marker is invalid",
@@ -332,6 +340,112 @@ export class GitHubAppGateway {
       if (reconciled?.body === input.body) return validate(reconciled);
       throw error;
     }
+  }
+
+  async closeIssue(
+    repositoryFullName: string,
+    issueNumber: number,
+  ): Promise<{ number: number; state: "closed"; url: string }> {
+    if (!Number.isSafeInteger(issueNumber) || issueNumber < 1)
+      throw new GitHubAppGatewayError(
+        "invalid_request",
+        "GitHub issue number is invalid",
+      );
+    const value = (
+      await this.api<{
+        number: number;
+        state: string;
+        html_url: string;
+        pull_request?: unknown;
+      }>(
+        "PATCH",
+        `${repositoryPath(repositoryFullName)}/issues/${issueNumber}`,
+        {
+          state: "closed",
+          state_reason: "completed",
+        },
+      )
+    ).value;
+    const expectedUrl = `https://github.com/${repositoryFullName}/issues/${issueNumber}`;
+    if (
+      value.number !== issueNumber ||
+      value.state !== "closed" ||
+      value.html_url !== expectedUrl ||
+      value.pull_request !== undefined
+    )
+      throw new GitHubAppGatewayError(
+        "invalid_response",
+        "GitHub issue close response was invalid",
+      );
+    return { number: value.number, state: "closed", url: value.html_url };
+  }
+
+  async markPullRequestReady(input: {
+    repositoryFullName: string;
+    pullRequestNumber: number;
+    expectedHeadSha: string;
+  }): Promise<{ number: number; url: string; ready: true }> {
+    if (
+      !Number.isSafeInteger(input.pullRequestNumber) ||
+      input.pullRequestNumber < 1 ||
+      !/^[a-f0-9]{40}$/.test(input.expectedHeadSha)
+    )
+      throw new GitHubAppGatewayError(
+        "invalid_request",
+        "GitHub pull request identity is invalid",
+      );
+    const pull = (
+      await this.api<{
+        number: number;
+        node_id: string;
+        html_url: string;
+        draft: boolean;
+        head: { sha: string };
+      }>(
+        "GET",
+        `${repositoryPath(input.repositoryFullName)}/pulls/${input.pullRequestNumber}`,
+      )
+    ).value;
+    const expectedUrl = `https://github.com/${input.repositoryFullName}/pull/${input.pullRequestNumber}`;
+    if (
+      pull.number !== input.pullRequestNumber ||
+      !pull.node_id ||
+      pull.html_url !== expectedUrl ||
+      pull.head.sha !== input.expectedHeadSha
+    )
+      throw new GitHubAppGatewayError(
+        "invalid_response",
+        "GitHub pull request readiness binding did not match",
+      );
+    if (!pull.draft)
+      return { number: pull.number, url: pull.html_url, ready: true };
+    const response = (
+      await this.api<{
+        data?: {
+          markPullRequestReadyForReview?: {
+            pullRequest: { number: number; url: string; isDraft: boolean };
+          };
+        };
+        errors?: unknown[];
+      }>("POST", "/graphql", {
+        query:
+          "mutation MarkReady($id: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $id }) { pullRequest { number url isDraft } } }",
+        variables: { id: pull.node_id },
+      })
+    ).value;
+    const ready = response.data?.markPullRequestReadyForReview?.pullRequest;
+    if (
+      response.errors?.length ||
+      !ready ||
+      ready.number !== input.pullRequestNumber ||
+      ready.url !== expectedUrl ||
+      ready.isDraft
+    )
+      throw new GitHubAppGatewayError(
+        "invalid_response",
+        "GitHub did not mark the pull request ready for review",
+      );
+    return { number: ready.number, url: ready.url, ready: true };
   }
 
   async upsertReviewCheck(input: {
@@ -590,7 +704,19 @@ export class GitHubAppGateway {
             title: input.pullRequestTitle,
             head: input.branch,
             base: "main",
-            body: `Roundhouse development dogfood for issue #${input.issueNumber}.`,
+            body: [
+              "## Summary",
+              "",
+              `Roundhouse implemented #${input.issueNumber} through the issue-driven development workflow.`,
+              "",
+              "## Human review",
+              "",
+              "- The pull request contains the exact validated patch approved from the source issue.",
+              "- Roundhouse posts the independent Claude review and any findings below.",
+              "- Merging remains a human decision.",
+              "",
+              `Closes #${input.issueNumber}`,
+            ].join("\n"),
             draft: true,
           })
         ).value;

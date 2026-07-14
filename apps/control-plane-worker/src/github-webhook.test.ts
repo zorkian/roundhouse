@@ -10,6 +10,7 @@ import {
   claimPendingComments,
   completeWebhookDelivery,
   enqueueComment,
+  enqueueProgressComment,
   enqueueStatusComment,
   exactPublishedCheckTargets,
   githubNativeOperatorMigration,
@@ -426,6 +427,33 @@ describe("GitHub-native operator webhook", () => {
         }),
       ]),
     );
+  });
+
+  it("keeps each human-visible progress milestone in its own mutable comment", async () => {
+    const env = await runtime();
+    const scope = `review_${"a".repeat(40)}`;
+    const marker = `<!-- roundhouse-progress:zorkian/roundhouse#19:${scope} -->`;
+    await enqueueProgressComment(
+      env,
+      "zorkian/roundhouse",
+      19,
+      scope,
+      `${marker}\nReview started`,
+    );
+    await enqueueProgressComment(
+      env,
+      "zorkian/roundhouse",
+      19,
+      scope,
+      `${marker}\nReview passed`,
+    );
+    const claims = await claimPendingComments(env);
+    expect(claims).toEqual([
+      expect.objectContaining({
+        key: `issue-progress:zorkian/roundhouse:19:${scope}`,
+        body: `${marker}\nReview passed`,
+      }),
+    ]);
   });
 
   it("rejects malformed status projections before persistence", async () => {

@@ -10,10 +10,11 @@ follow ordinary progress.
 
 ## Operator path
 
-An enrolled issue receives one rolling status comment. Roundhouse updates that
-comment in place as planning, implementation, approval, publication,
-independent review, and bounded remediation advance. The comment always links
-to the aggregate workflow page:
+An enrolled issue receives a compact live-run comment plus a bounded timeline
+of meaningful milestones. Planning, a human action request, publication, each
+independent-review cycle, a failure, and merge completion remain visually
+distinct so the operator does not have to reconstruct overwritten history.
+The live comment and milestones link to the aggregate workflow page:
 
 `/repositories/OWNER/REPOSITORY/issues/NUMBER`
 
@@ -23,9 +24,12 @@ evidence links. Detailed plan, run, revision-history, review, and evidence
 pages remain available for diagnosis. Successful CI observations stay quiet;
 they do not create issue comments merely because a check was observed.
 
-Independent review is projected as one rolling comment on the generated pull
-request. It names the exact reviewed head, links to the authenticated review
-page, and reports running, success, failure, findings, and remediation state.
+Independent review is projected as one comment per review cycle on the issue
+and generated pull request. The comment starts as “review in progress,” then is
+updated with Claude's summary, exact reviewed head, substantive findings,
+recommendations, Roundhouse dispositions, and retained-review link. A completed
+review makes the pull request ready for human review; bounded remediation keeps
+it draft until the next exact-head review finishes.
 The existing GitHub App installation has read-only Checks permission, and this
 milestone does not expand app scope. The exact-head Check adapter therefore
 remains contract-tested but disabled until a future permission review. Durable

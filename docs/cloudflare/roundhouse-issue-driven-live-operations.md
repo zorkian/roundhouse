@@ -16,8 +16,14 @@ release.
 
 ## Operator experience
 
-The rolling issue comment provides one stable workflow link and one live run
-link. The run page refreshes every five seconds and shows:
+The issue reads as a short workflow timeline instead of one ever-growing
+comment. Roundhouse keeps one compact live-run projection, while plans,
+approval requests, publication, each independent-review cycle, failures, and
+merge completion get distinct comments. A review comment is created when
+Claude starts and updated in place with its verdict and substantive findings.
+Every comment says whether the human needs to act.
+
+The run page refreshes every five seconds and shows:
 
 - durable run state, revision, base, plan, and publication;
 - current and completed Container phases with elapsed time;
@@ -29,6 +35,11 @@ link. The run page refreshes every five seconds and shows:
 
 The issue workflow links the GitHub issue, plan, source and remediation runs,
 draft pull request, exact reviewed heads, merged commit, and post-merge checks.
+Generated pull requests contain `Closes #NUMBER`; a signed merge webhook also
+closes the bound source issue idempotently and posts the exact merge commit.
+When an independent review completes without bounded remediation pending,
+Roundhouse removes the draft flag so the pull request visibly becomes ready
+for a human review and merge decision.
 
 ## Recovery semantics
 
@@ -62,7 +73,7 @@ and checks.
 
 ## Remaining POC limitations
 
-The status projection is polling rather than streaming. A Worker that dies may
+The live status projection is polling rather than streaming. A Worker that dies may
 still take up to the five-minute lease plus scheduled-trigger latency to be
 reclaimed. GitHub displays the authoritative development check result; Roundhouse
 links to it rather than duplicating workflow-run state in D1. Multi-repository
