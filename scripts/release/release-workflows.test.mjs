@@ -29,6 +29,12 @@ describe("release workflow handoff", () => {
     expect(production).toContain("/v1/releases/${source_commit}/canary");
     expect(development).toContain("development-canary.json");
     expect(production).toContain("production-canary.json");
+    expect(development).toContain("development-fleet.json");
+    expect(production).toContain("production-fleet.json");
+    expect(development).toContain("wrangler containers list --json");
+    expect(production).toContain("wrangler containers list --json");
+    expect(development).toContain('.state == "ready"');
+    expect(production).toContain('.state == "ready"');
     expect(development).toContain("--retry 60");
     expect(production).toContain("--retry 60");
     expect(development).toContain("after waiting for the gradual rollout");

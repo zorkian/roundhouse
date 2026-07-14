@@ -74,8 +74,9 @@ retains production evidence.
 Both environments permit up to ten distinct execution attempts concurrently.
 Queue concurrency is matched to that ceiling. Container replacements use
 cumulative 10%, 25%, 50%, and 100% rollout steps, and active instances remain
-ineligible for replacement for one hour before Cloudflare begins graceful
-termination. The runner refuses new work and drains on `SIGTERM`; normal
+ineligible for replacement for five minutes before Cloudflare begins graceful
+termination. Cloudflare then permits up to 15 minutes for the runner to drain.
+The runner refuses new work and drains on `SIGTERM`; normal
 completed attempts stop gracefully, while explicit cancellation may still
 destroy a failed instance immediately. See the
 [graceful rollout manifest](../cloudflare/roundhouse-graceful-rollout-manifest.md).

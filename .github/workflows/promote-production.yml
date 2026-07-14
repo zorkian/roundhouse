@@ -183,6 +183,28 @@ jobs:
             --arg commit "$source_commit" \
             '.schemaVersion == 1 and .ok == true and .releaseCommit == $commit and .environment == "production" and .workerId == "roundhouse-prod-control-plane"' \
             .roundhouse/release/production-canary.json > /dev/null
+          fleet_deadline=$((SECONDS + 1200))
+          while true; do
+            pnpm exec wrangler containers list --json \
+              > .roundhouse/release/production-fleet-all.json
+            if jq --exit-status \
+              --arg name roundhouse-prod-execution \
+              --arg commit "$source_commit" \
+              '.[] | select(.name == $name) | .state == "ready" and (.image | contains($commit))' \
+              .roundhouse/release/production-fleet-all.json > /dev/null; then
+              jq --arg name roundhouse-prod-execution \
+                '.[] | select(.name == $name)' \
+                .roundhouse/release/production-fleet-all.json \
+                > .roundhouse/release/production-fleet.json
+              break
+            fi
+            if (( SECONDS >= fleet_deadline )); then
+              echo "::error::Production Container fleet did not converge on ${source_commit} within 20 minutes"
+              jq . .roundhouse/release/production-fleet-all.json >&2
+              exit 1
+            fi
+            sleep 15
+          done
           ready_status="$(curl \
             --fail-with-body \
             --silent \
@@ -219,9 +241,10 @@ jobs:
             --arg origin https://roundhouse.rm-rf.rip \
             --arg checked_at "$(date --utc +%Y-%m-%dT%H:%M:%S.000Z)" \
             --slurpfile canary .roundhouse/release/production-canary.json \
+            --slurpfile fleet .roundhouse/release/production-fleet.json \
             --slurpfile ready .roundhouse/release/production-ready.json \
             --slurpfile health .roundhouse/release/production-health.json \
-            '{schemaVersion:1,origin:$origin,canary:$canary[0],ready:$ready[0],health:$health[0],checkedAt:$checked_at}' \
+            '{schemaVersion:1,origin:$origin,canary:$canary[0],fleet:$fleet[0],ready:$ready[0],health:$health[0],checkedAt:$checked_at}' \
             > .roundhouse/release/production-smoke.json
           node scripts/release/roundhouse-release.mjs evidence \
             production \
@@ -242,6 +265,7 @@ jobs:
             .roundhouse/release/development-evidence.json
             .roundhouse/release/promotion-approval.json
             .roundhouse/release/production-canary.json
+            .roundhouse/release/production-fleet.json
             .roundhouse/release/production-ready.json
             .roundhouse/release/production-smoke.json
             .roundhouse/release/production-evidence.json
