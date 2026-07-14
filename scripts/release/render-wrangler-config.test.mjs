@@ -24,7 +24,7 @@ afterEach(async () => {
 });
 
 describe("release Wrangler configuration", () => {
-  it("explicitly retains complete Worker and Container logs", async () => {
+  it("retains logs and configures bounded parallel graceful rollouts", async () => {
     const root = await mkdtemp(join(tmpdir(), "roundhouse-wrangler-"));
     temporaryDirectories.push(root);
     for (const environment of ["development", "production"]) {
@@ -53,6 +53,20 @@ describe("release Wrangler configuration", () => {
           persist: true,
         },
       });
+      expect(config.containers).toEqual([
+        expect.objectContaining({
+          max_instances: 10,
+          instance_type: "standard-1",
+          rollout_step_percentage: [10, 25, 50, 100],
+          rollout_active_grace_period: 3600,
+        }),
+      ]);
+      expect(config.queues.consumers).toEqual([
+        expect.objectContaining({
+          max_batch_size: 1,
+          max_concurrency: 10,
+        }),
+      ]);
     }
   });
 });

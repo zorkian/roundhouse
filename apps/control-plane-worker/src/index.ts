@@ -2256,6 +2256,34 @@ async function route(
     await env.DB.prepare("SELECT 1").first();
     return json({ schemaVersion: 1, ready: true });
   }
+  const releaseCanaryMatch = /^\/v1\/releases\/([a-f0-9]{40})\/canary$/.exec(
+    url.pathname,
+  );
+  if (request.method === "POST" && releaseCanaryMatch?.[1]) {
+    if (!env.EXECUTION_CONTAINERS)
+      throw new HttpError(503, "Execution Containers are not configured");
+    const releaseCommit = releaseCanaryMatch[1];
+    const container = env.EXECUTION_CONTAINERS.getByName(
+      `release_canary_${releaseCommit}`,
+    );
+    if (!container.releaseCanary)
+      throw new HttpError(503, "Execution Container canary is unavailable");
+    try {
+      const result = await container.releaseCanary(releaseCommit);
+      return json({
+        ...result,
+        environment: runtimeIdentity(env).environment,
+        workerId: runtimeIdentity(env).workerId,
+      });
+    } catch (error) {
+      await container.destroy().catch(() => undefined);
+      console.error("Execution Container release canary failed", {
+        releaseCommit,
+        reason: redactedReason(error),
+      });
+      throw new HttpError(503, "Execution Container release canary failed");
+    }
+  }
   if (request.method === "GET") {
     const page = operatorPage(url.pathname, runtimeIdentity(env).commandPrefix);
     if (page) return page;

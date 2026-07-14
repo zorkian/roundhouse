@@ -124,10 +124,82 @@ async function auditedModelTransport(
 
 export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
   override defaultPort = 8080;
+  override requiredPorts = [8080];
   override sleepAfter = "1m";
   override enableInternet = false;
   override interceptHttps = true;
   override allowedHosts: string[] = [];
+
+  override onStop({
+    exitCode,
+    reason,
+  }: {
+    exitCode: number;
+    reason: "exit" | "runtime_signal";
+  }): void {
+    console.info("Roundhouse Container lifecycle", {
+      event: "container.stopped",
+      exitCode,
+      reason,
+      occurredAt: new Date().toISOString(),
+    });
+  }
+
+  override onError(error: unknown): void {
+    console.error("Roundhouse Container lifecycle", {
+      event: "container.error",
+      reason: boundedReason(error),
+      occurredAt: new Date().toISOString(),
+    });
+    throw error;
+  }
+
+  async releaseCanary(expectedCommit: string): Promise<{
+    schemaVersion: 1;
+    ok: true;
+    releaseCommit: string;
+  }> {
+    if (!/^[a-f0-9]{40}$/.test(expectedCommit))
+      throw new Error("Invalid release canary commit");
+    const request = { attemptId: `release_canary_${expectedCommit}` };
+    lifecycle("info", "release-canary.started", request);
+    try {
+      await this.startAndWaitForPorts({
+        ports: 8080,
+        startOptions: {
+          enableInternet: false,
+          envVars: {},
+          labels: { releaseCommit: expectedCommit, mode: "release-canary" },
+        },
+        cancellationOptions: {
+          instanceGetTimeoutMS: 30_000,
+          portReadyTimeoutMS: 90_000,
+          waitInterval: 250,
+        },
+      });
+      const response = await this.containerFetch("http://container/ping");
+      const value = (await response.json()) as {
+        schemaVersion?: unknown;
+        ok?: unknown;
+        releaseCommit?: unknown;
+      };
+      if (
+        !response.ok ||
+        value.schemaVersion !== 1 ||
+        value.ok !== true ||
+        value.releaseCommit !== expectedCommit
+      )
+        throw new Error("Container release canary identity mismatch");
+      lifecycle("info", "release-canary.completed", request);
+      return {
+        schemaVersion: 1,
+        ok: true,
+        releaseCommit: expectedCommit,
+      };
+    } finally {
+      await this.stop();
+    }
+  }
 
   private async phase<T>(
     request: ObservableRequest,
@@ -267,7 +339,7 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
       const cleanup = await Promise.allSettled([
         this.setOutboundByHosts({}),
         this.setAllowedHosts([]),
-        this.destroy(),
+        this.stop(),
       ]);
       const failures = cleanup.filter((result) => result.status === "rejected");
       if (failures.length > 0)
@@ -362,7 +434,7 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
       const cleanup = await Promise.allSettled([
         this.setOutboundByHosts({}),
         this.setAllowedHosts([]),
-        this.destroy(),
+        this.stop(),
       ]);
       const failures = cleanup.filter((result) => result.status === "rejected");
       if (failures.length > 0)
@@ -444,7 +516,7 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
       const cleanup = await Promise.allSettled([
         this.setOutboundByHosts({}),
         this.setAllowedHosts([]),
-        this.destroy(),
+        this.stop(),
       ]);
       if (cleanup.some((result) => result.status === "rejected"))
         console.warn("Planning Container cleanup was incomplete", {
@@ -533,7 +605,7 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
       const cleanup = await Promise.allSettled([
         this.setOutboundByHosts({}),
         this.setAllowedHosts([]),
-        this.destroy(),
+        this.stop(),
       ]);
       const failures = cleanup.filter((result) => result.status === "rejected");
       if (failures.length > 0)
