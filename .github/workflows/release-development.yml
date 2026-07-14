@@ -52,7 +52,12 @@ jobs:
         run: |
           set -euo pipefail
           tag="roundhouse-release:${GITHUB_SHA}"
-          docker build --platform linux/amd64 --tag "$tag" --file containers/roundhouse-execution/Dockerfile .
+          docker build \
+            --platform linux/amd64 \
+            --build-arg "ROUNDHOUSE_RELEASE_COMMIT=${GITHUB_SHA}" \
+            --tag "$tag" \
+            --file containers/roundhouse-execution/Dockerfile \
+            .
           push_output="$(pnpm exec wrangler containers push "$tag" 2>&1 | tee /dev/stderr)"
           digest="$(printf '%s\n' "$push_output" | sed -nE 's/.*(sha256:[a-f0-9]{64}).*/\1/p' | tail -1)"
           test -n "$digest"
@@ -103,7 +108,7 @@ jobs:
             --config .roundhouse/release/wrangler.development.json \
             --tag "release-${GITHUB_SHA}" \
             --message "Roundhouse development ${GITHUB_SHA}" \
-            --containers-rollout immediate
+            --containers-rollout gradual
           pnpm exec wrangler versions list \
             --name roundhouse-dev-control-plane \
             --json > .roundhouse/release/development-versions.json
@@ -117,6 +122,42 @@ jobs:
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_SECRET }}
         run: |
           set -euo pipefail
+          canary_status="$(curl \
+            --fail-with-body \
+            --silent \
+            --show-error \
+            --retry 12 \
+            --retry-all-errors \
+            --retry-delay 10 \
+            --retry-max-time 900 \
+            --max-time 120 \
+            --request POST \
+            --header "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}" \
+            --header "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}" \
+            --output .roundhouse/release/development-canary.json \
+            --write-out '%{http_code}' \
+            "https://roundhouse-dev.rm-rf.rip/v1/releases/${GITHUB_SHA}/canary")"
+          test "$canary_status" = 200
+          jq --exit-status \
+            --arg commit "$GITHUB_SHA" \
+            '.schemaVersion == 1 and .ok == true and .releaseCommit == $commit and .environment == "development" and .workerId == "roundhouse-dev-control-plane"' \
+            .roundhouse/release/development-canary.json > /dev/null
+          ready_status="$(curl \
+            --fail-with-body \
+            --silent \
+            --show-error \
+            --retry 8 \
+            --retry-all-errors \
+            --retry-delay 3 \
+            --header "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}" \
+            --header "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}" \
+            --output .roundhouse/release/development-ready.json \
+            --write-out '%{http_code}' \
+            https://roundhouse-dev.rm-rf.rip/ready)"
+          test "$ready_status" = 200
+          jq --exit-status \
+            '.schemaVersion == 1 and .ready == true' \
+            .roundhouse/release/development-ready.json > /dev/null
           status="$(curl \
             --fail-with-body \
             --silent \
@@ -133,12 +174,13 @@ jobs:
           jq --exit-status \
             'type == "object" and keys == ["ok", "schemaVersion"] and .schemaVersion == 1 and .ok == true' \
             .roundhouse/release/development-health.json > /dev/null
-          health="$(jq --compact-output . .roundhouse/release/development-health.json)"
           jq -n \
             --arg origin https://roundhouse-dev.rm-rf.rip \
-            --arg response "$health" \
             --arg checked_at "$(date --utc +%Y-%m-%dT%H:%M:%S.000Z)" \
-            '{schemaVersion:1,origin:$origin,healthResponse:$response,checkedAt:$checked_at}' \
+            --slurpfile canary .roundhouse/release/development-canary.json \
+            --slurpfile ready .roundhouse/release/development-ready.json \
+            --slurpfile health .roundhouse/release/development-health.json \
+            '{schemaVersion:1,origin:$origin,canary:$canary[0],ready:$ready[0],health:$health[0],checkedAt:$checked_at}' \
             > .roundhouse/release/development-smoke.json
           node scripts/release/roundhouse-release.mjs evidence \
             development \
@@ -157,6 +199,8 @@ jobs:
           path: |
             .roundhouse/release/manifest.json
             .roundhouse/release/worker.mjs
+            .roundhouse/release/development-canary.json
+            .roundhouse/release/development-ready.json
             .roundhouse/release/development-smoke.json
             .roundhouse/release/development-evidence.json
           if-no-files-found: error

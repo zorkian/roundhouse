@@ -18,6 +18,8 @@ let prepared;
 let trusted;
 let review;
 let planning;
+const activeChildren = new Set();
+let draining = false;
 const codexHome = "/home/runner/.roundhouse-codex";
 const claudeHome = "/home/runner/.roundhouse-claude";
 const planningOutputSchema = JSON.stringify({
@@ -310,6 +312,7 @@ export async function command(executable, args, options = {}) {
     shell: false,
     stdio: ["ignore", "pipe", "pipe"],
   });
+  activeChildren.add(child);
   const maximum = options.maxOutputBytes ?? 262_144;
   const stdout = [];
   const stderr = [];
@@ -339,25 +342,29 @@ export async function command(executable, args, options = {}) {
         child.kill("SIGKILL");
       }, options.timeoutMs)
     : undefined;
-  const exitCode = await new Promise((resolve, reject) => {
-    let settled = false;
-    const finish = (callback) => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      callback();
+  try {
+    const exitCode = await new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (callback) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        callback();
+      };
+      child.once("error", (error) => finish(() => reject(error)));
+      child.once("close", (code) => finish(() => resolve(code)));
+    });
+    return {
+      exitCode,
+      timedOut,
+      durationMs: Date.now() - started,
+      stdout: Buffer.concat(stdout).toString("utf8"),
+      stderr: Buffer.concat(stderr).toString("utf8"),
+      outputTruncated,
     };
-    child.once("error", (error) => finish(() => reject(error)));
-    child.once("close", (code) => finish(() => resolve(code)));
-  });
-  return {
-    exitCode,
-    timedOut,
-    durationMs: Date.now() - started,
-    stdout: Buffer.concat(stdout).toString("utf8"),
-    stderr: Buffer.concat(stderr).toString("utf8"),
-    outputTruncated,
-  };
+  } finally {
+    activeChildren.delete(child);
+  }
 }
 
 export function pathAllowed(path, allowedPaths) {
@@ -1627,11 +1634,39 @@ async function execute(value) {
   };
 }
 
-if (import.meta.main)
-  createServer(async (request, response) => {
+export function runnerReleaseIdentity(environment = process.env) {
+  const releaseCommit = environment.ROUNDHOUSE_RELEASE_COMMIT ?? "unknown";
+  return {
+    schemaVersion: 1,
+    ok: true,
+    releaseCommit,
+  };
+}
+
+async function scrubRuntimeCredentials() {
+  await Promise.allSettled([
+    rm(codexHome, { recursive: true, force: true }),
+    rm(claudeHome, { recursive: true, force: true }),
+  ]);
+  trusted = trusted ? withoutRuntimeCredential(trusted) : undefined;
+  planning = planning
+    ? { ...planning, credentialInstalled: false, secrets: [] }
+    : undefined;
+  review = review
+    ? { ...review, credentialInstalled: false, secrets: [] }
+    : undefined;
+}
+
+export function createRunnerServer({ port = 8080, host = "0.0.0.0" } = {}) {
+  draining = false;
+  const server = createServer(async (request, response) => {
     try {
+      if (draining) {
+        response.setHeader("retry-after", "5");
+        return json(response, 503, { error: "runner_draining" });
+      }
       if (request.method === "GET" && request.url === "/ping")
-        return json(response, 200, { ok: true });
+        return json(response, 200, runnerReleaseIdentity());
       if (request.method === "POST" && request.url === "/prepare")
         return json(
           response,
@@ -1696,4 +1731,52 @@ if (import.meta.main)
         error: error instanceof Error ? error.message : "runner_error",
       });
     }
-  }).listen(8080, "0.0.0.0");
+  });
+  return server.listen(port, host);
+}
+
+export function drainRunner(
+  server,
+  {
+    hardTimeoutMs = 14 * 60_000,
+    exit = (code) => process.exit(code),
+    scrub = scrubRuntimeCredentials,
+  } = {},
+) {
+  if (draining) return;
+  draining = true;
+  console.log(
+    JSON.stringify({
+      source: "roundhouse-execution-container",
+      event: "runner.draining",
+      activeCommands: activeChildren.size,
+      occurredAt: new Date().toISOString(),
+    }),
+  );
+  const hardStop = setTimeout(async () => {
+    for (const child of activeChildren) child.kill("SIGTERM");
+    await scrub();
+    exit(1);
+  }, hardTimeoutMs);
+  hardStop.unref?.();
+  server.close(async () => {
+    clearTimeout(hardStop);
+    await scrub();
+    console.log(
+      JSON.stringify({
+        source: "roundhouse-execution-container",
+        event: "runner.drained",
+        occurredAt: new Date().toISOString(),
+      }),
+    );
+    exit(0);
+  });
+  server.closeIdleConnections?.();
+}
+
+if (import.meta.main) {
+  const server = createRunnerServer();
+  const shutdown = () => drainRunner(server);
+  process.once("SIGTERM", shutdown);
+  process.once("SIGINT", shutdown);
+}

@@ -42,27 +42,43 @@ boundary because Cloudflare API tokens cannot be restricted to one Worker.
 3. push it once and resolve its registry digest;
 4. bundle the Worker once and create the release manifest;
 5. apply the manifest's ordered additive migrations to development;
-6. upload and deploy that exact Worker bundle with the immutable image;
-7. authenticate to `/health` with the environment-specific Access service
-   token, require HTTP 200 and the exact health schema, and retain the manifest,
-   bundle, smoke response, and exact deployment evidence as one GitHub Actions
-   artifact.
+6. upload and deploy that exact Worker bundle with the immutable image using a
+   staged Container rollout;
+7. authenticate with the environment-specific Access service token and run a
+   unique credential-free Container canary that must report the exact image
+   commit;
+8. verify D1 readiness and outer Worker health; and
+9. retain the manifest, bundle, canary, readiness, smoke response, and exact
+   deployment evidence as one GitHub Actions artifact.
 
 The artifact and successful workflow-run ID are the production promotion
 input. A development failure does not affect production.
 
 ## Production promotion
 
-Run `Promote production` manually with the successful development workflow-run
-ID. The protected `roundhouse-production` environment pauses before any secret
-or deployment capability becomes available. Approval records the GitHub actor
-and binds the exact release-manifest bytes, development evidence bytes,
-development Worker version, Worker bundle, Container digest, and migration set.
+Every successful `Release development` run automatically starts a `Promote
+production` workflow with the exact successful run ID. The protected
+`roundhouse-production` environment pauses before any secret or deployment
+capability becomes available; the operator only reviews and approves or rejects
+the pending deployment. Manual dispatch with a development run ID remains an
+emergency fallback. Approval records the actual GitHub environment reviewer and
+binds the exact release-manifest bytes, development evidence bytes, development
+Worker version, Worker bundle, Container digest, and migration set.
 
 After approval, the workflow checks out the manifest's source commit, verifies
 the bindings, applies the same additive migrations, uploads the retained Worker
 bundle without rebuilding it, references the same Container digest, deploys,
-smoke-tests, and retains production evidence.
+performs the same exact-image Container canary, readiness and health checks, and
+retains production evidence.
+
+Both environments permit up to ten distinct execution attempts concurrently.
+Queue concurrency is matched to that ceiling. Container replacements use
+cumulative 10%, 25%, 50%, and 100% rollout steps, and active instances remain
+ineligible for replacement for one hour before Cloudflare begins graceful
+termination. The runner refuses new work and drains on `SIGTERM`; normal
+completed attempts stop gracefully, while explicit cancellation may still
+destroy a failed instance immediately. See the
+[graceful rollout manifest](../cloudflare/roundhouse-graceful-rollout-manifest.md).
 
 Rollback redeploys a previously retained Worker version and image digest. It
 never reverses D1 migrations or changes either App's webhook subscription.

@@ -1541,6 +1541,44 @@ describe("local control-plane Worker", () => {
         )
       ).status,
     ).toBe(401);
+    const releaseCommit = "a".repeat(40);
+    let canaryName = "";
+    env.EXECUTION_CONTAINERS = {
+      getByName: (name: string) => {
+        canaryName = name;
+        return {
+          runJob: async () => ({}),
+          releaseCanary: async (expectedCommit: string) => ({
+            schemaVersion: 1,
+            ok: true,
+            releaseCommit: expectedCommit,
+          }),
+          destroy: async () => undefined,
+        };
+      },
+    };
+    const unauthenticatedCanary = await handler.fetch!(
+      request(
+        `/v1/releases/${releaseCommit}/canary`,
+        { method: "POST" },
+        false,
+      ),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(unauthenticatedCanary.status).toBe(401);
+    const canary = await handler.fetch!(
+      request(`/v1/releases/${releaseCommit}/canary`, { method: "POST" }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(canary.status).toBe(200);
+    expect(await canary.json()).toMatchObject({
+      schemaVersion: 1,
+      ok: true,
+      releaseCommit,
+    });
+    expect(canaryName).toBe(`release_canary_${releaseCommit}`);
     expect(
       (
         await handler.fetch!(

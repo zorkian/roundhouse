@@ -36,6 +36,11 @@ export type ExecutionContainerPort = {
     request: PlanningAgentRequest,
     codexAuthJson: string,
   ): Promise<PlanningAgentResult>;
+  releaseCanary?(expectedCommit: string): Promise<{
+    schemaVersion: 1;
+    ok: true;
+    releaseCommit: string;
+  }>;
   destroy(): Promise<void>;
 };
 

@@ -10,17 +10,21 @@ import {
   changedPaths,
   createPublicationManifest,
   command,
+  createRunnerServer,
+  drainRunner,
   pathAllowed,
   parsePlanningOutput,
   planningPrompt,
   promptFor,
   parseClaudeReviewOutput,
+  runnerReleaseIdentity,
   secretStrings,
   skippedValidation,
   validRepositoryPath,
   validRuntimeCredentialSize,
   withoutRuntimeCredential,
 } from "./runner.mjs";
+import { once } from "node:events";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,6 +36,36 @@ describe("execution runner command", () => {
       command("/roundhouse-missing-executable", [], { timeoutMs: 10_000 }),
     ).rejects.toMatchObject({ code: "ENOENT" });
     expect(Date.now() - started).toBeLessThan(1_000);
+  });
+});
+
+describe("execution runner lifecycle", () => {
+  it("reports the immutable image release identity", () => {
+    expect(
+      runnerReleaseIdentity({ ROUNDHOUSE_RELEASE_COMMIT: "a".repeat(40) }),
+    ).toEqual({
+      schemaVersion: 1,
+      ok: true,
+      releaseCommit: "a".repeat(40),
+    });
+  });
+
+  it("stops accepting work and exits cleanly after draining", async () => {
+    const server = createRunnerServer({ port: 0, host: "127.0.0.1" });
+    await once(server, "listening");
+    let scrubbed = false;
+    const exited = new Promise((resolve) => {
+      drainRunner(server, {
+        hardTimeoutMs: 1_000,
+        scrub: async () => {
+          scrubbed = true;
+        },
+        exit: resolve,
+      });
+    });
+    await expect(exited).resolves.toBe(0);
+    expect(scrubbed).toBe(true);
+    expect(server.listening).toBe(false);
   });
 });
 

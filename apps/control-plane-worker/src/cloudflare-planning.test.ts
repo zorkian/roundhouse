@@ -3,7 +3,10 @@
 
 import { describe, expect, it } from "vitest";
 
-import { CloudflarePlanningBackend } from "./cloudflare-planning.js";
+import {
+  CloudflarePlanningBackend,
+  isRetryablePlanningInterruption,
+} from "./cloudflare-planning.js";
 
 const request = {
   schemaVersion: 1 as const,
@@ -18,6 +21,18 @@ const request = {
 };
 
 describe("Cloudflare planning backend", () => {
+  it("classifies only bounded deployment transport failures as retryable", () => {
+    expect(
+      isRetryablePlanningInterruption(
+        new Error("Durable Object reset because its code was updated."),
+      ),
+    ).toBe(true);
+    expect(isRetryablePlanningInterruption({ overloaded: true })).toBe(true);
+    expect(
+      isRetryablePlanningInterruption(new Error("Planning output was invalid")),
+    ).toBe(false);
+  });
+
   it("binds a structured result to the exact planning attempt", async () => {
     const backend = new CloudflarePlanningBackend(
       {
@@ -72,5 +87,50 @@ describe("Cloudflare planning backend", () => {
     );
     await expect(backend.execute(request)).rejects.toThrow();
     expect(destroyed).toBe(true);
+  });
+
+  it("recovers automatically after a deployment resets the planning object", async () => {
+    let invocations = 0;
+    let destroyed = 0;
+    const waits: number[] = [];
+    const backend = new CloudflarePlanningBackend(
+      {
+        getByName: () => ({
+          runJob: async () => ({}),
+          runPlanningJob: async () => {
+            invocations += 1;
+            if (invocations === 1)
+              throw new Error(
+                "Durable Object reset because its code was updated.",
+              );
+            return {
+              schemaVersion: 1,
+              attemptId: request.attemptId,
+              baseCommit: request.baseCommit,
+              status: "proposed",
+              summary: "Expose existing release metadata.",
+              exactPaths: ["apps/control-plane-worker/src/operator-ui.ts"],
+              acceptanceCriteria: ["The status page names the exact release."],
+              questions: [],
+              duplicateOf: "",
+              risk: "low",
+            };
+          },
+          destroy: async () => {
+            destroyed += 1;
+          },
+        }),
+      },
+      "credential",
+      async (milliseconds) => {
+        waits.push(milliseconds);
+      },
+    );
+    await expect(backend.execute(request)).resolves.toMatchObject({
+      status: "proposed",
+    });
+    expect(invocations).toBe(2);
+    expect(destroyed).toBe(1);
+    expect(waits).toEqual([250]);
   });
 });

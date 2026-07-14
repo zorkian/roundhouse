@@ -145,7 +145,7 @@ jobs:
             --config .roundhouse/release/wrangler.production.json \
             --tag "release-${source_commit}" \
             --message "Roundhouse production ${source_commit}" \
-            --containers-rollout immediate
+            --containers-rollout gradual
           pnpm exec wrangler versions list \
             --name roundhouse-prod-control-plane \
             --json > .roundhouse/release/production-versions.json
@@ -159,6 +159,43 @@ jobs:
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_SECRET }}
         run: |
           set -euo pipefail
+          source_commit="${{ steps.release.outputs.source_commit }}"
+          canary_status="$(curl \
+            --fail-with-body \
+            --silent \
+            --show-error \
+            --retry 12 \
+            --retry-all-errors \
+            --retry-delay 10 \
+            --retry-max-time 900 \
+            --max-time 120 \
+            --request POST \
+            --header "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}" \
+            --header "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}" \
+            --output .roundhouse/release/production-canary.json \
+            --write-out '%{http_code}' \
+            "https://roundhouse.rm-rf.rip/v1/releases/${source_commit}/canary")"
+          test "$canary_status" = 200
+          jq --exit-status \
+            --arg commit "$source_commit" \
+            '.schemaVersion == 1 and .ok == true and .releaseCommit == $commit and .environment == "production" and .workerId == "roundhouse-prod-control-plane"' \
+            .roundhouse/release/production-canary.json > /dev/null
+          ready_status="$(curl \
+            --fail-with-body \
+            --silent \
+            --show-error \
+            --retry 8 \
+            --retry-all-errors \
+            --retry-delay 3 \
+            --header "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}" \
+            --header "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}" \
+            --output .roundhouse/release/production-ready.json \
+            --write-out '%{http_code}' \
+            https://roundhouse.rm-rf.rip/ready)"
+          test "$ready_status" = 200
+          jq --exit-status \
+            '.schemaVersion == 1 and .ready == true' \
+            .roundhouse/release/production-ready.json > /dev/null
           status="$(curl \
             --fail-with-body \
             --silent \
@@ -175,12 +212,13 @@ jobs:
           jq --exit-status \
             'type == "object" and keys == ["ok", "schemaVersion"] and .schemaVersion == 1 and .ok == true' \
             .roundhouse/release/production-health.json > /dev/null
-          health="$(jq --compact-output . .roundhouse/release/production-health.json)"
           jq -n \
             --arg origin https://roundhouse.rm-rf.rip \
-            --arg response "$health" \
             --arg checked_at "$(date --utc +%Y-%m-%dT%H:%M:%S.000Z)" \
-            '{schemaVersion:1,origin:$origin,healthResponse:$response,checkedAt:$checked_at}' \
+            --slurpfile canary .roundhouse/release/production-canary.json \
+            --slurpfile ready .roundhouse/release/production-ready.json \
+            --slurpfile health .roundhouse/release/production-health.json \
+            '{schemaVersion:1,origin:$origin,canary:$canary[0],ready:$ready[0],health:$health[0],checkedAt:$checked_at}' \
             > .roundhouse/release/production-smoke.json
           node scripts/release/roundhouse-release.mjs evidence \
             production \
@@ -200,6 +238,8 @@ jobs:
             .roundhouse/release/manifest.json
             .roundhouse/release/development-evidence.json
             .roundhouse/release/promotion-approval.json
+            .roundhouse/release/production-canary.json
+            .roundhouse/release/production-ready.json
             .roundhouse/release/production-smoke.json
             .roundhouse/release/production-evidence.json
           if-no-files-found: error

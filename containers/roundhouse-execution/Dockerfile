@@ -14,6 +14,9 @@ RUN pnpm install --frozen-lockfile --ignore-scripts \
 
 FROM node:24.4.1-bookworm-slim@sha256:36ae19f59c91f3303c7a648f07493fe14c4bd91320ac8d898416327bacf1bbfa
 
+ARG ROUNDHOUSE_RELEASE_COMMIT=unknown
+ENV ROUNDHOUSE_RELEASE_COMMIT=${ROUNDHOUSE_RELEASE_COMMIT}
+
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates git tini \
     && rm -rf /var/lib/apt/lists/* \
