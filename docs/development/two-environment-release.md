@@ -72,13 +72,13 @@ performs the same exact-image Container canary, readiness and health checks, and
 retains production evidence.
 
 Both environments permit up to ten distinct execution attempts concurrently.
-Queue concurrency is matched to that ceiling. Container replacements use
-cumulative 10%, 25%, 50%, and 100% rollout steps, and active instances remain
-ineligible for replacement for five minutes before Cloudflare begins graceful
-termination. Cloudflare then permits up to 15 minutes for the runner to drain.
-The runner refuses new work and drains on `SIGTERM`; normal
-completed attempts stop gracefully, while explicit cancellation may still
-destroy a failed instance immediately. See the
+Queue concurrency is matched to that ceiling. New attempts move immediately to
+the new image. Already-running attempts remain on their original image and are
+protected for the existing 40-minute whole-attempt budget; their normal command
+and lease timeouts remain authoritative. Cloudflare then permits up to 15
+minutes for the runner to drain after `SIGTERM`. The runner refuses new work
+and drains on `SIGTERM`; normal completed attempts stop gracefully, while
+explicit cancellation may still destroy a failed instance immediately. See the
 [graceful rollout manifest](../cloudflare/roundhouse-graceful-rollout-manifest.md).
 
 Rollback redeploys a previously retained Worker version and image digest. It
