@@ -133,7 +133,7 @@ describe("GitHub App gateway", () => {
   });
 
   it("reconciles one repository-qualified rolling status comment", async () => {
-    const marker = "<!-- roundhouse-status:zorkian/roundhouse#7 -->";
+    const marker = "<!-- roundhouse-dev-status:zorkian/roundhouse#7 -->";
     const body = `${marker}\nCurrent state`;
     let retained: { id: number; html_url: string; body: string } | undefined;
     let creates = 0;
@@ -192,7 +192,7 @@ describe("GitHub App gateway", () => {
 
   it("updates a scoped milestone comment and closes its source issue", async () => {
     const scope = `review_${"a".repeat(40)}`;
-    const marker = `<!-- roundhouse-progress:zorkian/roundhouse#7:${scope} -->`;
+    const marker = `<!-- roundhouse-dev-progress:zorkian/roundhouse#7:${scope} -->`;
     let retained: { id: number; html_url: string; body: string } | undefined;
     const fetcher: typeof fetch = async (input, init) => {
       const url = new URL(String(input));
@@ -296,7 +296,7 @@ describe("GitHub App gateway", () => {
           id: 71,
           html_url:
             "https://github.com/zorkian/roundhouse/issues/8#issuecomment-71",
-          body: "<!-- roundhouse-status:zorkian/roundhouse#7 -->\nCurrent state",
+          body: "<!-- roundhouse-dev-status:zorkian/roundhouse#7 -->\nCurrent state",
         });
       if (url.pathname.endsWith("/issues/7/comments")) return json([]);
       return json({}, 404);
@@ -310,7 +310,7 @@ describe("GitHub App gateway", () => {
       gateway.upsertIssueStatusComment({
         repositoryFullName: "zorkian/roundhouse",
         issueNumber: 7,
-        body: "<!-- roundhouse-status:zorkian/roundhouse#7 -->\nCurrent state",
+        body: "<!-- roundhouse-dev-status:zorkian/roundhouse#7 -->\nCurrent state",
         existingCommentId: 71,
       }),
     ).rejects.toMatchObject({ code: "invalid_response" });
@@ -328,7 +328,7 @@ describe("GitHub App gateway", () => {
         return json({
           id: 71,
           html_url: "https://github.com/zorkian/roundhouse/issues/7",
-          body: "<!-- roundhouse-status:zorkian/roundhouse#7 -->\nCurrent state",
+          body: "<!-- roundhouse-dev-status:zorkian/roundhouse#7 -->\nCurrent state",
         });
       if (url.pathname.endsWith("/issues/7/comments")) return json([]);
       return json({}, 404);
@@ -342,7 +342,7 @@ describe("GitHub App gateway", () => {
       gateway.upsertIssueStatusComment({
         repositoryFullName: "zorkian/roundhouse",
         issueNumber: 7,
-        body: "<!-- roundhouse-status:zorkian/roundhouse#7 -->\nCurrent state",
+        body: "<!-- roundhouse-dev-status:zorkian/roundhouse#7 -->\nCurrent state",
         existingCommentId: 71,
       }),
     ).rejects.toMatchObject({ code: "invalid_response" });

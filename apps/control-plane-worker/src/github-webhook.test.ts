@@ -148,6 +148,27 @@ describe("GitHub-native operator webhook", () => {
     ).toBeNull();
   });
 
+  it("isolates production and development command families", () => {
+    const development = ["/rhd", "/roundhouse-dev"];
+    const production = ["/rh", "/roundhouse"];
+    expect(parseGitHubCommand("/rhd start", development)).toEqual({
+      kind: "start",
+    });
+    expect(parseGitHubCommand("/roundhouse-dev status", development)).toEqual({
+      kind: "status",
+    });
+    expect(parseGitHubCommand("/rh start", development)).toBeNull();
+    expect(parseGitHubCommand("/roundhouse start", development)).toBeNull();
+    expect(parseGitHubCommand("/rh start", production)).toEqual({
+      kind: "start",
+    });
+    expect(parseGitHubCommand("/roundhouse status", production)).toEqual({
+      kind: "status",
+    });
+    expect(parseGitHubCommand("/rhd start", production)).toBeNull();
+    expect(parseGitHubCommand("/roundhouse-dev start", production)).toBeNull();
+  });
+
   it("carries the verified repository into issue command identity", () => {
     expect(
       issueCommand({
@@ -392,7 +413,7 @@ describe("GitHub-native operator webhook", () => {
 
   it("updates one repository-qualified issue status projection", async () => {
     const env = await runtime();
-    const marker = "<!-- roundhouse-status:zorkian/roundhouse#19 -->";
+    const marker = "<!-- roundhouse-dev-status:zorkian/roundhouse#19 -->";
     await enqueueStatusComment(
       env,
       "zorkian/roundhouse",
@@ -409,7 +430,7 @@ describe("GitHub-native operator webhook", () => {
       env,
       "another/roundhouse",
       19,
-      "<!-- roundhouse-status:another/roundhouse#19 -->\nIndependent state",
+      "<!-- roundhouse-dev-status:another/roundhouse#19 -->\nIndependent state",
     );
     const claims = await claimPendingComments(env);
     expect(claims).toHaveLength(2);
@@ -432,7 +453,7 @@ describe("GitHub-native operator webhook", () => {
   it("keeps each human-visible progress milestone in its own mutable comment", async () => {
     const env = await runtime();
     const scope = `review_${"a".repeat(40)}`;
-    const marker = `<!-- roundhouse-progress:zorkian/roundhouse#19:${scope} -->`;
+    const marker = `<!-- roundhouse-dev-progress:zorkian/roundhouse#19:${scope} -->`;
     await enqueueProgressComment(
       env,
       "zorkian/roundhouse",
@@ -450,7 +471,7 @@ describe("GitHub-native operator webhook", () => {
     const claims = await claimPendingComments(env);
     expect(claims).toEqual([
       expect.objectContaining({
-        key: `issue-progress:zorkian/roundhouse:19:${scope}`,
+        key: `issue-progress:dev:zorkian/roundhouse:19:${scope}`,
         body: `${marker}\nReview passed`,
       }),
     ]);
@@ -463,7 +484,7 @@ describe("GitHub-native operator webhook", () => {
         env,
         "zorkian/roundhouse",
         0,
-        "<!-- roundhouse-status:zorkian/roundhouse#0 -->",
+        "<!-- roundhouse-dev-status:zorkian/roundhouse#0 -->",
       ),
     ).rejects.toMatchObject({ code: "invalid_issue_identity" });
     await expect(
@@ -474,7 +495,7 @@ describe("GitHub-native operator webhook", () => {
         env,
         "zorkian/roundhouse",
         19,
-        "prefix\n<!-- roundhouse-status:zorkian/roundhouse#19 -->",
+        "prefix\n<!-- roundhouse-dev-status:zorkian/roundhouse#19 -->",
       ),
     ).rejects.toMatchObject({ code: "invalid_status_marker" });
     const row = await env.DB.prepare(

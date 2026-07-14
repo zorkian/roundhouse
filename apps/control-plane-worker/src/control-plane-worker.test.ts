@@ -549,8 +549,25 @@ describe("local control-plane Worker", () => {
       }) as Request<unknown, IncomingRequestCfProperties>;
     };
     const handler = createControlPlaneHandler();
+    const productionCommand = await handler.fetch!(
+      await webhook(
+        "/rh start",
+        40,
+        "00000000-abcd-4321-abcd-1234567890ab",
+        16,
+      ),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(productionCommand.status).toBe(200);
+    await expect(productionCommand.json()).resolves.toMatchObject({
+      accepted: true,
+      ignored: true,
+    });
+    expect(await readIssuePlan(env, 16)).toBeNull();
+
     const accepted = await handler.fetch!(
-      await webhook("/rh start", 41, "12345678-abcd-4321-abcd-1234567890ab"),
+      await webhook("/rhd start", 41, "12345678-abcd-4321-abcd-1234567890ab"),
       env,
       {} as ExecutionContext,
     );
@@ -586,7 +603,7 @@ describe("local control-plane Worker", () => {
     expect(queued.messages).toHaveLength(0);
 
     const repeatedStart = await handler.fetch!(
-      await webhook("/rh start", 42, "87654321-abcd-4321-abcd-1234567890ab"),
+      await webhook("/rhd start", 42, "87654321-abcd-4321-abcd-1234567890ab"),
       env,
       {} as ExecutionContext,
     );
@@ -599,7 +616,7 @@ describe("local control-plane Worker", () => {
     expect(comments).toBe(1);
 
     const replay = await handler.fetch!(
-      await webhook("/rh start", 41, "12345678-abcd-4321-abcd-1234567890ab"),
+      await webhook("/rhd start", 41, "12345678-abcd-4321-abcd-1234567890ab"),
       env,
       {} as ExecutionContext,
     );
@@ -610,7 +627,7 @@ describe("local control-plane Worker", () => {
 
     const implementation = await handler.fetch!(
       await webhook(
-        `/rh implement ${plan!.plan.planId} 1 ${plan!.plan.planSha256}`,
+        `/rhd implement ${plan!.plan.planId} 1 ${plan!.plan.planSha256}`,
         43,
         "99999999-abcd-4321-abcd-1234567890ab",
       ),
@@ -622,6 +639,17 @@ describe("local control-plane Worker", () => {
       runId: string;
     };
     expect(implementationResult.runId).toMatch(/^run_[a-f0-9]{40}$/);
+    const developmentRun = await new D1JobStore(env.DB).read(
+      implementationResult.runId,
+    );
+    expect(developmentRun.task.source).toMatchObject({
+      kind: "github_issue",
+      roundhouseEnvironment: "development",
+    });
+    expect(developmentRun.task.taskId).toContain("task_development_");
+    expect(developmentRun.task.publication.branch).toBe(
+      "codex/dogfood-development-issue-17",
+    );
     expect(queued.messages).toHaveLength(1);
     expect(comments).toBe(2);
     expect(statusComment?.body).toContain(
@@ -680,7 +708,7 @@ describe("local control-plane Worker", () => {
       issue: { number: 17 },
       comment: {
         id: 42,
-        body: "/rh status",
+        body: "/rhd status",
         user: { login: "outside-actor" },
       },
     });
@@ -735,7 +763,7 @@ describe("local control-plane Worker", () => {
 
     const lowRisk = await handler.fetch!(
       await webhook(
-        "/rh start",
+        "/rhd start",
         44,
         "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff",
         18,
@@ -837,7 +865,7 @@ describe("local control-plane Worker", () => {
       issue: { number: 49 },
       comment: {
         id: 49,
-        body: "/rh start",
+        body: "/rhd start",
         user: { login: "zorkian" },
       },
     });
@@ -881,7 +909,7 @@ describe("local control-plane Worker", () => {
       code: "processing_failed",
       reason: "planning agent failed at [path] after [url]",
     });
-    expect(failureComment).toContain("could not complete `/rh start`");
+    expect(failureComment).toContain("could not complete `/rhd start`");
     expect(failureComment).toContain(
       "Failure: `planning agent failed at [path] after [url]`",
     );
@@ -1924,7 +1952,7 @@ describe("local control-plane Worker", () => {
     expect(failureComment?.body).toContain(
       "Failure classification: `unexpected`",
     );
-    expect(failureComment?.body).toContain(`/rh retry ${runId}`);
+    expect(failureComment?.body).toContain(`/rhd retry ${runId}`);
   });
 
   it("emits revision-bound retries and stops at the attempt limit", async () => {

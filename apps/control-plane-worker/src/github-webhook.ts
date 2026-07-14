@@ -191,12 +191,15 @@ function parseRevision(value: string | undefined): number | null {
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
-export function parseGitHubCommand(body: string): GitHubCommand | null {
+export function parseGitHubCommand(
+  body: string,
+  commandPrefixes: readonly string[] = ["/rh", "/roundhouse"],
+): GitHubCommand | null {
   const [firstLine, ...remainingLines] = body.trim().split(/\r?\n/);
   const line = firstLine?.trim();
-  if (!line?.startsWith("/rh")) return null;
+  if (!line) return null;
   const parts = line.split(/\s+/);
-  if (parts[0] !== "/rh") return null;
+  if (!commandPrefixes.includes(parts[0] ?? "")) return null;
   if (parts[1] === "start" && parts.length === 2) return { kind: "start" };
   if (parts[1] === "status" && parts.length <= 3) {
     if (parts[2] && !runId.test(parts[2])) return null;
@@ -279,6 +282,7 @@ export function parseGitHubCommand(body: string): GitHubCommand | null {
 
 function parsePullRequestFeedbackBody(
   body: string,
+  commandPrefixes: readonly string[],
 ): Pick<
   GitHubPullRequestFeedback,
   "runId" | "revision" | "headCommit" | "feedback"
@@ -289,7 +293,7 @@ function parsePullRequestFeedbackBody(
   const feedback = feedbackLines.join("\n").trim();
   if (
     parts.length !== 5 ||
-    parts[0] !== "/rh" ||
+    !commandPrefixes.includes(parts[0] ?? "") ||
     parts[1] !== "revise" ||
     !runId.test(parts[2] ?? "") ||
     revision === null ||
@@ -472,7 +476,10 @@ async function readLimitedBody(
   return bytes;
 }
 
-export function issueCommand(value: VerifiedWebhook): {
+export function issueCommand(
+  value: VerifiedWebhook,
+  commandPrefixes: readonly string[] = ["/rh", "/roundhouse"],
+): {
   repositoryFullName: string;
   issueNumber: number;
   actor: string;
@@ -481,7 +488,7 @@ export function issueCommand(value: VerifiedWebhook): {
   if (value.eventName !== "issue_comment") return null;
   const payload = issueCommentSchema.parse(value.payload);
   if (payload.action !== "created" || payload.issue.pull_request) return null;
-  const command = parseGitHubCommand(payload.comment.body);
+  const command = parseGitHubCommand(payload.comment.body, commandPrefixes);
   if (!command) return null;
   return {
     repositoryFullName: payload.repository.full_name,
@@ -493,11 +500,15 @@ export function issueCommand(value: VerifiedWebhook): {
 
 export function pullRequestFeedback(
   value: VerifiedWebhook,
+  commandPrefixes: readonly string[] = ["/rh", "/roundhouse"],
 ): GitHubPullRequestFeedback | null {
   if (value.eventName === "issue_comment") {
     const payload = pullRequestIssueCommentSchema.safeParse(value.payload);
     if (!payload.success || payload.data.action !== "created") return null;
-    const command = parsePullRequestFeedbackBody(payload.data.comment.body);
+    const command = parsePullRequestFeedbackBody(
+      payload.data.comment.body,
+      commandPrefixes,
+    );
     if (!command) return null;
     return {
       repositoryFullName: payload.data.repository.full_name,
@@ -513,6 +524,7 @@ export function pullRequestFeedback(
     if (!payload.success || payload.data.action !== "submitted") return null;
     const command = parsePullRequestFeedbackBody(
       payload.data.review.body ?? "",
+      commandPrefixes,
     );
     if (!command || command.headCommit !== payload.data.pull_request.head.sha)
       return null;
@@ -528,7 +540,10 @@ export function pullRequestFeedback(
   if (value.eventName === "pull_request_review_comment") {
     const payload = pullRequestReviewCommentSchema.safeParse(value.payload);
     if (!payload.success || payload.data.action !== "created") return null;
-    const command = parsePullRequestFeedbackBody(payload.data.comment.body);
+    const command = parsePullRequestFeedbackBody(
+      payload.data.comment.body,
+      commandPrefixes,
+    );
     if (!command || command.headCommit !== payload.data.pull_request.head.sha)
       return null;
     return {
@@ -713,12 +728,13 @@ export async function enqueueStatusComment(
   issueNumber: number,
   body: string,
 ): Promise<void> {
+  const identity = runtimeIdentity(env);
   return enqueueMutableComment(
     env,
     repositoryFullName,
     issueNumber,
-    `issue-status:${repositoryFullName}:${issueNumber}`,
-    `<!-- roundhouse-status:${repositoryFullName}#${issueNumber} -->`,
+    `issue-status:${identity.commentNamespace}:${repositoryFullName}:${issueNumber}`,
+    `<!-- roundhouse-${identity.commentNamespace}-status:${repositoryFullName}#${issueNumber} -->`,
     body,
   );
 }
@@ -732,12 +748,13 @@ export async function enqueueProgressComment(
 ): Promise<void> {
   if (!/^[a-zA-Z0-9:_-]{1,200}$/.test(scope))
     throw new GitHubWebhookError(400, "invalid_comment_scope");
+  const identity = runtimeIdentity(env);
   return enqueueMutableComment(
     env,
     repositoryFullName,
     issueNumber,
-    `issue-progress:${repositoryFullName}:${issueNumber}:${scope}`,
-    `<!-- roundhouse-progress:${repositoryFullName}#${issueNumber}:${scope} -->`,
+    `issue-progress:${identity.commentNamespace}:${repositoryFullName}:${issueNumber}:${scope}`,
+    `<!-- roundhouse-${identity.commentNamespace}-progress:${repositoryFullName}#${issueNumber}:${scope} -->`,
     body,
   );
 }

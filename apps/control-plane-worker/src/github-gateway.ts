@@ -263,11 +263,20 @@ export class GitHubAppGateway {
       );
     const base = repositoryPath(input.repositoryFullName);
     const marker = input.body.split("\n", 1)[0] ?? "";
-    const statusMarker = `<!-- roundhouse-status:${input.repositoryFullName}#${input.issueNumber} -->`;
-    const progressPrefix = `<!-- roundhouse-progress:${input.repositoryFullName}#${input.issueNumber}:`;
+    const statusMarkers = ["dev", "prod"].map(
+      (namespace) =>
+        `<!-- roundhouse-${namespace}-status:${input.repositoryFullName}#${input.issueNumber} -->`,
+    );
+    const progressPrefixes = ["dev", "prod"].map(
+      (namespace) =>
+        `<!-- roundhouse-${namespace}-progress:${input.repositoryFullName}#${input.issueNumber}:`,
+    );
+    const progressPrefix = progressPrefixes.find((prefix) =>
+      marker.startsWith(prefix),
+    );
     if (
-      marker !== statusMarker &&
-      (!marker.startsWith(progressPrefix) ||
+      !statusMarkers.includes(marker) &&
+      (!progressPrefix ||
         !/^[a-zA-Z0-9:_-]{1,200} -->$/.test(
           marker.slice(progressPrefix.length),
         ))

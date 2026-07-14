@@ -137,10 +137,11 @@ differ; the release contract verifies identical Worker bundle bytes.
 
 The production App is configured with
 `https://roundhouse.rm-rf.rip/v1/github/webhook` and an independent webhook
-secret. After production health and Access checks pass, verify its signed ping,
-then disable live webhook delivery on the development App before accepting a
-production issue command. Keep the development App installed for bounded
-acceptance work, but do not deliver duplicate live issue commands to it.
+secret. Keep live delivery enabled on both Apps. Development accepts only
+`/rhd` and `/roundhouse-dev`; production accepts only `/rh` and `/roundhouse`.
+Each App acknowledges and ignores the other command family, while environment-
+qualified task identity, publication branches, and comment markers keep later
+processing isolated.
 
 ## Cost and retention
 
@@ -155,9 +156,8 @@ Before each deployment, record the currently active Worker version and
 Container image digest. A failed development deployment rolls development back
 without affecting production. A failed production smoke test immediately
 deploys the previously recorded production Worker version and image digest.
-D1 migrations are not reversed. The GitHub webhook returns to development only
-through a separate explicit human decision; an automated rollback must not
-move webhook authority between environments.
+D1 migrations are not reversed. An automated rollback must not disable or
+retarget either GitHub App webhook.
 
 No retained database, Queue, R2 object, Worker, Access application, DNS record,
 or secret is deleted by rollback.

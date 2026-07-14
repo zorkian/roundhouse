@@ -10,12 +10,28 @@ const environmentOrigins = {
 
 export type RuntimeIdentity = {
   environment: "development" | "production";
+  commandPrefix: "/rhd" | "/rh";
+  commandPrefixes: readonly string[];
+  commentNamespace: "dev" | "prod";
   origin: string;
   repositoryFullName: "zorkian/roundhouse";
   owner: "zorkian";
   repository: "roundhouse";
   workerId: string;
 };
+
+const environmentCommands = {
+  development: {
+    commandPrefix: "/rhd",
+    commandPrefixes: ["/rhd", "/roundhouse-dev"],
+    commentNamespace: "dev",
+  },
+  production: {
+    commandPrefix: "/rh",
+    commandPrefixes: ["/rh", "/roundhouse"],
+    commentNamespace: "prod",
+  },
+} as const;
 
 export function runtimeIdentity(env: ControlPlaneEnv): RuntimeIdentity {
   const environment = env.ROUNDHOUSE_ENVIRONMENT ?? "development";
@@ -49,6 +65,7 @@ export function runtimeIdentity(env: ControlPlaneEnv): RuntimeIdentity {
     throw new Error("Roundhouse Worker identity is invalid");
   return {
     environment,
+    ...environmentCommands[environment],
     origin: parsed.origin,
     repositoryFullName,
     owner: "zorkian",

@@ -24,6 +24,7 @@ export const selfDevelopmentTaskSchema = z.object({
   source: z
     .object({
       kind: z.literal("github_issue"),
+      roundhouseEnvironment: z.enum(["development", "production"]).optional(),
       owner: z.literal("zorkian"),
       repository: z.literal("roundhouse"),
       issueNumber: z.number().int().positive(),

@@ -276,7 +276,10 @@ Do not request Administration, Secrets, Environments, or Workflows write access 
 
 ### 7.3 Commands and identity
 
-Supported commands begin with `/roundhouse`; `/rh` is an exact alias. Commands are accepted only from users meeting installation and repository policy:
+Production commands begin with `/roundhouse`; `/rh` is an exact alias.
+Development uses the isolated `/roundhouse-dev` and `/rhd` family. Each App
+accepts only its own family and ignores the other. Commands are accepted only
+from users meeting installation and repository policy:
 
 - `/roundhouse start`
 - `/roundhouse retry`

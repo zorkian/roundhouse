@@ -52,7 +52,7 @@ node scripts/roundhouse-operator.mjs github-publish RUN_ID /tmp/revision.json
 ```
 
 Issue-native development starts through the signed GitHub webhook by posting
-`/rh start` on the issue. The retired direct issue-to-run administration route
+`/rhd start` on the issue. The retired direct issue-to-run administration route
 is intentionally not exposed by the operator CLI. Issue text supplies untrusted
 requirements only; repository identity, base, profile, allowed path,
 validation, branch, and publication policy are selected by the deployed

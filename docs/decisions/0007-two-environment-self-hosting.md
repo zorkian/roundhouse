@@ -29,8 +29,10 @@ would prevent self-hosting progress.
 
 Use two isolated deployments:
 
-- production receives GitHub webhooks and coordinates real work;
-- development receives each merged release before production promotion.
+- production and development both receive GitHub webhooks;
+- development receives each merged release before production promotion and is
+  the normal dogfood orchestrator;
+- production is the stable fallback orchestrator.
 
 A release is an immutable manifest binding the source commit and tree, Worker
 bundle hash, Container image digest, migration hashes, profile and lockfile
@@ -63,11 +65,12 @@ non-secret bootstrap-exception audit event. A future broker must replace this
 adapter without changing coordinator, approval, evidence, or publication
 contracts.
 
-Production uses a separate GitHub App installation and private key. Its webhook
-becomes authoritative only after production is healthy, at which point live
-webhook delivery on the development App is disabled. Development then uses
-contract gateways and authenticated acceptance operations rather than
-receiving duplicate live issue commands.
+Production uses a separate GitHub App installation, private key, webhook
+secret, and command family. Development accepts `/rhd` and `/roundhouse-dev`;
+production accepts `/rh` and `/roundhouse`. Both Apps acknowledge every
+subscribed delivery but ignore commands owned by the other environment.
+Environment-qualified task metadata, idempotency keys, publication branches,
+and mutable comment markers keep subsequent processing isolated.
 
 ## Consequences
 
@@ -76,6 +79,7 @@ receiving duplicate live issue commands.
 - Worker code equivalence is verified by bundle hash rather than shared Worker
   version ID.
 - Storage and evidence remain isolated between environments.
+- Either environment can orchestrate a repair when the other is unhealthy.
 - Production starts without copying historical development rows; retained
   development evidence remains available at the development hostname.
 - Deployment credentials remain a meaningful bootstrap capability and require

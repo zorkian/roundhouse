@@ -8,6 +8,15 @@ import { operatorPage } from "./operator-ui.js";
 afterEach(() => vi.unstubAllGlobals());
 
 describe("operator UI", () => {
+  it("renders the environment-specific start command", async () => {
+    const response = operatorPage(
+      "/repositories/zorkian/roundhouse/issues/24",
+      "/rhd",
+    )!;
+    const html = await response.text();
+    expect(html).toContain('"commandPrefix":"/rhd"');
+  });
+
   it("serves authenticated dashboard, issue, plan, run, and review shells", async () => {
     for (const path of [
       "/",

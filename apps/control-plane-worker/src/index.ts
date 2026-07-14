@@ -440,10 +440,10 @@ async function materializeGitHubPlan(
     plan.issueContentSha256,
   );
   const response = await submitTask(
-    `github-plan:${plan.planId}`,
+    `${identity.environment}:github-plan:${plan.planId}`,
     {
       schemaVersion: 1,
-      taskId: `task_${plan.planId}`,
+      taskId: `task_${identity.environment}_${plan.planId}`,
       subject: plan.subject,
       instructions: [
         "Implement the exact approved Roundhouse issue plan.",
@@ -470,6 +470,7 @@ async function materializeGitHubPlan(
       },
       source: {
         kind: "github_issue",
+        roundhouseEnvironment: identity.environment,
         owner: identity.owner,
         repository: identity.repository,
         issueNumber,
@@ -481,7 +482,7 @@ async function materializeGitHubPlan(
       publication: {
         remote: "origin",
         remoteUrl: env.ALLOWED_REMOTE_URL,
-        branch: `codex/dogfood-issue-${issueNumber}`,
+        branch: `codex/dogfood-${identity.environment}-issue-${issueNumber}`,
         expectedRemoteHead: null,
         commitMessage: `Implement Roundhouse dogfood issue ${issueNumber}`,
         authorName: `Roundhouse ${identity.environment}`,
@@ -509,6 +510,28 @@ function lowRiskPlan(value: DurableIssuePlan): boolean {
     value.plan.status === "proposed" &&
     value.plan.risk === "low"
   );
+}
+
+function githubCommand(
+  identity: ReturnType<typeof runtimeIdentity>,
+  command: string,
+): string {
+  return `${identity.commandPrefix} ${command}`;
+}
+
+function statusMarker(
+  identity: ReturnType<typeof runtimeIdentity>,
+  issueNumber: number,
+): string {
+  return `<!-- roundhouse-${identity.commentNamespace}-status:${identity.repositoryFullName}#${issueNumber} -->`;
+}
+
+function progressMarker(
+  identity: ReturnType<typeof runtimeIdentity>,
+  issueNumber: number,
+  scope: string,
+): string {
+  return `<!-- roundhouse-${identity.commentNamespace}-progress:${identity.repositoryFullName}#${issueNumber}:${scope} -->`;
 }
 
 async function materializeLowRiskPlan(
@@ -571,7 +594,10 @@ async function planComment(
           ),
           "Reply with this exact revision-bound command, followed by numbered answers:",
           "```text",
-          `/rh clarify ${value.plan.planId} ${value.revision} ${value.plan.planSha256}`,
+          githubCommand(
+            identity,
+            `clarify ${value.plan.planId} ${value.revision} ${value.plan.planSha256}`,
+          ),
           "1. ...",
           "```",
         );
@@ -603,14 +629,20 @@ async function planComment(
           ? "Approve this exact plan and begin implementation with:"
           : "Resume materialization of this approved plan with:",
         "```text",
-        `/rh implement ${value.plan.planId} ${value.revision} ${value.plan.planSha256}`,
+        githubCommand(
+          identity,
+          `implement ${value.plan.planId} ${value.revision} ${value.plan.planSha256}`,
+        ),
         "```",
       );
     if (value.status === "proposed")
       lines.push(
         "Request a new plan after editing the issue with:",
         "```text",
-        `/rh replan ${value.plan.planId} ${value.revision} ${value.plan.planSha256}`,
+        githubCommand(
+          identity,
+          `replan ${value.plan.planId} ${value.revision} ${value.plan.planSha256}`,
+        ),
         "```",
       );
     if (value.runId) lines.push(`Materialized run: \`${value.runId}\``);
@@ -624,7 +656,7 @@ async function enqueuePlanComment(
   value: DurableIssuePlan,
 ): Promise<void> {
   const identity = runtimeIdentity(env);
-  const marker = `<!-- roundhouse-progress:${identity.repositoryFullName}#${issueNumber}:${value.plan.planId} -->`;
+  const marker = progressMarker(identity, issueNumber, value.plan.planId);
   await enqueueProgressComment(
     env,
     identity.repositoryFullName,
@@ -824,7 +856,10 @@ async function enqueueRunActionComment(
       "Approving opens a **draft pull request** and starts independent Claude review. It does **not** merge the change.",
       "If the implementation matches the issue, approve these exact retained bytes:",
       "```text",
-      `/rh approve ${run.runId} ${run.revision} ${run.task.baseCommit} ${run.implementation.patchSha256} ${evidenceSetSha256}`,
+      githubCommand(
+        identity,
+        `approve ${run.runId} ${run.revision} ${run.task.baseCommit} ${run.implementation.patchSha256} ${evidenceSetSha256}`,
+      ),
       "```",
     ].join("\n\n"),
     identity.repositoryFullName,
@@ -866,7 +901,7 @@ async function enqueueRunFailureComment(
   lines.push(
     "Retry this exact failed revision after reviewing the diagnostics with:",
     "```text",
-    `/rh retry ${run.runId} ${run.revision}`,
+    githubCommand(identity, `retry ${run.runId} ${run.revision}`),
     "```",
   );
   await enqueueComment(
@@ -943,7 +978,7 @@ async function enqueueRunComment(
     env,
     identity.repositoryFullName,
     issueNumber,
-    `<!-- roundhouse-status:${identity.repositoryFullName}#${issueNumber} -->\n\n${await runComment(run, identity)}${lifecycleSummary}`,
+    `${statusMarker(identity, issueNumber)}\n\n${await runComment(run, identity)}${lifecycleSummary}`,
   );
 }
 
@@ -1029,8 +1064,16 @@ async function enqueueReviewComment(
         `_${findings.length - 10} additional findings are available in the complete retained review._`,
       );
   }
-  const issueMarker = `<!-- roundhouse-progress:${identity.repositoryFullName}#${review.request.issueNumber}:${review.request.reviewId} -->`;
-  const pullMarker = `<!-- roundhouse-progress:${identity.repositoryFullName}#${review.request.pullRequestNumber}:${review.request.reviewId} -->`;
+  const issueMarker = progressMarker(
+    identity,
+    review.request.issueNumber,
+    review.request.reviewId,
+  );
+  const pullMarker = progressMarker(
+    identity,
+    review.request.pullRequestNumber,
+    review.request.reviewId,
+  );
   await enqueueProgressComment(
     env,
     identity.repositoryFullName,
@@ -1707,7 +1750,8 @@ async function githubWebhook(
       }
       return json({ schemaVersion: 1, accepted: true });
     }
-    const feedback = pullRequestFeedback(webhook);
+    const identity = runtimeIdentity(env);
+    const feedback = pullRequestFeedback(webhook, identity.commandPrefixes);
     if (feedback) {
       const result = await startPullRequestFeedbackRemediation(env, feedback);
       await completeWebhookDelivery(
@@ -1726,7 +1770,7 @@ async function githubWebhook(
       }
       return json({ schemaVersion: 1, accepted: true, ...result });
     }
-    const value = issueCommand(webhook);
+    const value = issueCommand(webhook, identity.commandPrefixes);
     if (!value) {
       await completeWebhookDelivery(
         env,
@@ -1805,7 +1849,7 @@ async function githubWebhook(
           `github-command-failure-${webhook.deliveryId}`,
           commandFailureTarget.issueNumber,
           [
-            `Roundhouse could not complete \`/rh ${commandFailureTarget.command.kind}\`.`,
+            `Roundhouse could not complete \`${githubCommand(runtimeIdentity(env), commandFailureTarget.command.kind)}\`.`,
             `Failure: \`${reason}\``,
             "No new plan or run was created. You can retry the command after the failure is addressed.",
           ].join("\n\n"),
@@ -2213,7 +2257,7 @@ async function route(
     return json({ schemaVersion: 1, ready: true });
   }
   if (request.method === "GET") {
-    const page = operatorPage(url.pathname);
+    const page = operatorPage(url.pathname, runtimeIdentity(env).commandPrefix);
     if (page) return page;
   }
   if (request.method === "GET" && url.pathname === "/v1/dashboard")

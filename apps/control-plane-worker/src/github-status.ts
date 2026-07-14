@@ -4,6 +4,7 @@
 import { z } from "zod";
 
 import type { ControlPlaneEnv } from "./environment.js";
+import { runtimeIdentity } from "./runtime-config.js";
 
 export const githubReviewCheckMigration = `
 CREATE TABLE IF NOT EXISTS github_review_check_outbox (
@@ -49,7 +50,7 @@ const projectionSchema = z
     detailsUrl: z
       .string()
       .regex(
-        /^https:\/\/roundhouse-dev\.rm-rf\.rip\/reviews\/review_[a-f0-9]{40}$/,
+        /^https:\/\/roundhouse(?:-dev)?\.rm-rf\.rip\/reviews\/review_[a-f0-9]{40}$/,
       ),
   })
   .superRefine((value, context) => {
@@ -85,6 +86,8 @@ export async function enqueueReviewCheck(
   input: ReviewCheckProjection,
 ): Promise<void> {
   const value = projectionSchema.parse(input);
+  if (!value.detailsUrl.startsWith(`${runtimeIdentity(env).origin}/reviews/`))
+    throw new Error("GitHub review Check environment identity conflict");
   const now = new Date().toISOString();
   await env.DB.prepare(
     "INSERT OR IGNORE INTO github_review_check_outbox(repository_full_name, review_id, pull_request_number, head_sha, revision, check_status, conclusion, title, summary, details_url, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)",

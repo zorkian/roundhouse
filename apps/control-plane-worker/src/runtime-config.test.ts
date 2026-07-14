@@ -12,6 +12,9 @@ describe("runtime identity", () => {
   it("retains development defaults for local and existing deployments", () => {
     expect(runtimeIdentity(env())).toEqual({
       environment: "development",
+      commandPrefix: "/rhd",
+      commandPrefixes: ["/rhd", "/roundhouse-dev"],
+      commentNamespace: "dev",
       origin: "https://roundhouse-dev.rm-rf.rip",
       repositoryFullName: "zorkian/roundhouse",
       owner: "zorkian",
@@ -32,6 +35,9 @@ describe("runtime identity", () => {
       ),
     ).toMatchObject({
       environment: "production",
+      commandPrefix: "/rh",
+      commandPrefixes: ["/rh", "/roundhouse"],
+      commentNamespace: "prod",
       origin: "https://roundhouse.rm-rf.rip",
       workerId: "roundhouse-prod-control-plane",
     });

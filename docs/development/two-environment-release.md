@@ -3,8 +3,9 @@
 
 # Two-environment self-hosting operations
 
-Roundhouse production receives authoritative GitHub webhooks and coordinates
-work against the isolated development deployment. A merged `main` commit is
+Roundhouse production and development both receive GitHub webhooks. Each
+deployment accepts only its own command family, so a webhook for the other
+deployment is acknowledged and ignored. A merged `main` commit is
 built once, deployed to development, and retained as an immutable release
 artifact. Production promotion reuses the exact Worker bundle and Container
 digest after a human GitHub-environment approval; it never rebuilds them.
@@ -64,9 +65,17 @@ bundle without rebuilding it, references the same Container digest, deploys,
 smoke-tests, and retains production evidence.
 
 Rollback redeploys a previously retained Worker version and image digest. It
-never reverses D1 migrations or automatically moves webhook authority.
+never reverses D1 migrations or changes either App's webhook subscription.
 
 ## GitHub-native feedback
+
+Use `/rhd` (or `/roundhouse-dev`) for development and `/rh` (or
+`/roundhouse`) for production. Every follow-up command emitted by Roundhouse
+uses the same command family as the environment that created the plan or run.
+The environment is also retained in GitHub task source metadata, idempotency
+identity, publication branch name, and mutable GitHub comment markers. This
+keeps the two Apps from consuming, publishing, or overwriting each other's
+work while they are installed on the same repository.
 
 An authorized reviewer can request a bounded follow-up from a pull-request
 review, review comment, or pull-request conversation comment:
@@ -91,8 +100,10 @@ Before the first production issue command:
 2. create and verify the production Access applications;
 3. complete one development release and approved production promotion;
 4. verify the signed production GitHub App ping and authenticated dashboard;
-5. disable webhook delivery on the development App;
-6. enable production App delivery and run one bounded issue-based task.
+5. enable webhook delivery on both GitHub Apps;
+6. verify `/rhd status` is ignored by production and `/rh status` is ignored
+   by development;
+7. run one bounded issue-based task in each environment.
 
-Development remains installed for acceptance testing, but both Apps must never
-deliver the same live issue command.
+Development remains the normal dogfood path. Production remains available as a
+fallback when development is unhealthy.

@@ -62,6 +62,30 @@ function projection(revision: number) {
 }
 
 describe("durable GitHub review Check projection", () => {
+  it("binds review links to the processing environment", async () => {
+    const env = await runtime();
+    await expect(
+      enqueueReviewCheck(env, {
+        ...projection(1),
+        detailsUrl: `https://roundhouse.rm-rf.rip/reviews/review_${"a".repeat(40)}`,
+      }),
+    ).rejects.toThrow("environment identity conflict");
+    await expect(
+      enqueueReviewCheck(
+        {
+          ...env,
+          ROUNDHOUSE_ENVIRONMENT: "production",
+          ROUNDHOUSE_PUBLIC_ORIGIN: "https://roundhouse.rm-rf.rip",
+          ROUNDHOUSE_WORKER_ID: "roundhouse-prod-control-plane",
+        },
+        {
+          ...projection(1),
+          detailsUrl: `https://roundhouse.rm-rf.rip/reviews/review_${"a".repeat(40)}`,
+        },
+      ),
+    ).resolves.toBeUndefined();
+  });
+
   it("keeps repository identity explicit and ignores stale revisions", async () => {
     const env = await runtime();
     await enqueueReviewCheck(env, projection(2));
