@@ -24,7 +24,9 @@ Roundhouse may retain and update only:
 - execution image `roundhouse-dev-execution` with `standard-1`, one maximum
   instance, and one active demonstration;
 - hostname `roundhouse-dev.rm-rf.rip` and its existing Access applications;
-- the existing five-minute scheduled trigger; and
+- the existing five-minute scheduled trigger;
+- existing Worker and Container observability with persisted invocation logs;
+  and
 - the existing development GitHub App installation for `zorkian/roundhouse`.
 
 Allowed mutations are additive D1 migrations, development-only Worker and
