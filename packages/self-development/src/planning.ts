@@ -63,7 +63,12 @@ export const qualificationIssueSchema = z.object({
     ])
     .optional(),
   evidence: z.array(z.string().min(1).max(1_000)).max(20).default([]),
-  duplicateOf: z.string().min(1).max(1_000).optional(),
+  duplicateOf: z
+    .union([
+      z.literal("").transform(() => undefined),
+      z.string().min(1).max(1_000),
+    ])
+    .optional(),
   planningEvidence: z.array(z.string().min(1).max(10_000)).max(20).default([]),
 });
 
