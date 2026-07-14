@@ -72,6 +72,33 @@ function trustedEvidenceKey(request: TrustedImplementationRequest): string {
   return `runs/${request.runId}/attempts/${request.attemptId}/trusted-implementation.json`;
 }
 
+function trustedValidationFailureReason(
+  result: TrustedImplementationResult,
+): string {
+  const failures = result.validation.filter(
+    (item) => item.exitCode !== 0 || item.timedOut || item.outputTruncated,
+  );
+  const diagnostics = failures
+    .map((item) => {
+      const output = [item.stdout, item.stderr]
+        .filter(Boolean)
+        .join("\n")
+        .trim()
+        .slice(-3_000);
+      return [
+        `${item.name}: ${item.command} (exit ${item.exitCode ?? "none"}${item.timedOut ? ", timed out" : ""}${item.outputTruncated ? ", output truncated" : ""})`,
+        output,
+      ]
+        .filter(Boolean)
+        .join("\n");
+    })
+    .join("\n\n");
+  return `Trusted implementation validation failed\n\n${diagnostics}`.slice(
+    0,
+    12_000,
+  );
+}
+
 async function validateTrustedResult(
   request: TrustedImplementationRequest,
   value: unknown,
@@ -84,6 +111,9 @@ async function validateTrustedResult(
       false,
     );
   const result = parsed.data;
+  const validationFailed = result.validation.some(
+    (item) => item.exitCode !== 0 || item.timedOut || item.outputTruncated,
+  );
   const patchBytes = encoder.encode(result.patch);
   const patchHash = bytesToHex(
     await crypto.subtle.digest("SHA-256", patchBytes),
@@ -146,6 +176,9 @@ async function validateTrustedResult(
     result.patchSha256 !== patchHash ||
     result.patchBytes !== patchBytes.byteLength ||
     result.patchBytes > request.maxPatchBytes ||
+    (result.validationOutcome === "failed") !== validationFailed ||
+    (result.validationOutcome === "failed" &&
+      result.publicationManifest !== undefined) ||
     !manifestBindingValid ||
     publicationBytes > request.maxPatchBytes ||
     result.changedFiles.length > request.maxChangedFiles ||
@@ -243,6 +276,7 @@ export class CloudflareTrustedImplementationBackend implements TrustedImplementa
             runId: request.runId,
             attemptId: request.attemptId,
             patchSha256: result.patchSha256,
+            validationOutcome: result.validationOutcome,
           },
           sha256: digest,
         })
@@ -278,8 +312,16 @@ export class CloudflareTrustedImplementationBackend implements TrustedImplementa
       sha256: bytesToHex(hash),
       size: evidenceBytes.byteLength,
       mediaType: "application/json" as const,
+      approvalEligible: result.validationOutcome === "passed",
       createdAt: result.completedAt,
     };
+    if (result.validationOutcome === "failed")
+      throw new StageFailure(
+        trustedValidationFailureReason(result),
+        "validation_failed",
+        false,
+        [evidence],
+      );
     return {
       state: "awaiting_approval",
       detail: {
@@ -534,6 +576,7 @@ export class CloudflareTrustedExecutionDispatcher implements ExecutionDispatcher
       baseCommit: request.baseCommit,
       subject: request.subject,
       instructions: request.instructions,
+      retryContext: request.retryContext,
       allowedPaths: request.allowedPaths,
       validationLevel: request.validationLevel,
       agentTimeoutMs: 20 * 60_000,

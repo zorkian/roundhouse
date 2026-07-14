@@ -37,6 +37,10 @@ export function inspectRun(run: SelfDevelopmentRun): Record<string, unknown> {
       completedAt: attempt.completedAt,
       retryable: attempt.retryable,
       classification: attempt.classification,
+      error:
+        attempt.classification === "validation_failed"
+          ? attempt.error
+          : undefined,
     })),
     evidence: run.evidence.map((item) => ({
       evidenceId: item.evidenceId,
@@ -45,6 +49,7 @@ export function inspectRun(run: SelfDevelopmentRun): Record<string, unknown> {
       sha256: item.sha256,
       size: item.size,
       mediaType: item.mediaType,
+      approvalEligible: item.approvalEligible !== false,
       createdAt: item.createdAt,
     })),
     events: run.events.map((event) => ({

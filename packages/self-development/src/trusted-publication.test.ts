@@ -84,6 +84,7 @@ async function fixture() {
     patchSha256: hash(patch),
     patchBytes: Buffer.byteLength(patch),
     changedFiles: [path],
+    validationOutcome: "passed",
     startedAt: now,
     completedAt: now,
     startupDurationMs: 1,

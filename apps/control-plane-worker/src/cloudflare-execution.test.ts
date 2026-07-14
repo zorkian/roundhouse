@@ -147,6 +147,59 @@ describe("CloudflareTrustedImplementationBackend", () => {
     expect(destroyed).toBe(1);
   });
 
+  it("retains a failed patch and complete validation diagnostics as immutable evidence", async () => {
+    const evidence = new MemoryEvidence();
+    const failedResult = {
+      ...trustedResult(),
+      validationOutcome: "failed" as const,
+      validation: [
+        {
+          name: "format" as const,
+          command: "prettier --check -- packages/example.ts",
+          exitCode: 1,
+          timedOut: false,
+          durationMs: 12,
+          stdout: "Checking formatting...",
+          stderr: "packages/example.ts needs formatting",
+          outputTruncated: false,
+        },
+      ],
+    };
+    const backend = new CloudflareTrustedImplementationBackend(
+      {
+        getByName: () => ({
+          runJob: async () => result(),
+          runTrustedJob: async () => failedResult,
+          destroy: async () => undefined,
+        }),
+      },
+      evidence,
+      "unused",
+    );
+
+    await expect(backend.execute(trustedRequest)).rejects.toMatchObject({
+      classification: "validation_failed",
+      retryable: false,
+      message: expect.stringContaining("packages/example.ts needs formatting"),
+      evidence: [
+        {
+          attemptId: trustedRequest.attemptId,
+          approvalEligible: false,
+          sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+        },
+      ],
+    });
+    expect(evidence.objects.size).toBe(1);
+    const retained = JSON.parse(
+      new TextDecoder().decode([...evidence.objects.values()][0]),
+    ) as Record<string, unknown>;
+    expect(retained.patch).toBe(failedResult.patch);
+    expect(JSON.stringify(retained.validation)).toContain(
+      "packages/example.ts needs formatting",
+    );
+    expect(retained).not.toHaveProperty("publicationManifest");
+  });
+
   it("rejects results exceeding request-scoped limits", async () => {
     const backend = new CloudflareTrustedImplementationBackend(
       {

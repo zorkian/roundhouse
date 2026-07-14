@@ -84,7 +84,9 @@ verified Access assertion.
 
 The inspection projection is allowlisted. It omits instructions, repository and
 remote locations, publication configuration, lease tokens, workspace paths and
-references, raw attempt errors, and event detail. The local deterministic
+references, raw internal attempt errors, and event detail. A bounded
+credential-free validation diagnostic is exposed when classified validation
+fails so an operator can act without direct database access. The local deterministic
 dispatcher executes no repository command and uses no network. A future
 Container adapter receives only the bounded `ExecutionDispatchRequest`, not the
 Worker environment or Cloudflare/GitHub credentials.

@@ -77,6 +77,7 @@ export const trustedImplementationRequestSchema = z.object({
   baseCommit: commit,
   subject: z.string().min(1).max(500),
   instructions: z.string().min(1).max(20_000),
+  retryContext: z.string().min(1).max(20_000).optional(),
   allowedPaths: z.array(repositoryRelativePathSchema).min(1).max(50),
   validationLevel: z.enum(["quick", "full"]),
   agentTimeoutMs: z
@@ -143,6 +144,7 @@ export const trustedImplementationResultSchema = z.object({
     .positive()
     .max(512 * 1024),
   changedFiles: z.array(repositoryRelativePathSchema).min(1).max(50),
+  validationOutcome: z.enum(["passed", "failed"]).default("passed"),
   publicationManifest: trustedPublicationManifestSchema.optional(),
   startedAt: z.iso.datetime(),
   completedAt: z.iso.datetime(),

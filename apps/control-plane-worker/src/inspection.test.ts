@@ -44,8 +44,8 @@ describe("inspectRun execution evidence", () => {
           startedAt: timestamp,
           completedAt: timestamp,
           retryable: false,
-          classification: "command_failed",
-          error: "internal runner detail containing a token",
+          classification: "validation_failed",
+          error: "format: prettier --check (exit 1)\nNeeds formatting",
         },
       ],
       evidence: [
@@ -76,8 +76,8 @@ describe("inspectRun execution evidence", () => {
     expect(serialized).toContain("Inspect evidence");
     expect(serialized).toContain("a".repeat(40));
     expect(serialized).toContain("evidence_run_inspection_evidence-prepare-1");
-    expect(serialized).toContain("command_failed");
-    expect(serialized).not.toContain("internal runner detail");
+    expect(serialized).toContain("validation_failed");
+    expect(serialized).toContain("Needs formatting");
     expect(serialized).not.toContain("/private/workspace");
     expect(serialized).not.toContain("roundhouse@example.invalid");
   });

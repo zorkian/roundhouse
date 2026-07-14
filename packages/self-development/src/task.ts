@@ -123,6 +123,7 @@ export const executionEvidenceSchema = z.object({
   sha256: z.string().regex(/^[a-f0-9]{64}$/),
   size: z.number().int().nonnegative(),
   mediaType: z.literal("application/json"),
+  approvalEligible: z.boolean().optional(),
   createdAt: z.iso.datetime(),
 });
 
