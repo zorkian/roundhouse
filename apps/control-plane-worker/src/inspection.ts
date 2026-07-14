@@ -30,6 +30,7 @@ export function inspectRun(run: SelfDevelopmentRun): Record<string, unknown> {
       : undefined,
     publication: run.publication,
     attempts: run.attempts.map((attempt) => ({
+      attemptId: attempt.attemptId,
       stage: attempt.stage,
       number: attempt.number,
       status: attempt.status,
