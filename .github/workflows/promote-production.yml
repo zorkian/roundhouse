@@ -3,7 +3,15 @@
 
 name: Promote production
 
+run-name: >-
+  Promote production from development ${{
+    github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.development_run_id
+  }}
+
 on:
+  workflow_run:
+    workflows: [Release development]
+    types: [completed]
   workflow_dispatch:
     inputs:
       development_run_id:
@@ -22,18 +30,24 @@ concurrency:
 jobs:
   promote:
     name: Promote accepted development bytes to production
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: roundhouse-production
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      DEVELOPMENT_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.development_run_id }}
+      EXPECTED_SOURCE_COMMIT: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || '' }}
 
     steps:
       - name: Download exact development evidence
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          run-id: ${{ inputs.development_run_id }}
+          run-id: ${{ env.DEVELOPMENT_RUN_ID }}
           github-token: ${{ github.token }}
           path: .roundhouse/release
           merge-multiple: true
@@ -45,6 +59,9 @@ jobs:
           source_commit="$(jq -r .sourceCommit .roundhouse/release/manifest.json)"
           digest="$(jq -r .container.digest .roundhouse/release/manifest.json)"
           test "${#source_commit}" -eq 40
+          if test -n "$EXPECTED_SOURCE_COMMIT"; then
+            test "$source_commit" = "$EXPECTED_SOURCE_COMMIT"
+          fi
           printf 'source_commit=%s\n' "$source_commit" >> "$GITHUB_OUTPUT"
           printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
 
@@ -69,17 +86,32 @@ jobs:
       - name: Restore downloaded immutable artifacts after checkout
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          run-id: ${{ inputs.development_run_id }}
+          run-id: ${{ env.DEVELOPMENT_RUN_ID }}
           github-token: ${{ github.token }}
           path: .roundhouse/release
           merge-multiple: true
+
+      - name: Read the production environment approver
+        id: environment-approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          approvals="$(gh api \
+            --header 'X-GitHub-Api-Version: 2026-03-10' \
+            "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/approvals")"
+          actor="$(jq -r \
+            '[.[] | select(.state == "approved") | select(any(.environments[]?; .name == "roundhouse-production"))] | last | .user.login // empty' \
+            <<<"$approvals")"
+          test -n "$actor"
+          printf 'actor=%s\n' "$actor" >> "$GITHUB_OUTPUT"
 
       - name: Record exact human promotion approval
         run: |
           node scripts/release/roundhouse-release.mjs approval \
             .roundhouse/release/manifest.json \
             .roundhouse/release/development-evidence.json \
-            "github:${GITHUB_ACTOR}" \
+            "github:${{ steps.environment-approval.outputs.actor }}" \
             .roundhouse/release/promotion-approval.json
           node scripts/release/roundhouse-release.mjs verify-promotion \
             .roundhouse/release/manifest.json \
