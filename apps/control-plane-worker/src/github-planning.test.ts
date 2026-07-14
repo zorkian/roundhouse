@@ -218,7 +218,7 @@ describe("durable issue planning", () => {
         actorId: "github:zorkian",
         now: new Date(),
       }),
-    ).rejects.toThrow("Rejected plan cannot run");
+    ).rejects.toThrow("Qualification cannot run");
   });
 
   it("revises a clarification after the issue content changes", async () => {
@@ -244,7 +244,40 @@ describe("durable issue planning", () => {
       clarification,
       "github:zorkian",
     );
-    expect(first).toMatchObject({ revision: 1, status: "rejected" });
+    expect(first).toMatchObject({
+      revision: 1,
+      status: "needs_clarification",
+    });
+
+    const answered = await qualifyAndPlan(
+      {
+        issueNumber: 24,
+        issueContentSha256: "d".repeat(64),
+        subject: "Improve issue status",
+        instructions: "Improve the issue status page.",
+        baseCommit: "b".repeat(40),
+        requestedPaths: ["apps/control-plane-worker/src/operator-ui.ts"],
+        planningAttemptId: `planning_${"f".repeat(40)}`,
+        understanding: "Improve the issue status page.",
+        acceptanceCriteria: ["The issue status page shows the new detail."],
+        clarificationQuestions: [],
+        suggestedRisk: "medium",
+        planningEvidence: ["Operator answer: change the issue status page."],
+      },
+      new Date("2026-07-12T00:04:00Z"),
+    );
+    const answeredPlan = await recordPlanningDecision(
+      env,
+      answered,
+      "github:zorkian",
+      {
+        planId: first.plan.planId,
+        revision: first.revision,
+        planSha256: first.plan.planSha256,
+        allowSameIssueContent: true,
+      },
+    );
+    expect(answeredPlan).toMatchObject({ revision: 2, status: "proposed" });
 
     const revised = await qualifyAndPlan(
       {
@@ -263,10 +296,14 @@ describe("durable issue planning", () => {
       new Date("2026-07-12T00:05:00Z"),
     );
     await expect(
-      recordPlanningDecision(env, revised, "github:zorkian"),
-    ).resolves.toMatchObject({ revision: 2, status: "proposed" });
+      recordPlanningDecision(env, revised, "github:zorkian", {
+        planId: answeredPlan.plan.planId,
+        revision: answeredPlan.revision,
+        planSha256: answeredPlan.plan.planSha256,
+      }),
+    ).resolves.toMatchObject({ revision: 3, status: "proposed" });
     await expect(readIssuePlan(env, 24)).resolves.toMatchObject({
-      revision: 2,
+      revision: 3,
       plan: { issueContentSha256: "f".repeat(64) },
     });
   });

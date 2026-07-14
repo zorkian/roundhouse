@@ -286,6 +286,8 @@ describe("bounded Codex planning boundary", () => {
           ].reverse(),
           acceptanceCriteria: ["The status page shows the release identity."],
           questions: [],
+          evidence: [],
+          duplicateOf: "",
           risk: "low",
         },
         request,
@@ -304,13 +306,60 @@ describe("bounded Codex planning boundary", () => {
     expect(() =>
       parsePlanningOutput(
         {
-          status: "clarification",
+          status: "needs_clarification",
           summary:
             "The requested behavior has two materially different meanings.",
           exactPaths: [],
           acceptanceCriteria: ["The selected behavior is testable."],
           questions: [],
+          evidence: [],
+          duplicateOf: "",
           risk: "medium",
+        },
+        request,
+      ),
+    ).toThrow("planning_invalid_structured_output");
+  });
+
+  it("requires concrete evidence for non-implementation outcomes", () => {
+    const common = {
+      summary: "The requested behavior is already present.",
+      exactPaths: [],
+      acceptanceCriteria: ["The existing behavior remains covered."],
+      questions: [],
+      risk: "low",
+      duplicateOf: "",
+    };
+    expect(() =>
+      parsePlanningOutput(
+        { ...common, status: "already_satisfied", evidence: [] },
+        request,
+      ),
+    ).toThrow("planning_invalid_structured_output");
+    expect(
+      parsePlanningOutput(
+        {
+          ...common,
+          status: "already_satisfied",
+          evidence: ["operator-ui.ts already renders releaseIdentity"],
+        },
+        request,
+      ),
+    ).toMatchObject({ status: "already_satisfied" });
+  });
+
+  it("requires a concrete duplicate identity", () => {
+    expect(() =>
+      parsePlanningOutput(
+        {
+          status: "duplicate",
+          summary: "This repeats existing work.",
+          exactPaths: [],
+          acceptanceCriteria: ["Use the existing work item."],
+          questions: [],
+          evidence: [],
+          duplicateOf: "",
+          risk: "low",
         },
         request,
       ),
@@ -324,5 +373,6 @@ describe("bounded Codex planning boundary", () => {
     expect(planningPrompt(request)).toContain(
       "read-only exact-commit checkout",
     );
+    expect(planningPrompt(request)).toContain("already_satisfied");
   });
 });

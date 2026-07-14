@@ -308,6 +308,10 @@ async function planGitHubIssue(
   issueNumber: number,
   env: ControlPlaneEnv,
   actorId: string,
+  revisionRequest?: {
+    current: DurableIssuePlan;
+    answers?: string;
+  },
 ): Promise<DurableIssuePlan> {
   const identity = runtimeIdentity(env);
   const github = githubGateway(env);
@@ -319,10 +323,19 @@ async function planGitHubIssue(
   });
   const baseCommit = await github.mainHead();
   await saveIssueSnapshot(env, snapshot, JSON.stringify(snapshot));
-  const plannedInstructions = snapshot.body.slice(
-    0,
-    maxPlannedInstructionCharacters,
-  );
+  if (
+    revisionRequest &&
+    revisionRequest.current.plan.issueNumber !== issueNumber
+  )
+    throw new HttpError(409, "Plan does not belong to this issue");
+  const plannedInstructions = [
+    snapshot.body,
+    revisionRequest?.answers
+      ? `\n\nExplicit maintainer clarification (untrusted requirements evidence):\n${revisionRequest.answers}`
+      : "",
+  ]
+    .join("")
+    .slice(0, maxPlannedInstructionCharacters);
   const declaredPaths = extractExactPaths(snapshot.body);
   const agentPlan =
     declaredPaths.length === 0 &&
@@ -365,10 +378,31 @@ async function planGitHubIssue(
       acceptanceCriteria: agentPlan?.acceptanceCriteria ?? [],
       clarificationQuestions: agentPlan?.questions ?? [],
       suggestedRisk: agentPlan?.risk,
+      outcome:
+        agentPlan?.status === "clarification"
+          ? "needs_clarification"
+          : agentPlan?.status,
+      evidence: agentPlan?.evidence ?? [],
+      duplicateOf: agentPlan?.duplicateOf,
+      planningEvidence: revisionRequest?.answers
+        ? [revisionRequest.answers]
+        : [],
     },
     new Date(snapshot.updatedAt),
   );
-  return recordPlanningDecision(env, decision, actorId);
+  return recordPlanningDecision(
+    env,
+    decision,
+    actorId,
+    revisionRequest
+      ? {
+          planId: revisionRequest.current.plan.planId,
+          revision: revisionRequest.current.revision,
+          planSha256: revisionRequest.current.plan.planSha256,
+          allowSameIssueContent: revisionRequest.answers !== undefined,
+        }
+      : undefined,
+  );
 }
 
 async function materializeGitHubPlan(
@@ -491,14 +525,37 @@ async function planComment(
     `Base: \`${value.plan.baseCommit}\``,
     `Profile: \`${value.plan.profileId}@${value.plan.profileVersion}\``,
   ];
-  if (value.plan.status === "rejected") {
-    lines.push(
-      "Qualification stopped before implementation:",
-      ...value.plan.findings.map(
-        (finding) =>
-          `- \`${finding.code}\`${finding.path ? ` for \`${finding.path}\`` : ""}: ${finding.message}`,
-      ),
-    );
+  if (value.plan.status !== "proposed") {
+    if (value.plan.status === "rejected") {
+      lines.push(
+        "Qualification stopped before implementation:",
+        ...value.plan.findings.map(
+          (finding) =>
+            `- \`${finding.code}\`${finding.path ? ` for \`${finding.path}\`` : ""}: ${finding.message}`,
+        ),
+      );
+    } else {
+      lines.push(`Understanding: ${value.plan.understanding}`);
+      if (value.plan.status === "needs_clarification")
+        lines.push(
+          "Targeted questions:",
+          ...value.plan.questions.map(
+            (question, index) => `${index + 1}. ${question}`,
+          ),
+          "Reply with this exact revision-bound command, followed by numbered answers:",
+          "```text",
+          `/rh clarify ${value.plan.planId} ${value.revision} ${value.plan.planSha256}`,
+          "1. ...",
+          "```",
+        );
+      if (value.plan.evidence.length > 0)
+        lines.push(
+          "Evidence:",
+          ...value.plan.evidence.map((item) => `- ${item}`),
+        );
+      if (value.plan.duplicateOf)
+        lines.push(`Existing work: ${value.plan.duplicateOf}`);
+    }
   } else {
     if (value.plan.understanding)
       lines.push(`Understanding: ${value.plan.understanding}`);
@@ -519,7 +576,14 @@ async function planComment(
           ? "Approve this exact plan and begin implementation with:"
           : "Resume materialization of this approved plan with:",
         "```text",
-        `/rh implement ${value.plan.planId} ${value.plan.revision} ${value.plan.planSha256}`,
+        `/rh implement ${value.plan.planId} ${value.revision} ${value.plan.planSha256}`,
+        "```",
+      );
+    if (value.status === "proposed")
+      lines.push(
+        "Request a new plan after editing the issue with:",
+        "```text",
+        `/rh replan ${value.plan.planId} ${value.revision} ${value.plan.planSha256}`,
         "```",
       );
     if (value.runId) lines.push(`Materialized run: \`${value.runId}\``);
@@ -1209,9 +1273,7 @@ async function executeGitHubCommand(
     }
     const existingPlan = await readIssuePlan(env, issueNumber);
     const plan =
-      existingPlan?.status === "rejected"
-        ? await planGitHubIssue(issueNumber, env, actorId)
-        : (existingPlan ?? (await planGitHubIssue(issueNumber, env, actorId)));
+      existingPlan ?? (await planGitHubIssue(issueNumber, env, actorId));
     if (lowRiskPlan(plan)) {
       runId = await materializeLowRiskPlan(env, issueNumber, plan, actorId);
       const current = await new D1JobStore(env.DB).read(runId);
@@ -1237,6 +1299,44 @@ async function executeGitHubCommand(
           state: plan.status,
           revision: plan.revision,
         };
+  } else if (command.kind === "clarify" || command.kind === "replan") {
+    const current = await readIssuePlan(env, issueNumber);
+    if (
+      !current ||
+      current.plan.planId !== command.planId ||
+      current.revision !== command.revision ||
+      current.plan.planSha256 !== command.planSha256
+    )
+      throw new HttpError(409, "Replanning binding does not match this issue");
+    if (command.kind === "clarify" && current.status !== "needs_clarification")
+      throw new HttpError(409, "Plan is not awaiting clarification");
+    if (
+      command.kind === "replan" &&
+      !["needs_clarification", "proposed", "rejected"].includes(current.status)
+    )
+      throw new HttpError(409, "Qualification cannot be replanned");
+    const plan = await planGitHubIssue(issueNumber, env, actorId, {
+      current,
+      answers: command.kind === "clarify" ? command.answers : undefined,
+    });
+    if (lowRiskPlan(plan)) {
+      runId = await materializeLowRiskPlan(env, issueNumber, plan, actorId);
+      const materialized = await new D1JobStore(env.DB).read(runId);
+      await enqueueRunComment(env, issueNumber, runId);
+      return {
+        kind: "run",
+        runId,
+        state: materialized.state,
+        revision: materialized.revision,
+      };
+    }
+    await enqueuePlanComment(env, issueNumber, plan);
+    return {
+      kind: "plan",
+      planId: plan.plan.planId,
+      state: plan.status,
+      revision: plan.revision,
+    };
   } else if (command.kind === "implement") {
     runId = await materializeGitHubPlan(env, issueNumber, command, actorId);
   } else if (command.kind === "status" && !(await issueRun(env, issueNumber))) {
