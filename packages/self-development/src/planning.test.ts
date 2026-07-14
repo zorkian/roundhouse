@@ -46,6 +46,15 @@ describe("issue qualification and planning", () => {
     });
   });
 
+  it("normalizes the planning agent's empty non-duplicate sentinel", async () => {
+    await expect(
+      qualifyAndPlan(
+        { ...input, duplicateOf: "" },
+        new Date("2026-07-12T00:00:00Z"),
+      ),
+    ).resolves.toMatchObject({ status: "proposed" });
+  });
+
   it("allows planning advice to raise but never lower policy risk", async () => {
     const attemptedDowngrade = await qualifyAndPlan(
       { ...input, suggestedRisk: "low" },
