@@ -41,6 +41,15 @@ describe("execution runner observability", () => {
       "x".repeat(2_000),
     );
   });
+
+  it.each([0, Number.NaN, Number.POSITIVE_INFINITY, 10_000])(
+    "fails closed for unsafe excerpt bound %s",
+    (maximum) => {
+      expect(boundedLogExcerpt("x".repeat(2_100), maximum)).toBe(
+        "x".repeat(2_000),
+      );
+    },
+  );
 });
 
 describe("trusted agent output boundary", () => {

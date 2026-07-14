@@ -47,9 +47,13 @@ function json(response, status, value) {
 }
 
 export function boundedLogExcerpt(value, maximum = 2_000) {
+  const bound =
+    Number.isSafeInteger(maximum) && maximum > 0
+      ? Math.min(maximum, 2_000)
+      : 2_000;
   return (typeof value === "string" ? value : "")
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]+/g, " ")
-    .slice(-maximum);
+    .slice(-bound);
 }
 
 function lifecycle(event, request, details = {}) {
