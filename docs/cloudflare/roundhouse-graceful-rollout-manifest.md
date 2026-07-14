@@ -34,9 +34,9 @@ continues to promote the exact development Worker bundle and Container digest.
 - Queue consumer concurrency is capped at 10 to match Container capacity and
   avoid deliberately driving requests beyond the upstream execution ceiling.
 - Container rollout steps are cumulative `[10, 25, 50, 100]`.
-- Active instances receive a 3,600-second grace period before becoming eligible
-  for replacement. Cloudflare then sends `SIGTERM` and provides its documented
-  shutdown interval before `SIGKILL`.
+- Active instances receive a 300-second grace period before becoming eligible
+  for replacement. Cloudflare then sends `SIGTERM` and provides its separate
+  15-minute shutdown interval before `SIGKILL`.
 - Release workflows use gradual Container rollout. Immediate rollout is not part
   of the ordinary development or production path.
 
@@ -51,8 +51,10 @@ identity. After each Worker deployment, the authenticated release workflow:
 4. calls `/ping` inside the Container;
 5. verifies the image reports the exact expected commit;
 6. gracefully stops the canary Container;
-7. verifies D1 readiness and outer Worker health; and
-8. retains those exact responses as release evidence.
+7. waits for the complete Container application to report `ready` on the exact
+   immutable image;
+8. verifies D1 readiness and outer Worker health; and
+9. retains those exact responses as release evidence.
 
 The canary receives no model, GitHub, Cloudflare, or other credential. It cannot
 run a repository command or enable network access.

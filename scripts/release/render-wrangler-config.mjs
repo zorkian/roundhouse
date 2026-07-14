@@ -110,7 +110,7 @@ const config = {
       max_instances: 10,
       instance_type: "standard-1",
       rollout_step_percentage: [10, 25, 50, 100],
-      rollout_active_grace_period: 3600,
+      rollout_active_grace_period: 300,
     },
   ],
   queues: {
