@@ -14,6 +14,8 @@ digest after a human GitHub-environment approval; it never rebuilds them.
 Create `roundhouse-development` with no required reviewer. Define:
 
 - secret `CLOUDFLARE_API_TOKEN` for the development deployment;
+- secrets `CLOUDFLARE_ACCESS_CLIENT_ID` and
+  `CLOUDFLARE_ACCESS_CLIENT_SECRET` for a development-only Access service token;
 - variable `CLOUDFLARE_ACCOUNT_ID`;
 - variable `CLOUDFLARE_D1_DATABASE_ID` set to
   `87a4098a-a829-4e0b-80c6-43e2eaf34ddc`;
@@ -22,7 +24,8 @@ Create `roundhouse-development` with no required reviewer. Define:
 
 Create `roundhouse-production` with `zorkian` as a required reviewer and allow
 deployments only from `main`. Define an independent Cloudflare token plus the
-same three variables, using production D1
+same two Access secrets and three variables, using a production-only Access
+service token and production D1
 `4dad8f65-56ed-4925-8333-7b0c0c59cd66` and the production Access audience.
 
 Neither token is available to pull-request CI, Roundhouse, or an execution
@@ -39,8 +42,10 @@ boundary because Cloudflare API tokens cannot be restricted to one Worker.
 4. bundle the Worker once and create the release manifest;
 5. apply the manifest's ordered additive migrations to development;
 6. upload and deploy that exact Worker bundle with the immutable image;
-7. smoke-test `/health` and retain the manifest, bundle, smoke response, and
-   exact deployment evidence as one GitHub Actions artifact.
+7. authenticate to `/health` with the environment-specific Access service
+   token, require HTTP 200 and the exact health schema, and retain the manifest,
+   bundle, smoke response, and exact deployment evidence as one GitHub Actions
+   artifact.
 
 The artifact and successful workflow-run ID are the production promotion
 input. A development failure does not affect production.
