@@ -1,3 +1,6 @@
+# Copyright 2026 Mark Smith
+# SPDX-License-Identifier: Apache-2.0
+
 name: Release development
 
 on:
@@ -109,9 +112,28 @@ jobs:
           printf 'version_id=%s\n' "$version_id" >> "$GITHUB_OUTPUT"
 
       - name: Smoke-test development
+        env:
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_SECRET }}
         run: |
           set -euo pipefail
-          health="$(curl --fail --silent --show-error --retry 8 --retry-all-errors --retry-delay 3 https://roundhouse-dev.rm-rf.rip/health)"
+          status="$(curl \
+            --fail-with-body \
+            --silent \
+            --show-error \
+            --retry 8 \
+            --retry-all-errors \
+            --retry-delay 3 \
+            --header "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}" \
+            --header "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}" \
+            --output .roundhouse/release/development-health.json \
+            --write-out '%{http_code}' \
+            https://roundhouse-dev.rm-rf.rip/health)"
+          test "$status" = 200
+          jq --exit-status \
+            'type == "object" and keys == ["ok", "schemaVersion"] and .schemaVersion == 1 and .ok == true' \
+            .roundhouse/release/development-health.json > /dev/null
+          health="$(jq --compact-output . .roundhouse/release/development-health.json)"
           jq -n \
             --arg origin https://roundhouse-dev.rm-rf.rip \
             --arg response "$health" \
