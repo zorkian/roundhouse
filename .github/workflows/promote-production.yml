@@ -161,10 +161,9 @@ jobs:
           set -euo pipefail
           source_commit="${{ steps.release.outputs.source_commit }}"
           canary_status="$(curl \
-            --fail-with-body \
             --silent \
             --show-error \
-            --retry 12 \
+            --retry 60 \
             --retry-all-errors \
             --retry-delay 10 \
             --retry-max-time 900 \
@@ -175,7 +174,11 @@ jobs:
             --output .roundhouse/release/production-canary.json \
             --write-out '%{http_code}' \
             "https://roundhouse.rm-rf.rip/v1/releases/${source_commit}/canary")"
-          test "$canary_status" = 200
+          if test "$canary_status" != 200; then
+            echo "::error::Production Container canary returned HTTP ${canary_status} after waiting for the gradual rollout"
+            jq . .roundhouse/release/production-canary.json >&2 || true
+            exit 1
+          fi
           jq --exit-status \
             --arg commit "$source_commit" \
             '.schemaVersion == 1 and .ok == true and .releaseCommit == $commit and .environment == "production" and .workerId == "roundhouse-prod-control-plane"' \
