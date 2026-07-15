@@ -2282,6 +2282,7 @@ describe("local control-plane Worker", () => {
     const attemptId = running.attempts.at(-1)!.attemptId;
     let containerName = "";
     let containerRequest: unknown;
+    let containerUnavailable = false;
     env.EXECUTION_CONTAINERS = {
       getByName: (name: string) => {
         containerName = name;
@@ -2289,6 +2290,7 @@ describe("local control-plane Worker", () => {
           runJob: async () => ({}),
           readAgentOutput: async (value) => {
             containerRequest = value;
+            if (containerUnavailable) throw new Error("container starting");
             return {
               schemaVersion: 1,
               attemptId,
@@ -2323,6 +2325,16 @@ describe("local control-plane Worker", () => {
       nextCursor: 9,
       lines: [{ cursor: 9, text: "Implementing the bounded endpoint" }],
     });
+    containerUnavailable = true;
+    await expect(
+      (
+        await handler.fetch!(
+          request(`/v1/runs/${runId}/agent-output/${attemptId}?cursor=9`),
+          env,
+          {} as ExecutionContext,
+        )
+      ).json(),
+    ).resolves.toMatchObject({ status: "unavailable", nextCursor: 9 });
     expect(
       (
         await handler.fetch!(

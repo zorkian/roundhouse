@@ -421,6 +421,94 @@ describe("operator UI", () => {
     expect(outputRequests).toBe(2);
   });
 
+  it("bounds retries when live output remains unavailable", async () => {
+    const runId = "run_unavailable_tail";
+    const attemptId = `${runId}-prepare-1`;
+    const outputUrl = `/v1/runs/${runId}/agent-output/${attemptId}`;
+    const script = /<script[^>]*>([\s\S]+)<\/script>/.exec(
+      await operatorPage(`/runs/${runId}`)!.text(),
+    )![1];
+    const app = { innerHTML: "Loading…" };
+    const outputElement = {
+      dataset: { agentOutputUrl: outputUrl },
+      textContent: "",
+      scrollTop: 0,
+      scrollHeight: 100,
+    };
+    const statusElement = {
+      dataset: { agentOutputStatus: outputUrl },
+      textContent: "",
+    };
+    let interval!: () => Promise<void>;
+    vi.stubGlobal("document", {
+      getElementById: (id: string) => (id === "app" ? app : null),
+      querySelectorAll: (selector: string) => {
+        if (selector === "[data-agent-output-url]") return [outputElement];
+        if (selector === "[data-agent-output-status]") return [statusElement];
+        return [];
+      },
+    });
+    vi.stubGlobal("setInterval", (callback: () => Promise<void>) => {
+      interval = callback;
+      return 0;
+    });
+    let outputRequests = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string) => {
+        if (input === `/v1/runs/${runId}`)
+          return Response.json({
+            schemaVersion: 1,
+            runId,
+            taskId: "task_unavailable_tail",
+            state: "implementing",
+            revision: 2,
+            attempts: [
+              {
+                attemptId,
+                stage: "prepare",
+                number: 1,
+                status: "running",
+                startedAt: "2026-07-15T00:00:00.000Z",
+              },
+            ],
+            progress: [
+              {
+                attemptId,
+                phase: "agent.implement",
+                status: "running",
+                startedAt: "2026-07-15T00:00:01.000Z",
+              },
+            ],
+            events: [],
+            evidence: [],
+            reviews: [],
+            workflows: [],
+          });
+        outputRequests += 1;
+        return Response.json({
+          schemaVersion: 1,
+          attemptId,
+          status: "unavailable",
+          nextCursor: 0,
+          truncated: false,
+          lines: [],
+        });
+      }),
+    );
+
+    new Function(script!)();
+    await vi.waitFor(() => expect(outputRequests).toBe(1));
+    expect(statusElement.textContent).toContain("retrying");
+    await interval();
+    await vi.waitFor(() => expect(outputRequests).toBe(2));
+    await interval();
+    await vi.waitFor(() => expect(outputRequests).toBe(3));
+    expect(statusElement.textContent).toContain("polling stopped");
+    await interval();
+    expect(outputRequests).toBe(3);
+  });
+
   it("does not label the source run as an active remediation", async () => {
     const response = operatorPage(
       "/repositories/zorkian/roundhouse/issues/24",

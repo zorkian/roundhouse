@@ -3555,11 +3555,7 @@ async function route(
       attemptId,
       cursor,
     });
-    return json(
-      output.status === "unavailable"
-        ? { ...output, status: "running" }
-        : output,
-    );
+    return json(output);
   }
   const reviewMatch = /^\/v1\/reviews\/(review_[a-f0-9]{40})$/.exec(
     url.pathname,
@@ -3654,11 +3650,7 @@ async function route(
       attemptId,
       cursor,
     });
-    return json(
-      output.status === "unavailable"
-        ? { ...output, status: "running" }
-        : output,
-    );
+    return json(output);
   }
   const match = /^\/v1\/runs\/([a-zA-Z0-9][a-zA-Z0-9_-]{0,127})$/.exec(
     url.pathname,

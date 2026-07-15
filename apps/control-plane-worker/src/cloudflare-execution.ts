@@ -93,7 +93,7 @@ export function isValidAgentOutputTail(
         typeof line.text === "string" &&
         line.text.length <= 2_000 &&
         typeof line.occurredAt === "string" &&
-        line.occurredAt.length <= 30,
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(line.occurredAt),
     )
   );
 }
@@ -118,7 +118,8 @@ export async function readAgentOutput(
   const container = containers.getByName(request.attemptId);
   if (!container.readAgentOutput) return unavailable();
   try {
-    return await container.readAgentOutput(request);
+    const value = await container.readAgentOutput(request);
+    return isValidAgentOutputTail(value, request) ? value : unavailable();
   } catch {
     return unavailable();
   }

@@ -94,6 +94,18 @@ describe("agent output adapter", () => {
     ).toBe(false);
   });
 
+  it("rejects non-timestamp content from the trusted container", () => {
+    expect(
+      isValidAgentOutputTail(
+        {
+          ...tail,
+          lines: [{ ...tail.lines[0]!, occurredAt: "not-a-timestamp" }],
+        },
+        outputRequest,
+      ),
+    ).toBe(false);
+  });
+
   it("passes the exact attempt and cursor to the named Container", async () => {
     let name = "";
     let input: unknown;
@@ -144,6 +156,31 @@ describe("agent output adapter", () => {
       status: "unavailable",
       nextCursor: 4,
       lines: [],
+    });
+  });
+
+  it("returns unavailable when a Container violates the output contract", async () => {
+    await expect(
+      readAgentOutput(
+        {
+          getByName: () => ({
+            runJob: async () => result(),
+            readAgentOutput: async () => ({
+              schemaVersion: 1,
+              attemptId: "wrong-attempt",
+              status: "running",
+              nextCursor: 4,
+              truncated: false,
+              lines: [],
+            }),
+            destroy: async () => undefined,
+          }),
+        },
+        { attemptId: "run_bound-prepare-1", cursor: 4 },
+      ),
+    ).resolves.toMatchObject({
+      attemptId: "run_bound-prepare-1",
+      status: "unavailable",
     });
   });
 });
