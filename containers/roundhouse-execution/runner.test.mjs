@@ -17,6 +17,7 @@ import {
   pathAllowed,
   parsePlanningOutput,
   planningPrompt,
+  planningOutputSchema,
   promptFor,
   remainingValidationBudget,
   reproductionInvocation,
@@ -42,6 +43,20 @@ describe("execution runner command", () => {
       command("/roundhouse-missing-executable", [], { timeoutMs: 10_000 }),
     ).rejects.toMatchObject({ code: "ENOENT" });
     expect(Date.now() - started).toBeLessThan(1_000);
+  });
+});
+
+describe("planning structured output", () => {
+  it("uses a flat compatibility schema and leaves semantic union checks to the runner", () => {
+    const schema = JSON.parse(planningOutputSchema);
+    const reproduction = schema.properties.bugReproduction;
+    expect(reproduction.type).toBe("object");
+    expect(reproduction).not.toHaveProperty("oneOf");
+    expect(reproduction.required).toEqual([
+      "applicability",
+      "command",
+      "rationale",
+    ]);
   });
 });
 
