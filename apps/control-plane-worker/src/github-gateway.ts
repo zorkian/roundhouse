@@ -160,14 +160,18 @@ export class GitHubAppGateway {
     return { status: response.status, value };
   }
 
-  private async rawApi(method: string, path: string): Promise<Response> {
+  private async rawApi(
+    method: string,
+    path: string,
+    accept = "application/vnd.github+json",
+  ): Promise<Response> {
     let response: Response;
     try {
       const fetcher = this.fetcher;
       response = await fetcher(`https://api.github.com${path}`, {
         method,
         headers: {
-          accept: "application/vnd.github+json",
+          accept,
           authorization: `Bearer ${await this.installationToken()}`,
           "user-agent": this.config.userAgent ?? "roundhouse-control-plane",
           "x-github-api-version": "2022-11-28",
@@ -545,6 +549,87 @@ export class GitHubAppGateway {
         "GitHub did not mark the pull request ready for review",
       );
     return { number: ready.number, url: ready.url, ready: true };
+  }
+
+  async manualReviewPullRequest(input: {
+    repositoryFullName: string;
+    pullRequestNumber: number;
+    expectedHeadSha: string;
+  }): Promise<{
+    number: number;
+    url: string;
+    branch: string;
+    baseCommit: string;
+    headCommit: string;
+    patchSha256: string;
+    changedFiles: string[];
+  }> {
+    const base = repositoryPath(input.repositoryFullName);
+    const pull = (
+      await this.api<{
+        number: number;
+        html_url: string;
+        base: { sha: string; repo: { full_name: string } };
+        head: { sha: string; ref: string; repo: { full_name: string } };
+      }>("GET", `${base}/pulls/${input.pullRequestNumber}`)
+    ).value;
+    const expectedUrl = `https://github.com/${input.repositoryFullName}/pull/${input.pullRequestNumber}`;
+    if (
+      pull.number !== input.pullRequestNumber ||
+      pull.html_url !== expectedUrl ||
+      pull.base.repo.full_name !== input.repositoryFullName ||
+      pull.head.repo.full_name !== input.repositoryFullName ||
+      pull.head.sha !== input.expectedHeadSha ||
+      !/^[a-f0-9]{40}$/.test(pull.base.sha) ||
+      !/^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,199}$/.test(pull.head.ref)
+    )
+      throw new GitHubAppGatewayError(
+        "stale_head",
+        "Manual review pull request binding did not match",
+      );
+    const files = (
+      await this.api<Array<{ filename: string }>>(
+        "GET",
+        `${base}/pulls/${pull.number}/files?per_page=100`,
+      )
+    ).value.map((file) => file.filename);
+    if (
+      files.length < 1 ||
+      files.length > 50 ||
+      new Set(files).size !== files.length ||
+      files.some(
+        (path) =>
+          path.startsWith("/") ||
+          path.includes("\\") ||
+          path
+            .split("/")
+            .some((part) => !part || part === "." || part === ".."),
+      )
+    )
+      throw new GitHubAppGatewayError(
+        "invalid_response",
+        "Manual review changed-file inventory was invalid",
+      );
+    const response = await this.rawApi(
+      "GET",
+      `${base}/pulls/${pull.number}`,
+      "application/vnd.github.diff",
+    );
+    const patch = new Uint8Array(await response.arrayBuffer());
+    if (patch.byteLength < 1 || patch.byteLength > 512 * 1024)
+      throw new GitHubAppGatewayError(
+        "invalid_response",
+        "Manual review patch exceeded the bounded size",
+      );
+    return {
+      number: pull.number,
+      url: pull.html_url,
+      branch: pull.head.ref,
+      baseCommit: pull.base.sha,
+      headCommit: pull.head.sha,
+      patchSha256: await sha256(patch),
+      changedFiles: files,
+    };
   }
 
   async upsertReviewCheck(input: {

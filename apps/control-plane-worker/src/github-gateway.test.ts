@@ -49,6 +49,79 @@ const reviewPackage = {
 };
 
 describe("GitHub App gateway", () => {
+  it("binds manual review evidence to the exact pull request head and files", async () => {
+    const baseCommit = "a".repeat(40);
+    const headCommit = "b".repeat(40);
+    const diff = "diff --git a/docs/a.md b/docs/a.md\n";
+    const fetcher: typeof fetch = async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/access_tokens"))
+        return json({
+          token: "installation-token",
+          expires_at: "2026-07-12T02:00:00Z",
+        });
+      if (url.pathname.endsWith("/pulls/92/files")) {
+        expect(url.searchParams.get("per_page")).toBe("100");
+        return json([{ filename: "docs/a.md" }]);
+      }
+      if (url.pathname.endsWith("/pulls/92")) {
+        if (
+          new Headers(init?.headers).get("accept") ===
+          "application/vnd.github.diff"
+        )
+          return new Response(diff);
+        return json({
+          number: 92,
+          html_url: "https://github.com/zorkian/roundhouse/pull/92",
+          base: {
+            sha: baseCommit,
+            repo: { full_name: "zorkian/roundhouse" },
+          },
+          head: {
+            sha: headCommit,
+            ref: "codex/issue-92-manual-review",
+            repo: { full_name: "zorkian/roundhouse" },
+          },
+        });
+      }
+      return json({}, 404);
+    };
+    const gateway = new GitHubAppGateway(
+      { appId: "1", installationId: "2", privateKey },
+      fetcher,
+      () => new Date("2026-07-12T01:00:00Z"),
+    );
+    const digest = [
+      ...new Uint8Array(
+        await crypto.subtle.digest("SHA-256", new TextEncoder().encode(diff)),
+      ),
+    ]
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+    await expect(
+      gateway.manualReviewPullRequest({
+        repositoryFullName: "zorkian/roundhouse",
+        pullRequestNumber: 92,
+        expectedHeadSha: headCommit,
+      }),
+    ).resolves.toEqual({
+      number: 92,
+      url: "https://github.com/zorkian/roundhouse/pull/92",
+      branch: "codex/issue-92-manual-review",
+      baseCommit,
+      headCommit,
+      patchSha256: digest,
+      changedFiles: ["docs/a.md"],
+    });
+    await expect(
+      gateway.manualReviewPullRequest({
+        repositoryFullName: "zorkian/roundhouse",
+        pullRequestNumber: 92,
+        expectedHeadSha: "c".repeat(40),
+      }),
+    ).rejects.toMatchObject({ code: "stale_head" });
+  });
+
   it("bounds GitHub Actions job logs before returning evidence", async () => {
     const fetcher: typeof fetch = async (input) => {
       const url = new URL(String(input));

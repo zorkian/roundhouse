@@ -983,6 +983,205 @@ describe("local control-plane Worker", () => {
     expect(failureComment).not.toContain("chatgpt.com");
   });
 
+  it("reviews an authorized manual fallback once per exact pull-request head", async () => {
+    const { env, queued } = await runtime();
+    const pair = await generateKeyPair("RS256", { extractable: true });
+    env.GITHUB_APP_ID = "4281837";
+    env.GITHUB_INSTALLATION_ID = "146147681";
+    env.ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY = await exportPKCS8(pair.privateKey);
+    env.ROUNDHOUSE_GITHUB_WEBHOOK_SECRET = "signed-webhook-secret";
+    env.ROUNDHOUSE_ENVIRONMENT = "development";
+    const planId = `plan_${"9".repeat(40)}`;
+    const runId = "run_manual_review";
+    const manualTask: SelfDevelopmentTask = {
+      ...task,
+      taskId: "task_manual_review",
+      subject: "Review a manual fallback",
+      instructions: "Review the exact bounded manual implementation.",
+      allowedPaths: ["apps/control-plane-worker/src/index.ts"],
+      source: {
+        kind: "github_issue",
+        roundhouseEnvironment: "development",
+        owner: "zorkian",
+        repository: "roundhouse",
+        issueNumber: 92,
+        issueUrl: "https://github.com/zorkian/roundhouse/issues/92",
+        nodeId: "issue-node-92",
+        contentSha256: "8".repeat(64),
+        updatedAt: "2026-07-15T00:00:00.000Z",
+      },
+      planning: {
+        planId,
+        planSha256: "7".repeat(64),
+        profileId: "roundhouse-self-development-v1",
+        profileVersion: 2,
+        issueContentSha256: "8".repeat(64),
+        exactPathsSha256: "6".repeat(64),
+        approvedBy: "github:zorkian",
+        approvedAt: "2026-07-15T00:00:00.000Z",
+      },
+    };
+    const jobs = new D1JobStore(env.DB);
+    await jobs.submit(runId, manualTask, new Date("2026-07-15T00:00:00Z"));
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const now = new Date(`2026-07-15T00:0${attempt}:00Z`);
+      const claim = await jobs.claim(runId, `worker-${attempt}`, now, 30_000);
+      await jobs.startAttempt(runId, claim!.token, "prepare", now);
+      await jobs.failAttempt(
+        runId,
+        claim!.token,
+        "prepare",
+        {
+          retryable: true,
+          classification: "agent",
+          error: "bounded implementation failure",
+          evidence:
+            attempt === 1
+              ? [
+                  {
+                    schemaVersion: 1,
+                    evidenceId: "evidence_manual_review_failure",
+                    attemptId: `${runId}-prepare-1`,
+                    objectKey: `runs/${runId}/attempts/prepare-1/failure.json`,
+                    sha256: "5".repeat(64),
+                    size: 10,
+                    mediaType: "application/json",
+                    createdAt: now.toISOString(),
+                  },
+                ]
+              : undefined,
+        },
+        attempt === 3,
+        now,
+      );
+      await jobs.release(runId, claim!.token, now);
+    }
+    const failed = await jobs.read(runId);
+    expect(failed).toMatchObject({ state: "failed" });
+    await env.DB.prepare(
+      "INSERT INTO github_plan_events(event_id, plan_id, sequence, event_type, actor_id, detail_json, occurred_at) VALUES (?, ?, 1, 'implementation.manual_fallback', 'github:zorkian', '{}', ?)",
+    )
+      .bind("manual-fallback:test", planId, "2026-07-15T00:04:00.000Z")
+      .run();
+
+    let headCommit = "b".repeat(40);
+    env.GITHUB_API_FETCHER = async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/access_tokens"))
+        return new Response(
+          JSON.stringify({
+            token: "installation-token",
+            expires_at: "2026-07-15T01:00:00Z",
+          }),
+          { status: 201 },
+        );
+      if (url.pathname.endsWith("/pulls/102/files"))
+        return new Response(
+          JSON.stringify([
+            { filename: "apps/control-plane-worker/src/index.ts" },
+          ]),
+        );
+      if (url.pathname.endsWith("/pulls/102")) {
+        if (
+          new Headers(init?.headers).get("accept") ===
+          "application/vnd.github.diff"
+        )
+          return new Response("diff --git a/index.ts b/index.ts\n");
+        return new Response(
+          JSON.stringify({
+            number: 102,
+            html_url: "https://github.com/zorkian/roundhouse/pull/102",
+            base: {
+              sha: manualTask.baseCommit,
+              repo: { full_name: "zorkian/roundhouse" },
+            },
+            head: {
+              sha: headCommit,
+              ref: "codex/issue-92-manual-review",
+              repo: { full_name: "zorkian/roundhouse" },
+            },
+          }),
+        );
+      }
+      return new Response("{}", { status: 404 });
+    };
+    const key = await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode("signed-webhook-secret"),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+    const webhook = async (deliveryId: string) => {
+      const payload = JSON.stringify({
+        action: "created",
+        installation: { id: 146147681 },
+        repository: { full_name: "zorkian/roundhouse" },
+        sender: { login: "zorkian" },
+        issue: {
+          number: 102,
+          pull_request: {
+            url: "https://api.github.com/repos/zorkian/roundhouse/pulls/102",
+          },
+        },
+        comment: {
+          id: Number.parseInt(deliveryId.slice(-4), 16) + 1,
+          body: `/rhd review ${runId} ${failed.revision} ${headCommit}`,
+          user: { login: "zorkian" },
+        },
+      });
+      const mac = await crypto.subtle.sign(
+        "HMAC",
+        key,
+        new TextEncoder().encode(payload),
+      );
+      return new Request("http://roundhouse.local/v1/github/webhook", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-github-delivery": deliveryId,
+          "x-github-event": "issue_comment",
+          "x-hub-signature-256": `sha256=${[...new Uint8Array(mac)]
+            .map((byte) => byte.toString(16).padStart(2, "0"))
+            .join("")}`,
+        },
+        body: payload,
+      }) as Request<unknown, IncomingRequestCfProperties>;
+    };
+    const handler = createControlPlaneHandler();
+    const invoke = async (deliveryId: string) =>
+      handler.fetch!(await webhook(deliveryId), env, {} as ExecutionContext);
+    const first = await invoke("aaaaaaaa-bbbb-4ccc-8ddd-000000000101");
+    expect(first.status).toBe(200);
+    await expect(first.json()).resolves.toMatchObject({
+      kind: "manual_review",
+      status: "pending",
+    });
+    const duplicate = await invoke("aaaaaaaa-bbbb-4ccc-8ddd-000000000102");
+    expect(duplicate.status).toBe(200);
+    expect(queued.messages).toHaveLength(1);
+    let reviews = await env.DB.prepare(
+      "SELECT json_extract(payload, '$.request.cycle') AS cycle, json_extract(payload, '$.request.headCommit') AS head_commit FROM independent_reviews WHERE run_id = ? ORDER BY cycle",
+    )
+      .bind(runId)
+      .all<{ cycle: number; head_commit: string }>();
+    expect(reviews.results).toEqual([{ cycle: 1, head_commit: headCommit }]);
+
+    headCommit = "c".repeat(40);
+    const changed = await invoke("aaaaaaaa-bbbb-4ccc-8ddd-000000000103");
+    expect(changed.status).toBe(200);
+    expect(queued.messages).toHaveLength(2);
+    reviews = await env.DB.prepare(
+      "SELECT json_extract(payload, '$.request.cycle') AS cycle, json_extract(payload, '$.request.headCommit') AS head_commit FROM independent_reviews WHERE run_id = ? ORDER BY cycle",
+    )
+      .bind(runId)
+      .all<{ cycle: number; head_commit: string }>();
+    expect(reviews.results).toEqual([
+      { cycle: 1, head_commit: "b".repeat(40) },
+      { cycle: 2, head_commit: "c".repeat(40) },
+    ]);
+  });
+
   it("does not expose the retired direct issue-to-run administration route", async () => {
     const { env, queued } = await runtime();
     const handler = createControlPlaneHandler();

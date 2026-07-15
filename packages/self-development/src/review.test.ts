@@ -12,6 +12,15 @@ import {
 } from "./review.js";
 
 describe("independent review contracts", () => {
+  it("accepts safe manual branches and rejects unsafe ref syntax", () => {
+    const branch = independentReviewRequestSchema.shape.branch;
+    expect(branch.safeParse("codex/issue-92-manual-review").success).toBe(true);
+    expect(branch.safeParse("feature/manual-review").success).toBe(true);
+    expect(branch.safeParse("feature/../main").success).toBe(false);
+    expect(branch.safeParse("feature//review").success).toBe(false);
+    expect(branch.safeParse("feature/review.lock").success).toBe(false);
+  });
+
   it("keeps review run identity aligned with the durable run contract", async () => {
     const maximumRunId = `run_${"x".repeat(124)}`;
     const oversizedRunId = `${maximumRunId}x`;
