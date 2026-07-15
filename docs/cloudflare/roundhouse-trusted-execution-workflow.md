@@ -63,6 +63,8 @@ pnpm exec wrangler deploy --dry-run --containers-rollout=none \
   --config apps/control-plane-worker/wrangler.deploy.jsonc
 ```
 
-Development deployment is performed only by the reviewed main-branch release
-workflow. The generated production configuration intentionally omits the
-Workflow binding until a separate production manifest amendment is approved.
+Deployment is performed only by the reviewed main-branch release and promotion
+workflows. Development binds `roundhouse-dev-trusted-execution`; production
+binds `roundhouse-prod-trusted-execution`. Promotion renders the production
+binding from the exact development release rather than rebuilding source or the
+Container image.
