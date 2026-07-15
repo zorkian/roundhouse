@@ -22,7 +22,7 @@ const activeChildren = new Set();
 let draining = false;
 const codexHome = "/home/runner/.roundhouse-codex";
 const claudeHome = "/home/runner/.roundhouse-claude";
-const planningOutputSchema = JSON.stringify({
+export const planningOutputSchema = JSON.stringify({
   type: "object",
   properties: {
     status: {
@@ -43,26 +43,17 @@ const planningOutputSchema = JSON.stringify({
     duplicateOf: { type: "string" },
     risk: { type: "string", enum: ["low", "medium", "high"] },
     bugReproduction: {
-      oneOf: [
-        {
-          type: "object",
-          properties: {
-            applicability: { const: "applicable" },
-            command: { type: "string" },
-          },
-          required: ["applicability", "command"],
-          additionalProperties: false,
+      type: "object",
+      properties: {
+        applicability: {
+          type: "string",
+          enum: ["applicable", "not_applicable"],
         },
-        {
-          type: "object",
-          properties: {
-            applicability: { const: "not_applicable" },
-            rationale: { type: "string" },
-          },
-          required: ["applicability", "rationale"],
-          additionalProperties: false,
-        },
-      ],
+        command: { type: "string" },
+        rationale: { type: "string" },
+      },
+      required: ["applicability", "command", "rationale"],
+      additionalProperties: false,
     },
   },
   required: [
@@ -347,7 +338,8 @@ export function planningPrompt(request) {
     "Use already_satisfied only with concrete repository evidence, and duplicate only with a concrete issue or work-item identity.",
     "Use rejected only when the requested work cannot safely fit the bounded development policy.",
     "For proposed, return literal existing or new repository-relative file paths and testable acceptance criteria.",
-    "For bug work, return one bounded existing repository test command in bugReproduction; otherwise explicitly mark bugReproduction not_applicable with a rationale.",
+    "For bug work, set bugReproduction applicability to applicable and return one bounded existing repository test command; set rationale to an empty string.",
+    "For non-bug work, set bugReproduction applicability to not_applicable with a rationale and set command to an empty string.",
     "Return only the required structured output.",
     "",
     `Issue #${request.issueNumber}: ${request.subject}`,
