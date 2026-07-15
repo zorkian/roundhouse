@@ -44,12 +44,56 @@ export type ExecutionContainerPort = {
     ok: true;
     releaseCommit: string;
   }>;
+  readAgentOutput?(request: AgentOutputRequest): Promise<AgentOutputTail>;
   destroy(): Promise<void>;
+};
+
+export type AgentOutputRequest = {
+  attemptId: string;
+  cursor?: number;
+};
+
+export type AgentOutputLine = {
+  cursor: number;
+  stream: "stdout" | "stderr" | "system";
+  text: string;
+  occurredAt: string;
+};
+
+export type AgentOutputTail = {
+  schemaVersion: 1;
+  attemptId: string;
+  status: "running" | "completed" | "failed" | "unavailable";
+  nextCursor: number;
+  truncated: boolean;
+  lines: AgentOutputLine[];
 };
 
 export type ExecutionContainerNamespacePort = {
   getByName(name: string): ExecutionContainerPort;
 };
+
+export async function readAgentOutput(
+  containers: ExecutionContainerNamespacePort | undefined,
+  request: AgentOutputRequest,
+): Promise<AgentOutputTail> {
+  const unavailable = (): AgentOutputTail => ({
+    schemaVersion: 1,
+    attemptId: request.attemptId,
+    status: "unavailable",
+    nextCursor: request.cursor ?? 0,
+    truncated: false,
+    lines: [],
+  });
+  if (!containers) return unavailable();
+  const container = containers.getByName(request.attemptId);
+  if (!container.readAgentOutput) return unavailable();
+  try {
+    return await container.readAgentOutput(request);
+  } catch {
+    return unavailable();
+  }
+}
 
 export type EvidenceObject = {
   text(): Promise<string>;

@@ -2261,6 +2261,190 @@ describe("local control-plane Worker", () => {
     expect(text).toContain('"status":"running"');
   });
 
+  it("serves cursor-bound live output only for an agent attempt owned by the run", async () => {
+    const { env } = await runtime();
+    const handler = createControlPlaneHandler();
+    const runId = "run_agent_output_binding";
+    const jobs = new D1JobStore(env.DB);
+    await jobs.submit(runId, task, new Date("2026-07-15T00:00:00Z"));
+    const claim = await jobs.claim(
+      runId,
+      "worker-agent-output",
+      new Date("2026-07-15T00:00:01Z"),
+      60_000,
+    );
+    const running = await jobs.startAttempt(
+      runId,
+      claim!.token,
+      "prepare",
+      new Date("2026-07-15T00:00:01Z"),
+    );
+    const attemptId = running.attempts.at(-1)!.attemptId;
+    await recordExecutionPhase(env, {
+      runId,
+      attemptId,
+      phase: "agent.implement",
+      status: "running",
+      occurredAt: "2026-07-15T00:00:02.000Z",
+      detail: {},
+    });
+    let containerName = "";
+    let containerRequest: unknown;
+    env.EXECUTION_CONTAINERS = {
+      getByName: (name: string) => {
+        containerName = name;
+        return {
+          runJob: async () => ({}),
+          readAgentOutput: async (value) => {
+            containerRequest = value;
+            return {
+              schemaVersion: 1,
+              attemptId,
+              status: "running",
+              nextCursor: 9,
+              truncated: false,
+              lines: [
+                {
+                  cursor: 9,
+                  stream: "stdout",
+                  text: "Implementing the bounded endpoint",
+                  occurredAt: "2026-07-15T00:00:03.000Z",
+                },
+              ],
+            };
+          },
+          destroy: async () => undefined,
+        };
+      },
+    };
+
+    const response = await handler.fetch!(
+      request(`/v1/runs/${runId}/agent-output/${attemptId}?cursor=8`),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(response.status).toBe(200);
+    expect(containerName).toBe(attemptId);
+    expect(containerRequest).toEqual({ attemptId, cursor: 8 });
+    await expect(response.json()).resolves.toMatchObject({
+      attemptId,
+      nextCursor: 9,
+      lines: [{ cursor: 9, text: "Implementing the bounded endpoint" }],
+    });
+    expect(
+      (
+        await handler.fetch!(
+          request(`/v1/runs/${runId}/agent-output/not-this-attempt`),
+          env,
+          {} as ExecutionContext,
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await handler.fetch!(
+          request(`/v1/runs/${runId}/agent-output/${attemptId}?cursor=01`),
+          env,
+          {} as ExecutionContext,
+        )
+      ).status,
+    ).toBe(400);
+  });
+
+  it("binds independent-review live output to the exact active review attempt", async () => {
+    const { env } = await runtime();
+    const handler = createControlPlaneHandler();
+    const identity = {
+      runId: "run_review_agent_output",
+      headCommit: "a".repeat(40),
+      cycle: 1,
+    };
+    const reviewId = await reviewIdentity(identity);
+    const reviewRequest: IndependentReviewRequest = {
+      schemaVersion: 1,
+      reviewId,
+      attemptId: `${reviewId}-attempt-1`,
+      attemptNumber: 1,
+      cycle: 1,
+      runId: identity.runId,
+      repositoryUrl: remoteUrl,
+      issueNumber: 66,
+      issueUrl: "https://github.com/zorkian/roundhouse/issues/66",
+      pullRequestNumber: 130,
+      pullRequestUrl: "https://github.com/zorkian/roundhouse/pull/130",
+      branch: "codex/review-agent-output",
+      baseCommit: "b".repeat(40),
+      headCommit: identity.headCommit,
+      patchSha256: "c".repeat(64),
+      subject: "Show live review output",
+      instructions: "Review the exact bounded patch.",
+      allowedPaths: ["apps/control-plane-worker/src/operator-ui.ts"],
+      planning: {
+        planId: `plan_${"d".repeat(40)}`,
+        planRevision: 1,
+        planSha256: "e".repeat(64),
+      },
+      evidence: [
+        {
+          evidenceId: "evidence_review_agent_output",
+          objectKey: "reviews/agent-output.patch",
+          sha256: "f".repeat(64),
+          size: 1,
+        },
+      ],
+      timeoutMs: 60_000,
+      maxOutputBytes: 1024,
+      maxFindings: 10,
+      scenario: "success",
+      manualFallback: true,
+    };
+    await reserveIndependentReview(env, reviewRequest, new Date());
+    const claimed = await claimIndependentReview(
+      env,
+      reviewId,
+      "review-agent-output-worker",
+      new Date(),
+      60_000,
+    );
+    const attemptId = claimed!.review.activeAttemptId!;
+    env.EXECUTION_CONTAINERS = {
+      getByName: () => ({
+        runJob: async () => ({}),
+        readAgentOutput: async () => ({
+          schemaVersion: 1,
+          attemptId,
+          status: "running",
+          nextCursor: 1,
+          truncated: false,
+          lines: [],
+        }),
+        destroy: async () => undefined,
+      }),
+    };
+
+    const response = await handler.fetch!(
+      request(`/v1/reviews/${reviewId}/agent-output/${attemptId}`),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      attemptId,
+      status: "running",
+    });
+    expect(
+      (
+        await handler.fetch!(
+          request(
+            `/v1/reviews/${reviewId}/agent-output/${reviewId}-attempt-99`,
+          ),
+          env,
+          {} as ExecutionContext,
+        )
+      ).status,
+    ).toBe(404);
+  });
+
   it("repairs interruption between submission reservation and run creation", async () => {
     const { env, queued } = await runtime();
     const key = "reservation-recovery-01";

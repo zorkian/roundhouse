@@ -30,6 +30,10 @@ import {
 } from "./execution-egress.js";
 import { recordExecutionPhase } from "./execution-progress.js";
 import { withContainerControlTimeout } from "./execution-control.js";
+import type {
+  AgentOutputRequest,
+  AgentOutputTail,
+} from "./cloudflare-execution.js";
 
 const modelHosts = ["chatgpt.com", "auth.openai.com"];
 const reviewModelHosts = ["api.anthropic.com"];
@@ -135,6 +139,48 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
   override enableInternet = false;
   override interceptHttps = true;
   override allowedHosts: string[] = [];
+
+  async readAgentOutput(input: AgentOutputRequest): Promise<AgentOutputTail> {
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(input.attemptId))
+      throw new Error("Invalid agent-output attempt identity");
+    if (
+      input.cursor !== undefined &&
+      (!Number.isSafeInteger(input.cursor) || input.cursor < 0)
+    )
+      throw new Error("Invalid agent-output cursor");
+    const query = new URLSearchParams({ attemptId: input.attemptId });
+    if (input.cursor !== undefined)
+      query.set("cursor", input.cursor.toString());
+    const response = await this.containerFetch(
+      `http://container/agent-output?${query.toString()}`,
+    );
+    if (!response.ok)
+      throw new Error(`Agent output unavailable: HTTP ${response.status}`);
+    const value = (await response.json()) as Partial<AgentOutputTail>;
+    if (
+      value.schemaVersion !== 1 ||
+      value.attemptId !== input.attemptId ||
+      !["running", "completed", "failed", "unavailable"].includes(
+        value.status ?? "",
+      ) ||
+      !Number.isSafeInteger(value.nextCursor) ||
+      (value.nextCursor ?? -1) < (input.cursor ?? 0) ||
+      typeof value.truncated !== "boolean" ||
+      !Array.isArray(value.lines) ||
+      value.lines.length > 100 ||
+      !value.lines.every(
+        (line) =>
+          Number.isSafeInteger(line.cursor) &&
+          line.cursor > (input.cursor ?? 0) &&
+          ["stdout", "stderr", "system"].includes(line.stream) &&
+          typeof line.text === "string" &&
+          line.text.length <= 2_000 &&
+          typeof line.occurredAt === "string",
+      )
+    )
+      throw new Error("Agent output binding mismatch");
+    return value as AgentOutputTail;
+  }
 
   override onStop({
     exitCode,

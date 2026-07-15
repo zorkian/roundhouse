@@ -19,6 +19,7 @@ let trusted;
 let review;
 let planning;
 const activeChildren = new Set();
+const agentOutputByAttempt = new Map();
 let draining = false;
 const codexHome = "/home/runner/.roundhouse-codex";
 const claudeHome = "/home/runner/.roundhouse-claude";
@@ -151,6 +152,105 @@ export function redactKnownSecrets(value, secrets) {
   for (const secret of secrets)
     if (secret) redacted = redacted.split(secret).join("[redacted]");
   return redacted;
+}
+
+const retainedAgentOutputLines = 1_000;
+const returnedAgentOutputLines = 100;
+
+function redactAgentOutput(value, secrets) {
+  return boundedLogExcerpt(redactKnownSecrets(value, secrets), 2_000)
+    .replace(
+      /(authorization\s*:\s*(?:bearer|token)\s+)[^\s]+/gi,
+      "$1[redacted]",
+    )
+    .replace(
+      /\b(?:sk|ghp|github_pat|xox[baprs])[-_][a-zA-Z0-9_-]{16,}\b/g,
+      "[redacted]",
+    );
+}
+
+export function startAgentOutput(attemptId) {
+  const output = {
+    attemptId,
+    status: "running",
+    nextCursor: 0,
+    lines: [],
+  };
+  agentOutputByAttempt.set(attemptId, output);
+  appendAgentOutput(attemptId, "system", "Agent started", []);
+  return output;
+}
+
+export function appendAgentOutput(attemptId, stream, value, secrets = []) {
+  const output = agentOutputByAttempt.get(attemptId);
+  if (!output || !["stdout", "stderr", "system"].includes(stream)) return;
+  const text = redactAgentOutput(value, secrets);
+  if (!text) return;
+  output.nextCursor += 1;
+  output.lines.push({
+    cursor: output.nextCursor,
+    stream,
+    text,
+    occurredAt: new Date().toISOString(),
+  });
+  if (output.lines.length > retainedAgentOutputLines)
+    output.lines.splice(0, output.lines.length - retainedAgentOutputLines);
+}
+
+export function finishAgentOutput(attemptId, status, secrets = []) {
+  const output = agentOutputByAttempt.get(attemptId);
+  if (!output) return;
+  output.status = status === "completed" ? "completed" : "failed";
+  appendAgentOutput(
+    attemptId,
+    "system",
+    status === "completed" ? "Agent completed" : `Agent failed: ${status}`,
+    secrets,
+  );
+}
+
+export function readAgentOutput(attemptId, cursor) {
+  const output = agentOutputByAttempt.get(attemptId);
+  if (!output) return undefined;
+  const hasCursor = cursor !== undefined;
+  const firstRetained = output.lines[0]?.cursor ?? output.nextCursor + 1;
+  const truncated = hasCursor
+    ? cursor < firstRetained - 1
+    : output.lines.length > returnedAgentOutputLines || firstRetained > 1;
+  const available = hasCursor
+    ? output.lines.filter((line) => line.cursor > cursor)
+    : output.lines.slice(-returnedAgentOutputLines);
+  const lines = available.slice(0, returnedAgentOutputLines);
+  const status =
+    hasCursor && available.length > lines.length ? "running" : output.status;
+  return {
+    schemaVersion: 1,
+    attemptId,
+    status,
+    nextCursor: lines.at(-1)?.cursor ?? cursor ?? output.nextCursor,
+    truncated,
+    lines,
+  };
+}
+
+function agentOutputCapture(attemptId, secrets) {
+  startAgentOutput(attemptId);
+  const buffers = { stdout: "", stderr: "" };
+  const write = (stream, chunk) => {
+    const value = buffers[stream] + chunk.toString("utf8");
+    const parts = value.split(/\r?\n/);
+    buffers[stream] = parts.pop() ?? "";
+    for (const line of parts)
+      appendAgentOutput(attemptId, stream, line, secrets);
+  };
+  const flush = () => {
+    for (const stream of ["stdout", "stderr"])
+      if (buffers[stream]) {
+        appendAgentOutput(attemptId, stream, buffers[stream], secrets);
+        buffers[stream] = "";
+      }
+  };
+  return { write, flush };
 }
 
 function lifecycle(event, request, details = {}) {
@@ -501,9 +601,11 @@ export async function command(executable, args, options = {}) {
     return current + Math.min(chunk.length, remaining);
   };
   child.stdout.on("data", (chunk) => {
+    options.onOutput?.("stdout", chunk);
     stdoutBytes = capture(stdout, chunk, stdoutBytes);
   });
   child.stderr.on("data", (chunk) => {
+    options.onOutput?.("stderr", chunk);
     stderrBytes = capture(stderr, chunk, stderrBytes);
   });
   let timedOut = false;
@@ -1129,6 +1231,8 @@ async function runPlanning(value) {
   const outputPath = `/tmp/${request.attemptId}-output.json`;
   await writeFile(schemaPath, planningOutputSchema, { mode: 0o600 });
   const secrets = [...planning.secrets];
+  const output = agentOutputCapture(request.attemptId, secrets);
+  let outputStatus = "planning failed";
   try {
     const result = await command(
       "codex",
@@ -1162,6 +1266,7 @@ async function runPlanning(value) {
             ? { SSL_CERT_FILE: interceptedCa }
             : {}),
         },
+        onOutput: output.write,
       },
     );
     assertCompleteAgentOutput(result);
@@ -1176,8 +1281,11 @@ async function runPlanning(value) {
     const changed = await command("git", ["status", "--porcelain=v1"]);
     if (changed.exitCode !== 0 || changed.stdout.trim())
       throw new Error("planning_modified_checkout");
+    outputStatus = "completed";
     return parsed;
   } finally {
+    output.flush();
+    finishAgentOutput(request.attemptId, outputStatus, secrets);
     await rm(codexHome, { recursive: true, force: true });
     await rm(schemaPath, { force: true });
     await rm(outputPath, { force: true });
@@ -1257,6 +1365,8 @@ async function implement(value) {
           ];
   let agent;
   const credentialSecrets = [...trusted.secrets];
+  const output = agentOutputCapture(request.attemptId, credentialSecrets);
+  let outputStatus = "implementation failed";
   try {
     const result = await command(invocation[0], invocation[1], {
       timeoutMs: request.scenario === "timeout" ? 500 : request.agentTimeoutMs,
@@ -1267,6 +1377,7 @@ async function implement(value) {
         ...(existsSync(interceptedCa) ? { SSL_CERT_FILE: interceptedCa } : {}),
         USERPROFILE: "/home/runner",
       },
+      onOutput: output.write,
     });
     assertCompleteAgentOutput(result);
     agent = parseCodexEvents(result.stdout, request.maxOutputBytes);
@@ -1274,7 +1385,10 @@ async function implement(value) {
       throw new Error(
         `agent_failed: ${boundedAgentFailure(result.stderr, credentialSecrets)}`,
       );
+    outputStatus = "completed";
   } finally {
+    output.flush();
+    finishAgentOutput(request.attemptId, outputStatus, credentialSecrets);
     if (request.scenario !== "credential-cleanup-failure")
       await rm(codexHome, { recursive: true, force: true });
     trusted = withoutRuntimeCredential(trusted);
@@ -1426,6 +1540,8 @@ async function runReview(value) {
             ],
           ];
   const secrets = [...review.secrets];
+  const output = agentOutputCapture(request.attemptId, secrets);
+  let outputStatus = "review failed";
   let parsed;
   try {
     const result = await command(invocation[0], invocation[1], {
@@ -1443,6 +1559,7 @@ async function runReview(value) {
         CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: "1",
         ...(existsSync(interceptedCa) ? { SSL_CERT_FILE: interceptedCa } : {}),
       },
+      onOutput: output.write,
     });
     assertCompleteAgentOutput(result);
     if (result.exitCode !== 0)
@@ -1453,7 +1570,10 @@ async function runReview(value) {
     const possibleEvidence = JSON.stringify(parsed);
     if (secrets.some((secret) => possibleEvidence.includes(secret)))
       throw new Error("review_credential_leak_detected");
+    outputStatus = "completed";
   } finally {
+    output.flush();
+    finishAgentOutput(request.attemptId, outputStatus, secrets);
     await rm(claudeHome, { recursive: true, force: true });
     review = {
       ...review,
@@ -2182,6 +2302,31 @@ export function createRunnerServer({ port = 8080, host = "0.0.0.0" } = {}) {
       }
       if (request.method === "GET" && request.url === "/ping")
         return json(response, 200, runnerReleaseIdentity());
+      if (
+        request.method === "GET" &&
+        request.url?.startsWith("/agent-output")
+      ) {
+        const url = new URL(request.url, "http://runner");
+        const attemptId = url.searchParams.get("attemptId") ?? "";
+        const rawCursor = url.searchParams.get("cursor");
+        if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(attemptId))
+          return json(response, 400, { error: "invalid_attempt_id" });
+        const cursor =
+          rawCursor === null || rawCursor === ""
+            ? undefined
+            : Number.parseInt(rawCursor, 10);
+        if (
+          cursor !== undefined &&
+          (!Number.isSafeInteger(cursor) ||
+            cursor < 0 ||
+            String(cursor) !== rawCursor)
+        )
+          return json(response, 400, { error: "invalid_cursor" });
+        const output = readAgentOutput(attemptId, cursor);
+        return output
+          ? json(response, 200, output)
+          : json(response, 404, { error: "agent_output_not_found" });
+      }
       if (request.method === "POST" && request.url === "/prepare")
         return json(
           response,

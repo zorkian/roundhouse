@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 import {
   CloudflareRepositoryExecutionBackend,
   CloudflareTrustedImplementationBackend,
+  readAgentOutput,
   type EvidenceBucketPort,
   type ExecutionContainerPort,
 } from "./cloudflare-execution.js";
@@ -43,6 +44,61 @@ describe("repository execution request", () => {
         attemptId: `attempt-${"x".repeat(200)}`,
       }),
     ).toThrow();
+  });
+});
+
+describe("agent output adapter", () => {
+  it("passes the exact attempt and cursor to the named Container", async () => {
+    let name = "";
+    let input: unknown;
+    const outputTail = await readAgentOutput(
+      {
+        getByName: (value) => {
+          name = value;
+          return {
+            runJob: async () => result(),
+            readAgentOutput: async (request) => {
+              input = request;
+              return {
+                schemaVersion: 1,
+                attemptId: request.attemptId,
+                status: "running",
+                nextCursor: 8,
+                truncated: false,
+                lines: [],
+              };
+            },
+            destroy: async () => undefined,
+          };
+        },
+      },
+      { attemptId: "run_live-prepare-1", cursor: 7 },
+    );
+    expect(name).toBe("run_live-prepare-1");
+    expect(input).toEqual({ attemptId: "run_live-prepare-1", cursor: 7 });
+    expect(outputTail).toMatchObject({ status: "running", nextCursor: 8 });
+  });
+
+  it("returns a stable unavailable state when the Container cannot be read", async () => {
+    await expect(
+      readAgentOutput(
+        {
+          getByName: () => ({
+            runJob: async () => result(),
+            readAgentOutput: async () => {
+              throw new Error("stopped");
+            },
+            destroy: async () => undefined,
+          }),
+        },
+        { attemptId: "run_stopped-prepare-1", cursor: 4 },
+      ),
+    ).resolves.toMatchObject({
+      attemptId: "run_stopped-prepare-1",
+      status: "unavailable",
+      nextCursor: 4,
+      lines: [],
+    });
   });
 });
 

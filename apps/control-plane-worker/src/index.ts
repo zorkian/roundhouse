@@ -33,6 +33,7 @@ import {
   CloudflareRepositoryExecutionBackend,
   CloudflareTrustedExecutionDispatcher,
   CloudflareTrustedImplementationBackend,
+  readAgentOutput,
 } from "./cloudflare-execution.js";
 import { CloudflareIndependentReviewBackend } from "./cloudflare-review.js";
 import {
@@ -192,6 +193,16 @@ const trustedImplementationHeartbeatMs = 60_000;
 
 function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), { status, headers: jsonHeaders });
+}
+
+function parseAgentOutputCursor(value: string | null): number | undefined {
+  if (value === null || value === "") return undefined;
+  if (!/^(?:0|[1-9][0-9]*)$/.test(value))
+    throw new HttpError(400, "Agent output cursor is invalid");
+  const cursor = Number(value);
+  if (!Number.isSafeInteger(cursor))
+    throw new HttpError(400, "Agent output cursor is invalid");
+  return cursor;
 }
 
 class HttpError extends Error {
@@ -3514,6 +3525,42 @@ async function route(
     if (!plan) throw new HttpError(404, "Plan not found");
     return exactEvidence(plan.evidence, env);
   }
+  const reviewAgentOutputMatch =
+    /^\/v1\/reviews\/(review_[a-f0-9]{40})\/agent-output\/([a-zA-Z0-9][a-zA-Z0-9_-]{0,127})$/.exec(
+      url.pathname,
+    );
+  if (
+    request.method === "GET" &&
+    reviewAgentOutputMatch?.[1] &&
+    reviewAgentOutputMatch[2]
+  ) {
+    const review = await readIndependentReview(env, reviewAgentOutputMatch[1]);
+    const attemptId = reviewAgentOutputMatch[2];
+    if (
+      !review ||
+      ![review.activeAttemptId, review.request.attemptId].includes(attemptId)
+    )
+      throw new HttpError(404, "Independent review attempt not found");
+    const cursor = parseAgentOutputCursor(url.searchParams.get("cursor"));
+    if (!["pending", "running"].includes(review.status))
+      return json({
+        schemaVersion: 1,
+        attemptId,
+        status: review.status === "failed" ? "failed" : "completed",
+        nextCursor: cursor ?? 0,
+        truncated: false,
+        lines: [],
+      });
+    const output = await readAgentOutput(env.EXECUTION_CONTAINERS, {
+      attemptId,
+      cursor,
+    });
+    return json(
+      output.status === "unavailable"
+        ? { ...output, status: "running" }
+        : output,
+    );
+  }
   const reviewMatch = /^\/v1\/reviews\/(review_[a-f0-9]{40})$/.exec(
     url.pathname,
   );
@@ -3572,6 +3619,55 @@ async function route(
   }
   if (request.method === "POST" && url.pathname === "/v1/runs")
     return submit(request, env);
+  const runAgentOutputMatch =
+    /^\/v1\/runs\/([a-zA-Z0-9][a-zA-Z0-9_-]{0,127})\/agent-output\/([a-zA-Z0-9][a-zA-Z0-9_-]{0,127})$/.exec(
+      url.pathname,
+    );
+  if (
+    request.method === "GET" &&
+    runAgentOutputMatch?.[1] &&
+    runAgentOutputMatch[2]
+  ) {
+    const runId = runAgentOutputMatch[1];
+    const attemptId = runAgentOutputMatch[2];
+    let run;
+    try {
+      run = await new D1JobStore(env.DB).read(runId);
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("Run not found:"))
+        throw new HttpError(404, "Run not found");
+      throw error;
+    }
+    const attempt = run.attempts.find((value) => value.attemptId === attemptId);
+    const progress = await readExecutionProgress(env, runId);
+    if (
+      !attempt ||
+      !progress.some(
+        (value) =>
+          value.attemptId === attemptId && value.phase.startsWith("agent."),
+      )
+    )
+      throw new HttpError(404, "Run agent attempt not found");
+    const cursor = parseAgentOutputCursor(url.searchParams.get("cursor"));
+    if (attempt.status !== "running")
+      return json({
+        schemaVersion: 1,
+        attemptId,
+        status: attempt.status === "failed" ? "failed" : "completed",
+        nextCursor: cursor ?? 0,
+        truncated: false,
+        lines: [],
+      });
+    const output = await readAgentOutput(env.EXECUTION_CONTAINERS, {
+      attemptId,
+      cursor,
+    });
+    return json(
+      output.status === "unavailable"
+        ? { ...output, status: "running" }
+        : output,
+    );
+  }
   const match = /^\/v1\/runs\/([a-zA-Z0-9][a-zA-Z0-9_-]{0,127})$/.exec(
     url.pathname,
   );
