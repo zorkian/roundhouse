@@ -85,6 +85,7 @@ pnpm test -- apps/control-plane-worker/src/control-plane-worker.test.ts
 
 Start with [ADR 0008](docs/decisions/0008-lean-open-source-poc-security-boundary.md)
 for the V1 security boundary, [the current V1 architecture](docs/v1-plan.md),
+[the issue-native V1 loop](docs/cloudflare/roundhouse-issue-native-v1-loop.md),
 [the issue-driven live workflow](docs/cloudflare/roundhouse-issue-driven-live-operations.md),
 and [the two-environment release design](docs/development/two-environment-release.md).
 
