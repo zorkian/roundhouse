@@ -12,6 +12,35 @@ import {
 import type { ControlPlaneEnv } from "./environment.js";
 
 export const githubPlanningMigration = `
+CREATE TABLE IF NOT EXISTS github_planning_jobs (
+  job_id TEXT PRIMARY KEY,
+  request_key TEXT NOT NULL UNIQUE,
+  roundhouse_environment TEXT NOT NULL CHECK (roundhouse_environment IN ('development', 'production')),
+  repository_full_name TEXT NOT NULL,
+  issue_number INTEGER NOT NULL,
+  actor_id TEXT NOT NULL,
+  command_json TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'retrying', 'completed', 'failed', 'timed_out')),
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  claim_id TEXT,
+  claim_expires_at TEXT,
+  result_json TEXT,
+  failure_reason TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS github_planning_jobs_status ON github_planning_jobs(status, updated_at);
+CREATE TABLE IF NOT EXISTS github_planning_job_events (
+  event_id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL,
+  sequence INTEGER NOT NULL,
+  event_type TEXT NOT NULL,
+  detail_json TEXT NOT NULL,
+  occurred_at TEXT NOT NULL,
+  UNIQUE(job_id, sequence)
+);
+CREATE INDEX IF NOT EXISTS github_planning_job_events_job ON github_planning_job_events(job_id, sequence);
 CREATE TABLE IF NOT EXISTS github_issue_plans (
   plan_id TEXT PRIMARY KEY,
   issue_number INTEGER NOT NULL UNIQUE,
@@ -42,6 +71,275 @@ CREATE TABLE IF NOT EXISTS github_plan_events (
 CREATE INDEX IF NOT EXISTS github_plan_events_plan ON github_plan_events(plan_id, sequence);
 CREATE INDEX IF NOT EXISTS self_development_runs_dashboard ON self_development_runs(updated_at DESC, state);
 `;
+
+export type PlanningJobCommand =
+  | { kind: "start" }
+  | {
+      kind: "clarify";
+      planId: string;
+      revision: number;
+      planSha256: string;
+      answers: string;
+    }
+  | {
+      kind: "replan";
+      planId?: string;
+      revision?: number;
+      planSha256?: string;
+    };
+
+export type DurablePlanningJob = {
+  jobId: string;
+  roundhouseEnvironment: "development" | "production";
+  repositoryFullName: string;
+  issueNumber: number;
+  actorId: string;
+  command: PlanningJobCommand;
+  status:
+    "queued" | "running" | "retrying" | "completed" | "failed" | "timed_out";
+  attemptCount: number;
+  failureReason?: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  events: Array<{ sequence: number; type: string; occurredAt: string }>;
+};
+
+type PlanningJobRow = {
+  job_id: string;
+  roundhouse_environment: DurablePlanningJob["roundhouseEnvironment"];
+  repository_full_name: string;
+  issue_number: number;
+  actor_id: string;
+  command_json: string;
+  status: DurablePlanningJob["status"];
+  attempt_count: number;
+  failure_reason: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+};
+
+async function planningJob(
+  env: ControlPlaneEnv,
+  jobId: string,
+): Promise<DurablePlanningJob | undefined> {
+  const row = await env.DB.prepare(
+    "SELECT job_id, roundhouse_environment, repository_full_name, issue_number, actor_id, command_json, status, attempt_count, failure_reason, created_at, updated_at, completed_at FROM github_planning_jobs WHERE job_id = ?",
+  )
+    .bind(jobId)
+    .first<PlanningJobRow>();
+  if (!row) return undefined;
+  const events = await env.DB.prepare(
+    "SELECT sequence, event_type, occurred_at FROM github_planning_job_events WHERE job_id = ? ORDER BY sequence",
+  )
+    .bind(jobId)
+    .all<{ sequence: number; event_type: string; occurred_at: string }>();
+  return {
+    jobId: row.job_id,
+    roundhouseEnvironment: row.roundhouse_environment,
+    repositoryFullName: row.repository_full_name,
+    issueNumber: row.issue_number,
+    actorId: row.actor_id,
+    command: JSON.parse(row.command_json) as PlanningJobCommand,
+    status: row.status,
+    attemptCount: row.attempt_count,
+    failureReason: row.failure_reason ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    completedAt: row.completed_at ?? undefined,
+    events: events.results.map((event) => ({
+      sequence: event.sequence,
+      type: event.event_type,
+      occurredAt: event.occurred_at,
+    })),
+  };
+}
+
+export async function reservePlanningJob(
+  env: ControlPlaneEnv,
+  input: {
+    requestKey: string;
+    jobId: string;
+    roundhouseEnvironment: DurablePlanningJob["roundhouseEnvironment"];
+    repositoryFullName: string;
+    issueNumber: number;
+    actorId: string;
+    command: PlanningJobCommand;
+    now: Date;
+  },
+): Promise<{ job: DurablePlanningJob; created: boolean }> {
+  const now = input.now.toISOString();
+  const inserted = await env.DB.prepare(
+    "INSERT OR IGNORE INTO github_planning_jobs(job_id, request_key, roundhouse_environment, repository_full_name, issue_number, actor_id, command_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)",
+  )
+    .bind(
+      input.jobId,
+      input.requestKey,
+      input.roundhouseEnvironment,
+      input.repositoryFullName,
+      input.issueNumber,
+      input.actorId,
+      JSON.stringify(input.command),
+      now,
+      now,
+    )
+    .run();
+  const row = await env.DB.prepare(
+    "SELECT job_id FROM github_planning_jobs WHERE request_key = ?",
+  )
+    .bind(input.requestKey)
+    .first<{ job_id: string }>();
+  if (!row) throw new Error("Planning job reservation was not retained");
+  if ((inserted.meta.changes ?? 0) === 1)
+    await env.DB.prepare(
+      "INSERT INTO github_planning_job_events(event_id, job_id, sequence, event_type, detail_json, occurred_at) VALUES (?, ?, 1, 'planning.queued', '{}', ?)",
+    )
+      .bind(`${input.jobId}:1`, input.jobId, now)
+      .run();
+  return {
+    job: (await planningJob(env, row.job_id))!,
+    created: (inserted.meta.changes ?? 0) === 1,
+  };
+}
+
+export async function claimPlanningJob(
+  env: ControlPlaneEnv,
+  jobId: string,
+  binding: {
+    roundhouseEnvironment: DurablePlanningJob["roundhouseEnvironment"];
+    repositoryFullName: string;
+  },
+  now: Date,
+  leaseMs: number,
+): Promise<(DurablePlanningJob & { claimId: string }) | undefined> {
+  const claimId = crypto.randomUUID();
+  const at = now.toISOString();
+  const expires = new Date(now.getTime() + leaseMs).toISOString();
+  const claimed = await env.DB.prepare(
+    "UPDATE github_planning_jobs SET status = 'running', attempt_count = attempt_count + 1, claim_id = ?, claim_expires_at = ?, updated_at = ? WHERE job_id = ? AND roundhouse_environment = ? AND repository_full_name = ? AND status IN ('queued', 'retrying', 'running') AND (claim_id IS NULL OR claim_expires_at <= ?)",
+  )
+    .bind(
+      claimId,
+      expires,
+      at,
+      jobId,
+      binding.roundhouseEnvironment,
+      binding.repositoryFullName,
+      at,
+    )
+    .run();
+  if ((claimed.meta.changes ?? 0) !== 1) return undefined;
+  const job = (await planningJob(env, jobId))!;
+  await env.DB.prepare(
+    "INSERT OR IGNORE INTO github_planning_job_events(event_id, job_id, sequence, event_type, detail_json, occurred_at) VALUES (?, ?, ?, 'planning.started', ?, ?)",
+  )
+    .bind(
+      `${jobId}:${job.attemptCount * 2}`,
+      jobId,
+      job.attemptCount * 2,
+      JSON.stringify({ attempt: job.attemptCount }),
+      at,
+    )
+    .run();
+  return { ...job, claimId };
+}
+
+export async function finishPlanningJob(
+  env: ControlPlaneEnv,
+  jobId: string,
+  claimId: string,
+  result: unknown,
+  now: Date,
+): Promise<void> {
+  const at = now.toISOString();
+  const updated = await env.DB.prepare(
+    "UPDATE github_planning_jobs SET status = 'completed', result_json = ?, claim_id = NULL, claim_expires_at = NULL, updated_at = ?, completed_at = ? WHERE job_id = ? AND status = 'running' AND claim_id = ?",
+  )
+    .bind(JSON.stringify(result), at, at, jobId, claimId)
+    .run();
+  if ((updated.meta.changes ?? 0) !== 1)
+    throw new Error("Planning job claim was lost");
+  const job = (await planningJob(env, jobId))!;
+  await env.DB.prepare(
+    "INSERT OR IGNORE INTO github_planning_job_events(event_id, job_id, sequence, event_type, detail_json, occurred_at) VALUES (?, ?, ?, 'planning.completed', '{}', ?)",
+  )
+    .bind(
+      `${jobId}:${job.attemptCount * 2 + 1}`,
+      jobId,
+      job.attemptCount * 2 + 1,
+      at,
+    )
+    .run();
+}
+
+export async function failPlanningJob(
+  env: ControlPlaneEnv,
+  jobId: string,
+  claimId: string,
+  reason: string,
+  retry: boolean,
+  timedOut: boolean,
+  now: Date,
+): Promise<DurablePlanningJob> {
+  const at = now.toISOString();
+  const status = timedOut ? "timed_out" : retry ? "retrying" : "failed";
+  const updated = await env.DB.prepare(
+    "UPDATE github_planning_jobs SET status = ?, failure_reason = ?, claim_id = NULL, claim_expires_at = NULL, updated_at = ?, completed_at = CASE WHEN ? = 'retrying' THEN NULL ELSE ? END WHERE job_id = ? AND status = 'running' AND claim_id = ?",
+  )
+    .bind(status, reason, at, status, at, jobId, claimId)
+    .run();
+  if ((updated.meta.changes ?? 0) !== 1)
+    throw new Error("Planning job claim was lost");
+  const job = (await planningJob(env, jobId))!;
+  await env.DB.prepare(
+    "INSERT OR IGNORE INTO github_planning_job_events(event_id, job_id, sequence, event_type, detail_json, occurred_at) VALUES (?, ?, ?, ?, ?, ?)",
+  )
+    .bind(
+      `${jobId}:${job.attemptCount * 2 + 1}`,
+      jobId,
+      job.attemptCount * 2 + 1,
+      `planning.${status}`,
+      JSON.stringify({ attempt: job.attemptCount, reason }),
+      at,
+    )
+    .run();
+  return (await planningJob(env, jobId))!;
+}
+
+export async function planningJobForIssue(
+  env: ControlPlaneEnv,
+  roundhouseEnvironment: DurablePlanningJob["roundhouseEnvironment"],
+  repositoryFullName: string,
+  issueNumber: number,
+): Promise<DurablePlanningJob | undefined> {
+  const row = await env.DB.prepare(
+    "SELECT job_id FROM github_planning_jobs WHERE roundhouse_environment = ? AND repository_full_name = ? AND issue_number = ? ORDER BY created_at DESC LIMIT 1",
+  )
+    .bind(roundhouseEnvironment, repositoryFullName, issueNumber)
+    .first<{ job_id: string }>();
+  return row ? planningJob(env, row.job_id) : undefined;
+}
+
+export async function recoverablePlanningJobs(
+  env: ControlPlaneEnv,
+  binding: {
+    roundhouseEnvironment: DurablePlanningJob["roundhouseEnvironment"];
+    repositoryFullName: string;
+  },
+  now: Date,
+): Promise<string[]> {
+  const rows = await env.DB.prepare(
+    "SELECT job_id FROM github_planning_jobs WHERE roundhouse_environment = ? AND repository_full_name = ? AND (status IN ('queued', 'retrying') OR (status = 'running' AND claim_expires_at <= ?)) ORDER BY updated_at LIMIT 25",
+  )
+    .bind(
+      binding.roundhouseEnvironment,
+      binding.repositoryFullName,
+      now.toISOString(),
+    )
+    .all<{ job_id: string }>();
+  return rows.results.map((row) => row.job_id);
+}
 
 type PlanStatus = "proposed" | "rejected" | "approved" | "materialized";
 type DurablePlanStatus =
