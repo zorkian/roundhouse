@@ -34,6 +34,7 @@ import { CloudflareIndependentReviewBackend } from "./cloudflare-review.js";
 import { CloudflarePlanningBackend } from "./cloudflare-planning.js";
 import {
   approveRunSchema,
+  githubPlanningDeliverySchema,
   idempotencyKeySchema,
   recordPublicationSchema,
   recoveryRequestSchema,
@@ -63,10 +64,15 @@ import {
 } from "./github-operations.js";
 import {
   approvePlan,
+  claimPlanningJob,
+  failPlanningJob,
+  finishPlanningJob,
   materializePlan,
   readIssuePlan,
   readPlanById,
+  recoverablePlanningJobs,
   recordPlanningDecision,
+  reservePlanningJob,
   requireQualifiedPlan,
   type DurableIssuePlan,
 } from "./github-planning.js";
@@ -687,6 +693,26 @@ async function enqueuePlanComment(
     issueNumber,
     value.plan.planId,
     `${marker}\n\n${await planComment(value, identity)}`,
+  );
+}
+
+async function enqueuePlanningStartedComment(
+  env: ControlPlaneEnv,
+  repositoryFullName: string,
+  issueNumber: number,
+  jobId: string,
+): Promise<void> {
+  const identity = runtimeIdentity(env);
+  await enqueueComment(
+    env,
+    `planning-started:${repositoryFullName}:${jobId}`,
+    issueNumber,
+    [
+      "## ⏳ Roundhouse started planning",
+      `Planning job \`${jobId}\` is durably queued. No action is needed while Roundhouse prepares the plan.`,
+      `Workflow: ${identity.origin}/repositories/${repositoryFullName}/issues/${issueNumber}`,
+    ].join("\n\n"),
+    repositoryFullName,
   );
 }
 
@@ -1931,6 +1957,219 @@ async function runForIssueCommand(
   throw new HttpError(409, "Command run does not match this issue");
 }
 
+function isPlanningCommand(
+  command: GitHubCommand,
+): command is Extract<GitHubCommand, { kind: "start" | "clarify" | "replan" }> {
+  return ["start", "clarify", "replan"].includes(command.kind);
+}
+
+async function scheduleGitHubPlanning(
+  env: ControlPlaneEnv,
+  repositoryFullName: string,
+  issueNumber: number,
+  actor: string,
+  command: Extract<GitHubCommand, { kind: "start" | "clarify" | "replan" }>,
+): Promise<{
+  kind: "planning";
+  jobId: string;
+  state: string;
+  revision: number;
+}> {
+  if (actor !== "zorkian")
+    throw new GitHubWebhookError(403, "unauthorized_actor");
+  const current = await readIssuePlan(env, issueNumber);
+  if (command.kind !== "start") {
+    if (
+      !current ||
+      (command.planId !== undefined &&
+        (current.plan.planId !== command.planId ||
+          current.revision !== command.revision ||
+          current.plan.planSha256 !== command.planSha256))
+    )
+      throw new HttpError(409, "Replanning binding does not match this issue");
+    if (command.kind === "clarify" && current.status !== "needs_clarification")
+      throw new HttpError(409, "Plan is not awaiting clarification");
+    if (
+      command.kind === "replan" &&
+      !["needs_clarification", "proposed", "rejected"].includes(current.status)
+    )
+      throw new HttpError(409, "Qualification cannot be replanned");
+  }
+  const requestKey = await sha256(
+    JSON.stringify({
+      roundhouseEnvironment: runtimeIdentity(env).environment,
+      repositoryFullName,
+      issueNumber,
+      command,
+      currentPlanBinding:
+        command.kind === "replan" && command.planId === undefined && current
+          ? {
+              planId: current.plan.planId,
+              revision: current.revision,
+              planSha256: current.plan.planSha256,
+            }
+          : undefined,
+    }),
+  );
+  const jobId = `planning_job_${requestKey.slice(0, 40)}`;
+  const reservation = await reservePlanningJob(env, {
+    requestKey,
+    jobId,
+    roundhouseEnvironment: runtimeIdentity(env).environment,
+    repositoryFullName,
+    issueNumber,
+    actorId: `github:${actor}`,
+    command,
+    now: new Date(),
+  });
+  if (reservation.created) {
+    await enqueuePlanningStartedComment(
+      env,
+      repositoryFullName,
+      issueNumber,
+      jobId,
+    );
+    await env.RUN_QUEUE.send({
+      schemaVersion: 1,
+      kind: "github_issue_planning",
+      jobId,
+    });
+  }
+  return {
+    kind: "planning",
+    jobId,
+    state: reservation.job.status,
+    revision: reservation.job.attemptCount,
+  };
+}
+
+async function executePlanningJob(
+  env: ControlPlaneEnv,
+  job: NonNullable<Awaited<ReturnType<typeof claimPlanningJob>>>,
+): Promise<{
+  kind: "plan" | "run";
+  planId?: string;
+  runId?: string;
+  state: string;
+  revision: number;
+}> {
+  const existing = await issueRun(env, job.issueNumber);
+  if (existing) {
+    const run = await new D1JobStore(env.DB).read(existing);
+    await enqueueRunComment(env, job.issueNumber, existing);
+    return {
+      kind: "run",
+      runId: existing,
+      state: run.state,
+      revision: run.revision,
+    };
+  }
+  let plan: DurableIssuePlan;
+  if (job.command.kind === "start") {
+    plan =
+      (await readIssuePlan(env, job.issueNumber)) ??
+      (await planGitHubIssue(job.issueNumber, env, job.actorId));
+  } else {
+    const current = await readIssuePlan(env, job.issueNumber);
+    if (!current) throw new Error("Planning revision is no longer available");
+    plan = await planGitHubIssue(job.issueNumber, env, job.actorId, {
+      current,
+      answers: job.command.kind === "clarify" ? job.command.answers : undefined,
+      restartFromScratch:
+        job.command.kind === "replan" && job.command.planId === undefined,
+    });
+  }
+  if (lowRiskPlan(plan)) {
+    const runId = await materializeLowRiskPlan(
+      env,
+      job.issueNumber,
+      plan,
+      job.actorId,
+    );
+    const run = await new D1JobStore(env.DB).read(runId);
+    await enqueueRunComment(env, job.issueNumber, runId);
+    return { kind: "run", runId, state: run.state, revision: run.revision };
+  }
+  await enqueuePlanComment(env, job.issueNumber, plan);
+  return {
+    kind: "plan",
+    planId: plan.plan.planId,
+    state: plan.status,
+    revision: plan.revision,
+  };
+}
+
+async function consumePlanningMessage(
+  message: { body: unknown; ack(): void; retry(): void },
+  env: ControlPlaneEnv,
+): Promise<boolean> {
+  const delivery = githubPlanningDeliverySchema.safeParse(message.body);
+  if (!delivery.success) return false;
+  const claim = await claimPlanningJob(
+    env,
+    delivery.data.jobId,
+    {
+      roundhouseEnvironment: runtimeIdentity(env).environment,
+      repositoryFullName: runtimeIdentity(env).repositoryFullName,
+    },
+    new Date(),
+    20 * 60_000,
+  );
+  if (!claim) {
+    message.ack();
+    return true;
+  }
+  try {
+    const result = await executePlanningJob(env, claim);
+    await finishPlanningJob(
+      env,
+      claim.jobId,
+      claim.claimId,
+      result,
+      new Date(),
+    );
+    await flushGitHubOutputs(env).catch((error) =>
+      console.warn("Planning result delivery deferred", {
+        reason: redactedReason(error),
+      }),
+    );
+    message.ack();
+  } catch (error) {
+    const reason = redactedReason(error);
+    const timedOut = /timed?\s*out|timeout/i.test(reason);
+    const retry = !timedOut && claim.attemptCount < 3;
+    const failed = await failPlanningJob(
+      env,
+      claim.jobId,
+      claim.claimId,
+      reason,
+      retry,
+      timedOut,
+      new Date(),
+    );
+    if (!retry) {
+      await enqueueComment(
+        env,
+        `planning-failure-${claim.jobId}`,
+        claim.issueNumber,
+        [
+          `Roundhouse could not complete \`${githubCommand(runtimeIdentity(env), claim.command.kind)}\`.`,
+          `Failure: \`${failed.failureReason ?? reason}\``,
+          "Planning reached a terminal state. Retry the command after the failure is addressed.",
+        ].join("\n\n"),
+        claim.repositoryFullName,
+      );
+      await flushGitHubOutputs(env).catch((deliveryError) =>
+        console.warn("Planning failure delivery deferred", {
+          reason: redactedReason(deliveryError),
+        }),
+      );
+      message.ack();
+    } else message.retry();
+  }
+  return true;
+}
+
 async function executeGitHubCommand(
   env: ControlPlaneEnv,
   deliveryId: string,
@@ -2250,14 +2489,22 @@ async function githubWebhook(
       repositoryFullName: value.repositoryFullName,
       command: value.command,
     };
-    const result = await executeGitHubCommand(
-      env,
-      webhook.deliveryId,
-      value.repositoryFullName,
-      value.issueNumber,
-      value.actor,
-      value.command,
-    );
+    const result = isPlanningCommand(value.command)
+      ? await scheduleGitHubPlanning(
+          env,
+          value.repositoryFullName,
+          value.issueNumber,
+          value.actor,
+          value.command,
+        )
+      : await executeGitHubCommand(
+          env,
+          webhook.deliveryId,
+          value.repositoryFullName,
+          value.issueNumber,
+          value.actor,
+          value.command,
+        );
     await completeWebhookDelivery(
       env,
       webhook.deliveryId,
@@ -3159,8 +3406,8 @@ export function createControlPlaneHandler(
       const workflowBacked =
         env.EXECUTION_MODE === "cloudflare-trusted-codex" &&
         Boolean(env.TRUSTED_EXECUTION_WORKFLOW);
-      const worker = workflowBacked ? undefined : coordinator(env);
       for (const message of batch.messages) {
+        if (await consumePlanningMessage(message, env)) continue;
         if (workflowBacked) {
           const review = reviewDeliverySchema.safeParse(message.body);
           if (review.success) {
@@ -3193,7 +3440,7 @@ export function createControlPlaneHandler(
             ack: () => message.ack(),
             retry: () => message.retry(),
           },
-          worker!,
+          coordinator(env),
           async (delivery, processed) =>
             void (await finalizeRunDelivery(env, delivery, processed)),
         );
@@ -3232,6 +3479,19 @@ export function createControlPlaneHandler(
             await markReviewDispatched(env, delivery.reviewId);
         }
       }
+      for (const jobId of await recoverablePlanningJobs(
+        env,
+        {
+          roundhouseEnvironment: runtimeIdentity(env).environment,
+          repositoryFullName: runtimeIdentity(env).repositoryFullName,
+        },
+        new Date(),
+      ))
+        await env.RUN_QUEUE.send({
+          schemaVersion: 1,
+          kind: "github_issue_planning",
+          jobId,
+        });
     },
   };
 }

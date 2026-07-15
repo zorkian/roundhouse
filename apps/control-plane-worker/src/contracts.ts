@@ -46,6 +46,16 @@ export const revisionMutationSchema = z.object({
   expectedRevision: z.number().int().positive(),
 });
 
+export const githubPlanningDeliverySchema = z.object({
+  schemaVersion: z.literal(1),
+  kind: z.literal("github_issue_planning"),
+  jobId: z.string().regex(/^planning_job_[a-f0-9]{40}$/),
+});
+
+export type GitHubPlanningDelivery = z.infer<
+  typeof githubPlanningDeliverySchema
+>;
+
 export const recoveryRequestSchema = z.object({
   schemaVersion: z.literal(1),
 });

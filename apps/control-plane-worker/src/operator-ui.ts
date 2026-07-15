@@ -5,6 +5,7 @@ import type { ControlPlaneEnv } from "./environment.js";
 import { inspectRun } from "./inspection.js";
 import {
   listIssuePlans,
+  planningJobForIssue,
   readIssuePlan,
   readPlanById,
 } from "./github-planning.js";
@@ -18,6 +19,7 @@ import { issueRun } from "./github-webhook.js";
 import { readExecutionProgress } from "./execution-progress.js";
 import { readPullRequestLifecycle } from "./github-lifecycle.js";
 import { readTrustedReviewWorkflows } from "./trusted-execution-workflow.js";
+import { runtimeIdentity } from "./runtime-config.js";
 
 function responseHeaders(nonce: string): HeadersInit {
   return {
@@ -153,6 +155,12 @@ export async function issueInspection(
     schemaVersion: 1,
     repositoryFullName,
     issueNumber,
+    planning: await planningJobForIssue(
+      env,
+      runtimeIdentity(env).environment,
+      repositoryFullName,
+      issueNumber,
+    ),
     plan: await readIssuePlan(env, issueNumber),
     sourceRun,
     activeRun,

@@ -58,6 +58,8 @@ const resetTables = [
   "independent_reviews",
   "github_plan_events",
   "github_issue_plans",
+  "github_planning_job_events",
+  "github_planning_jobs",
   "github_check_observations",
   "github_comment_outbox",
   "github_issue_runs",
@@ -609,12 +611,28 @@ describe("local control-plane Worker", () => {
     expect(accepted.status).toBe(202);
     const result = (await accepted.json()) as {
       kind: string;
-      planId: string;
+      jobId: string;
     };
-    expect(result).toMatchObject({ kind: "plan" });
-    expect(result.planId).toMatch(/^plan_[a-f0-9]{40}$/);
-    expect(queued.messages).toHaveLength(0);
+    expect(result).toMatchObject({ kind: "planning", state: "queued" });
+    expect(result.jobId).toMatch(/^planning_job_[a-f0-9]{40}$/);
+    await expect(
+      env.DB.prepare(
+        "SELECT roundhouse_environment, repository_full_name, actor_id FROM github_planning_jobs WHERE job_id = ?",
+      )
+        .bind(result.jobId)
+        .first(),
+    ).resolves.toMatchObject({
+      roundhouse_environment: "development",
+      repository_full_name: "zorkian/roundhouse",
+      actor_id: "github:zorkian",
+    });
+    expect(queued.messages).toHaveLength(1);
     expect(comments).toBe(1);
+    expect(await readIssuePlan(env, 17)).toBeNull();
+    await expect(
+      deliver(handler, env, queued.messages.splice(0)),
+    ).resolves.toEqual(["ack:0"]);
+    expect(comments).toBe(2);
     const plan = await readIssuePlan(env, 17);
     expect(plan).toMatchObject({ status: "proposed", revision: 1 });
 
@@ -644,11 +662,12 @@ describe("local control-plane Worker", () => {
     );
     expect(repeatedStart.status).toBe(202);
     await expect(repeatedStart.json()).resolves.toMatchObject({
-      kind: "plan",
-      planId: result.planId,
+      kind: "planning",
+      jobId: result.jobId,
+      state: "completed",
     });
     expect(queued.messages).toHaveLength(0);
-    expect(comments).toBe(1);
+    expect(comments).toBe(2);
 
     const replay = await handler.fetch!(
       await webhook("/rhd start", 41, "12345678-abcd-4321-abcd-1234567890ab"),
@@ -658,7 +677,7 @@ describe("local control-plane Worker", () => {
     expect(replay.status).toBe(200);
     await expect(replay.json()).resolves.toMatchObject({ replayed: true });
     expect(queued.messages).toHaveLength(0);
-    expect(comments).toBe(1);
+    expect(comments).toBe(2);
 
     const implementation = await handler.fetch!(
       await webhook(
@@ -686,7 +705,7 @@ describe("local control-plane Worker", () => {
       "codex/dogfood-development-issue-17",
     );
     expect(queued.messages).toHaveLength(1);
-    expect(comments).toBe(2);
+    expect(comments).toBe(3);
     expect(statusComment?.body).toContain(
       `https://roundhouse-dev.rm-rf.rip/runs/${implementationResult.runId}`,
     );
@@ -809,23 +828,28 @@ describe("local control-plane Worker", () => {
     expect(lowRisk.status).toBe(202);
     const lowRiskResult = (await lowRisk.json()) as {
       kind: string;
-      runId: string;
+      jobId: string;
     };
-    expect(lowRiskResult).toMatchObject({ kind: "run" });
-    expect(lowRiskResult.runId).toMatch(/^run_[a-f0-9]{40}$/);
+    expect(lowRiskResult).toMatchObject({ kind: "planning" });
+    await expect(
+      deliver(handler, env, queued.messages.splice(1)),
+    ).resolves.toEqual(["ack:0"]);
+    const lowRiskPlan = await readIssuePlan(env, 18);
+    const lowRiskRunId = lowRiskPlan!.runId!;
+    expect(lowRiskRunId).toMatch(/^run_[a-f0-9]{40}$/);
     expect(await readIssuePlan(env, 18)).toMatchObject({
       status: "materialized",
-      runId: lowRiskResult.runId,
+      runId: lowRiskRunId,
       approvedBy: "github:zorkian",
     });
     expect(queued.messages).toHaveLength(2);
     expect(lowRiskStatusComment?.body).toContain(
-      `https://roundhouse-dev.rm-rf.rip/runs/${lowRiskResult.runId}`,
+      `https://roundhouse-dev.rm-rf.rip/runs/${lowRiskRunId}`,
     );
   });
 
   it("retains and reports a bounded planning failure on the source issue", async () => {
-    const { env } = await runtime();
+    const { env, queued } = await runtime();
     const pair = await generateKeyPair("RS256", { extractable: true });
     env.GITHUB_APP_ID = "4281837";
     env.GITHUB_INSTALLATION_ID = "146147681";
@@ -917,7 +941,8 @@ describe("local control-plane Worker", () => {
       new TextEncoder().encode(payload),
     );
     const deliveryId = "cccccccc-dddd-4eee-8fff-000000000049";
-    const response = await createControlPlaneHandler().fetch!(
+    const handler = createControlPlaneHandler();
+    const response = await handler.fetch!(
       new Request("http://roundhouse.local/v1/github/webhook", {
         method: "POST",
         headers: {
@@ -933,17 +958,23 @@ describe("local control-plane Worker", () => {
       env,
       {} as ExecutionContext,
     );
-    expect(response.status).toBe(500);
+    expect(response.status).toBe(202);
+    const planningDelivery = queued.messages[0];
+    await expect(deliver(handler, env, [planningDelivery])).resolves.toEqual([
+      "retry:0",
+    ]);
+    await expect(deliver(handler, env, [planningDelivery])).resolves.toEqual([
+      "retry:0",
+    ]);
+    await expect(deliver(handler, env, [planningDelivery])).resolves.toEqual([
+      "ack:0",
+    ]);
     const receipt = await env.DB.prepare(
       "SELECT status, result_json FROM github_webhook_deliveries WHERE delivery_id = ?",
     )
       .bind(deliveryId)
       .first<{ status: string; result_json: string }>();
-    expect(receipt?.status).toBe("failed");
-    expect(JSON.parse(receipt!.result_json)).toEqual({
-      code: "processing_failed",
-      reason: "planning agent failed at [path] after [url]",
-    });
+    expect(receipt?.status).toBe("completed");
     expect(failureComment).toContain("could not complete `/rhd start`");
     expect(failureComment).toContain(
       "Failure: `planning agent failed at [path] after [url]`",
