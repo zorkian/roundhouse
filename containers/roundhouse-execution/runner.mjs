@@ -443,6 +443,12 @@ export function planningPrompt(request) {
 }
 
 export async function command(executable, args, options = {}) {
+  if (
+    options.input !== undefined &&
+    (typeof options.input !== "string" ||
+      Buffer.byteLength(options.input) > maxBodyBytes)
+  )
+    throw new Error("command_stdin_too_large");
   const started = Date.now();
   const child = spawn(executable, args, {
     cwd: options.cwd ?? workspace,
@@ -458,9 +464,13 @@ export async function command(executable, args, options = {}) {
       ...(options.env ?? {}),
     },
     shell: false,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
   });
   activeChildren.add(child);
+  if (child.stdin) {
+    child.stdin.on("error", () => undefined);
+    child.stdin.end(options.input);
+  }
   const maximum = options.maxOutputBytes ?? 262_144;
   const stdout = [];
   const stderr = [];
@@ -1305,6 +1315,10 @@ async function runReview(value) {
   if (diff.exitCode !== 0 || diff.outputTruncated)
     throw new Error("review_diff_unavailable");
   const startedAt = new Date().toISOString();
+  const input =
+    request.scenario === "timeout" || request.scenario === "invalid-output"
+      ? undefined
+      : reviewPrompt(request, diff.stdout);
   const invocation =
     request.scenario === "timeout"
       ? ["node", ["-e", "setTimeout(() => {}, 300000)"]]
@@ -1314,7 +1328,6 @@ async function runReview(value) {
             "claude",
             [
               "-p",
-              reviewPrompt(request, diff.stdout),
               "--model",
               "sonnet",
               "--effort",
@@ -1341,6 +1354,7 @@ async function runReview(value) {
   let parsed;
   try {
     const result = await command(invocation[0], invocation[1], {
+      input,
       timeoutMs: request.scenario === "timeout" ? 500 : request.timeoutMs,
       maxOutputBytes: request.maxOutputBytes,
       env: {

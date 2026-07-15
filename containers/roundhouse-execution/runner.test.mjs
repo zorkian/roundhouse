@@ -55,6 +55,25 @@ describe("execution runner command", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
     expect(Date.now() - started).toBeLessThan(1_000);
   });
+
+  it("passes bounded prompts through stdin instead of argv", async () => {
+    const input = "review-prompt\n".repeat(20_000);
+    const args = ["-e", "process.stdin.pipe(process.stdout)"];
+    expect(args).not.toContain(input);
+    const result = await command("node", args, {
+      cwd: process.cwd(),
+      input,
+      maxOutputBytes: 512 * 1024,
+    });
+    expect(result).toMatchObject({ exitCode: 0, outputTruncated: false });
+    expect(result.stdout).toBe(input);
+  });
+
+  it("rejects unbounded stdin before spawning", async () => {
+    await expect(
+      command("node", [], { input: "x".repeat(768 * 1024 + 1) }),
+    ).rejects.toThrow("command_stdin_too_large");
+  });
 });
 
 describe("candidate formatter boundary", () => {
