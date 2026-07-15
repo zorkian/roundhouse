@@ -33,6 +33,7 @@ export class GitHubAppGatewayError extends Error {
   constructor(
     readonly code: string,
     message: string,
+    readonly retryable = false,
   ) {
     super(message);
   }
@@ -804,6 +805,37 @@ export class GitHubAppGateway {
     }
   }
 
+  private async reconcileOpenPullRequest(
+    branch: string,
+    expectedHeadSha: string,
+  ): Promise<{
+    number: number;
+    html_url: string;
+    head: { sha: string };
+  } | null> {
+    let stalePullFound = false;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const pulls = (
+        await this.api<
+          Array<{ number: number; html_url: string; head: { sha: string } }>
+        >(
+          "GET",
+          `${this.repositoryPath}/pulls?state=open&head=${encodeURIComponent(this.repositoryFullName.split("/")[0]!)}:${encodeURIComponent(branch)}`,
+        )
+      ).value;
+      const exact = pulls.find((pull) => pull.head.sha === expectedHeadSha);
+      if (exact) return exact;
+      stalePullFound ||= pulls.length > 0;
+    }
+    if (stalePullFound)
+      throw new GitHubAppGatewayError(
+        "publication_ambiguous",
+        "GitHub pull request head metadata did not converge",
+        true,
+      );
+    return null;
+  }
+
   async publish(input: {
     manifest: TrustedPublicationManifest;
     branch: string;
@@ -908,15 +940,7 @@ export class GitHubAppGateway {
       }
     }
 
-    const existingPulls = (
-      await this.api<
-        Array<{ number: number; html_url: string; head: { sha: string } }>
-      >(
-        "GET",
-        `${this.repositoryPath}/pulls?state=all&head=${encodeURIComponent(this.repositoryFullName.split("/")[0]!)}:${encodeURIComponent(input.branch)}`,
-      )
-    ).value;
-    let pull = existingPulls.find((value) => value.head.sha === commit);
+    let pull = await this.reconcileOpenPullRequest(input.branch, commit);
     if (!pull) {
       try {
         pull = (
@@ -936,15 +960,7 @@ export class GitHubAppGateway {
           })
         ).value;
       } catch (error) {
-        const reconciledPulls = (
-          await this.api<
-            Array<{ number: number; html_url: string; head: { sha: string } }>
-          >(
-            "GET",
-            `${this.repositoryPath}/pulls?state=all&head=${encodeURIComponent(this.repositoryFullName.split("/")[0]!)}:${encodeURIComponent(input.branch)}`,
-          )
-        ).value;
-        pull = reconciledPulls.find((value) => value.head.sha === commit);
+        pull = await this.reconcileOpenPullRequest(input.branch, commit);
         if (!pull) throw error;
         reconciled = true;
       }
