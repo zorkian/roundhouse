@@ -118,7 +118,15 @@ const checkSchema = envelopeSchema.extend({
   check_run: z
     .object({
       id: z.number().int().positive(),
-      app: z.object({ id: z.number().int().positive() }).optional(),
+      app: z
+        .object({
+          id: z.number().int().positive(),
+          slug: z.string().optional(),
+        })
+        .optional(),
+      name: z.string().optional(),
+      details_url: z.string().url().nullable().optional(),
+      external_id: z.string().nullable().optional(),
       head_sha: z.string().regex(/^[a-f0-9]{40}$/),
       status: z.string(),
       conclusion: z.string().nullable().optional(),
@@ -136,6 +144,19 @@ const checkSchema = envelopeSchema.extend({
     })
     .optional(),
 });
+
+function actionsJobId(check: {
+  external_id?: string | null;
+  details_url?: string | null;
+}): number | undefined {
+  const candidate =
+    check.external_id && /^[1-9][0-9]*$/.test(check.external_id)
+      ? check.external_id
+      : check.details_url?.match(/\/job\/([1-9][0-9]*)(?:[/?#]|$)/)?.[1];
+  if (!candidate) return undefined;
+  const value = Number(candidate);
+  return Number.isSafeInteger(value) ? value : undefined;
+}
 
 export type GitHubCommand =
   | { kind: "start" }
@@ -563,13 +584,20 @@ export function pullRequestFeedback(
 
 export function checkObservation(
   value: VerifiedWebhook,
-  roundhouseAppId?: number,
+  _roundhouseAppId?: number,
 ): Array<{
   pullRequestNumber: number;
   headSha: string;
   key: string;
   status: string;
   conclusion?: string;
+  repositoryFullName: string;
+  checkRunId: number;
+  appId?: number;
+  appSlug?: string;
+  name?: string;
+  detailsUrl?: string;
+  actionsJobId?: number;
 }> {
   // GitHub sends both suite and run completion events for the same result. The
   // completed check run is the single actionable unit; retaining the suite as
@@ -578,17 +606,21 @@ export function checkObservation(
   const payload = checkSchema.parse(value.payload);
   const check = payload.check_run;
   if (!check) return [];
-  // Roundhouse's independent-review Check is a projection of internal review
-  // state, not repository CI. Use the authenticated GitHub App identity rather
-  // than the mutable Check display name to exclude it.
-  if (roundhouseAppId !== undefined && check.app?.id === roundhouseAppId)
-    return [];
+  // Own-check exclusion requires the persisted check-run identity too, so the
+  // durable coordinator performs it after parsing this immutable observation.
   return check.pull_requests.map((pull) => ({
     pullRequestNumber: pull.number,
     headSha: check.head_sha,
     key: `check_run:${check.id}`,
     status: check.status,
     conclusion: check.conclusion ?? undefined,
+    repositoryFullName: payload.repository.full_name,
+    checkRunId: check.id,
+    appId: check.app?.id,
+    appSlug: check.app?.slug,
+    name: check.name,
+    detailsUrl: check.details_url ?? undefined,
+    actionsJobId: actionsJobId(check),
   }));
 }
 
@@ -918,15 +950,12 @@ export async function exactPublishedCheckTargets(
   env: ControlPlaneEnv,
   observations: ReturnType<typeof checkObservation>,
 ): Promise<
-  Array<{
-    runId: string;
-    issueNumber: number;
-    pullRequestNumber: number;
-    headSha: string;
-    key: string;
-    status: string;
-    conclusion?: string;
-  }>
+  Array<
+    {
+      runId: string;
+      issueNumber: number;
+    } & ReturnType<typeof checkObservation>[number]
+  >
 > {
   if (observations.length === 0) return [];
   const clauses = observations.map(
@@ -942,15 +971,12 @@ export async function exactPublishedCheckTargets(
   )
     .bind(...queryBindings)
     .all<{ run_id: string; result_json: string; issue_number: number }>();
-  const result: Array<{
-    runId: string;
-    issueNumber: number;
-    pullRequestNumber: number;
-    headSha: string;
-    key: string;
-    status: string;
-    conclusion?: string;
-  }> = [];
+  const result: Array<
+    {
+      runId: string;
+      issueNumber: number;
+    } & ReturnType<typeof checkObservation>[number]
+  > = [];
   for (const row of publications.results) {
     let publication: { pullRequestNumber?: unknown; commit?: unknown };
     try {

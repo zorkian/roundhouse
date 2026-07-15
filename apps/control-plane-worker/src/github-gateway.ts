@@ -154,6 +154,90 @@ export class GitHubAppGateway {
     return { status: response.status, value };
   }
 
+  private async rawApi(method: string, path: string): Promise<Response> {
+    let response: Response;
+    try {
+      const fetcher = this.fetcher;
+      response = await fetcher(`https://api.github.com${path}`, {
+        method,
+        headers: {
+          accept: "application/vnd.github+json",
+          authorization: `Bearer ${await this.installationToken()}`,
+          "user-agent": this.config.userAgent ?? "roundhouse-control-plane",
+          "x-github-api-version": "2022-11-28",
+        },
+      });
+    } catch (error) {
+      if (error instanceof GitHubAppGatewayError) throw error;
+      throw new GitHubAppGatewayError(
+        "transport_failed",
+        "GitHub API transport failed",
+      );
+    }
+    if (!response.ok) throw safeGitHubError(response.status);
+    return response;
+  }
+
+  async boundedActionsJobLogs(
+    repositoryFullName: string,
+    jobId: number,
+    limit = 32_768,
+  ): Promise<string> {
+    if (
+      !Number.isSafeInteger(jobId) ||
+      jobId < 1 ||
+      limit < 1 ||
+      limit > 65_536
+    )
+      throw new GitHubAppGatewayError(
+        "invalid_request",
+        "GitHub Actions job log request is invalid",
+      );
+    const response = await this.rawApi(
+      "GET",
+      `${repositoryPath(repositoryFullName)}/actions/jobs/${jobId}/logs`,
+    );
+    if (!response.body) return "";
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let length = 0;
+    while (length < limit) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const remaining = limit - length;
+      const chunk =
+        value.byteLength > remaining ? value.slice(0, remaining) : value;
+      chunks.push(chunk);
+      length += chunk.byteLength;
+      if (value.byteLength > remaining) {
+        await reader.cancel();
+        break;
+      }
+    }
+    const joined = new Uint8Array(length);
+    let offset = 0;
+    for (const chunk of chunks) {
+      joined.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return new TextDecoder().decode(joined);
+  }
+
+  async rerunActionsJob(
+    repositoryFullName: string,
+    jobId: number,
+  ): Promise<void> {
+    if (!Number.isSafeInteger(jobId) || jobId < 1)
+      throw new GitHubAppGatewayError(
+        "invalid_request",
+        "GitHub Actions job rerun request is invalid",
+      );
+    await this.rawApi(
+      "POST",
+      `${repositoryPath(repositoryFullName)}/actions/jobs/${jobId}/rerun`,
+    );
+  }
+
   async fetchIssue(
     reference: GitHubIssueReference,
   ): Promise<GitHubIssueSnapshot> {

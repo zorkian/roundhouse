@@ -46,6 +46,16 @@ import { readExecutionProgress } from "./execution-progress.js";
 import { inspectRun } from "./inspection.js";
 import { GitHubAppGateway, GitHubAppGatewayError } from "./github-gateway.js";
 import {
+  classifyCiFailure,
+  exactHeadIsReady,
+  isRoundhouseReviewCheck,
+  recordCiOutcome,
+  recordCiRecovery,
+  resolveCiRecoveriesForHead,
+  reserveCiRecovery,
+  type CiObservation,
+} from "./github-ci.js";
+import {
   durableGitHubPublication,
   GitHubPublicationPendingError,
   readIssueSnapshot,
@@ -1521,6 +1531,132 @@ async function startPullRequestFeedbackRemediation(
   return { runId: run.runId, state: run.state, revision: run.revision };
 }
 
+async function handleExactCiTarget(
+  env: ControlPlaneEnv,
+  target: CiObservation & { runId: string; issueNumber: number },
+): Promise<void> {
+  await recordCiOutcome(env, target);
+  const passing =
+    target.status === "completed" &&
+    target.conclusion !== undefined &&
+    ["success", "neutral", "skipped"].includes(target.conclusion);
+  if (passing) {
+    await resolveCiRecoveriesForHead(env, target);
+    if (
+      await exactHeadIsReady(
+        env,
+        target.repositoryFullName,
+        target.pullRequestNumber,
+        target.headSha,
+      )
+    )
+      await enqueueComment(
+        env,
+        `merge-request:${target.repositoryFullName}:${target.pullRequestNumber}:${target.headSha}`,
+        target.pullRequestNumber,
+        `Everything passed. [Merge PR #${target.pullRequestNumber} to accept this change.](https://github.com/${target.repositoryFullName}/pull/${target.pullRequestNumber})`,
+        target.repositoryFullName,
+      );
+    return;
+  }
+  if (target.status !== "completed" || !target.conclusion) return;
+  const recovery = await reserveCiRecovery(env, target);
+  if (recovery === "duplicate") return;
+  if (recovery === "exhausted") {
+    await enqueueComment(
+      env,
+      `ci-exhausted:${target.repositoryFullName}:${target.pullRequestNumber}:${target.headSha}:${target.checkRunId}`,
+      target.issueNumber,
+      `Roundhouse observed failing Check \`${target.name ?? target.checkRunId}\` on exact head \`${target.headSha}\`, but the one automatic recovery permitted for this head has already been used. Next action: open ${target.detailsUrl ?? `https://github.com/${target.repositoryFullName}/pull/${target.pullRequestNumber}/checks`} and inspect the failure.`,
+      target.repositoryFullName,
+    );
+    return;
+  }
+
+  const gateway = githubGateway(env);
+  let logs = "";
+  try {
+    if (!target.actionsJobId)
+      throw new Error("actions_job_identity_unavailable");
+    logs = await gateway.boundedActionsJobLogs(
+      target.repositoryFullName,
+      target.actionsJobId,
+    );
+    if (!logs.trim()) throw new Error("actions_job_logs_unavailable");
+    const classification = classifyCiFailure(logs);
+    const evidenceSha256 = await sha256(logs);
+    if (classification === "transient") {
+      await gateway.rerunActionsJob(
+        target.repositoryFullName,
+        target.actionsJobId,
+      );
+      await recordCiRecovery(env, target, {
+        disposition: "rerun_requested",
+        classification,
+        evidenceSha256,
+        evidenceExcerpt: logs,
+        nextAction: "No action is needed while the single CI rerun completes.",
+      });
+      await enqueueComment(
+        env,
+        `ci-recovery:${target.repositoryFullName}:${target.pullRequestNumber}:${target.headSha}:${target.checkRunId}`,
+        target.issueNumber,
+        `Roundhouse classified failing Check \`${target.name ?? target.checkRunId}\` as transient and requested its one permitted rerun. No action is needed while it completes.`,
+        target.repositoryFullName,
+      );
+      return;
+    }
+    const source = await new D1JobStore(env.DB).read(target.runId);
+    const remediation = await startPullRequestFeedbackRemediation(env, {
+      repositoryFullName: target.repositoryFullName,
+      pullRequestNumber: target.pullRequestNumber,
+      actor: "zorkian",
+      sourceId: `check_run:${target.checkRunId}`,
+      sourceUrl: target.detailsUrl,
+      runId: target.runId,
+      revision: source.revision,
+      headCommit: target.headSha,
+      feedback: [
+        `Repository CI Check ${target.name ?? target.checkRunId} failed with conclusion ${target.conclusion}.`,
+        "Bounded GitHub Actions log excerpt:",
+        logs.slice(0, 8192),
+      ].join("\n\n"),
+    });
+    await recordCiRecovery(env, target, {
+      disposition: "remediation_started",
+      classification,
+      evidenceSha256,
+      evidenceExcerpt: logs,
+      remediationRunId: remediation.runId,
+      nextAction: "No action is needed while bounded remediation runs.",
+    });
+    await enqueueComment(
+      env,
+      `ci-recovery:${target.repositoryFullName}:${target.pullRequestNumber}:${target.headSha}:${target.checkRunId}`,
+      target.issueNumber,
+      `Roundhouse retained bounded evidence for failing Check \`${target.name ?? target.checkRunId}\` and started its one permitted remediation run \`${remediation.runId}\`. No action is needed while it runs.`,
+      target.repositoryFullName,
+    );
+  } catch (error) {
+    const nextAction = `Open ${target.detailsUrl ?? `https://github.com/${target.repositoryFullName}/pull/${target.pullRequestNumber}/checks`} and inspect Check ${target.name ?? target.checkRunId}; Roundhouse could not safely retrieve logs or start its single remediation.`;
+    await recordCiRecovery(env, target, {
+      disposition: "manual_required",
+      classification: redactedReason(error),
+      ...(logs
+        ? { evidenceSha256: await sha256(logs), evidenceExcerpt: logs }
+        : {}),
+      nextAction,
+    });
+    await enqueueComment(
+      env,
+      `ci-recovery:${target.repositoryFullName}:${target.pullRequestNumber}:${target.headSha}:${target.checkRunId}`,
+      target.issueNumber,
+      `Roundhouse observed failing Check \`${target.name ?? target.checkRunId}\` on exact head \`${target.headSha}\`, but could not safely perform automatic recovery. Next action: ${nextAction}`,
+      target.repositoryFullName,
+    );
+  }
+}
+
 function reviewWorkflowResult(
   review: DurableIndependentReview,
 ): TrustedReviewWorkflowResult {
@@ -1565,6 +1701,28 @@ async function finalizeIndependentReviewProjection(
       reason: redactedReason(error),
     }),
   );
+  if (
+    await exactHeadIsReady(
+      env,
+      runtimeIdentity(env).repositoryFullName,
+      completed.request.pullRequestNumber,
+      completed.request.headCommit,
+    )
+  ) {
+    await enqueueComment(
+      env,
+      `merge-request:${runtimeIdentity(env).repositoryFullName}:${completed.request.pullRequestNumber}:${completed.request.headCommit}`,
+      completed.request.pullRequestNumber,
+      `Everything passed. [Merge PR #${completed.request.pullRequestNumber} to accept this change.](${completed.request.pullRequestUrl})`,
+      runtimeIdentity(env).repositoryFullName,
+    );
+    await flushGitHubOutputs(env).catch((error) =>
+      console.warn("GitHub merge request delivery deferred", {
+        reviewId: completed.request.reviewId,
+        reason: redactedReason(error),
+      }),
+    );
+  }
   return completed;
 }
 
@@ -1998,31 +2156,26 @@ async function githubWebhook(
       Number.isSafeInteger(configuredAppId) ? configuredAppId : undefined,
     );
     if (observations.length > 0) {
-      await recordCheckObservations(env, observations);
-      const targets = await exactPublishedCheckTargets(env, observations);
-      for (const target of targets)
+      const external = [];
+      for (const observation of observations)
         if (
-          target.status === "completed" &&
-          target.conclusion &&
-          !["success", "neutral", "skipped"].includes(target.conclusion)
-        )
-          await enqueueComment(
+          !(await isRoundhouseReviewCheck(
             env,
-            `check-failure:${target.runId}:${target.headSha}:${target.key}:${target.conclusion}`,
-            target.issueNumber,
-            [
-              `Roundhouse observed an actionable CI failure for exact published head \`${target.headSha}\` on pull request #${target.pullRequestNumber}.`,
-              `Check \`${target.key}\`: **${target.conclusion}**.`,
-              `Status: ${runtimeIdentity(env).origin}/runs/${target.runId}`,
-            ].join("\n\n"),
-          );
+            observation,
+            Number.isSafeInteger(configuredAppId) ? configuredAppId : undefined,
+          ))
+        )
+          external.push(observation);
+      await recordCheckObservations(env, external);
+      const targets = await exactPublishedCheckTargets(env, external);
+      for (const target of targets) await handleExactCiTarget(env, target);
       await completeWebhookDelivery(
         env,
         webhook.deliveryId,
         reservation.claimId,
         "completed",
         {
-          observations: observations.length,
+          observations: external.length,
           exactPublishedTargets: targets.length,
         },
       );
