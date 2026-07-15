@@ -5,7 +5,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   CloudflarePlanningBackend,
+  isDeterministicPlanningFailure,
   isRetryablePlanningInterruption,
+  planningSchemaDiagnostics,
 } from "./cloudflare-planning.js";
 
 const request = {
@@ -31,6 +33,82 @@ describe("Cloudflare planning backend", () => {
     expect(
       isRetryablePlanningInterruption(new Error("Planning output was invalid")),
     ).toBe(false);
+  });
+
+  it("classifies invalid output and binding failures as deterministic", () => {
+    expect(
+      isDeterministicPlanningFailure(
+        new Error(
+          "Container runner failed with HTTP 400: planning_invalid_structured_output",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      isDeterministicPlanningFailure(
+        new Error("Planning result binding does not match request"),
+      ),
+    ).toBe(true);
+    expect(
+      isDeterministicPlanningFailure(
+        new Error(
+          "Container runner failed with HTTP 400: planning_credential_leak_detected",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      isDeterministicPlanningFailure(
+        new Error(
+          "Container runner failed with HTTP 400: planning_modified_checkout",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      isDeterministicPlanningFailure(new Error("instance disappeared")),
+    ).toBe(false);
+  });
+
+  it("reports bounded field diagnostics without echoing invalid content", async () => {
+    let invocations = 0;
+    const backend = new CloudflarePlanningBackend(
+      {
+        getByName: () => ({
+          runJob: async () => ({}),
+          runPlanningJob: async () => {
+            invocations += 1;
+            return {
+              schemaVersion: 1,
+              attemptId: request.attemptId,
+              baseCommit: request.baseCommit,
+              status: "proposed",
+              summary: "secret-invalid-content",
+              exactPaths: [],
+              acceptanceCriteria: [],
+              questions: [],
+              risk: "low",
+            };
+          },
+          destroy: async () => undefined,
+        }),
+      },
+      "credential",
+    );
+    let failure = "";
+    try {
+      await backend.execute(request);
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+    }
+    expect(failure).toMatch(
+      /Planning result failed schema validation: .*acceptanceCriteria/,
+    );
+    expect(failure).not.toContain("secret-invalid-content");
+    expect(invocations).toBe(1);
+  });
+
+  it("bounds unknown schema diagnostics", () => {
+    expect(planningSchemaDiagnostics(new Error("raw secret"))).toBe(
+      "unknown_contract_violation",
+    );
   });
 
   it("binds a structured result to the exact planning attempt", async () => {

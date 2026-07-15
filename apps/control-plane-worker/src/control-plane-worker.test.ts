@@ -981,7 +981,7 @@ describe("local control-plane Worker", () => {
     );
   });
 
-  it("retains and reports a bounded planning failure on the source issue", async () => {
+  it("does not repeat a deterministic planning contract failure", async () => {
     const { env, queued } = await runtime();
     const pair = await generateKeyPair("RS256", { extractable: true });
     env.GITHUB_APP_ID = "4281837";
@@ -994,7 +994,7 @@ describe("local control-plane Worker", () => {
       getByName: () => ({
         runPlanningJob: async () => {
           throw new Error(
-            "planning agent failed at /private/runner/output.json after https://chatgpt.com/request",
+            "planning_invalid_structured_output at /private/runner/output.json after https://chatgpt.com/request",
           );
         },
         destroy: async () => undefined,
@@ -1094,14 +1094,12 @@ describe("local control-plane Worker", () => {
     expect(response.status).toBe(202);
     const planningDelivery = queued.messages[0];
     await expect(deliver(handler, env, [planningDelivery])).resolves.toEqual([
-      "retry:0",
-    ]);
-    await expect(deliver(handler, env, [planningDelivery])).resolves.toEqual([
-      "retry:0",
-    ]);
-    await expect(deliver(handler, env, [planningDelivery])).resolves.toEqual([
       "ack:0",
     ]);
+    const planningJob = await env.DB.prepare(
+      "SELECT status, attempt_count FROM github_planning_jobs WHERE issue_number = 49",
+    ).first<{ status: string; attempt_count: number }>();
+    expect(planningJob).toEqual({ status: "failed", attempt_count: 1 });
     const receipt = await env.DB.prepare(
       "SELECT status, result_json FROM github_webhook_deliveries WHERE delivery_id = ?",
     )
@@ -1110,7 +1108,7 @@ describe("local control-plane Worker", () => {
     expect(receipt?.status).toBe("completed");
     expect(failureComment).toContain("could not complete `/rhd start`");
     expect(failureComment).toContain(
-      "Failure: `planning agent failed at [path] after [url]`",
+      "Failure: `planning_invalid_structured_output at [path] after [url]`",
     );
     expect(failureComment).not.toContain("/private/runner");
     expect(failureComment).not.toContain("chatgpt.com");

@@ -31,7 +31,10 @@ import {
   CloudflareTrustedImplementationBackend,
 } from "./cloudflare-execution.js";
 import { CloudflareIndependentReviewBackend } from "./cloudflare-review.js";
-import { CloudflarePlanningBackend } from "./cloudflare-planning.js";
+import {
+  CloudflarePlanningBackend,
+  isDeterministicPlanningFailure,
+} from "./cloudflare-planning.js";
 import {
   approveRunSchema,
   githubPlanningDeliverySchema,
@@ -2492,7 +2495,10 @@ async function consumePlanningMessage(
   } catch (error) {
     const reason = redactedReason(error);
     const timedOut = /timed?\s*out|timeout/i.test(reason);
-    const retry = !timedOut && claim.attemptCount < 3;
+    const retry =
+      !timedOut &&
+      !isDeterministicPlanningFailure(error) &&
+      claim.attemptCount < 3;
     const failed = await failPlanningJob(
       env,
       claim.jobId,

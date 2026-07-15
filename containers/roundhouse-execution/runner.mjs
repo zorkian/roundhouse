@@ -28,6 +28,27 @@ export const roundhouseFormatterWriteCommand = Object.freeze({
 });
 const formattablePathPattern =
   /\.(?:cjs|css|html|js|json|jsonc|jsx|md|mdx|mjs|ts|tsx|yaml|yml)$/;
+export const planningOutputLimits = Object.freeze({
+  summary: { minLength: 1, maxLength: 4_000 },
+  exactPaths: { maxItems: 50 },
+  acceptanceCriteria: {
+    minItems: 1,
+    maxItems: 20,
+    itemMinLength: 1,
+    itemMaxLength: 500,
+  },
+  questions: { maxItems: 5, itemMinLength: 1, itemMaxLength: 500 },
+  evidence: { maxItems: 20, itemMinLength: 1, itemMaxLength: 1_000 },
+  duplicateOf: { maxLength: 1_000 },
+});
+export const planningOutputContract = Object.freeze({
+  summary: `Must contain ${planningOutputLimits.summary.minLength}-${planningOutputLimits.summary.maxLength} characters.`,
+  exactPaths: `Must contain at most ${planningOutputLimits.exactPaths.maxItems} unique valid repository-relative paths.`,
+  acceptanceCriteria: `Must contain ${planningOutputLimits.acceptanceCriteria.minItems}-${planningOutputLimits.acceptanceCriteria.maxItems} items of ${planningOutputLimits.acceptanceCriteria.itemMinLength}-${planningOutputLimits.acceptanceCriteria.itemMaxLength} characters each.`,
+  questions: `Must contain at most ${planningOutputLimits.questions.maxItems} items of ${planningOutputLimits.questions.itemMinLength}-${planningOutputLimits.questions.itemMaxLength} characters each.`,
+  evidence: `Must contain at most ${planningOutputLimits.evidence.maxItems} items of ${planningOutputLimits.evidence.itemMinLength}-${planningOutputLimits.evidence.itemMaxLength} characters each.`,
+  duplicateOf: `Must contain at most ${planningOutputLimits.duplicateOf.maxLength} characters.`,
+});
 export const planningOutputSchema = JSON.stringify({
   type: "object",
   properties: {
@@ -41,12 +62,36 @@ export const planningOutputSchema = JSON.stringify({
         "rejected",
       ],
     },
-    summary: { type: "string" },
-    exactPaths: { type: "array", items: { type: "string" } },
-    acceptanceCriteria: { type: "array", items: { type: "string" } },
-    questions: { type: "array", items: { type: "string" } },
-    evidence: { type: "array", items: { type: "string" } },
-    duplicateOf: { type: "string" },
+    summary: { type: "string", description: planningOutputContract.summary },
+    exactPaths: {
+      type: "array",
+      description: planningOutputContract.exactPaths,
+      maxItems: planningOutputLimits.exactPaths.maxItems,
+      items: { type: "string" },
+    },
+    acceptanceCriteria: {
+      type: "array",
+      description: planningOutputContract.acceptanceCriteria,
+      minItems: planningOutputLimits.acceptanceCriteria.minItems,
+      maxItems: planningOutputLimits.acceptanceCriteria.maxItems,
+      items: { type: "string" },
+    },
+    questions: {
+      type: "array",
+      description: planningOutputContract.questions,
+      maxItems: planningOutputLimits.questions.maxItems,
+      items: { type: "string" },
+    },
+    evidence: {
+      type: "array",
+      description: planningOutputContract.evidence,
+      maxItems: planningOutputLimits.evidence.maxItems,
+      items: { type: "string" },
+    },
+    duplicateOf: {
+      type: "string",
+      description: planningOutputContract.duplicateOf,
+    },
     risk: { type: "string", enum: ["low", "medium", "high"] },
     bugReproduction: {
       type: "object",
@@ -387,6 +432,7 @@ export function planningPrompt(request) {
     "Use already_satisfied only with concrete repository evidence, and duplicate only with a concrete issue or work-item identity.",
     "Use rejected only when the requested work cannot safely fit the bounded development policy.",
     "For proposed, return literal existing or new repository-relative file paths and testable acceptance criteria.",
+    `Obey these exact field bounds: ${Object.values(planningOutputContract).join(" ")}`,
     "For bug work, set bugReproduction applicability to applicable and return one bounded existing repository test command; set rationale to an empty string.",
     "For non-bug work, set bugReproduction applicability to not_applicable with a rationale and set command to an empty string.",
     "Return only the required structured output.",
@@ -926,33 +972,41 @@ export function parsePlanningOutput(value, request) {
       "rejected",
     ].includes(value.status) ||
     typeof value.summary !== "string" ||
-    value.summary.length < 1 ||
-    value.summary.length > 4_000 ||
+    value.summary.length < planningOutputLimits.summary.minLength ||
+    value.summary.length > planningOutputLimits.summary.maxLength ||
     !Array.isArray(value.exactPaths) ||
-    value.exactPaths.length > 50 ||
+    value.exactPaths.length > planningOutputLimits.exactPaths.maxItems ||
     !value.exactPaths.every(validRepositoryPath) ||
     new Set(value.exactPaths).size !== value.exactPaths.length ||
     !Array.isArray(value.acceptanceCriteria) ||
-    value.acceptanceCriteria.length < 1 ||
-    value.acceptanceCriteria.length > 20 ||
+    value.acceptanceCriteria.length <
+      planningOutputLimits.acceptanceCriteria.minItems ||
+    value.acceptanceCriteria.length >
+      planningOutputLimits.acceptanceCriteria.maxItems ||
     !value.acceptanceCriteria.every(
       (item) =>
-        typeof item === "string" && item.length > 0 && item.length <= 500,
+        typeof item === "string" &&
+        item.length >= planningOutputLimits.acceptanceCriteria.itemMinLength &&
+        item.length <= planningOutputLimits.acceptanceCriteria.itemMaxLength,
     ) ||
     !Array.isArray(value.questions) ||
-    value.questions.length > 5 ||
+    value.questions.length > planningOutputLimits.questions.maxItems ||
     !value.questions.every(
       (item) =>
-        typeof item === "string" && item.length > 0 && item.length <= 500,
+        typeof item === "string" &&
+        item.length >= planningOutputLimits.questions.itemMinLength &&
+        item.length <= planningOutputLimits.questions.itemMaxLength,
     ) ||
     !Array.isArray(value.evidence) ||
-    value.evidence.length > 20 ||
+    value.evidence.length > planningOutputLimits.evidence.maxItems ||
     !value.evidence.every(
       (item) =>
-        typeof item === "string" && item.length > 0 && item.length <= 1_000,
+        typeof item === "string" &&
+        item.length >= planningOutputLimits.evidence.itemMinLength &&
+        item.length <= planningOutputLimits.evidence.itemMaxLength,
     ) ||
     typeof value.duplicateOf !== "string" ||
-    value.duplicateOf.length > 1_000 ||
+    value.duplicateOf.length > planningOutputLimits.duplicateOf.maxLength ||
     !["low", "medium", "high"].includes(value.risk) ||
     (value.bugReproduction !== undefined &&
       !validBugReproduction(value.bugReproduction)) ||
