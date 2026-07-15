@@ -35,6 +35,29 @@ describe("issue qualification and planning", () => {
     expect(extractExactPaths("Change whatever is needed.")).toEqual([]);
   });
 
+  it.each([
+    "Scope is exactly:",
+    "# Scope is exactly:",
+    "###### Scope is exactly:",
+  ])("accepts the exact-scope marker %s", (marker) => {
+    expect(
+      extractExactPaths(
+        `${marker}\n\n- packages/domain/src/a.ts\n- \`packages/domain/src/path with spaces.ts\``,
+      ),
+    ).toEqual([
+      "packages/domain/src/a.ts",
+      "packages/domain/src/path with spaces.ts",
+    ]);
+  });
+
+  it("stops exact scope before prose bullets or the next section", () => {
+    expect(
+      extractExactPaths(
+        `Scope is exactly:\n\n- packages/domain/src/a.ts\n\n- Keep the implementation narrowly focused.\n- packages/domain/src/not-in-scope.ts\n\n## Requirements\n\n- Preserve existing behavior.`,
+      ),
+    ).toEqual(["packages/domain/src/a.ts"]);
+  });
+
   it("produces one deterministic immutable plan", async () => {
     const first = await qualifyAndPlan(input, new Date("2026-07-12T00:00:00Z"));
     const replay = await qualifyAndPlan(
