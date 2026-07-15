@@ -15,9 +15,9 @@ let db: D1Database;
 
 const schema = `
 CREATE TABLE github_issue_plans(plan_id TEXT PRIMARY KEY, issue_number INTEGER, revision INTEGER, status TEXT, plan_sha256 TEXT, approved_at TEXT, run_id TEXT, created_at TEXT, updated_at TEXT);
-CREATE TABLE github_planning_jobs(job_id TEXT PRIMARY KEY, roundhouse_environment TEXT, repository_full_name TEXT, issue_number INTEGER, actor_id TEXT, command_json TEXT, created_at TEXT);
+CREATE TABLE github_planning_jobs(job_id TEXT PRIMARY KEY, roundhouse_environment TEXT, repository_full_name TEXT, issue_number INTEGER, actor_id TEXT, command_json TEXT, status TEXT, attempt_count INTEGER, failure_reason TEXT, created_at TEXT);
 CREATE TABLE self_development_runs(run_id TEXT PRIMARY KEY, state TEXT, payload TEXT);
-CREATE TABLE independent_reviews(review_id TEXT PRIMARY KEY, run_id TEXT, cycle INTEGER, status TEXT, attempt_count INTEGER, created_at TEXT, updated_at TEXT);
+CREATE TABLE independent_reviews(review_id TEXT PRIMARY KEY, run_id TEXT, cycle INTEGER, status TEXT, attempt_count INTEGER, payload TEXT, created_at TEXT, updated_at TEXT);
 CREATE TABLE github_ci_outcomes(repository_full_name TEXT, pull_request_number INTEGER, observed_at TEXT, status TEXT, conclusion TEXT);
 CREATE TABLE github_plan_events(event_id TEXT PRIMARY KEY, plan_id TEXT, sequence INTEGER, event_type TEXT, actor_id TEXT, detail_json TEXT, occurred_at TEXT, UNIQUE(plan_id, sequence));
 CREATE TABLE github_webhook_deliveries(delivery_id TEXT PRIMARY KEY, repository_full_name TEXT, payload_sha256 TEXT);
@@ -68,12 +68,12 @@ async function seedCompleted() {
     .run();
   await db
     .prepare(
-      "INSERT INTO github_planning_jobs VALUES ('job_start', 'development', 'zorkian/roundhouse', 83, 'github:zorkian', '{\"kind\":\"start\"}', '2026-07-15T00:00:00.000Z')",
+      "INSERT INTO github_planning_jobs VALUES ('job_start', 'development', 'zorkian/roundhouse', 83, 'github:zorkian', '{\"kind\":\"start\"}', 'completed', 1, NULL, '2026-07-15T00:00:00.000Z')",
     )
     .run();
   await db
     .prepare(
-      "INSERT INTO github_planning_jobs VALUES ('job_replan', 'development', 'zorkian/roundhouse', 83, 'github:zorkian', '{\"kind\":\"replan\"}', '2026-07-15T00:00:30.000Z')",
+      "INSERT INTO github_planning_jobs VALUES ('job_replan', 'development', 'zorkian/roundhouse', 83, 'github:zorkian', '{\"kind\":\"replan\"}', 'completed', 2, NULL, '2026-07-15T00:00:30.000Z')",
     )
     .run();
   const run = {
@@ -82,13 +82,19 @@ async function seedCompleted() {
     state: "completed",
     attempts: [
       {
+        attemptId: "run_metrics-implement-1",
         stage: "implement",
+        number: 1,
+        status: "failed",
+        classification: "validation_failed",
         startedAt: "2026-07-15T00:03:00.000Z",
         completedAt: "2026-07-15T00:04:00.000Z",
       },
       {
+        attemptId: "run_metrics-implement-2",
         stage: "implement",
-        classification: "validation_failed",
+        number: 2,
+        status: "succeeded",
         startedAt: "2026-07-15T00:04:00.000Z",
         completedAt: "2026-07-15T00:05:00.000Z",
       },
@@ -115,7 +121,7 @@ async function seedCompleted() {
     .run();
   await db
     .prepare(
-      "INSERT INTO independent_reviews VALUES ('review_metrics', 'run_metrics', 2, 'completed', 1, '2026-07-15T00:07:00.000Z', '2026-07-15T00:08:00.000Z')",
+      "INSERT INTO independent_reviews VALUES ('review_metrics', 'run_metrics', 2, 'completed', 1, '{}', '2026-07-15T00:07:00.000Z', '2026-07-15T00:08:00.000Z')",
     )
     .run();
   await db
@@ -161,6 +167,20 @@ describe("V1 pilot reliability metrics", () => {
         duplicateDeliveries: 0,
       },
       terminal: { status: "terminal", outcome: "succeeded" },
+      modelPhases: {
+        planning: {
+          attempts: 3,
+          terminal: { status: "terminal", outcome: "succeeded" },
+        },
+        implementation: {
+          attempts: 2,
+          terminal: { status: "terminal", outcome: "succeeded" },
+        },
+        independentReview: {
+          attempts: 1,
+          terminal: { status: "terminal", outcome: "succeeded" },
+        },
+      },
     });
     expect(first.workflows[0]?.durations.startToPlan).toEqual({
       status: "available",
@@ -204,6 +224,138 @@ describe("V1 pilot reliability metrics", () => {
       outcome: "failed",
       failureClass: "other",
     });
+    expect(value.workflows[0]?.modelPhases).toEqual({
+      planning: { attempts: 0, terminal: { status: "unavailable" } },
+      implementation: {
+        attempts: 0,
+        terminal: { status: "unavailable" },
+      },
+      independentReview: {
+        attempts: 0,
+        terminal: { status: "unavailable" },
+      },
+    });
+  });
+
+  it("reports bounded deterministic planning failures and incomplete work", async () => {
+    await db
+      .prepare(
+        "INSERT INTO github_issue_plans VALUES ('plan_failed', 9, 1, 'rejected', ?, NULL, NULL, '2026-07-15T00:00:00.000Z', '2026-07-15T00:01:00.000Z'), ('plan_incomplete', 10, 1, 'proposed', ?, NULL, NULL, '2026-07-15T00:02:00.000Z', '2026-07-15T00:02:00.000Z')",
+      )
+      .bind("c".repeat(64), "d".repeat(64))
+      .run();
+    await db
+      .prepare(
+        "INSERT INTO github_planning_jobs VALUES ('job_failed', 'development', 'zorkian/roundhouse', 9, 'github:zorkian', '{\"kind\":\"start\"}', 'failed', 1, 'Container failed: planning_invalid_structured_output raw-content-must-not-leak', '2026-07-15T00:00:00.000Z'), ('job_running', 'development', 'zorkian/roundhouse', 10, 'github:zorkian', '{\"kind\":\"start\"}', 'running', 1, NULL, '2026-07-15T00:02:00.000Z')",
+      )
+      .run();
+
+    const value = await reliabilitySummary(
+      env(),
+      "development",
+      "zorkian/roundhouse",
+    );
+    const failed = value.workflows.find(
+      (workflow) => workflow.issueNumber === 9,
+    );
+    const incomplete = value.workflows.find(
+      (workflow) => workflow.issueNumber === 10,
+    );
+    expect(failed?.modelPhases).toEqual({
+      planning: {
+        attempts: 1,
+        terminal: {
+          status: "terminal",
+          outcome: "failed",
+          classification: "planning_invalid_structured_output",
+        },
+      },
+      implementation: {
+        attempts: 0,
+        terminal: { status: "unavailable" },
+      },
+      independentReview: {
+        attempts: 0,
+        terminal: { status: "unavailable" },
+      },
+    });
+    expect(JSON.stringify(failed)).not.toContain("raw-content-must-not-leak");
+    expect(incomplete?.modelPhases.planning).toEqual({
+      attempts: 1,
+      terminal: { status: "nonterminal" },
+    });
+    expect(incomplete?.terminal).toEqual({ status: "nonterminal" });
+  });
+
+  it("keeps implementation and review classifications phase-bound", async () => {
+    await db
+      .prepare(
+        "INSERT INTO github_issue_plans VALUES ('plan_phase_failure', 11, 1, 'materialized', ?, NULL, 'run_phase_failure', '2026-07-15T00:00:00.000Z', '2026-07-15T00:04:00.000Z')",
+      )
+      .bind("e".repeat(64))
+      .run();
+    await db
+      .prepare(
+        "INSERT INTO self_development_runs VALUES ('run_phase_failure', 'failed', ?)",
+      )
+      .bind(
+        JSON.stringify({
+          state: "failed",
+          attempts: [
+            {
+              attemptId: "run_phase_failure-implement-1",
+              stage: "implement",
+              number: 1,
+              status: "failed",
+              classification: "validation_failed",
+              startedAt: "2026-07-15T00:01:00.000Z",
+              completedAt: "2026-07-15T00:02:00.000Z",
+            },
+          ],
+          events: [],
+        }),
+      )
+      .run();
+    await db
+      .prepare(
+        "INSERT INTO independent_reviews VALUES ('review_phase_failure', 'run_phase_failure', 1, 'failed', 2, ?, '2026-07-15T00:02:00.000Z', '2026-07-15T00:04:00.000Z')",
+      )
+      .bind(
+        JSON.stringify({
+          failureClassification: "review_workflow_exhausted",
+          failureReason: "raw-review-detail-must-not-leak",
+        }),
+      )
+      .run();
+
+    const value = await reliabilitySummary(
+      env(),
+      "development",
+      "zorkian/roundhouse",
+    );
+    const workflow = value.workflows[0];
+    expect(workflow?.modelPhases).toEqual({
+      planning: { attempts: 0, terminal: { status: "unavailable" } },
+      implementation: {
+        attempts: 1,
+        terminal: {
+          status: "terminal",
+          outcome: "failed",
+          classification: "validation_failed",
+        },
+      },
+      independentReview: {
+        attempts: 2,
+        terminal: {
+          status: "terminal",
+          outcome: "failed",
+          classification: "review_workflow_exhausted",
+        },
+      },
+    });
+    expect(JSON.stringify(workflow)).not.toContain(
+      "raw-review-detail-must-not-leak",
+    );
   });
 
   it("records one actor-bound manual fallback and reports it", async () => {

@@ -21,6 +21,15 @@ type PlanRow = {
 
 type RunRow = { run_id: string; state: string; payload: string };
 
+type PhaseTerminal =
+  | { status: "unavailable" }
+  | { status: "nonterminal" }
+  | {
+      status: "terminal";
+      outcome: "succeeded" | "failed" | "timed_out";
+      classification?: string;
+    };
+
 function duration(start?: string | null, end?: string | null): DurationMetric {
   if (!start || !end) return { status: "unavailable" };
   const value = Date.parse(end) - Date.parse(start);
@@ -76,6 +85,86 @@ function failureClass(run: SelfDevelopmentRun | undefined): string | undefined {
       : undefined;
 }
 
+function boundedClassification(value?: string | null): string | undefined {
+  if (!value) return undefined;
+  return /^[a-z][a-z0-9_:]{0,99}$/.test(value) ? value : "other";
+}
+
+function planningClassification(reason?: string | null): string | undefined {
+  const value = reason?.toLowerCase() ?? "";
+  if (value.includes("planning_invalid_structured_output"))
+    return "planning_invalid_structured_output";
+  if (value.includes("planning result binding does not match request"))
+    return "planning_binding_mismatch";
+  if (value.includes("planning result failed schema validation"))
+    return "planning_schema_validation";
+  if (value.includes("planning_credential_leak_detected"))
+    return "planning_credential_leak_detected";
+  if (value.includes("planning_modified_checkout"))
+    return "planning_modified_checkout";
+  return reason ? "other" : undefined;
+}
+
+function planningTerminal(
+  value: { status: string; failure_reason: string | null } | undefined,
+): PhaseTerminal {
+  if (!value) return { status: "unavailable" };
+  if (["queued", "running", "retrying"].includes(value.status))
+    return { status: "nonterminal" };
+  if (value.status === "completed")
+    return { status: "terminal", outcome: "succeeded" };
+  if (value.status === "timed_out")
+    return {
+      status: "terminal",
+      outcome: "timed_out",
+      classification: "timeout",
+    };
+  return {
+    status: "terminal",
+    outcome: "failed",
+    classification: planningClassification(value.failure_reason),
+  };
+}
+
+function implementationTerminal(
+  value: SelfDevelopmentRun["attempts"][number] | undefined,
+): PhaseTerminal {
+  if (!value?.status) return { status: "unavailable" };
+  if (value.status === "running") return { status: "nonterminal" };
+  return {
+    status: "terminal",
+    outcome: value.status === "succeeded" ? "succeeded" : "failed",
+    classification:
+      value.status === "failed"
+        ? boundedClassification(value.classification)
+        : undefined,
+  };
+}
+
+function reviewTerminal(
+  value: { status: string; payload: string } | undefined,
+): PhaseTerminal {
+  if (!value) return { status: "unavailable" };
+  if (["pending", "running", "remediation_pending"].includes(value.status))
+    return { status: "nonterminal" };
+  if (["completed", "remediated"].includes(value.status))
+    return { status: "terminal", outcome: "succeeded" };
+  let classification: string | undefined;
+  try {
+    classification = boundedClassification(
+      (JSON.parse(value.payload) as { failureClassification?: string })
+        .failureClassification,
+    );
+  } catch {
+    classification = undefined;
+  }
+  return {
+    status: "terminal",
+    outcome: "failed",
+    classification,
+  };
+}
+
 function pullRequestNumber(url?: string): number | undefined {
   const match = /\/pull\/([1-9][0-9]*)$/.exec(url ?? "");
   return match?.[1] ? Number(match[1]) : undefined;
@@ -110,7 +199,7 @@ export async function reliabilitySummary(
       : undefined;
     const run = parseRun(runRow ?? undefined);
     const planning = await env.DB.prepare(
-      `SELECT job_id, actor_id, created_at, command_json FROM github_planning_jobs
+      `SELECT job_id, actor_id, created_at, command_json, status, attempt_count, failure_reason FROM github_planning_jobs
         WHERE roundhouse_environment = ? AND repository_full_name = ? AND issue_number = ?
         ORDER BY created_at`,
     )
@@ -120,16 +209,20 @@ export async function reliabilitySummary(
         actor_id: string;
         created_at: string;
         command_json: string;
+        status: string;
+        attempt_count: number;
+        failure_reason: string | null;
       }>();
     const reviews = plan.run_id
       ? await env.DB.prepare(
-          "SELECT cycle, status, attempt_count, created_at, updated_at FROM independent_reviews WHERE run_id = ? ORDER BY cycle",
+          "SELECT cycle, status, attempt_count, payload, created_at, updated_at FROM independent_reviews WHERE run_id = ? ORDER BY cycle",
         )
           .bind(plan.run_id)
           .all<{
             cycle: number;
             status: string;
             attempt_count: number;
+            payload: string;
             created_at: string;
             updated_at: string;
           }>()
@@ -274,6 +367,26 @@ export async function reliabilitySummary(
         ),
         duplicateDeliveries: 0,
         distinctHumanActions: humanActions.size,
+      },
+      modelPhases: {
+        planning: {
+          attempts: planning.results.reduce(
+            (total, job) => total + job.attempt_count,
+            0,
+          ),
+          terminal: planningTerminal(planning.results.at(-1)),
+        },
+        implementation: {
+          attempts: implementationAttempts.length,
+          terminal: implementationTerminal(implementationAttempts.at(-1)),
+        },
+        independentReview: {
+          attempts: reviews.results.reduce(
+            (total, review) => total + review.attempt_count,
+            0,
+          ),
+          terminal: reviewTerminal(reviews.results.at(-1)),
+        },
       },
       manualFallbackRequired: manualFallback,
       terminal: terminal
