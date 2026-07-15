@@ -115,7 +115,7 @@ async function awaitingImplementation(env: ControlPlaneEnv) {
       planId: `plan_${"6".repeat(40)}`,
       planSha256: "5".repeat(64),
       profileId: "roundhouse-self-development-v1",
-      profileVersion: 1,
+      profileVersion: 2,
       issueContentSha256: "7".repeat(64),
       exactPathsSha256: "4".repeat(64),
       approvedBy: "github:zorkian",

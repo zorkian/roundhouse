@@ -75,6 +75,33 @@ describe("issue qualification and planning", () => {
     expect(raised).toMatchObject({ status: "proposed", risk: "high" });
   });
 
+  it("enrolls only the exact repository README path", async () => {
+    await expect(
+      qualifyAndPlan(
+        { ...input, requestedPaths: ["README.md"] },
+        new Date("2026-07-12T00:00:00Z"),
+      ),
+    ).resolves.toMatchObject({
+      status: "proposed",
+      profileVersion: 2,
+      exactPaths: ["README.md"],
+    });
+    await expect(
+      qualifyAndPlan(
+        { ...input, requestedPaths: ["README.md/nested.md"] },
+        new Date("2026-07-12T00:00:00Z"),
+      ),
+    ).resolves.toMatchObject({
+      status: "rejected",
+      findings: [
+        expect.objectContaining({
+          code: "path_not_enrolled",
+          path: "README.md/nested.md",
+        }),
+      ],
+    });
+  });
+
   it("distinguishes non-implementation qualification outcomes", async () => {
     const clarification = await qualifyAndPlan(
       {

@@ -39,8 +39,9 @@ only Access-bypassed path remains the exact signed GitHub webhook endpoint.
 
 ## Planning policy
 
-The reviewed profile is `roundhouse-self-development-v1@1`. It permits no more
-than twelve literal files under `apps/`, `packages/`, or `docs/`. It rejects
+The reviewed profile is `roundhouse-self-development-v1@2`. It permits no more
+than twelve literal files under `apps/`, `packages/`, or `docs/`, plus the exact
+root `README.md`. It rejects
 traversal, globs, repository policy/configuration, workflows, licensing files,
 container definitions, D1 migrations, and paths outside the enrolled prefixes.
 The current bounded limits are a 512 KiB patch, 900 seconds, 256 model requests,
