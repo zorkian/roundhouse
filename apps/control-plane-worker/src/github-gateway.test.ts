@@ -21,6 +21,55 @@ function json(value: unknown, status = 200): Response {
 }
 
 describe("GitHub App gateway", () => {
+  it("bounds GitHub Actions job logs before returning evidence", async () => {
+    const fetcher: typeof fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/access_tokens"))
+        return json({
+          token: "installation-token",
+          expires_at: "2026-07-12T02:00:00Z",
+        });
+      if (url.pathname.endsWith("/actions/jobs/123/logs"))
+        return new Response("0123456789abcdef");
+      return json({}, 404);
+    };
+    const gateway = new GitHubAppGateway(
+      { appId: "1", installationId: "2", privateKey },
+      fetcher,
+      () => new Date("2026-07-12T01:00:00Z"),
+    );
+    await expect(
+      gateway.boundedActionsJobLogs("zorkian/roundhouse", 123, 8),
+    ).resolves.toBe("01234567");
+  });
+
+  it("requests one GitHub Actions job rerun without requiring a JSON body", async () => {
+    let reruns = 0;
+    const fetcher: typeof fetch = async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/access_tokens"))
+        return json({
+          token: "installation-token",
+          expires_at: "2026-07-12T02:00:00Z",
+        });
+      if (
+        url.pathname.endsWith("/actions/jobs/123/rerun") &&
+        init?.method === "POST"
+      ) {
+        reruns += 1;
+        return new Response(null, { status: 201 });
+      }
+      return json({}, 404);
+    };
+    const gateway = new GitHubAppGateway(
+      { appId: "1", installationId: "2", privateKey },
+      fetcher,
+      () => new Date("2026-07-12T01:00:00Z"),
+    );
+    await gateway.rerunActionsJob("zorkian/roundhouse", 123);
+    expect(reruns).toBe(1);
+  });
+
   it("invokes a native-style fetcher without rebinding its receiver", async () => {
     const fetcher = async function (
       this: unknown,

@@ -32,6 +32,7 @@ import {
   githubNativeOperatorMigration,
 } from "./github-webhook.js";
 import { githubReviewCheckMigration } from "./github-status.js";
+import { githubCiMigration } from "./github-ci.js";
 import {
   executionProgressMigration,
   recordExecutionPhase,
@@ -50,6 +51,8 @@ const resetTables = [
   "execution_attempt_phases",
   "github_pull_request_lifecycle",
   "github_review_check_outbox",
+  "github_ci_remediations",
+  "github_ci_outcomes",
   "independent_review_findings",
   "independent_review_events",
   "independent_reviews",
@@ -296,7 +299,7 @@ beforeAll(async () => {
     new URL("../migrations/0008_independent_review.sql", import.meta.url),
     "utf8",
   );
-  for (const statement of `${d1JobStoreMigration}\n${controlPlaneSubmissionMigration}\n${cloudOperationsMigration}\n${githubPocMigration}\n${githubNativeOperatorMigration}\n${githubPlanningMigration}\n${independentReviewMigration}\n${githubReviewCheckMigration}\n${executionProgressMigration}\n${trustedExecutionWorkflowMigration}`
+  for (const statement of `${d1JobStoreMigration}\n${controlPlaneSubmissionMigration}\n${cloudOperationsMigration}\n${githubPocMigration}\n${githubNativeOperatorMigration}\n${githubPlanningMigration}\n${independentReviewMigration}\n${githubReviewCheckMigration}\n${githubCiMigration}\n${executionProgressMigration}\n${trustedExecutionWorkflowMigration}`
     .split(";")
     .map((value) => value.trim())
     .filter(Boolean))

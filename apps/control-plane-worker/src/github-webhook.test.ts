@@ -98,6 +98,9 @@ describe("GitHub-native operator webhook", () => {
         check_run: {
           id: 91,
           app: { id: 15368 },
+          name: "CI",
+          details_url:
+            "https://github.com/zorkian/roundhouse/actions/runs/90/job/123",
           head_sha: "b".repeat(40),
           status: "completed",
           conclusion: "success",
@@ -112,6 +115,13 @@ describe("GitHub-native operator webhook", () => {
         key: "check_run:91",
         status: "completed",
         conclusion: "success",
+        repositoryFullName: "zorkian/roundhouse",
+        checkRunId: 91,
+        appId: 15368,
+        name: "CI",
+        detailsUrl:
+          "https://github.com/zorkian/roundhouse/actions/runs/90/job/123",
+        actionsJobId: 123,
       },
     ]);
     expect(
@@ -128,7 +138,15 @@ describe("GitHub-native operator webhook", () => {
         },
         4281837,
       ),
-    ).toEqual([]);
+    ).toEqual([
+      expect.objectContaining({
+        repositoryFullName: "zorkian/roundhouse",
+        pullRequestNumber: 76,
+        headSha: "b".repeat(40),
+        checkRunId: 91,
+        appId: 4281837,
+      }),
+    ]);
     expect(
       checkObservation(
         {
@@ -669,6 +687,8 @@ describe("GitHub-native operator webhook", () => {
         key: "check_run:1",
         status: "completed",
         conclusion: "success",
+        repositoryFullName: "zorkian/roundhouse",
+        checkRunId: 1,
       },
       {
         pullRequestNumber: 31,
@@ -676,6 +696,8 @@ describe("GitHub-native operator webhook", () => {
         key: "check_run:2",
         status: "completed",
         conclusion: "success",
+        repositoryFullName: "zorkian/roundhouse",
+        checkRunId: 2,
       },
     ];
     await expect(
