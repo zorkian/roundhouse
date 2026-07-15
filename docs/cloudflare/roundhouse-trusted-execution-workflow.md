@@ -3,10 +3,11 @@
 
 # Trusted execution Workflow
 
-`roundhouse-dev-trusted-execution` is the development-only durable owner of a
-trusted repository implementation delivery. The existing Queue remains the
-buffer and backpressure boundary, but its consumer no longer waits for checkout,
-agent execution, validation, evidence retention, or GitHub projection.
+The environment-specific trusted-execution Workflow is the durable owner of
+trusted repository implementation and independent-review deliveries. The
+existing Queue remains the buffer and backpressure boundary, but its consumer
+no longer waits for checkout, agent execution, validation, review, evidence
+retention, or GitHub projection.
 
 ## Handoff
 
@@ -22,7 +23,7 @@ For `cloudflare-trusted-codex` deployments with the
 Duplicate delivery is harmless. The Workflow ID is a SHA-256 binding of the run
 ID, delivery ID, and expected run revision. Event parameters contain no
 credential. Deployments without the binding retain the legacy synchronous Queue
-adapter so production remains unchanged until separately authorized.
+adapter for local compatibility.
 
 ## Durable execution
 
@@ -48,12 +49,32 @@ Workflow reservation is pending, dispatched, or running. If Workflow retries
 are exhausted, its D1 projection becomes `failed`; ordinary recovery may then
 requeue the still-active Roundhouse run with a new delivery identity.
 
+Independent-review deliveries use the same Workflow binding with a distinct
+deterministic `review-*` instance identity and `trusted_review_workflows` D1
+projection. The Queue consumer durably reserves and starts the Workflow, then
+acknowledges the message without opening a Container. The Workflow persists the
+long review result before a separate idempotent finalization step records
+findings, starts bounded remediation when needed, updates the GitHub Check, and
+projects human-visible comments.
+
+The review lease belongs to the exact Workflow instance for four hours, longer
+than the three-hour Workflow step timeout. A retried Workflow step durably
+closes the interrupted attempt and advances the same review to its next bounded
+attempt; retained R2 evidence is replayed when execution had already completed.
+After the Workflow retry budget is exhausted, the review is durably classified
+as `review_workflow_exhausted`.
+
 ## Inspection
 
 `GET /v1/runs/:runId` includes `workflows`, with the instance ID, exact delivery
 and revision binding, status, and timestamps. The run page shows the newest
 durable execution instance above the phase timeline. Phase and attempt evidence
 remain authoritative for repository execution details.
+
+Issue qualification also uses a Container when deterministic issue content
+does not declare exact paths. It does not execute in the Queue and therefore is
+not subject to the Queue consumer wall-clock ceiling. Making webhook
+qualification independently resumable remains a separate ingress milestone.
 
 Local verification:
 

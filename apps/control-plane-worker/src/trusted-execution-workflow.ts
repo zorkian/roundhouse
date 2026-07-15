@@ -2,8 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import {
+  reviewDeliverySchema,
   runDeliverySchema,
   type DeliveryMessage,
+  type IndependentReviewExecution,
+  type ReviewDelivery,
   type RunDelivery,
 } from "@roundhouse/self-development/cloudflare";
 
@@ -23,11 +26,26 @@ CREATE TABLE IF NOT EXISTS trusted_execution_workflows (
 );
 CREATE INDEX IF NOT EXISTS trusted_execution_workflows_run
   ON trusted_execution_workflows(run_id, created_at);
+
+CREATE TABLE IF NOT EXISTS trusted_review_workflows (
+  workflow_instance_id TEXT PRIMARY KEY,
+  review_id TEXT NOT NULL,
+  delivery_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'dispatched', 'running', 'completed', 'failed')),
+  created_at TEXT NOT NULL,
+  started_at TEXT,
+  completed_at TEXT,
+  UNIQUE (review_id, delivery_id)
+);
+CREATE INDEX IF NOT EXISTS trusted_review_workflows_review
+  ON trusted_review_workflows(review_id, created_at);
 `;
+
+export type TrustedWorkflowPayload = RunDelivery | ReviewDelivery;
 
 export type TrustedExecutionWorkflowBindingPort = {
   createBatch(
-    batch: Array<{ id: string; params: RunDelivery }>,
+    batch: Array<{ id: string; params: TrustedWorkflowPayload }>,
   ): Promise<Array<{ id: string }>>;
 };
 
@@ -53,6 +71,13 @@ export type TrustedExecutionWorkflowResult = {
   state: string;
 };
 
+export type TrustedReviewWorkflowResult = {
+  schemaVersion: 1;
+  reviewId: string;
+  revision: number;
+  status: string;
+};
+
 async function digest(value: string): Promise<string> {
   return [
     ...new Uint8Array(
@@ -76,6 +101,21 @@ export async function trustedExecutionWorkflowId(
     ]),
   );
   return `trusted-${hash}`;
+}
+
+export async function trustedReviewWorkflowId(
+  input: ReviewDelivery,
+): Promise<string> {
+  const delivery = reviewDeliverySchema.parse(input);
+  const hash = await digest(
+    JSON.stringify([
+      delivery.schemaVersion,
+      delivery.kind,
+      delivery.reviewId,
+      delivery.deliveryId,
+    ]),
+  );
+  return `review-${hash}`;
 }
 
 export async function dispatchTrustedExecutionWorkflow(
@@ -123,6 +163,77 @@ export async function dispatchTrustedExecutionWorkflow(
     .bind(instanceId)
     .run();
   return instanceId;
+}
+
+export async function dispatchTrustedReviewWorkflow(
+  env: ControlPlaneEnv,
+  input: ReviewDelivery,
+): Promise<string> {
+  const delivery = reviewDeliverySchema.parse(input);
+  const binding = env.TRUSTED_EXECUTION_WORKFLOW;
+  if (!binding) throw new Error("Trusted execution Workflow is not configured");
+  const instanceId = await trustedReviewWorkflowId(delivery);
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO trusted_review_workflows(
+       workflow_instance_id, review_id, delivery_id, status, created_at
+     ) VALUES (?, ?, ?, 'pending', ?)`,
+  )
+    .bind(instanceId, delivery.reviewId, delivery.deliveryId, now)
+    .run();
+  const reserved = await env.DB.prepare(
+    "SELECT review_id, delivery_id FROM trusted_review_workflows WHERE workflow_instance_id = ?",
+  )
+    .bind(instanceId)
+    .first<{ review_id: string; delivery_id: string }>();
+  if (
+    !reserved ||
+    reserved.review_id !== delivery.reviewId ||
+    reserved.delivery_id !== delivery.deliveryId
+  )
+    throw new Error("Trusted review Workflow identity conflict");
+  await binding.createBatch([{ id: instanceId, params: delivery }]);
+  await env.DB.prepare(
+    "UPDATE trusted_review_workflows SET status = 'dispatched' WHERE workflow_instance_id = ? AND status = 'pending'",
+  )
+    .bind(instanceId)
+    .run();
+  return instanceId;
+}
+
+export async function readTrustedReviewWorkflows(
+  env: ControlPlaneEnv,
+  reviewId: string,
+): Promise<
+  Array<{
+    workflowInstanceId: string;
+    deliveryId: string;
+    status: "pending" | "dispatched" | "running" | "completed" | "failed";
+    createdAt: string;
+    startedAt?: string;
+    completedAt?: string;
+  }>
+> {
+  const rows = await env.DB.prepare(
+    "SELECT workflow_instance_id, delivery_id, status, created_at, started_at, completed_at FROM trusted_review_workflows WHERE review_id = ? ORDER BY created_at, workflow_instance_id",
+  )
+    .bind(reviewId)
+    .all<{
+      workflow_instance_id: string;
+      delivery_id: string;
+      status: "pending" | "dispatched" | "running" | "completed" | "failed";
+      created_at: string;
+      started_at: string | null;
+      completed_at: string | null;
+    }>();
+  return rows.results.map((row) => ({
+    workflowInstanceId: row.workflow_instance_id,
+    deliveryId: row.delivery_id,
+    status: row.status,
+    createdAt: row.created_at,
+    startedAt: row.started_at ?? undefined,
+    completedAt: row.completed_at ?? undefined,
+  }));
 }
 
 export async function readTrustedExecutionWorkflows(
@@ -177,6 +288,22 @@ export async function consumeTrustedExecutionDelivery(
       env,
       delivery.data,
     );
+    message.ack();
+    return instanceId;
+  } catch {
+    message.retry();
+    return null;
+  }
+}
+
+export async function consumeTrustedReviewDelivery(
+  message: DeliveryMessage,
+  env: ControlPlaneEnv,
+): Promise<string | null> {
+  const delivery = reviewDeliverySchema.safeParse(message.body);
+  if (!delivery.success) return null;
+  try {
+    const instanceId = await dispatchTrustedReviewWorkflow(env, delivery.data);
     message.ack();
     return instanceId;
   } catch {
@@ -249,5 +376,85 @@ export async function runTrustedExecutionWorkflow(
       .bind(new Date().toISOString(), instanceId)
       .run();
     throw error;
+  }
+}
+
+export async function runTrustedReviewWorkflow(
+  env: ControlPlaneEnv,
+  input: unknown,
+  step: TrustedExecutionWorkflowStepPort,
+  execute: (delivery: ReviewDelivery) => Promise<IndependentReviewExecution>,
+  finalize: (
+    delivery: ReviewDelivery,
+    execution: IndependentReviewExecution,
+  ) => Promise<TrustedReviewWorkflowResult>,
+  fail: (
+    delivery: ReviewDelivery,
+    error: unknown,
+  ) => Promise<TrustedReviewWorkflowResult>,
+): Promise<TrustedReviewWorkflowResult> {
+  const delivery = reviewDeliverySchema.parse(input);
+  const instanceId = await trustedReviewWorkflowId(delivery);
+  try {
+    const execution = await step.do(
+      "execute independent review",
+      {
+        retries: { limit: 2, delay: "6 minutes", backoff: "constant" },
+        timeout: "3 hours",
+      },
+      async () => {
+        const running = await env.DB.prepare(
+          "UPDATE trusted_review_workflows SET status = 'running', started_at = COALESCE(started_at, ?) WHERE workflow_instance_id = ? AND review_id = ? AND delivery_id = ? AND status IN ('pending', 'dispatched', 'running')",
+        )
+          .bind(
+            new Date().toISOString(),
+            instanceId,
+            delivery.reviewId,
+            delivery.deliveryId,
+          )
+          .run();
+        if ((running.meta.changes ?? 0) !== 1)
+          throw new Error("Trusted review Workflow reservation is invalid");
+        return execute(delivery);
+      },
+    );
+    return await step.do(
+      "finalize independent review",
+      {
+        retries: { limit: 5, delay: "10 seconds", backoff: "exponential" },
+        timeout: "5 minutes",
+      },
+      async () => {
+        const result = await finalize(delivery, execution);
+        const completed = await env.DB.prepare(
+          "UPDATE trusted_review_workflows SET status = 'completed', completed_at = ? WHERE workflow_instance_id = ? AND review_id = ? AND delivery_id = ? AND status IN ('running', 'completed')",
+        )
+          .bind(
+            new Date().toISOString(),
+            instanceId,
+            delivery.reviewId,
+            delivery.deliveryId,
+          )
+          .run();
+        if ((completed.meta.changes ?? 0) !== 1)
+          throw new Error("Trusted review Workflow completion is invalid");
+        return result;
+      },
+    );
+  } catch (error) {
+    const result = await step.do(
+      "record independent review failure",
+      {
+        retries: { limit: 5, delay: "10 seconds", backoff: "exponential" },
+        timeout: "5 minutes",
+      },
+      () => fail(delivery, error),
+    );
+    await env.DB.prepare(
+      "UPDATE trusted_review_workflows SET status = 'failed', completed_at = ? WHERE workflow_instance_id = ? AND status != 'completed'",
+    )
+      .bind(new Date().toISOString(), instanceId)
+      .run();
+    return result;
   }
 }
