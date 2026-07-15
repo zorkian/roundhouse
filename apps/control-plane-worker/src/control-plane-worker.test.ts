@@ -47,6 +47,8 @@ import {
 } from "./github-lifecycle.js";
 import { trustedExecutionWorkflowMigration } from "./trusted-execution-workflow.js";
 import {
+  claimIndependentReview,
+  failIndependentReview,
   readIndependentReview,
   reserveIndependentReview,
 } from "./github-review.js";
@@ -2412,6 +2414,25 @@ describe("local control-plane Worker", () => {
       manualFallback: true,
     };
     await reserveIndependentReview(env, reviewRequest, new Date());
+    const initial = await claimIndependentReview(
+      env,
+      reviewId,
+      "initial-review-worker",
+      new Date(),
+      60_000,
+    );
+    await failIndependentReview(
+      env,
+      reviewId,
+      initial!.token,
+      {
+        attemptId: initial!.review.request.attemptId,
+        retryable: true,
+        classification: "simulated_initial_interruption",
+        reason: "advance the replay fixture to attempt two",
+      },
+      new Date(),
+    );
     const delivery = {
       schemaVersion: 1 as const,
       kind: "independent_review" as const,
@@ -2516,14 +2537,14 @@ describe("local control-plane Worker", () => {
         const active = await readIndependentReview(env, reviewId);
         expect(active).toMatchObject({
           status: "running",
-          attemptCount: 1,
-          request: { attemptId: `${reviewId}-attempt-1` },
+          attemptCount: 2,
+          request: { attemptId: `${reviewId}-attempt-2` },
         });
         expect(
           active?.events.filter(
             ({ type }) => type === "review.retry_scheduled",
           ),
-        ).toHaveLength(0);
+        ).toHaveLength(1);
         releaseBackend();
         const interrupted = await Promise.allSettled([first, replay]);
         expect(interrupted).toEqual([
@@ -2531,26 +2552,26 @@ describe("local control-plane Worker", () => {
           expect.objectContaining({ status: "rejected" }),
         ]);
         const pending = await readIndependentReview(env, reviewId);
-        expect(pending).toMatchObject({ status: "pending", attemptCount: 1 });
+        expect(pending).toMatchObject({ status: "pending", attemptCount: 2 });
         expect(
           pending?.events.filter(
             ({ type }) => type === "review.retry_scheduled",
           ),
-        ).toHaveLength(1);
+        ).toHaveLength(2);
         return callback();
       },
     });
 
     expect(attemptIds).toEqual([
-      `${reviewId}-attempt-1`,
-      `${reviewId}-attempt-1`,
       `${reviewId}-attempt-2`,
+      `${reviewId}-attempt-2`,
+      `${reviewId}-attempt-3`,
     ]);
     const completed = await readIndependentReview(env, reviewId);
-    expect(completed).toMatchObject({ status: "completed", attemptCount: 2 });
+    expect(completed).toMatchObject({ status: "completed", attemptCount: 3 });
     expect(
       completed?.events.filter(({ type }) => type === "review.retry_scheduled"),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
   });
 
   it("repairs an API interruption before Queue delivery", async () => {

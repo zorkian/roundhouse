@@ -2165,7 +2165,8 @@ async function executeWorkflowReview(
       delivery.reviewId,
       claim.token,
       {
-        attemptId: claim.review.request.attemptId,
+        attemptId:
+          claim.review.activeAttemptId ?? claim.review.request.attemptId,
         retryable: true,
         classification:
           claim.review.attemptCount >= 3
@@ -2277,7 +2278,8 @@ async function consumeReviewMessage(
       parsed.data.reviewId,
       claim.token,
       {
-        attemptId: claim.review.request.attemptId,
+        attemptId:
+          claim.review.activeAttemptId ?? claim.review.request.attemptId,
         retryable,
         classification: retryable
           ? "review_infrastructure_interrupted"
