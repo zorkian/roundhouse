@@ -4,6 +4,7 @@
 import {
   repositoryExecutionRequestSchema,
   roundhouseFormatterWriteCommand,
+  trustedImplementationResultSchema,
   type RepositoryExecutionRequest,
   type TrustedImplementationRequest,
 } from "@roundhouse/self-development/cloudflare";
@@ -342,6 +343,36 @@ describe("CloudflareTrustedImplementationBackend", () => {
       classification: "validation_failed",
       retryable: false,
       message: expect.stringContaining("format[exit=1"),
+    });
+    expect(destroyed).toBe(1);
+  });
+
+  it("classifies trusted result schema failure as non-retryable", async () => {
+    let destroyed = 0;
+    const backend = new CloudflareTrustedImplementationBackend(
+      {
+        getByName: () => ({
+          runJob: async () => result(),
+          runTrustedJob: async () =>
+            trustedImplementationResultSchema.parse({
+              ...trustedResult(),
+              validation: Array.from(
+                { length: 9 },
+                () => trustedResult().validation[0],
+              ),
+            }),
+          destroy: async () => {
+            destroyed += 1;
+          },
+        }),
+      },
+      new MemoryEvidence(),
+      "unused",
+    );
+    await expect(backend.execute(trustedRequest)).rejects.toMatchObject({
+      classification: "implementation_binding_mismatch",
+      retryable: false,
+      message: "Trusted implementation result failed schema validation",
     });
     expect(destroyed).toBe(1);
   });

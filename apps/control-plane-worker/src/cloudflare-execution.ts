@@ -23,6 +23,7 @@ import {
   type TrustedImplementationResult,
 } from "@roundhouse/self-development/cloudflare";
 import { StageFailure } from "@roundhouse/self-development/cloudflare";
+import { ZodError } from "zod";
 
 export type ExecutionContainerPort = {
   runJob(request: RepositoryExecutionRequest): Promise<unknown>;
@@ -327,6 +328,12 @@ export class CloudflareTrustedImplementationBackend implements TrustedImplementa
       } catch (error) {
         await container.destroy().catch(() => undefined);
         if (error instanceof StageFailure) throw error;
+        if (error instanceof ZodError)
+          throw new StageFailure(
+            "Trusted implementation result failed schema validation",
+            "implementation_binding_mismatch",
+            false,
+          );
         const reason = boundedInfrastructureReason(error);
         if (reason.includes("validation_failed"))
           throw new StageFailure(

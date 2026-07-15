@@ -267,6 +267,8 @@ export const validationCommandEvidenceSchema = z.object({
   outputTruncated: z.boolean(),
 });
 
+export const trustedValidationEvidenceLimit = 8;
+
 export const regressionEvidenceSchema = z
   .object({
     repositoryUrl: z.literal("https://github.com/zorkian/roundhouse.git"),
@@ -358,7 +360,10 @@ export const trustedImplementationResultSchema = z.object({
       .nonnegative()
       .max(5 * 1024 * 1024),
   }),
-  validation: z.array(validationCommandEvidenceSchema).min(1).max(7),
+  validation: z
+    .array(validationCommandEvidenceSchema)
+    .min(1)
+    .max(trustedValidationEvidenceLimit),
   regressionEvidence: regressionEvidenceSchema.optional(),
   network: z.object({
     checkoutHosts: z.array(z.literal("github.com")),

@@ -12,6 +12,7 @@ import {
   repositoryRelativePathSchema,
   trustedImplementationRequestSchema,
   trustedImplementationResultSchema,
+  trustedValidationEvidenceLimit,
   regressionEvidenceSchema,
 } from "./trusted-loop.js";
 import { selfDevelopmentRunSchema, selfDevelopmentTaskSchema } from "./task.js";
@@ -192,6 +193,32 @@ describe("trusted self-development contracts", () => {
       selfDevelopmentRunSchema.shape.implementation
         .unwrap()
         .shape.changedFiles.safeParse([]).success,
+    ).toBe(false);
+  });
+
+  it("bounds the complete trusted code-validation evidence pipeline", () => {
+    const evidence = {
+      name: "test",
+      command: "pnpm test",
+      exitCode: 0,
+      timedOut: false,
+      durationMs: 1,
+      stdout: "",
+      stderr: "",
+      outputTruncated: false,
+    };
+    expect(
+      trustedImplementationResultSchema.shape.validation.safeParse(
+        Array.from({ length: trustedValidationEvidenceLimit }, () => evidence),
+      ).success,
+    ).toBe(true);
+    expect(
+      trustedImplementationResultSchema.shape.validation.safeParse(
+        Array.from(
+          { length: trustedValidationEvidenceLimit + 1 },
+          () => evidence,
+        ),
+      ).success,
     ).toBe(false);
   });
 
