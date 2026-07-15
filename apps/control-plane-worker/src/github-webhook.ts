@@ -183,6 +183,12 @@ export type GitHubCommand =
   | { kind: "cancel"; runId: string; revision: number }
   | { kind: "retry"; runId: string; revision: number }
   | {
+      kind: "review";
+      runId: string;
+      revision: number;
+      headCommit: string;
+    }
+  | {
       kind: "approve";
       runId: string;
       revision: number;
@@ -283,6 +289,19 @@ export function parseGitHubCommand(
       kind: parts[1] as "cancel" | "retry",
       runId: parts[2]!,
       revision,
+    };
+  if (
+    parts[1] === "review" &&
+    parts.length === 5 &&
+    runId.test(parts[2] ?? "") &&
+    revision !== null &&
+    sha40.test(parts[4] ?? "")
+  )
+    return {
+      kind: "review",
+      runId: parts[2]!,
+      revision,
+      headCommit: parts[4]!,
     };
   if (
     parts[1] === "approve" &&
@@ -513,11 +532,36 @@ export function issueCommand(
   const payload = issueCommentSchema.parse(value.payload);
   if (payload.action !== "created" || payload.issue.pull_request) return null;
   const command = parseGitHubCommand(payload.comment.body, commandPrefixes);
-  if (!command) return null;
+  if (!command || command.kind === "review") return null;
   return {
     repositoryFullName: payload.repository.full_name,
     issueNumber: payload.issue.number,
     actor: payload.comment.user.login,
+    command,
+  };
+}
+
+export function manualReviewCommand(
+  value: VerifiedWebhook,
+  commandPrefixes: readonly string[] = ["/rh", "/roundhouse"],
+): {
+  repositoryFullName: string;
+  pullRequestNumber: number;
+  actor: string;
+  command: Extract<GitHubCommand, { kind: "review" }>;
+} | null {
+  if (value.eventName !== "issue_comment") return null;
+  const payload = pullRequestIssueCommentSchema.safeParse(value.payload);
+  if (!payload.success || payload.data.action !== "created") return null;
+  const command = parseGitHubCommand(
+    payload.data.comment.body,
+    commandPrefixes,
+  );
+  if (!command || command.kind !== "review") return null;
+  return {
+    repositoryFullName: payload.data.repository.full_name,
+    pullRequestNumber: payload.data.issue.number,
+    actor: payload.data.comment.user.login,
     command,
   };
 }

@@ -18,6 +18,7 @@ import {
   issueCommand,
   issueRun,
   isUnretainedWebhookEvent,
+  manualReviewCommand,
   parseGitHubCommand,
   pullRequestFeedback,
   reserveWebhookDelivery,
@@ -276,6 +277,55 @@ describe("GitHub-native operator webhook", () => {
       repositoryFullName: "another/roundhouse",
       issueNumber: 19,
     });
+  });
+
+  it("routes exact manual-review commands only from pull-request comments", () => {
+    const headCommit = "a".repeat(40);
+    const webhook = {
+      deliveryId: "12345678-abcd-4321-abcd-1234567890ab",
+      eventName: "issue_comment",
+      payloadSha256: "b".repeat(64),
+      payload: {
+        installation: { id: 146147681 },
+        repository: { full_name: "zorkian/roundhouse" },
+        action: "created",
+        issue: {
+          number: 92,
+          pull_request: {
+            url: "https://api.github.com/repos/zorkian/roundhouse/pulls/92",
+          },
+        },
+        comment: {
+          id: 9200,
+          body: `/rh review run_failed 18 ${headCommit}`,
+          user: { login: "zorkian" },
+        },
+      },
+    } as const;
+    expect(manualReviewCommand(webhook)).toEqual({
+      repositoryFullName: "zorkian/roundhouse",
+      pullRequestNumber: 92,
+      actor: "zorkian",
+      command: {
+        kind: "review",
+        runId: "run_failed",
+        revision: 18,
+        headCommit,
+      },
+    });
+    expect(issueCommand(webhook)).toBeNull();
+    expect(
+      manualReviewCommand({
+        ...webhook,
+        payload: {
+          ...webhook.payload,
+          comment: {
+            ...webhook.payload.comment,
+            body: `/rh review run_failed 18 ${"c".repeat(39)}`,
+          },
+        },
+      }),
+    ).toBeNull();
   });
 
   it("binds explicit pull-request feedback to an exact run revision and head", () => {

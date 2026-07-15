@@ -33,6 +33,7 @@ export const independentReviewRequestSchema = z.object({
   attemptId: boundedIdentitySchema,
   attemptNumber: z.number().int().positive().max(3),
   cycle: z.number().int().min(1).max(2),
+  manualFallback: z.boolean().optional(),
   runId: runIdentitySchema,
   repositoryUrl: z.literal("https://github.com/zorkian/roundhouse.git"),
   issueNumber: z.number().int().positive(),
@@ -43,7 +44,16 @@ export const independentReviewRequestSchema = z.object({
   pullRequestUrl: z
     .string()
     .regex(/^https:\/\/github\.com\/zorkian\/roundhouse\/pull\/[1-9][0-9]*$/),
-  branch: z.string().regex(/^codex\/dogfood-[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$/),
+  branch: z
+    .string()
+    .regex(/^[a-zA-Z0-9][a-zA-Z0-9._\/-]{0,199}$/)
+    .refine(
+      (value) =>
+        !value.includes("..") &&
+        !value.includes("//") &&
+        !value.endsWith("/") &&
+        !value.split("/").some((part) => part.endsWith(".lock")),
+    ),
   baseCommit: commitSchema,
   headCommit: commitSchema,
   patchSha256: sha256Schema,
