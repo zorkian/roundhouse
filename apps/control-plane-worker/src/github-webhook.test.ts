@@ -7,6 +7,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { ControlPlaneEnv } from "./environment.js";
 import {
   bindIssueRun,
+  checkObservation,
   claimPendingComments,
   completeWebhookDelivery,
   enqueueComment,
@@ -86,6 +87,71 @@ beforeEach(async () => {
 afterAll(async () => instance.dispose());
 
 describe("GitHub-native operator webhook", () => {
+  it("uses external check runs as the single CI unit and ignores Roundhouse's own Check", () => {
+    const base = {
+      deliveryId: "check-delivery",
+      payloadSha256: "a".repeat(64),
+      eventName: "check_run",
+      payload: {
+        installation: { id: 146147681 },
+        repository: { full_name: "zorkian/roundhouse" },
+        check_run: {
+          id: 91,
+          app: { id: 15368 },
+          head_sha: "b".repeat(40),
+          status: "completed",
+          conclusion: "success",
+          pull_requests: [{ number: 76 }],
+        },
+      },
+    };
+    expect(checkObservation(base, 4281837)).toEqual([
+      {
+        pullRequestNumber: 76,
+        headSha: "b".repeat(40),
+        key: "check_run:91",
+        status: "completed",
+        conclusion: "success",
+      },
+    ]);
+    expect(
+      checkObservation(
+        {
+          ...base,
+          payload: {
+            ...base.payload,
+            check_run: {
+              ...base.payload.check_run,
+              app: { id: 4281837 },
+            },
+          },
+        },
+        4281837,
+      ),
+    ).toEqual([]);
+    expect(
+      checkObservation(
+        {
+          ...base,
+          eventName: "check_suite",
+          payload: {
+            installation: { id: 146147681 },
+            repository: { full_name: "zorkian/roundhouse" },
+            check_suite: {
+              id: 45,
+              app: { id: 15368 },
+              head_sha: "b".repeat(40),
+              status: "completed",
+              conclusion: "success",
+              pull_requests: [{ number: 76 }],
+            },
+          },
+        },
+        4281837,
+      ),
+    ).toEqual([]);
+  });
+
   it("parses only exact bounded commands", () => {
     expect(parseGitHubCommand("/rh start")).toEqual({ kind: "start" });
     expect(parseGitHubCommand("/rh status run_123")).toEqual({
