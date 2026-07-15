@@ -1899,6 +1899,7 @@ describe("local control-plane Worker", () => {
       oauthToken: `setup-token-${"s".repeat(80)}`,
     });
     let reviewExecutions = 0;
+    const executedAttemptIds: string[] = [];
     env.EXECUTION_CONTAINERS = {
       getByName: () => ({
         runJob: async () => {
@@ -1906,6 +1907,7 @@ describe("local control-plane Worker", () => {
         },
         runReviewJob: async (review) => {
           reviewExecutions += 1;
+          executedAttemptIds.push(review.attemptId);
           if (reviewExecutions === 1)
             throw new Error("instance disappeared during independent review");
           return {
@@ -1974,11 +1976,16 @@ describe("local control-plane Worker", () => {
         try {
           return await callback();
         } catch {
+          await callback();
           return callback();
         }
       },
     });
     expect(reviewExecutions).toBe(2);
+    expect(executedAttemptIds).toEqual([
+      `${firstBody.review.request.reviewId}-attempt-1`,
+      `${firstBody.review.request.reviewId}-attempt-2`,
+    ]);
     const reviewResponse = await handler.fetch!(
       request(`/v1/reviews/${firstBody.review.request.reviewId}`),
       env,
@@ -2000,6 +2007,11 @@ describe("local control-plane Worker", () => {
         expect.objectContaining({ type: "review.retry_scheduled" }),
       ]),
     });
+    expect(
+      (reviewBody as { events: Array<{ type: string }> }).events.filter(
+        ({ type }) => type === "review.retry_scheduled",
+      ),
+    ).toHaveLength(1);
     expect(checkWrites).toBe(1);
     expect(reviewCheck).toMatchObject({
       head_sha: commit,
