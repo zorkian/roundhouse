@@ -11,6 +11,8 @@ import {
 
 import type { ControlPlaneEnv } from "./environment.js";
 
+export class PlanCommandRejectionError extends Error {}
+
 export const githubPlanningMigration = `
 CREATE TABLE IF NOT EXISTS github_planning_jobs (
   job_id TEXT PRIMARY KEY,
@@ -671,24 +673,28 @@ export async function approvePlan(
   },
 ): Promise<DurableIssuePlan> {
   const row = await planRow(env, "plan_id", input.planId);
-  if (!row) throw new Error("Plan not found");
+  if (!row) throw new PlanCommandRejectionError("Plan not found");
   if (row.plan_sha256 !== input.planSha256)
-    throw new Error("Plan approval binding does not match");
+    throw new PlanCommandRejectionError("Plan approval binding does not match");
   const decision = parseDecision(row.plan_json);
   if (decision.status !== "proposed")
-    throw new Error("Qualification cannot run");
+    throw new PlanCommandRejectionError("Qualification cannot run");
   if (row.status === "approved" || row.status === "materialized") {
     const plan = parseDecision(row.plan_json);
     if (row.approved_by !== input.actorId)
-      throw new Error("Existing plan approval actor does not match");
+      throw new PlanCommandRejectionError(
+        "Existing plan approval actor does not match",
+      );
     // Replay must preserve the immutable revision embedded in the original
     // approval command, even though the durable row has advanced since then.
     if (input.expectedRevision !== plan.revision)
-      throw new Error("Plan approval binding does not match");
+      throw new PlanCommandRejectionError(
+        "Plan approval binding does not match",
+      );
     return durable(row);
   }
   if (row.revision !== input.expectedRevision)
-    throw new Error("Plan approval binding does not match");
+    throw new PlanCommandRejectionError("Plan approval binding does not match");
   const approvedAt = input.now.toISOString();
   const updated = await env.DB.prepare(
     "UPDATE github_issue_plans SET status = 'approved', revision = revision + 1, approved_by = ?, approved_at = ?, updated_at = ? WHERE plan_id = ? AND revision = ? AND status = 'proposed' AND plan_sha256 = ?",
@@ -724,12 +730,14 @@ export async function materializePlan(
   now: Date,
 ): Promise<DurableIssuePlan> {
   const row = await planRow(env, "plan_id", planId);
-  if (!row) throw new Error("Plan not found");
+  if (!row) throw new PlanCommandRejectionError("Plan not found");
   if (row.status === "materialized") {
-    if (row.run_id !== runId) throw new Error("Plan run binding conflict");
+    if (row.run_id !== runId)
+      throw new PlanCommandRejectionError("Plan run binding conflict");
     return durable(row);
   }
-  if (row.status !== "approved") throw new Error("Plan is not approved");
+  if (row.status !== "approved")
+    throw new PlanCommandRejectionError("Plan is not approved");
   const occurredAt = now.toISOString();
   const updated = await env.DB.prepare(
     "UPDATE github_issue_plans SET status = 'materialized', revision = revision + 1, run_id = ?, updated_at = ? WHERE plan_id = ? AND revision = ? AND status = 'approved' AND run_id IS NULL",
@@ -764,6 +772,8 @@ export async function listIssuePlans(
 
 export function requireQualifiedPlan(value: DurableIssuePlan): QualifiedPlan {
   if (value.plan.status !== "proposed")
-    throw new Error("Plan was rejected by repository policy");
+    throw new PlanCommandRejectionError(
+      "Plan was rejected by repository policy",
+    );
   return value.plan;
 }

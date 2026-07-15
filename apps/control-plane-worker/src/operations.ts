@@ -41,6 +41,7 @@ export class MutationPendingError extends Error {
     super("An operator mutation with this idempotency key is still pending");
   }
 }
+export class RunRetryRejectionError extends Error {}
 
 async function hash(value: unknown): Promise<string> {
   const bytes = await crypto.subtle.digest(
@@ -197,7 +198,9 @@ export async function retryFailedRun(
     ) ||
     stageAttempts >= maxOperatorStageAttempts
   )
-    throw new Error("Run is not eligible for retry at this revision");
+    throw new RunRetryRejectionError(
+      "Run is not eligible for retry at this revision",
+    );
   const state = retryState[attempt.stage];
   const next = selfDevelopmentRunSchema.parse({
     ...run,

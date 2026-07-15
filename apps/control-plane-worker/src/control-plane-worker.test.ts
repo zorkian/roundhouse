@@ -561,6 +561,7 @@ describe("local control-plane Worker", () => {
       { id: number; html_url: string; body: string } | undefined;
     let lowRiskStatusComment:
       { id: number; html_url: string; body: string } | undefined;
+    let issue17Title = "Classify GitHub gateway errors";
     env.GITHUB_API_FETCHER = async (input, init) => {
       const url = new URL(String(input));
       if (url.pathname.endsWith("/access_tokens"))
@@ -577,7 +578,7 @@ describe("local control-plane Worker", () => {
             number: 17,
             node_id: "issue-node-17",
             html_url: "https://github.com/zorkian/roundhouse/issues/17",
-            title: "Classify GitHub gateway errors",
+            title: issue17Title,
             body: [
               "Exercise the reviewed Roundhouse profile.",
               "",
@@ -986,6 +987,41 @@ describe("local control-plane Worker", () => {
     expect(queued.messages).toHaveLength(2);
     expect(lowRiskStatusComment?.body).toContain(
       `https://roundhouse-dev.rm-rf.rip/runs/${lowRiskRunId}`,
+    );
+
+    issue17Title = "Classify edited GitHub gateway errors";
+    const editedStart = await handler.fetch!(
+      await webhook("/rhd start", 45, "dddddddd-eeee-4fff-8aaa-111111111111"),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(editedStart.status).toBe(202);
+    await expect(editedStart.json()).resolves.toMatchObject({
+      kind: "planning",
+      state: "queued",
+      jobId: expect.not.stringMatching(result.jobId),
+    });
+    expect(queued.messages).toHaveLength(3);
+
+    const staleImplement = await handler.fetch!(
+      await webhook(
+        `/rhd implement ${plan!.plan.planId} 2 ${plan!.plan.planSha256}`,
+        46,
+        "eeeeeeee-ffff-4000-8bbb-222222222222",
+      ),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(staleImplement.status).toBe(202);
+    await expect(staleImplement.json()).resolves.toMatchObject({
+      accepted: true,
+      ignored: true,
+    });
+    expect(statusComment?.body).toContain(
+      "Roundhouse rejected the stale `/rhd implement` binding.",
+    );
+    expect(statusComment?.body).toContain(
+      `Next action: \`/rhd status ${implementationResult.runId}\``,
     );
   });
 

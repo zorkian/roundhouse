@@ -75,6 +75,7 @@ import {
   failPlanningJob,
   finishPlanningJob,
   materializePlan,
+  PlanCommandRejectionError,
   readIssuePlan,
   readPlanById,
   recoverablePlanningJobs,
@@ -160,6 +161,7 @@ import {
   recoveryHistory,
   retentionReport,
   retryFailedRun,
+  RunRetryRejectionError,
   runRecoveryCycle,
 } from "./operations.js";
 import {
@@ -2370,11 +2372,19 @@ async function scheduleGitHubPlanning(
     )
       throw new HttpError(409, "Qualification cannot be replanned");
   }
+  const identity = runtimeIdentity(env);
+  const snapshot = await githubGateway(env).fetchIssue({
+    schemaVersion: 1,
+    owner: identity.owner,
+    repository: identity.repository,
+    number: issueNumber,
+  });
   const requestKey = await sha256(
     JSON.stringify({
       roundhouseEnvironment: runtimeIdentity(env).environment,
       repositoryFullName,
       issueNumber,
+      issueContentSha256: snapshot.contentSha256,
       command,
       currentPlanBinding:
         command.kind === "replan" && command.planId === undefined && current
@@ -2398,6 +2408,7 @@ async function scheduleGitHubPlanning(
     now: new Date(),
   });
   if (reservation.created) {
+    await saveIssueSnapshot(env, snapshot, JSON.stringify(snapshot));
     await enqueuePlanningStartedComment(
       env,
       repositoryFullName,
@@ -2416,6 +2427,46 @@ async function scheduleGitHubPlanning(
     state: reservation.job.status,
     revision: reservation.job.attemptCount,
   };
+}
+
+async function commandRejectionComment(
+  env: ControlPlaneEnv,
+  issueNumber: number,
+  command: GitHubCommand,
+): Promise<string> {
+  const identity = runtimeIdentity(env);
+  const boundRunId = await issueRun(env, issueNumber);
+  if (boundRunId) {
+    try {
+      const run = await new D1JobStore(env.DB).read(boundRunId);
+      return [
+        `Roundhouse rejected the stale \`${githubCommand(identity, command.kind)}\` binding.`,
+        `The current run is \`${boundRunId}\` at revision \`${run.revision}\` with status \`${run.state}\`.`,
+        `Next action: \`${githubCommand(identity, `status ${boundRunId}`)}\``,
+      ].join("\n\n");
+    } catch {
+      // Fall through to a plan or generic response if the bound run vanished.
+    }
+  }
+  const plan = await readIssuePlan(env, issueNumber).catch(() => null);
+  if (plan)
+    return [
+      `Roundhouse rejected the stale \`${githubCommand(identity, command.kind)}\` binding.`,
+      `The current plan is \`${plan.plan.planId}\` at revision \`${plan.revision}\` with status \`${plan.status}\`.`,
+      `Next action: \`${githubCommand(identity, `status ${plan.plan.planId}`)}\``,
+    ].join("\n\n");
+  return [
+    `Roundhouse rejected \`${githubCommand(identity, command.kind)}\` because the referenced plan or run is no longer current.`,
+    `Next action: \`${githubCommand(identity, "status")}\``,
+  ].join("\n\n");
+}
+
+function isAuthorizedCommandRejection(error: unknown): boolean {
+  return (
+    error instanceof HttpError ||
+    error instanceof PlanCommandRejectionError ||
+    error instanceof RunRetryRejectionError
+  );
 }
 
 async function executePlanningJob(
@@ -2947,7 +2998,7 @@ async function githubWebhook(
   } catch (error) {
     const reason = redactedReason(error);
     const permanentlyRejected =
-      error instanceof HttpError ||
+      isAuthorizedCommandRejection(error) ||
       (error instanceof GitHubWebhookError && error.status < 500);
     console.error("GitHub webhook processing failed", {
       deliveryId: webhook.deliveryId,
@@ -2977,7 +3028,27 @@ async function githubWebhook(
         reason: redactedReason(completionError),
       });
     }
-    if (!permanentlyRejected && commandFailureTarget) {
+    if (isAuthorizedCommandRejection(error) && commandFailureTarget) {
+      try {
+        await enqueueComment(
+          env,
+          `github-command-rejection-${webhook.deliveryId}`,
+          commandFailureTarget.issueNumber,
+          await commandRejectionComment(
+            env,
+            commandFailureTarget.issueNumber,
+            commandFailureTarget.command,
+          ),
+          commandFailureTarget.repositoryFullName,
+        );
+        await flushGitHubOutputs(env);
+      } catch (deliveryError) {
+        console.warn("GitHub command rejection status delivery deferred", {
+          deliveryId: webhook.deliveryId,
+          reason: redactedReason(deliveryError),
+        });
+      }
+    } else if (!permanentlyRejected && commandFailureTarget) {
       try {
         await enqueueComment(
           env,
