@@ -2466,6 +2466,8 @@ describe("local control-plane Worker", () => {
           if (backendEntries === 1) firstBackendEntered();
           if (backendEntries === 2) secondBackendEntered();
           await backendReleased;
+          if (backendEntries <= 2)
+            throw new Error("simulated shared review interruption");
           return {
             schemaVersion: 1 as const,
             reviewId: request.reviewId,
@@ -2523,22 +2525,32 @@ describe("local control-plane Worker", () => {
           ),
         ).toHaveLength(0);
         releaseBackend();
-        await replay;
-        return first;
+        const interrupted = await Promise.allSettled([first, replay]);
+        expect(interrupted).toEqual([
+          expect.objectContaining({ status: "rejected" }),
+          expect.objectContaining({ status: "rejected" }),
+        ]);
+        const pending = await readIndependentReview(env, reviewId);
+        expect(pending).toMatchObject({ status: "pending", attemptCount: 1 });
+        expect(
+          pending?.events.filter(
+            ({ type }) => type === "review.retry_scheduled",
+          ),
+        ).toHaveLength(1);
+        return callback();
       },
     });
 
     expect(attemptIds).toEqual([
       `${reviewId}-attempt-1`,
       `${reviewId}-attempt-1`,
+      `${reviewId}-attempt-2`,
     ]);
     const completed = await readIndependentReview(env, reviewId);
-    expect(completed).toMatchObject({ status: "completed", attemptCount: 1 });
-    expect(completed?.events).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ type: "review.retry_scheduled" }),
-      ]),
-    );
+    expect(completed).toMatchObject({ status: "completed", attemptCount: 2 });
+    expect(
+      completed?.events.filter(({ type }) => type === "review.retry_scheduled"),
+    ).toHaveLength(1);
   });
 
   it("repairs an API interruption before Queue delivery", async () => {

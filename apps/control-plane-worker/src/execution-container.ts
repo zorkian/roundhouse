@@ -125,6 +125,7 @@ async function auditedModelTransport(
 }
 
 export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
+  // CloudflareIndependentReviewBackend names this Durable Object by attemptId.
   private readonly reviewAttempts =
     new AttemptSingleFlight<IndependentReviewResult>();
 

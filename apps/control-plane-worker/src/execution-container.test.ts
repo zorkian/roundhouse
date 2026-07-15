@@ -87,4 +87,14 @@ describe("execution Container attempt single-flight", () => {
     );
     expect(starts).toBe(2);
   });
+
+  it("rejects a different identity on an attempt-named instance", async () => {
+    const attempts = new AttemptSingleFlight<string>();
+    await expect(
+      attempts.run("review-attempt-1", async () => "reviewed"),
+    ).resolves.toBe("reviewed");
+    await expect(
+      attempts.run("review-attempt-2", async () => "wrong container"),
+    ).rejects.toThrow("identity conflicts");
+  });
 });

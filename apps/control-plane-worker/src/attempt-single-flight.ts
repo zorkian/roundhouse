@@ -1,6 +1,12 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
+/**
+ * Deduplicates work inside one Container Durable Object. Review containers are
+ * named by the exact attempt ID, so a successful result is deliberately kept
+ * for every replay during that object's lifetime. Failed work is cleared so
+ * the same attempt can resume after an interruption.
+ */
 export class AttemptSingleFlight<T> {
   private active?: { attemptId: string; promise: Promise<T> };
 
