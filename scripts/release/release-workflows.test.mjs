@@ -13,6 +13,19 @@ async function repositoryFile(path) {
 }
 
 describe("release workflow handoff", () => {
+  it("ships the durable async-planning tables as a deployment migration", async () => {
+    const migration = await repositoryFile(
+      "apps/control-plane-worker/migrations/0014_async_github_planning.sql",
+    );
+    expect(migration).toContain(
+      "CREATE TABLE IF NOT EXISTS github_planning_jobs",
+    );
+    expect(migration).toContain(
+      "CREATE TABLE IF NOT EXISTS github_planning_job_events",
+    );
+    expect(migration).toContain("roundhouse_environment TEXT NOT NULL");
+  });
+
   it("starts new attempts on the new image without interrupting active attempts", async () => {
     const [development, production, dockerfile] = await Promise.all([
       repositoryFile(".github/workflows/release-development.yml"),
