@@ -1,44 +1,109 @@
+<!-- Copyright 2026 Mark Smith -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
 # Roundhouse
 
 ![Roundhouse orchestration hub: coding-agent engines routed through a human-controlled software delivery workflow](docs/assets/roundhouse-banner.png)
 
+Roundhouse is a working V1 dogfood system for turning a GitHub issue into a
+reviewable draft pull request. It qualifies untrusted issue text against
+repository policy, runs a bounded coding agent in an isolated container,
+validates the result, publishes it through a credentialed control plane, and
+asks Claude to review the exact pull-request head. GitHub remains the place
+where a human reviews and merges or rejects the change.
+
 > [!CAUTION]
-> Roundhouse is completely untested, pre-release alpha software. It is under active design and may be incomplete, insecure, destructive, or simply wrong. Do not use it with production repositories, valuable data, or credentials you cannot revoke.
+> Roundhouse is experimental, pre-release software for enrolled public
+> repositories. Generated code may be incorrect or insecure even when checks
+> pass. Do not use it with production data or credentials you cannot revoke.
 
-Roundhouse is a GitHub-native orchestration system for AI-assisted software development. Its goal is to turn GitHub issues into qualified, evidence-backed work and coordinate coding agents through planning, implementation, validation, and review under explicit safety, budget, audit, and human-approval policies.
+## Dogfood workflow
 
-Roundhouse is not a coding model. It is intended to be the durable workflow and policy layer around coding-agent runtimes such as Codex and Claude Code. GitHub remains the primary place where engineers initiate work, answer questions, review plans, inspect pull requests, and make merge decisions.
+1. An authorized maintainer writes an issue and posts `/rhd start` in
+   development or `/rh start` in production.
+2. Roundhouse snapshots the issue, resolves an exact base commit, and creates a
+   bounded plan. It requests clarification or explicit approval when policy
+   requires it.
+3. Codex implements only the approved scope in an ephemeral Cloudflare
+   Container and runs repository validation. The container has no GitHub,
+   Cloudflare, or deployment authority.
+4. The Worker verifies the result and opens a draft pull request through the
+   GitHub App. Higher-risk work can require approval before publication.
+5. Claude independently reviews the exact published head. Roundhouse reports
+   findings and may run a bounded remediation pass before marking the pull
+   request ready for human review.
+6. A human reviews the diff, checks, and Claude findings, then merges or rejects
+   the pull request. Roundhouse has no merge command or merge authority.
 
-The project currently consists primarily of its proposed V1 product and technical design. There is no usable implementation yet, and none of the described security or safety properties should be assumed to exist.
+Use `/rhd` (or `/roundhouse-dev`) only for the development deployment. Use
+`/rh` (or `/roundhouse`) only for production. Each deployment ignores the
+other command family and keeps its plans, runs, branches, and comments separate.
+Follow-up commands include the correct prefix and required identifiers; copy
+the exact command Roundhouse posts rather than constructing one by hand.
 
-## Status
+After a human merge to `main`, the `Release development` GitHub workflow runs
+checks, builds the release once, and deploys that commit to development.
+Production is not updated by the merge. `Promote production` reuses the exact
+successful development artifacts and is a separate action protected by the
+`roundhouse-production` GitHub environment and human approval.
 
-- Experimental and completely untested
-- Pre-release alpha; APIs and architecture may change without notice
-- Not suitable for production use
-- No warranty or expectation of data safety
-- Human review is required for every generated change
+## Local development
 
-## Design
+Prerequisites are Git, Node.js 24 or newer, Corepack, and pnpm 10.13.1. No
+Cloudflare or GitHub credentials are needed for the local checks.
 
-See [docs/v1-plan.md](docs/v1-plan.md) for the proposed product scope, architecture, workflows, safety model, and implementation phases.
+```sh
+corepack enable
+corepack prepare pnpm@10.13.1 --activate
+pnpm install --frozen-lockfile
+pnpm check
+```
 
-The [self-development walking skeleton](docs/self-development-walking-skeleton.md)
-documents the durable local task-to-approved-publication path and its current
-V1 boundaries.
+`pnpm check` verifies formatting and Apache-2.0 headers, typechecks the
+workspace, and runs the full test suite. Useful focused commands are:
 
-The [resumable job loop](docs/resumable-job-loop.md) documents platform-neutral
-coordination, leases, retries, crash recovery, and the local-to-Cloudflare
-adapter map.
+```sh
+pnpm format:check
+pnpm typecheck
+pnpm test -- apps/control-plane-worker/src/control-plane-worker.test.ts
+```
 
-The [local-first Cloudflare coordination adapters](docs/cloudflare-coordination-adapters.md)
-document run-targeted Queue delivery, D1 compare-and-set lease ownership, and
-the unapplied development resource proposal.
+## Cloudflare architecture
 
-The [local control-plane Worker](docs/local-control-plane-worker.md) documents
-the authenticated task API, durable submission outbox, safe run inspection,
-bounded execution dispatch, and local restart/replay procedure.
+- The control-plane Worker verifies GitHub webhooks, serves the operator UI and
+  APIs, applies policy, coordinates publication, and holds external authority
+  outside agent execution.
+- Workflows and Queues drive durable execution and review stages, retries,
+  recovery, and backpressure.
+- D1 stores plans, run state, leases, approvals, and projections; R2 stores
+  retained patches, validation, and other run evidence.
+- Cloudflare Containers provide disposable, resource-bounded repository
+  checkout, Codex implementation, validation, and independent Claude review.
+- The GitHub App publishes constrained branches, comments, checks, and draft
+  pull requests. Branch protection and the human merge decision remain outside
+  Roundhouse.
+
+Start with [ADR 0008](docs/decisions/0008-lean-open-source-poc-security-boundary.md)
+for the V1 security boundary, [the current V1 architecture](docs/v1-plan.md),
+[the issue-driven live workflow](docs/cloudflare/roundhouse-issue-driven-live-operations.md),
+and [the two-environment release design](docs/development/two-environment-release.md).
+
+## Current limitations
+
+- V1 is a single-tenant dogfood POC for explicitly enrolled public
+  repositories, not a general multi-repository or private-source service.
+- Roundhouse creates draft pull requests but cannot merge, modify a protected
+  default branch directly, or deploy generated changes.
+- Codex and Claude credentials are narrow development exceptions inside the
+  trusted container boundary, not a production credential-broker architecture.
+- The operator UI polls rather than streams, and recovery after interruption
+  can take several minutes.
+- Automated validation and Claude review are advisory; a human must evaluate
+  every generated change and decide whether to merge it.
+- Production promotion is never automatic and requires a separate protected
+  approval after a successful development release.
 
 ## License
 
-Roundhouse is licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution information.
+Roundhouse is licensed under the [Apache License 2.0](LICENSE). See
+[NOTICE](NOTICE) for attribution information.
