@@ -12,6 +12,9 @@ validation:
   format:
     command: pnpm
     args: [format:check]
+  formatWrite:
+    command: pnpm
+    args: [exec, prettier, --write]
   compile:
     command: pnpm
     args: [typecheck]

@@ -3,6 +3,7 @@
 
 import {
   repositoryExecutionRequestSchema,
+  roundhouseFormatterWriteCommand,
   type RepositoryExecutionRequest,
   type TrustedImplementationRequest,
 } from "@roundhouse/self-development/cloudflare";
@@ -56,6 +57,10 @@ const trustedRequest: TrustedImplementationRequest = {
   instructions: "Change only the dogfood document.",
   allowedPaths: ["docs/dogfood/trusted-self-development-loop.md"],
   validationLevel: "full",
+  formatter: {
+    command: roundhouseFormatterWriteCommand.command,
+    args: [...roundhouseFormatterWriteCommand.args],
+  },
   agentTimeoutMs: 1_200_000,
   validationTimeoutMs: 900_000,
   maxPatchBytes: 512 * 1024,

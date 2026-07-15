@@ -106,7 +106,17 @@ describe("trusted self-development contracts", () => {
     };
     expect(trustedImplementationRequestSchema.parse(request)).toMatchObject({
       allowedPaths: ["docs/dogfood/trusted-self-development-loop.md"],
+      formatter: {
+        command: "pnpm",
+        args: ["exec", "prettier", "--write"],
+      },
     });
+    expect(() =>
+      trustedImplementationRequestSchema.parse({
+        ...request,
+        formatter: { command: "sh", args: ["-c", "anything"] },
+      }),
+    ).toThrow();
     expect(
       trustedImplementationRequestSchema.parse({
         ...request,

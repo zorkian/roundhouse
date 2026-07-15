@@ -22,6 +22,12 @@ const activeChildren = new Set();
 let draining = false;
 const codexHome = "/home/runner/.roundhouse-codex";
 const claudeHome = "/home/runner/.roundhouse-claude";
+export const roundhouseFormatterWriteCommand = Object.freeze({
+  command: "pnpm",
+  args: Object.freeze(["exec", "prettier", "--write"]),
+});
+const formattablePathPattern =
+  /\.(?:cjs|css|html|js|json|jsonc|jsx|md|mdx|mjs|ts|tsx|yaml|yml)$/;
 export const planningOutputSchema = JSON.stringify({
   type: "object",
   properties: {
@@ -83,6 +89,13 @@ export function boundedLogExcerpt(value, maximum = 2_000) {
   return (typeof value === "string" ? value : "")
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]+/g, " ")
     .slice(-bound);
+}
+
+export function redactKnownSecrets(value, secrets) {
+  let redacted = typeof value === "string" ? value : "";
+  for (const secret of secrets)
+    if (secret) redacted = redacted.split(secret).join("[redacted]");
+  return redacted;
 }
 
 function lifecycle(event, request, details = {}) {
@@ -183,6 +196,7 @@ export function reproductionInvocation(value) {
 }
 
 function validateTrusted(value) {
+  const formatter = value?.formatter ?? roundhouseFormatterWriteCommand;
   if (
     value?.schemaVersion !== 1 ||
     !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(value.runId) ||
@@ -222,6 +236,12 @@ function validateTrusted(value) {
     value.allowedPaths.length > 50 ||
     !value.allowedPaths.every(validRepositoryPath) ||
     !["quick", "full"].includes(value.validationLevel) ||
+    formatter?.command !== roundhouseFormatterWriteCommand.command ||
+    !Array.isArray(formatter.args) ||
+    formatter.args.length !== roundhouseFormatterWriteCommand.args.length ||
+    !formatter.args.every(
+      (part, index) => part === roundhouseFormatterWriteCommand.args[index],
+    ) ||
     (value.bugReproduction !== undefined &&
       !validBugReproduction(value.bugReproduction)) ||
     ((value.bugReproduction !== undefined || value.planning !== undefined) &&
@@ -252,7 +272,7 @@ function validateTrusted(value) {
     ].includes(value.scenario ?? "success")
   )
     throw new Error("invalid_trusted_implementation_request");
-  return value;
+  return { ...value, formatter };
 }
 
 function validReviewProvenance(value) {
@@ -468,6 +488,88 @@ export function changedPaths(output) {
     } else paths.push(entry.slice(3));
   }
   return paths.filter(Boolean);
+}
+
+export function candidateChangedFiles(statusOutput, request, phase = "agent") {
+  const files = changedPaths(statusOutput);
+  const prefix = phase === "formatter" ? "formatter_" : "";
+  if (files.length === 0)
+    throw new Error(
+      phase === "formatter"
+        ? "formatter_produced_no_changes"
+        : "agent_produced_no_changes",
+    );
+  if (files.length > request.maxChangedFiles)
+    throw new Error(`${prefix}changed_file_limit_exceeded`);
+  if (!files.every((path) => validRepositoryPath(path)))
+    throw new Error(`${prefix}invalid_changed_path`);
+  const disallowed = files.filter(
+    (path) => !pathAllowed(path, request.allowedPaths),
+  );
+  if (disallowed.length > 0)
+    throw new Error(
+      phase === "formatter"
+        ? `formatter_changed_path_not_allowed: ${disallowed.join(", ")}`
+        : "changed_path_not_allowed",
+    );
+  return files;
+}
+
+export async function formatCandidateImplementation(
+  request,
+  files,
+  secrets = [],
+  execute = command,
+) {
+  const formattable = files.filter((path) => formattablePathPattern.test(path));
+  if (formattable.length === 0)
+    return skippedValidation(
+      "format-write",
+      "not-applicable",
+      "Skipped because no changed file uses the repository-profile formatter",
+    );
+  const args = [...request.formatter.args, "--", ...formattable];
+  lifecycle("implementation.formatter.started", request, {
+    changedFileCount: formattable.length,
+  });
+  const result = await execute(request.formatter.command, args, {
+    timeoutMs: Math.min(request.validationTimeoutMs, 120_000),
+    maxOutputBytes: Math.min(request.maxOutputBytes, 512 * 1024),
+  });
+  lifecycle("implementation.formatter.completed", request, {
+    exitCode: result.exitCode,
+    timedOut: result.timedOut,
+    durationMs: result.durationMs,
+    outputTruncated: result.outputTruncated,
+    stdoutExcerpt: boundedLogExcerpt(
+      redactKnownSecrets(result.stdout, secrets),
+    ),
+    stderrExcerpt: boundedLogExcerpt(
+      redactKnownSecrets(result.stderr, secrets),
+    ),
+  });
+  const stdout = redactKnownSecrets(result.stdout, secrets);
+  const stderr = redactKnownSecrets(result.stderr, secrets);
+  const evidence = {
+    name: "format-write",
+    command: [request.formatter.command, ...args].join(" ").slice(0, 500),
+    exitCode: result.exitCode,
+    timedOut: result.timedOut,
+    durationMs: result.durationMs,
+    stdout,
+    stderr,
+    outputTruncated: result.outputTruncated,
+  };
+  if (result.exitCode !== 0 || result.timedOut || result.outputTruncated) {
+    const diagnostics = boundedAgentFailure(
+      [stdout, stderr].filter(Boolean).join("\n"),
+      [],
+    );
+    throw new Error(
+      `formatter_failed: ${evidence.command} (exit ${String(result.exitCode)}${result.timedOut ? ", timeout" : ""}${result.outputTruncated ? ", output truncated" : ""}): ${diagnostics}`,
+    );
+  }
+  return evidence;
 }
 
 export function promptFor(request) {
@@ -1048,14 +1150,21 @@ async function implement(value) {
     "--untracked-files=all",
   ]);
   if (status.exitCode !== 0) throw new Error("changed_file_inventory_failed");
-  const files = changedPaths(status.stdout);
-  if (files.length === 0) throw new Error("agent_produced_no_changes");
-  if (files.length > request.maxChangedFiles)
-    throw new Error("changed_file_limit_exceeded");
-  if (!files.every((path) => validRepositoryPath(path)))
-    throw new Error("invalid_changed_path");
-  if (!files.every((path) => pathAllowed(path, request.allowedPaths)))
-    throw new Error("changed_path_not_allowed");
+  let files = candidateChangedFiles(status.stdout, request);
+  const formatter = await formatCandidateImplementation(
+    request,
+    files,
+    credentialSecrets,
+  );
+  const formattedStatus = await command("git", [
+    "status",
+    "--porcelain=v1",
+    "-z",
+    "--untracked-files=all",
+  ]);
+  if (formattedStatus.exitCode !== 0)
+    throw new Error("formatter_changed_file_inventory_failed");
+  files = candidateChangedFiles(formattedStatus.stdout, request, "formatter");
   const intentPaths = files.filter((path) =>
     existsSync(`${workspace}/${path}`),
   );
@@ -1088,6 +1197,7 @@ async function implement(value) {
     patchBytes,
     patchSha256: createHash("sha256").update(diff.stdout).digest("hex"),
     changedFiles: files,
+    formatter,
     retryLineage: request.retryCandidate
       ? {
           priorAttemptId: request.retryCandidate.attemptId,
@@ -1472,6 +1582,7 @@ async function validateImplementation(value) {
   validation.push(
     planComplianceValidation(request.allowedPaths, trusted.changedFiles),
   );
+  validation.push(trusted.formatter);
   const regression = await capturePostChangeRegression(
     request,
     prepared.preChange,
@@ -1506,8 +1617,13 @@ async function validateImplementation(value) {
     formattable.length > 0
       ? await validationCommand(
           "format",
-          "prettier",
-          ["--check", "--", ...formattable],
+          request.formatter.command,
+          [
+            ...request.formatter.args.slice(0, -1),
+            "--check",
+            "--",
+            ...formattable,
+          ],
           request,
           validationDeadlineAt,
         )

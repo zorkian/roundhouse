@@ -4,6 +4,7 @@
 import {
   repositoryExecutionRequestSchema,
   repositoryExecutionResultSchema,
+  roundhouseFormatterWriteCommand,
   type IndependentReviewRequest,
   type IndependentReviewResult,
   type PlanningAgentRequest,
@@ -651,6 +652,10 @@ export class CloudflareTrustedExecutionDispatcher implements ExecutionDispatcher
       retryFromAttemptId: request.retryFromAttemptId,
       allowedPaths: request.allowedPaths,
       validationLevel: request.validationLevel,
+      formatter: {
+        command: roundhouseFormatterWriteCommand.command,
+        args: [...roundhouseFormatterWriteCommand.args],
+      },
       bugReproduction: request.bugReproduction,
       planning: request.planning,
       // The development Workflow, rather than a Queue invocation, owns this

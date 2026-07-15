@@ -5,7 +5,10 @@ import { readFile } from "node:fs/promises";
 
 import { describe, expect, it } from "vitest";
 
-import { parseRepositoryProfile } from "./index.js";
+import {
+  parseRepositoryProfile,
+  roundhouseFormatterWriteCommand,
+} from "./index.js";
 
 const validProfile = `
 version: 1
@@ -52,4 +55,13 @@ describe("repository profiles", () => {
       expect(profile.network.default).toBe("deny");
     },
   );
+
+  it("keeps the trusted Roundhouse formatter command bound to its profile", async () => {
+    const profile = parseRepositoryProfile(
+      await readFile("profiles/roundhouse.v1.yaml", "utf8"),
+    );
+    expect(profile.validation.formatWrite).toEqual(
+      roundhouseFormatterWriteCommand,
+    );
+  });
 });
