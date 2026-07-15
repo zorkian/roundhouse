@@ -18,6 +18,7 @@ import type { ControlPlaneEnv } from "./environment.js";
 import {
   createControlPlaneHandler,
   executeTrustedExecutionWorkflow,
+  independentReviewCheckOutcome,
 } from "./index.js";
 import {
   controlPlaneSubmissionMigration,
@@ -373,6 +374,31 @@ async function deliver(
 }
 
 describe("local control-plane Worker", () => {
+  it("keeps advisory review findings visible without requiring human Check action", () => {
+    expect(
+      independentReviewCheckOutcome({
+        status: "completed",
+        findingCount: 1,
+        acceptedCount: 0,
+      }),
+    ).toEqual({
+      status: "completed",
+      conclusion: "success",
+      title: "Independent review passed with 1 advisory finding",
+    });
+    expect(
+      independentReviewCheckOutcome({
+        status: "remediation_pending",
+        findingCount: 1,
+        acceptedCount: 1,
+      }),
+    ).toEqual({
+      status: "in_progress",
+      conclusion: null,
+      title: "Independent review remediation in progress",
+    });
+  });
+
   it("keeps the Access-bypassed namespace limited to one exact Worker route", async () => {
     const { env } = await runtime();
     const handler = createControlPlaneHandler();

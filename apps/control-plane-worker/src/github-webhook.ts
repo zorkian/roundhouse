@@ -118,6 +118,7 @@ const checkSchema = envelopeSchema.extend({
   check_run: z
     .object({
       id: z.number().int().positive(),
+      app: z.object({ id: z.number().int().positive() }).optional(),
       head_sha: z.string().regex(/^[a-f0-9]{40}$/),
       status: z.string(),
       conclusion: z.string().nullable().optional(),
@@ -127,6 +128,7 @@ const checkSchema = envelopeSchema.extend({
   check_suite: z
     .object({
       id: z.number().int().positive(),
+      app: z.object({ id: z.number().int().positive() }).optional(),
       head_sha: z.string().regex(/^[a-f0-9]{40}$/),
       status: z.string(),
       conclusion: z.string().nullable().optional(),
@@ -559,22 +561,32 @@ export function pullRequestFeedback(
   return null;
 }
 
-export function checkObservation(value: VerifiedWebhook): Array<{
+export function checkObservation(
+  value: VerifiedWebhook,
+  roundhouseAppId?: number,
+): Array<{
   pullRequestNumber: number;
   headSha: string;
   key: string;
   status: string;
   conclusion?: string;
 }> {
-  if (!["check_run", "check_suite"].includes(value.eventName)) return [];
+  // GitHub sends both suite and run completion events for the same result. The
+  // completed check run is the single actionable unit; retaining the suite as
+  // another observation would duplicate comments and remediation.
+  if (value.eventName !== "check_run") return [];
   const payload = checkSchema.parse(value.payload);
-  const check =
-    value.eventName === "check_run" ? payload.check_run : payload.check_suite;
+  const check = payload.check_run;
   if (!check) return [];
+  // Roundhouse's independent-review Check is a projection of internal review
+  // state, not repository CI. Use the authenticated GitHub App identity rather
+  // than the mutable Check display name to exclude it.
+  if (roundhouseAppId !== undefined && check.app?.id === roundhouseAppId)
+    return [];
   return check.pull_requests.map((pull) => ({
     pullRequestNumber: pull.number,
     headSha: check.head_sha,
-    key: `${value.eventName}:${check.id}`,
+    key: `check_run:${check.id}`,
     status: check.status,
     conclusion: check.conclusion ?? undefined,
   }));

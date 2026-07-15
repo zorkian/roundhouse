@@ -1107,7 +1107,10 @@ async function enqueueReviewComment(
   const accepted = review.dispositions.filter(
     (value) => value.disposition === "accepted",
   ).length;
-  const running = review.status === "pending" || review.status === "running";
+  const running =
+    review.status === "pending" ||
+    review.status === "running" ||
+    review.status === "remediation_pending";
   const heading = running
     ? "## 🔍 Independent review in progress"
     : review.status === "failed"
@@ -1135,7 +1138,7 @@ async function enqueueReviewComment(
   }
   if (readyForHumanReview)
     common.push(
-      "**The draft flag has been removed. This pull request is ready for human review and a merge decision.**",
+      `**The draft flag has been removed. Next action: confirm repository CI is passing, then merge pull request #${review.request.pullRequestNumber} if the change looks right.**`,
     );
   if (review.status === "failed")
     common.push(
@@ -1205,30 +1208,20 @@ async function enqueueReviewComment(
   );
   if (env.GITHUB_REVIEW_CHECKS_ENABLED !== "true") return;
   const findingCount = findings.length;
-  const failed = review.status === "failed";
+  const check = independentReviewCheckOutcome({
+    status: review.status,
+    findingCount,
+    acceptedCount: accepted,
+  });
   await enqueueReviewCheck(env, {
     repositoryFullName: identity.repositoryFullName,
     reviewId: review.request.reviewId,
     pullRequestNumber: review.request.pullRequestNumber,
     headSha: review.request.headCommit,
     revision: review.revision,
-    status: running ? "in_progress" : "completed",
-    conclusion: running
-      ? null
-      : failed
-        ? "failure"
-        : findingCount > 0
-          ? review.status === "remediated"
-            ? "neutral"
-            : "action_required"
-          : "success",
-    title: running
-      ? "Independent review in progress"
-      : failed
-        ? "Independent review failed"
-        : findingCount === 0
-          ? "Independent review passed"
-          : `Independent review found ${findingCount} substantive ${findingCount === 1 ? "finding" : "findings"}`,
+    status: check.status,
+    conclusion: check.conclusion,
+    title: check.title,
     summary: [
       `Review: ${review.request.reviewId}`,
       `Exact head: ${review.request.headCommit}`,
@@ -1238,6 +1231,58 @@ async function enqueueReviewComment(
     ].join("\n"),
     detailsUrl: `${identity.origin}/reviews/${review.request.reviewId}`,
   });
+}
+
+export function independentReviewCheckOutcome(input: {
+  status: DurableIndependentReview["status"];
+  findingCount: number;
+  acceptedCount: number;
+}): {
+  status: "in_progress" | "completed";
+  conclusion: "success" | "failure" | "neutral" | "action_required" | null;
+  title: string;
+} {
+  if (["pending", "running", "remediation_pending"].includes(input.status))
+    return {
+      status: "in_progress",
+      conclusion: null,
+      title:
+        input.status === "remediation_pending"
+          ? "Independent review remediation in progress"
+          : "Independent review in progress",
+    };
+  if (input.status === "failed")
+    return {
+      status: "completed",
+      conclusion: "failure",
+      title: "Independent review failed",
+    };
+  if (input.status === "remediated")
+    return {
+      status: "completed",
+      conclusion: "neutral",
+      title:
+        input.findingCount === 0
+          ? "Independent review remediation completed"
+          : `Independent review found ${input.findingCount} substantive ${input.findingCount === 1 ? "finding" : "findings"}`,
+    };
+  if (input.acceptedCount > 0)
+    return {
+      status: "completed",
+      conclusion: "action_required",
+      title: "Independent review requires human action",
+    };
+  // A completed review with no accepted findings is passing even when Claude
+  // recorded advisory findings. Those findings remain visible in evidence and
+  // comments, but no human action is required to resolve the Check itself.
+  return {
+    status: "completed",
+    conclusion: "success",
+    title:
+      input.findingCount === 0
+        ? "Independent review passed"
+        : `Independent review passed with ${input.findingCount} advisory ${input.findingCount === 1 ? "finding" : "findings"}`,
+  };
 }
 
 function reviewBackend(env: ControlPlaneEnv) {
@@ -1947,7 +1992,11 @@ async function githubWebhook(
       }
     | undefined;
   try {
-    const observations = checkObservation(webhook);
+    const configuredAppId = Number(env.GITHUB_APP_ID);
+    const observations = checkObservation(
+      webhook,
+      Number.isSafeInteger(configuredAppId) ? configuredAppId : undefined,
+    );
     if (observations.length > 0) {
       await recordCheckObservations(env, observations);
       const targets = await exactPublishedCheckTargets(env, observations);
