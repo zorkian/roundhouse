@@ -159,10 +159,19 @@ import {
   reviewInspection,
 } from "./operator-ui.js";
 import { runtimeIdentity } from "./runtime-config.js";
+import {
+  markManualFallback,
+  reliabilitySummary,
+} from "./reliability-metrics.js";
 
 const maxBodyBytes = 64 * 1024;
 const jsonHeaders = { "content-type": "application/json; charset=utf-8" };
 const delegatedApprover = "mark-smith-delegated-trusted-loop-dogfood";
+const manualFallbackSchema = z.object({
+  schemaVersion: z.literal(1),
+  expectedRevision: z.number().int().positive(),
+  planSha256: z.string().regex(/^[a-f0-9]{64}$/),
+});
 // Healthy work renews a short lease. A terminated Worker therefore becomes
 // reclaimable promptly without allowing a long-running healthy agent to overlap.
 const trustedImplementationLeaseMs = 5 * 60_000;
@@ -3381,6 +3390,55 @@ async function route(
         resolvedAt: row.resolved_at ?? undefined,
       })),
     });
+  }
+  if (
+    request.method === "GET" &&
+    url.pathname === "/v1/operations/reliability"
+  ) {
+    const identity = runtimeIdentity(env);
+    return json(
+      await reliabilitySummary(
+        env,
+        identity.environment,
+        identity.repositoryFullName,
+      ),
+    );
+  }
+  const manualFallbackMatch =
+    /^\/v1\/plans\/([a-zA-Z0-9_-]{1,128})\/manual-fallback$/.exec(url.pathname);
+  if (request.method === "POST" && manualFallbackMatch?.[1]) {
+    const input = manualFallbackSchema.parse(await requestBody(request));
+    const planId = manualFallbackMatch[1];
+    return mutationResponse(
+      request,
+      env,
+      actorId,
+      "manual-fallback",
+      planId,
+      input,
+      async () => {
+        try {
+          return json(
+            await markManualFallback(env, {
+              planId,
+              expectedRevision: input.expectedRevision,
+              planSha256: input.planSha256,
+              actorId,
+              now: new Date(),
+            }),
+          );
+        } catch (error) {
+          if (error instanceof Error && error.message === "Plan not found")
+            throw new HttpError(404, error.message);
+          if (
+            error instanceof Error &&
+            error.message === "Manual fallback binding does not match"
+          )
+            throw new HttpError(409, error.message);
+          throw error;
+        }
+      },
+    );
   }
   if (request.method === "GET" && url.pathname === "/v1/operations/retention")
     return json(await retentionReport(env));

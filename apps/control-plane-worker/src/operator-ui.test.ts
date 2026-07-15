@@ -443,6 +443,20 @@ describe("operator UI", () => {
       vi.fn(async () =>
         Response.json({
           schemaVersion: 1,
+          reliability: {
+            schemaVersion: 1,
+            environment: "development",
+            workflows: [
+              {
+                manualFallbackRequired: true,
+                counts: { retries: 2 },
+                terminal: { status: "terminal", outcome: "succeeded" },
+                durations: {
+                  startToPlan: { status: "available", milliseconds: 12_000 },
+                },
+              },
+            ],
+          },
           plans: [
             {
               status: "materialized",
@@ -516,6 +530,9 @@ describe("operator UI", () => {
     expect(app.innerHTML).toContain("Needs attention");
     expect(app.innerHTML).toContain("In progress");
     expect(app.innerHTML).toContain("Finished");
+    expect(app.innerHTML).toContain("V1 pilot reliability");
+    expect(app.innerHTML).toContain("development");
+    expect(app.innerHTML).toContain("12s");
     expect(app.innerHTML).not.toContain("<h2>Plans</h2>");
     expect(app.innerHTML).not.toContain("<h2>Runs</h2>");
     expect(app.innerHTML).not.toContain("<h2>Independent reviews</h2>");
