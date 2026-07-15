@@ -174,7 +174,18 @@ describe("operator UI", () => {
           taskId: "task_live",
           state: "implementing",
           revision: 3,
-          attempts: [],
+          attempts: [
+            {
+              attemptId: "run_live-prepare-1",
+              stage: "prepare",
+              number: 1,
+              status: "failed",
+              classification: "lease_expired",
+              error: "Worker lease expired during execution",
+              startedAt: "2026-07-14T00:00:00.000Z",
+              completedAt: "2026-07-14T00:06:00.000Z",
+            },
+          ],
           evidence: [],
           events: [],
           reviews: [
@@ -243,6 +254,9 @@ describe("operator UI", () => {
     expect(app.innerHTML).toContain("The implementation is ready.");
     expect(app.innerHTML).toContain("Keep the timeline readable");
     expect(app.innerHTML).toContain("running");
+    expect(app.innerHTML).toContain("prepare outcome");
+    expect(app.innerHTML).toContain("lease_expired");
+    expect(app.innerHTML).toContain("Worker lease expired during execution");
     expect(app.innerHTML).toContain("5s");
     expect(app.innerHTML).not.toContain("run_live-prepare-1");
     expect(app.innerHTML).not.toContain(
@@ -254,7 +268,7 @@ describe("operator UI", () => {
     );
     expect(app.innerHTML).not.toContain("<h2>Attempts</h2>");
     expect(app.innerHTML).not.toContain("<h2>Evidence</h2>");
-    expect(app.innerHTML.match(/class="event-row"/g)).toHaveLength(3);
+    expect(app.innerHTML.match(/class="event-row"/g)).toHaveLength(4);
   });
 
   it("does not label the source run as an active remediation", async () => {

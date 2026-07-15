@@ -28,6 +28,7 @@ import {
   modelRequestAuditAccepted,
 } from "./execution-egress.js";
 import { recordExecutionPhase } from "./execution-progress.js";
+import { withContainerControlTimeout } from "./execution-control.js";
 
 const modelHosts = ["chatgpt.com", "auth.openai.com"];
 const reviewModelHosts = ["api.anthropic.com"];
@@ -411,8 +412,14 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
       await this.phase(request, "agent.implement", () =>
         this.post("/trusted/implement", request),
       );
-      await this.setOutboundByHosts({});
-      await this.setAllowedHosts([]);
+      await this.phase(request, "network.revoke", async () => {
+        await withContainerControlTimeout("outbound revocation", () =>
+          this.setOutboundByHosts({}),
+        );
+        await withContainerControlTimeout("allowlist revocation", () =>
+          this.setAllowedHosts([]),
+        );
+      });
       const result = await this.phase(request, "validation", async () =>
         trustedImplementationResultSchema.parse({
           ...((await this.post("/trusted/validate", request)) as object),
@@ -432,9 +439,13 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
         mode: "trusted-agent",
       });
       const cleanup = await Promise.allSettled([
-        this.setOutboundByHosts({}),
-        this.setAllowedHosts([]),
-        this.stop(),
+        withContainerControlTimeout("cleanup outbound revocation", () =>
+          this.setOutboundByHosts({}),
+        ),
+        withContainerControlTimeout("cleanup allowlist revocation", () =>
+          this.setAllowedHosts([]),
+        ),
+        withContainerControlTimeout("cleanup stop", () => this.stop()),
       ]);
       const failures = cleanup.filter((result) => result.status === "rejected");
       if (failures.length > 0)

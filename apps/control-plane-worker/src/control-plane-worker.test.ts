@@ -1775,6 +1775,50 @@ describe("local control-plane Worker", () => {
     expect(reservation.row.delivery_state).toBe("sent");
   });
 
+  it("refreshes active GitHub run status during scheduled recovery", async () => {
+    const { env } = await runtime();
+    const jobs = new D1JobStore(env.DB);
+    const now = new Date("2026-07-15T02:40:00.000Z");
+    const runId = "run_scheduled_status";
+    await jobs.submit(
+      runId,
+      {
+        ...task,
+        taskId: "task_scheduled_status",
+        source: {
+          kind: "github_issue",
+          owner: "zorkian",
+          repository: "roundhouse",
+          issueNumber: 65,
+          issueUrl: "https://github.com/zorkian/roundhouse/issues/65",
+          nodeId: "issue-node-65",
+          contentSha256: "6".repeat(64),
+          updatedAt: now.toISOString(),
+        },
+      },
+      now,
+    );
+    await env.DB.prepare(
+      "INSERT INTO github_issue_runs(issue_number, run_id, created_at, updated_at) VALUES (?, ?, ?, ?)",
+    )
+      .bind(65, runId, now.toISOString(), now.toISOString())
+      .run();
+    const handler = createControlPlaneHandler();
+
+    await handler.scheduled!(
+      {} as ScheduledController,
+      env,
+      {} as ExecutionContext,
+    );
+
+    const comment = await env.DB.prepare(
+      "SELECT body FROM github_comment_outbox WHERE comment_key LIKE 'issue-status:%' AND issue_number = 65",
+    ).first<{ body: string }>();
+    expect(comment?.body).toContain(runId);
+    expect(comment?.body).toContain("revision `1`");
+    expect(comment?.body).toContain("Open live status");
+  });
+
   it("rejects conflicting idempotency reuse", async () => {
     const { env } = await runtime();
     const handler = createControlPlaneHandler();
