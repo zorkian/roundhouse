@@ -128,6 +128,7 @@ describe("GitHub-native operator webhook", () => {
         `/rh replan plan_${"a".repeat(40)} 2 ${"b".repeat(64)}`,
       ),
     ).toMatchObject({ kind: "replan", revision: 2 });
+    expect(parseGitHubCommand("/rh replan")).toEqual({ kind: "replan" });
     expect(
       parseGitHubCommand(
         `/rh clarify plan_${"a".repeat(40)} 2 ${"b".repeat(64)}`,
