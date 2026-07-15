@@ -1194,7 +1194,7 @@ async function enqueueReviewComment(
     );
   const issueLines = [
     ...common,
-    `Draft pull request: ${review.request.pullRequestUrl}`,
+    `${review.request.manualFallback ? "Pull request" : "Draft pull request"}: ${review.request.pullRequestUrl}`,
   ];
   if (findings.length > 0)
     issueLines.push(
