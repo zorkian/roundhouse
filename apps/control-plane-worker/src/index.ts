@@ -336,6 +336,7 @@ async function planGitHubIssue(
   revisionRequest?: {
     current: DurableIssuePlan;
     answers?: string;
+    restartFromScratch?: boolean;
   },
 ): Promise<DurableIssuePlan> {
   const identity = runtimeIdentity(env);
@@ -424,7 +425,9 @@ async function planGitHubIssue(
           planId: revisionRequest.current.plan.planId,
           revision: revisionRequest.current.revision,
           planSha256: revisionRequest.current.plan.planSha256,
-          allowSameIssueContent: revisionRequest.answers !== undefined,
+          allowSameIssueContent:
+            revisionRequest.answers !== undefined ||
+            revisionRequest.restartFromScratch === true,
         }
       : undefined,
   );
@@ -651,12 +654,9 @@ async function planComment(
       );
     if (value.status === "proposed")
       lines.push(
-        "Request a new plan after editing the issue with:",
+        "Start planning again from the latest issue with:",
         "```text",
-        githubCommand(
-          identity,
-          `replan ${value.plan.planId} ${value.revision} ${value.plan.planSha256}`,
-        ),
+        githubCommand(identity, "replan"),
         "```",
       );
     if (value.runId) lines.push(`Materialized run: \`${value.runId}\``);
@@ -1789,9 +1789,10 @@ async function executeGitHubCommand(
     const current = await readIssuePlan(env, issueNumber);
     if (
       !current ||
-      current.plan.planId !== command.planId ||
-      current.revision !== command.revision ||
-      current.plan.planSha256 !== command.planSha256
+      (command.planId !== undefined &&
+        (current.plan.planId !== command.planId ||
+          current.revision !== command.revision ||
+          current.plan.planSha256 !== command.planSha256))
     )
       throw new HttpError(409, "Replanning binding does not match this issue");
     if (command.kind === "clarify" && current.status !== "needs_clarification")
@@ -1804,6 +1805,8 @@ async function executeGitHubCommand(
     const plan = await planGitHubIssue(issueNumber, env, actorId, {
       current,
       answers: command.kind === "clarify" ? command.answers : undefined,
+      restartFromScratch:
+        command.kind === "replan" && command.planId === undefined,
     });
     if (lowRiskPlan(plan)) {
       runId = await materializeLowRiskPlan(env, issueNumber, plan, actorId);

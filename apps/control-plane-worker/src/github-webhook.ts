@@ -146,9 +146,9 @@ export type GitHubCommand =
     }
   | {
       kind: "replan";
-      planId: string;
-      revision: number;
-      planSha256: string;
+      planId?: string;
+      revision?: number;
+      planSha256?: string;
     }
   | { kind: "status"; runId?: string }
   | {
@@ -236,6 +236,7 @@ export function parseGitHubCommand(
       revision,
       planSha256: parts[4]!,
     };
+  if (parts[1] === "replan" && parts.length === 2) return { kind: "replan" };
   if (
     parts[1] === "implement" &&
     parts.length === 5 &&
