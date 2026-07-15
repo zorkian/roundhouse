@@ -179,10 +179,10 @@ function validateTrusted(value) {
     !["quick", "full"].includes(value.validationLevel) ||
     !Number.isInteger(value.agentTimeoutMs) ||
     value.agentTimeoutMs <= 0 ||
-    value.agentTimeoutMs > 1_200_000 ||
+    value.agentTimeoutMs > 7_200_000 ||
     !Number.isInteger(value.validationTimeoutMs) ||
     value.validationTimeoutMs <= 0 ||
-    value.validationTimeoutMs > 900_000 ||
+    value.validationTimeoutMs > 1_800_000 ||
     !Number.isInteger(value.maxPatchBytes) ||
     value.maxPatchBytes <= 0 ||
     value.maxPatchBytes > 512 * 1024 ||

@@ -301,6 +301,12 @@ export async function runRecoveryCycle(
       alertsRecorded += 1;
       continue;
     }
+    const activeWorkflow = await env.DB.prepare(
+      "SELECT workflow_instance_id FROM trusted_execution_workflows WHERE run_id = ? AND status IN ('pending', 'dispatched', 'running') ORDER BY created_at DESC LIMIT 1",
+    )
+      .bind(run.runId)
+      .first<{ workflow_instance_id: string }>();
+    if (activeWorkflow) continue;
     if (run.lease && new Date(run.lease.expiresAt) > now) continue;
     const recoveryKind = run.lease
       ? "expired_lease_requeued"

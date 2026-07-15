@@ -19,6 +19,7 @@ import {
   retryFailedRun,
   runRecoveryCycle,
 } from "./operations.js";
+import { trustedExecutionWorkflowMigration } from "./trusted-execution-workflow.js";
 
 let instance: Miniflare;
 let sharedDb: D1Database;
@@ -46,6 +47,7 @@ beforeAll(async () => {
   sharedDb = await instance.getD1Database("DB");
   for (const statement of `${d1JobStoreMigration}
     ${cloudOperationsMigration}
+    ${trustedExecutionWorkflowMigration}
     CREATE TABLE control_plane_submissions(idempotency_key TEXT PRIMARY KEY, request_hash TEXT, run_id TEXT, delivery_id TEXT, delivery_state TEXT, created_at TEXT, delivered_at TEXT);
     CREATE TABLE execution_evidence(evidence_id TEXT PRIMARY KEY);`
     .split(";")
@@ -81,6 +83,7 @@ beforeEach(async () => {
     "recovery_cycles",
     "control_plane_submissions",
     "execution_evidence",
+    "trusted_execution_workflows",
     "self_development_runs",
   ])
     await sharedDb.prepare(`DELETE FROM ${table}`).run();
@@ -177,6 +180,32 @@ describe("cloud operator persistence", () => {
     );
     expect(cycle).toMatchObject({ requeuedRuns: 2, alertsRecorded: 3 });
     expect(env.queued).toHaveLength(2);
+  });
+
+  it("does not requeue a lease-less run owned by an active Workflow", async () => {
+    const env = await runtime();
+    const jobs = new D1JobStore(env.DB);
+    const start = new Date("2026-07-12T00:00:00Z");
+    await jobs.submit("run_workflow_owned", task, start);
+    await env.DB.prepare(
+      "INSERT INTO trusted_execution_workflows(workflow_instance_id, run_id, delivery_id, expected_revision, status, created_at) VALUES (?, ?, ?, ?, 'running', ?)",
+    )
+      .bind(
+        `trusted-${"a".repeat(64)}`,
+        "run_workflow_owned",
+        "delivery_workflow_owned",
+        1,
+        start.toISOString(),
+      )
+      .run();
+
+    const cycle = await runRecoveryCycle(
+      env,
+      new Date(start.getTime() + 60_000),
+    );
+
+    expect(cycle.requeuedRuns).toBe(0);
+    expect(env.queued).toEqual([]);
   });
 
   it("allows an exact operator retry for a validation failure without making it automatic", async () => {

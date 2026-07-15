@@ -16,6 +16,7 @@ import {
   DispatchingStageExecutor,
   ResumableCoordinator,
   type DurableIndependentReview,
+  type RunDelivery,
   type SelfDevelopmentTask,
 } from "@roundhouse/self-development/cloudflare";
 import { z } from "zod";
@@ -105,6 +106,13 @@ import {
   reserveIndependentReview,
 } from "./github-review.js";
 import { DeterministicLocalDispatcher } from "./local-dispatch.js";
+import {
+  consumeTrustedExecutionDelivery,
+  readTrustedExecutionWorkflows,
+  runTrustedExecutionWorkflow,
+  type TrustedExecutionWorkflowResult,
+  type TrustedExecutionWorkflowStepPort,
+} from "./trusted-execution-workflow.js";
 import {
   IdempotencyConflictError,
   markDelivered,
@@ -993,6 +1001,84 @@ async function enqueueActiveRunComments(env: ControlPlaneEnv): Promise<void> {
   ).all<{ issue_number: number; run_id: string }>();
   for (const row of rows.results)
     await enqueueRunComment(env, row.issue_number, row.run_id);
+}
+
+function workflowResult(run: {
+  runId: string;
+  revision: number;
+  state: string;
+}): TrustedExecutionWorkflowResult {
+  return {
+    schemaVersion: 1,
+    runId: run.runId,
+    revision: run.revision,
+    state: run.state,
+  };
+}
+
+async function finalizeRunDelivery(
+  env: ControlPlaneEnv,
+  delivery: RunDelivery,
+  processed?: Awaited<ReturnType<ResumableCoordinator["workRun"]>>,
+): Promise<TrustedExecutionWorkflowResult> {
+  const jobs = new D1JobStore(env.DB);
+  let run = processed;
+  if (!run)
+    try {
+      run = await jobs.read(delivery.runId);
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("Run not found:"))
+        throw new Error("Trusted execution run is unavailable");
+      throw error;
+    }
+  const latest = run.attempts.at(-1);
+  if (run.state !== "failed" && latest?.status === "failed" && latest.retryable)
+    await env.RUN_QUEUE.send({
+      schemaVersion: 1,
+      runId: run.runId,
+      deliveryId: `retry_${run.runId}_${run.revision}`,
+      expectedRevision: run.revision,
+    });
+  run = await publishEligibleLowRiskRun(env, run);
+  if (run.task.source?.kind === "github_issue") {
+    await enqueueRunComment(env, run.task.source.issueNumber, run.runId);
+    await enqueueRunFailureComment(env, run.task.source.issueNumber, run);
+    await enqueueRunActionComment(env, run.task.source.issueNumber, run);
+    try {
+      await flushGitHubOutputs(env);
+    } catch (error) {
+      console.warn("GitHub Queue status delivery deferred", {
+        runId: run.runId,
+        reason: redactedReason(error),
+      });
+    }
+  }
+  return workflowResult(run);
+}
+
+export async function executeTrustedExecutionWorkflow(
+  env: ControlPlaneEnv,
+  input: unknown,
+  step: TrustedExecutionWorkflowStepPort,
+): Promise<TrustedExecutionWorkflowResult> {
+  const jobs = new D1JobStore(env.DB);
+  return runTrustedExecutionWorkflow(
+    env,
+    input,
+    step,
+    async (delivery) => {
+      const processed = await coordinator(env).workRun(
+        delivery.runId,
+        delivery.expectedRevision,
+      );
+      if (processed) return workflowResult(processed);
+      const current = await jobs.read(delivery.runId);
+      if (current.lease && Date.parse(current.lease.expiresAt) > Date.now())
+        throw new Error("Trusted execution run still has a valid lease");
+      return workflowResult(current);
+    },
+    async (delivery) => finalizeRunDelivery(env, delivery),
+  );
 }
 
 async function enqueueReviewComment(
@@ -2398,6 +2484,7 @@ async function route(
       return json({
         ...inspectRun(await new D1JobStore(env.DB).read(match[1])),
         progress: await readExecutionProgress(env, match[1]),
+        workflows: await readTrustedExecutionWorkflows(env, match[1]),
         reviews: await listRunReviews(env, match[1]),
       });
     } catch (error) {
@@ -2704,69 +2791,32 @@ export function createControlPlaneHandler(
       }
     },
     async queue(batch, env): Promise<void> {
-      const worker = coordinator(env);
-      const jobs = new D1JobStore(env.DB);
+      const workflowBacked =
+        env.EXECUTION_MODE === "cloudflare-trusted-codex" &&
+        Boolean(env.TRUSTED_EXECUTION_WORKFLOW);
+      const worker = workflowBacked ? undefined : coordinator(env);
       for (const message of batch.messages) {
         if (await consumeReviewMessage(message, env)) continue;
+        if (workflowBacked) {
+          await consumeTrustedExecutionDelivery(
+            {
+              body: message.body,
+              ack: () => message.ack(),
+              retry: () => message.retry(),
+            },
+            env,
+          );
+          continue;
+        }
         await consumeRunDelivery(
           {
             body: message.body,
             ack: () => message.ack(),
             retry: () => message.retry(),
           },
-          worker,
-          async (delivery, processed) => {
-            let run = processed;
-            if (!run)
-              try {
-                run = await jobs.read(delivery.runId);
-              } catch (error) {
-                if (
-                  error instanceof Error &&
-                  error.message.startsWith("Run not found:")
-                )
-                  return;
-                throw error;
-              }
-            const latest = run.attempts.at(-1);
-            if (
-              run.state !== "failed" &&
-              latest?.status === "failed" &&
-              latest.retryable
-            )
-              await env.RUN_QUEUE.send({
-                schemaVersion: 1,
-                runId: run.runId,
-                deliveryId: `retry_${run.runId}_${run.revision}`,
-                expectedRevision: run.revision,
-              });
-            run = await publishEligibleLowRiskRun(env, run);
-            if (run.task.source?.kind === "github_issue") {
-              await enqueueRunComment(
-                env,
-                run.task.source.issueNumber,
-                run.runId,
-              );
-              await enqueueRunFailureComment(
-                env,
-                run.task.source.issueNumber,
-                run,
-              );
-              await enqueueRunActionComment(
-                env,
-                run.task.source.issueNumber,
-                run,
-              );
-              try {
-                await flushGitHubOutputs(env);
-              } catch (error) {
-                console.warn("GitHub Queue status delivery deferred", {
-                  runId: run.runId,
-                  reason: redactedReason(error),
-                });
-              }
-            }
-          },
+          worker!,
+          async (delivery, processed) =>
+            void (await finalizeRunDelivery(env, delivery, processed)),
         );
       }
     },

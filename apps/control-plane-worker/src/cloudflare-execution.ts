@@ -636,12 +636,11 @@ export class CloudflareTrustedExecutionDispatcher implements ExecutionDispatcher
       retryFromAttemptId: request.retryFromAttemptId,
       allowedPaths: request.allowedPaths,
       validationLevel: request.validationLevel,
-      // Queue consumers have a hard 15-minute wall-clock limit. Keep the
-      // bounded agent and validation budgets below it so the coordinator can
-      // durably finish or classify the attempt before Cloudflare ends the
-      // invocation.
-      agentTimeoutMs: 9 * 60_000,
-      validationTimeoutMs: 3 * 60_000,
+      // The development Workflow, rather than a Queue invocation, owns this
+      // bounded long-running attempt. These are total agent and validation
+      // budgets; the Workflow itself retains a small finalization margin.
+      agentTimeoutMs: 2 * 60 * 60_000,
+      validationTimeoutMs: 30 * 60_000,
       maxPatchBytes: 512 * 1024,
       maxChangedFiles: 50,
       maxOutputBytes: 5 * 1024 * 1024,

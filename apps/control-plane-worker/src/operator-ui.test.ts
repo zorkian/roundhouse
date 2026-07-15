@@ -174,6 +174,15 @@ describe("operator UI", () => {
           taskId: "task_live",
           state: "implementing",
           revision: 3,
+          workflows: [
+            {
+              workflowInstanceId: `trusted-${"a".repeat(64)}`,
+              deliveryId: "delivery_live",
+              expectedRevision: 1,
+              status: "running",
+              createdAt: "2026-07-14T00:00:00.000Z",
+            },
+          ],
           attempts: [
             {
               attemptId: "run_live-prepare-1",
@@ -254,6 +263,8 @@ describe("operator UI", () => {
     expect(app.innerHTML).toContain("The implementation is ready.");
     expect(app.innerHTML).toContain("Keep the timeline readable");
     expect(app.innerHTML).toContain("running");
+    expect(app.innerHTML).toContain("durable execution");
+    expect(app.innerHTML).toContain(`trusted-${"a".repeat(64)}`);
     expect(app.innerHTML).toContain("prepare outcome");
     expect(app.innerHTML).toContain("lease_expired");
     expect(app.innerHTML).toContain("Worker lease expired during execution");
