@@ -20,6 +20,34 @@ function json(value: unknown, status = 200): Response {
   });
 }
 
+const reviewPackage = {
+  issueNumber: 7,
+  issueUrl: "https://github.com/zorkian/roundhouse/issues/7",
+  issueTitle: "Dogfood task",
+  planId: `plan_${"a".repeat(40)}`,
+  planSha256: "b".repeat(64),
+  problem: "Make the change independently reviewable.",
+  implementation: "Updated the dogfood document.",
+  files: [
+    {
+      path: "docs/dogfood/github-integrated-poc.md",
+      reason: "updated by the approved implementation",
+    },
+  ],
+  validation: [
+    {
+      name: "license" as const,
+      command: "node scripts/check-license-headers.mjs",
+      exitCode: 0,
+      timedOut: false,
+      durationMs: 1,
+      stdout: "",
+      stderr: "",
+      outputTruncated: false,
+    },
+  ],
+};
+
 describe("GitHub App gateway", () => {
   it("bounds GitHub Actions job logs before returning evidence", async () => {
     const fetcher: typeof fetch = async (input) => {
@@ -655,6 +683,8 @@ describe("GitHub App gateway", () => {
           head: { sha: commit },
         });
       }
+      if (url.pathname.endsWith("/pulls/11") && method === "PATCH")
+        return json({});
       if (url.pathname.endsWith(`/git/commits/${commit}`))
         return json({
           sha: commit,
@@ -690,6 +720,7 @@ describe("GitHub App gateway", () => {
       pullRequestTitle: "Roundhouse GitHub dogfood",
       issueNumber: 7,
       approvedAt: "2026-07-12T00:45:00Z",
+      reviewPackage,
     });
     expect(result).toMatchObject({
       commit,
@@ -698,7 +729,7 @@ describe("GitHub App gateway", () => {
       reconciled: true,
     });
     expect(pullBody).toContain("Closes #7");
-    expect(pullBody).toContain("independent Claude review");
+    expect(pullBody).toContain("Independent Claude review");
   });
 
   it("advances an existing branch only from the exact expected head", async () => {
@@ -743,6 +774,8 @@ describe("GitHub App gateway", () => {
             head: { sha: commit },
           },
         ]);
+      if (url.pathname.endsWith("/pulls/11") && method === "PATCH")
+        return json({});
       if (url.pathname.endsWith(`/git/commits/${commit}`))
         return json({
           sha: commit,
@@ -779,6 +812,7 @@ describe("GitHub App gateway", () => {
         pullRequestTitle: "Roundhouse GitHub dogfood",
         issueNumber: 7,
         approvedAt: "2026-07-12T00:45:00Z",
+        reviewPackage,
       }),
     ).resolves.toMatchObject({ commit, pullRequestNumber: 11 });
     expect(updates).toBe(1);

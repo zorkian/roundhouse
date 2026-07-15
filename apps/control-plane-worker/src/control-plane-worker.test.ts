@@ -1225,6 +1225,7 @@ describe("local control-plane Worker", () => {
     const commit = "e".repeat(40);
     let branch: string | null = null;
     let pullWrites = 0;
+    let pullRequestBody = "";
     let reviewCheck:
       | {
           id: number;
@@ -1294,6 +1295,7 @@ describe("local control-plane Worker", () => {
         );
       if (url.pathname.endsWith("/pulls") && method === "POST") {
         pullWrites += 1;
+        pullRequestBody = String(body?.body ?? "");
         return new Response(
           JSON.stringify({
             number: 11,
@@ -1301,6 +1303,24 @@ describe("local control-plane Worker", () => {
             head: { sha: commit },
           }),
           { status: 201 },
+        );
+      }
+      if (url.pathname.endsWith("/pulls/11") && method === "GET")
+        return new Response(
+          JSON.stringify({
+            number: 11,
+            body: pullRequestBody,
+            head: { sha: commit },
+          }),
+        );
+      if (url.pathname.endsWith("/pulls/11") && method === "PATCH") {
+        pullRequestBody = String(body?.body ?? "");
+        return new Response(
+          JSON.stringify({
+            number: 11,
+            body: pullRequestBody,
+            head: { sha: commit },
+          }),
         );
       }
       if (url.pathname.endsWith(`/git/commits/${commit}`))
@@ -1419,6 +1439,8 @@ describe("local control-plane Worker", () => {
     };
     expect(await replay.json()).toEqual(firstBody);
     expect(pullWrites).toBe(1);
+    expect(pullRequestBody).toContain("Human review package");
+    expect(pullRequestBody).toContain(`Exact head:** \`${commit}\``);
     await expect(
       recordPullRequestLifecycle(env, {
         deliveryId: "lifecycle-test",
