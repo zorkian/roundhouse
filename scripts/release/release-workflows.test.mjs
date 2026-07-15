@@ -4,6 +4,7 @@
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { build } from "esbuild";
 import { describe, expect, it } from "vitest";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -13,6 +14,22 @@ async function repositoryFile(path) {
 }
 
 describe("release workflow handoff", () => {
+  it("keeps Worker-bundled contracts free of Node-only profile loading", async () => {
+    const result = await build({
+      entryPoints: [join(root, "apps/control-plane-worker/src/deploy.ts")],
+      bundle: true,
+      format: "esm",
+      platform: "browser",
+      target: "es2022",
+      external: ["cloudflare:workers"],
+      write: false,
+      logLevel: "silent",
+    });
+
+    expect(result.outputFiles).toHaveLength(1);
+    expect(result.outputFiles[0]?.text).not.toContain("node:fs/promises");
+  });
+
   it("ships the durable async-planning tables as a deployment migration", async () => {
     const migration = await repositoryFile(
       "apps/control-plane-worker/migrations/0014_async_github_planning.sql",

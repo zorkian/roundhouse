@@ -6,6 +6,8 @@ import { readFile } from "node:fs/promises";
 import { parse } from "yaml";
 import { z } from "zod";
 
+export { roundhouseFormatterWriteCommand } from "./contracts.js";
+
 const commandSchema = z.object({
   command: z.string().min(1),
   args: z.array(z.string()).default([]),
@@ -16,11 +18,6 @@ const quickValidationSchema = z.object({
     include: z.array(z.string().min(1)).min(1),
   }),
   fullWhenChanged: z.array(z.string().min(1)).default([]),
-});
-
-export const roundhouseFormatterWriteCommand = Object.freeze({
-  command: "pnpm" as const,
-  args: ["exec", "prettier", "--write"] as const,
 });
 
 export const repositoryProfileSchema = z.object({
