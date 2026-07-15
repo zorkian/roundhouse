@@ -2138,41 +2138,24 @@ async function executeWorkflowReview(
   const retained = await readIndependentReview(env, delivery.reviewId);
   if (!retained) throw new Error("Independent review is unavailable");
   if (retained.execution) return retained.execution;
+  const now = new Date();
   let claim = await claimIndependentReview(
     env,
     delivery.reviewId,
     workerId,
-    new Date(),
+    now,
     4 * 60 * 60_000,
   );
   if (!claim) {
     const resumed = await readIndependentReview(env, delivery.reviewId);
     if (resumed?.execution) return resumed.execution;
-    if (resumed?.status !== "running" || resumed.lease?.workerId !== workerId)
+    if (
+      resumed?.status !== "running" ||
+      resumed.lease?.workerId !== workerId ||
+      new Date(resumed.lease.expiresAt).getTime() <= now.getTime()
+    )
       throw new Error("Independent review Workflow claim is unavailable");
-    await failIndependentReview(
-      env,
-      delivery.reviewId,
-      resumed.lease.token,
-      {
-        retryable: true,
-        classification:
-          resumed.attemptCount >= 3
-            ? "review_workflow_exhausted"
-            : "review_workflow_step_interrupted",
-        reason: "Independent review Workflow step restarted before completion",
-      },
-      new Date(),
-    );
-    claim = await claimIndependentReview(
-      env,
-      delivery.reviewId,
-      workerId,
-      new Date(),
-      4 * 60 * 60_000,
-    );
-    if (!claim)
-      throw new Error("Independent review Workflow retry claim is unavailable");
+    claim = { review: resumed, token: resumed.lease.token };
   }
   try {
     return await reviewBackend(env).execute(claim.review.request);
@@ -2182,6 +2165,8 @@ async function executeWorkflowReview(
       delivery.reviewId,
       claim.token,
       {
+        attemptId:
+          claim.review.activeAttemptId ?? claim.review.request.attemptId,
         retryable: true,
         classification:
           claim.review.attemptCount >= 3
@@ -2236,6 +2221,7 @@ async function failWorkflowReview(
       delivery.reviewId,
       current.lease.token,
       {
+        attemptId: current.activeAttemptId ?? current.request.attemptId,
         retryable: false,
         classification: "review_workflow_exhausted",
         reason: redactedReason(error),
@@ -2292,6 +2278,8 @@ async function consumeReviewMessage(
       parsed.data.reviewId,
       claim.token,
       {
+        attemptId:
+          claim.review.activeAttemptId ?? claim.review.request.attemptId,
         retryable,
         classification: retryable
           ? "review_infrastructure_interrupted"

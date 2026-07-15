@@ -503,15 +503,32 @@ export async function failIndependentReview(
   env: ControlPlaneEnv,
   reviewId: string,
   token: string,
-  failure: { retryable: boolean; classification: string; reason: string },
+  failure: {
+    attemptId: string;
+    retryable: boolean;
+    classification: string;
+    reason: string;
+  },
   now: Date,
 ): Promise<DurableIndependentReview> {
   for (let contention = 0; contention < 8; contention += 1) {
     const currentRow = await row(env, reviewId);
     if (!currentRow) throw new Error("Independent review not found");
     const current = record(currentRow);
-    if (current.status !== "running" || current.lease?.token !== token)
+    const classification = failure.classification.slice(0, 100);
+    const reason = failure.reason.slice(0, 500);
+    const activeAttemptId =
+      current.activeAttemptId ?? current.request.attemptId;
+    if (current.status !== "running" || current.lease?.token !== token) {
+      if (
+        ["pending", "failed"].includes(current.status) &&
+        activeAttemptId === failure.attemptId
+      )
+        return current;
       throw new Error("Independent review failure binding mismatch");
+    }
+    if (activeAttemptId !== failure.attemptId)
+      throw new Error("Independent review failure attempt mismatch");
     const retryable =
       failure.retryable && current.attemptCount < maximumAttempts;
     const timestamp = now.toISOString();
@@ -521,8 +538,8 @@ export async function failIndependentReview(
       revision: current.revision + 1,
       status: retryable ? "pending" : "failed",
       retryable,
-      failureClassification: failure.classification.slice(0, 100),
-      failureReason: failure.reason.slice(0, 500),
+      failureClassification: classification,
+      failureReason: reason,
       updatedAt: timestamp,
       events: [
         ...current.events,
@@ -531,7 +548,7 @@ export async function failIndependentReview(
           type: retryable ? "review.retry_scheduled" : "review.failed",
           occurredAt: timestamp,
           detail: {
-            classification: failure.classification.slice(0, 100),
+            classification,
             attemptCount: current.attemptCount,
           },
         },

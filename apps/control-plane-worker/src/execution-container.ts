@@ -22,6 +22,7 @@ import {
 } from "@roundhouse/self-development/cloudflare";
 
 import type { ControlPlaneEnv } from "./environment.js";
+import { AttemptSingleFlight } from "./attempt-single-flight.js";
 import {
   allowedCheckoutHosts,
   isCheckoutRequestAllowed,
@@ -124,6 +125,10 @@ async function auditedModelTransport(
 }
 
 export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
+  // CloudflareIndependentReviewBackend names this Durable Object by attemptId.
+  private readonly reviewAttempts =
+    new AttemptSingleFlight<IndependentReviewResult>();
+
   override defaultPort = 8080;
   override requiredPorts = [8080];
   override sleepAfter = "1m";
@@ -546,6 +551,15 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
     claudeAuthJson: string,
   ): Promise<IndependentReviewResult> {
     const request = independentReviewRequestSchema.parse(input);
+    return this.reviewAttempts.run(request.attemptId, () =>
+      this.executeReviewJob(request, claudeAuthJson),
+    );
+  }
+
+  private async executeReviewJob(
+    request: IndependentReviewRequest,
+    claudeAuthJson: string,
+  ): Promise<IndependentReviewResult> {
     const startupStarted = Date.now();
     lifecycle("info", "attempt.started", request, {
       mode: "independent-review",
