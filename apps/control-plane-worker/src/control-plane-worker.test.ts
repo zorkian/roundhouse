@@ -19,6 +19,7 @@ import {
   createControlPlaneHandler,
   executeTrustedExecutionWorkflow,
   independentReviewCheckOutcome,
+  safePlanningFailureSummary,
 } from "./index.js";
 import {
   controlPlaneSubmissionMigration,
@@ -377,6 +378,15 @@ async function deliver(
   );
   return outcomes;
 }
+
+describe("planning failure summaries", () => {
+  it("neutralizes Markdown breaks and mentions before rendering comments", () => {
+    expect(safePlanningFailureSummary("bad `value`\n@maintainer\tdetail")).toBe(
+      "bad 'value' ＠maintainer detail",
+    );
+    expect(safePlanningFailureSummary(undefined)).toBe("unspecified failure");
+  });
+});
 
 describe("local control-plane Worker", () => {
   it("keeps advisory review findings visible without requiring human Check action", () => {

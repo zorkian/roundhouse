@@ -709,6 +709,16 @@ async function enqueuePlanComment(
   );
 }
 
+export function safePlanningFailureSummary(value: string | undefined): string {
+  return (
+    value
+      ?.replace(/[\r\n\t]+/g, " ")
+      .replace(/`/g, "'")
+      .replace(/@/g, "＠")
+      .slice(0, 500) || "unspecified failure"
+  );
+}
+
 async function enqueuePlanningStartedComment(
   env: ControlPlaneEnv,
   repositoryFullName: string,
@@ -725,7 +735,7 @@ async function enqueuePlanningStartedComment(
       `Planning job \`${job.jobId}\` (generation ${job.generation}) is durably queued. No action is needed while Roundhouse prepares the plan.`,
       ...(job.priorJobId
         ? [
-            `This retries failed planning job \`${job.priorJobId}\`. Prior failure: \`${job.priorFailureReason ?? "unspecified failure"}\`.`,
+            `This retries failed planning job \`${job.priorJobId}\`. Prior failure: \`${safePlanningFailureSummary(job.priorFailureReason)}\`.`,
           ]
         : []),
       `Workflow: ${identity.origin}/repositories/${repositoryFullName}/issues/${issueNumber}`,
