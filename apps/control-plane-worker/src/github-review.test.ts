@@ -464,6 +464,12 @@ describe("durable independent review coordination", () => {
         new Date(`2026-07-12T00:00:0${attempt}Z`),
         500,
       );
+      if (attempt === 1)
+        await env.DB.prepare(
+          "UPDATE independent_reviews SET payload = json_remove(payload, '$.activeAttemptId') WHERE review_id = ?",
+        )
+          .bind(input.reviewId)
+          .run();
       const failed = await failIndependentReview(
         env,
         input.reviewId,

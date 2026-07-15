@@ -517,15 +517,17 @@ export async function failIndependentReview(
     const current = record(currentRow);
     const classification = failure.classification.slice(0, 100);
     const reason = failure.reason.slice(0, 500);
+    const activeAttemptId =
+      current.activeAttemptId ?? current.request.attemptId;
     if (current.status !== "running" || current.lease?.token !== token) {
       if (
         ["pending", "failed"].includes(current.status) &&
-        current.activeAttemptId === failure.attemptId
+        activeAttemptId === failure.attemptId
       )
         return current;
       throw new Error("Independent review failure binding mismatch");
     }
-    if (current.activeAttemptId !== failure.attemptId)
+    if (activeAttemptId !== failure.attemptId)
       throw new Error("Independent review failure attempt mismatch");
     const retryable =
       failure.retryable && current.attemptCount < maximumAttempts;
