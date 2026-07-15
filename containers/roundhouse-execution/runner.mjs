@@ -280,6 +280,9 @@ function validateTrusted(value) {
     value.allowedPaths.length < 1 ||
     value.allowedPaths.length > 50 ||
     !value.allowedPaths.every(validRepositoryPath) ||
+    (value.pathPolicy !== undefined &&
+      (!validRepositoryPathPolicy(value.pathPolicy) ||
+        value.pathPolicy.maxChangedFiles !== value.maxChangedFiles)) ||
     !["quick", "full"].includes(value.validationLevel) ||
     formatter?.command !== roundhouseFormatterWriteCommand.command ||
     !Array.isArray(formatter.args) ||
@@ -525,8 +528,63 @@ export async function command(executable, args, options = {}) {
   }
 }
 
-export function pathAllowed(path, allowedPaths) {
-  return allowedPaths.includes(path);
+function uniqueStrings(values) {
+  return Array.isArray(values) && new Set(values).size === values.length;
+}
+
+function validRepositoryPrefix(value) {
+  return (
+    typeof value === "string" &&
+    validRepositoryPath(value.endsWith("/") ? value.slice(0, -1) : value)
+  );
+}
+
+export function validRepositoryPathPolicy(value) {
+  return (
+    value &&
+    typeof value === "object" &&
+    uniqueStrings(value.allowedExactPaths) &&
+    value.allowedExactPaths.length <= 50 &&
+    value.allowedExactPaths.every(validRepositoryPath) &&
+    uniqueStrings(value.allowedPrefixes) &&
+    value.allowedPrefixes.length <= 50 &&
+    value.allowedPrefixes.every(validRepositoryPrefix) &&
+    uniqueStrings(value.deniedExactPaths) &&
+    value.deniedExactPaths.length <= 50 &&
+    value.deniedExactPaths.every(validRepositoryPath) &&
+    uniqueStrings(value.deniedPrefixes) &&
+    value.deniedPrefixes.length <= 50 &&
+    value.deniedPrefixes.every(validRepositoryPrefix) &&
+    uniqueStrings(value.deniedBasenames) &&
+    value.deniedBasenames.length <= 50 &&
+    value.deniedBasenames.every(
+      (basename) =>
+        typeof basename === "string" &&
+        basename.length >= 1 &&
+        basename.length <= 100 &&
+        !basename.includes("/") &&
+        !basename.includes("\\") &&
+        !/[\u0000-\u001f\u007f]/.test(basename),
+    ) &&
+    Number.isInteger(value.maxChangedFiles) &&
+    value.maxChangedFiles >= 1 &&
+    value.maxChangedFiles <= 50
+  );
+}
+
+export function pathAllowed(path, allowedPaths, pathPolicy) {
+  if (!pathPolicy) return allowedPaths.includes(path);
+  const basename = path.split("/").at(-1) ?? "";
+  if (
+    pathPolicy.deniedExactPaths.includes(path) ||
+    pathPolicy.deniedPrefixes.some((prefix) => path.startsWith(prefix)) ||
+    pathPolicy.deniedBasenames.includes(basename)
+  )
+    return false;
+  return (
+    pathPolicy.allowedExactPaths.includes(path) ||
+    pathPolicy.allowedPrefixes.some((prefix) => path.startsWith(prefix))
+  );
 }
 
 export function changedPaths(output) {
@@ -560,7 +618,7 @@ export function candidateChangedFiles(statusOutput, request, phase = "agent") {
   if (!files.every((path) => validRepositoryPath(path)))
     throw new Error(`${prefix}invalid_changed_path`);
   const disallowed = files.filter(
-    (path) => !pathAllowed(path, request.allowedPaths),
+    (path) => !pathAllowed(path, request.allowedPaths, request.pathPolicy),
   );
   if (disallowed.length > 0)
     throw new Error(
@@ -629,12 +687,19 @@ export async function formatCandidateImplementation(
 }
 
 export function promptFor(request) {
+  const pathBoundary = request.pathPolicy
+    ? [
+        "The approved plan's likely paths are advisory; use other paths only when the trusted repository policy permits them and they are necessary for the approved objective.",
+        `Likely paths: ${request.allowedPaths.join(", ")}`,
+        `Trusted path policy: ${JSON.stringify(request.pathPolicy)}`,
+      ]
+    : [`You may change only: ${request.allowedPaths.join(", ")}`];
   return [
     "You are a bounded implementation agent in an isolated exact-commit checkout.",
     "Do not inspect credentials or paths outside the checkout.",
     "Do not commit, push, create branches, install packages, or access external services.",
     "Tool network access is disabled.",
-    `You may change only: ${request.allowedPaths.join(", ")}`,
+    ...pathBoundary,
     "Keep the patch minimal and include the Apache-2.0 header in new source or documentation files.",
     "Before finishing, format every changed file and run focused tests or typechecking when applicable.",
     "Finish with a concise public-safe summary. Never include secrets or authentication data.",
@@ -1136,7 +1201,7 @@ async function implement(value) {
     if (
       patchSha256 !== candidate.patchSha256 ||
       !candidate.changedFiles.every((path) =>
-        pathAllowed(path, request.allowedPaths),
+        pathAllowed(path, request.allowedPaths, request.pathPolicy),
       )
     )
       throw new Error("retry_candidate_binding_mismatch");
@@ -1575,23 +1640,31 @@ export async function capturePostChangeRegression(
   };
 }
 
-export function planComplianceValidation(allowedPaths, changedFiles) {
+export function planComplianceValidation(
+  allowedPaths,
+  changedFiles,
+  pathPolicy,
+) {
   const disallowedPaths = changedFiles.filter(
-    (path) => !allowedPaths.includes(path),
+    (path) => !pathAllowed(path, allowedPaths, pathPolicy),
   );
   return {
-    name: "plan-compliance",
-    command: "internal: approved path boundary",
+    name: pathPolicy ? "repository-policy" : "plan-compliance",
+    command: pathPolicy
+      ? "internal: trusted repository path policy"
+      : "internal: approved path boundary",
     exitCode: disallowedPaths.length > 0 ? 1 : 0,
     timedOut: false,
     durationMs: 0,
     stdout:
       disallowedPaths.length > 0
         ? ""
-        : `Final patch changes ${changedFiles.length} of ${allowedPaths.length} approved path(s).`,
+        : pathPolicy
+          ? `Final patch changes ${changedFiles.length} path(s) permitted by trusted repository policy.`
+          : `Final patch changes ${changedFiles.length} of ${allowedPaths.length} approved path(s).`,
     stderr:
       disallowedPaths.length > 0
-        ? `Final patch contains paths outside the approved boundary: ${disallowedPaths.join(", ")}`
+        ? `Final patch contains paths outside the ${pathPolicy ? "trusted repository policy" : "approved boundary"}: ${disallowedPaths.join(", ")}`
         : "",
     outputTruncated: false,
   };
@@ -1648,7 +1721,11 @@ async function validateImplementation(value) {
     throw new Error("validation_network_not_denied");
   const validation = [];
   validation.push(
-    planComplianceValidation(request.allowedPaths, trusted.changedFiles),
+    planComplianceValidation(
+      request.allowedPaths,
+      trusted.changedFiles,
+      request.pathPolicy,
+    ),
   );
   validation.push(trusted.formatter);
   const regression = await capturePostChangeRegression(

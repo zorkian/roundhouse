@@ -38,6 +38,7 @@ import {
   secretStrings,
   skippedValidation,
   validRepositoryPath,
+  validRepositoryPathPolicy,
   validBugReproduction,
   validRuntimeCredentialSize,
   withoutRuntimeCredential,
@@ -361,6 +362,41 @@ describe("trusted agent output boundary", () => {
     expect(pathAllowed(`${allowed[0]}/extra.md`, allowed)).toBe(false);
   });
 
+  it("allows unpredicted enrolled paths while denying protected policy paths", () => {
+    const planned = ["packages/planned.ts"];
+    const policy = {
+      allowedExactPaths: ["README.md"],
+      allowedPrefixes: ["apps/", "docs/", "packages/"],
+      deniedExactPaths: ["LICENSE"],
+      deniedPrefixes: ["apps/control-plane-worker/wrangler", "containers/"],
+      deniedBasenames: ["package.json", "pnpm-lock.yaml"],
+      maxChangedFiles: 2,
+    };
+    expect(pathAllowed("packages/unpredicted.test.ts", planned, policy)).toBe(
+      true,
+    );
+    expect(pathAllowed("packages/example/package.json", planned, policy)).toBe(
+      false,
+    );
+    expect(pathAllowed("containers/runner.mjs", planned, policy)).toBe(false);
+    expect(validRepositoryPathPolicy(policy)).toBe(true);
+    expect(
+      promptFor({
+        subject: "Implement approved behavior",
+        instructions: "Keep the objective binding.",
+        allowedPaths: planned,
+        pathPolicy: policy,
+      }),
+    ).toContain("likely paths are advisory");
+    expect(() =>
+      candidateChangedFiles(
+        " M packages/one.ts\0 M packages/two.ts\0 M packages/three.ts\0",
+        { allowedPaths: planned, pathPolicy: policy, maxChangedFiles: 2 },
+        "implementation",
+      ),
+    ).toThrow("changed_file_limit_exceeded");
+  });
+
   it("allows only bounded repository test commands for bug reproduction", () => {
     expect(
       validBugReproduction({
@@ -495,6 +531,39 @@ describe("trusted agent output boundary", () => {
     ).toMatchObject({
       exitCode: 1,
       stderr: expect.stringContaining("packages/outside.ts"),
+    });
+  });
+
+  it("enforces repository policy independently of advisory planned paths", () => {
+    const policy = {
+      allowedExactPaths: ["README.md"],
+      allowedPrefixes: ["packages/"],
+      deniedExactPaths: [],
+      deniedPrefixes: ["packages/protected/"],
+      deniedBasenames: ["package.json"],
+      maxChangedFiles: 12,
+    };
+    expect(
+      planComplianceValidation(
+        ["packages/planned.ts", "packages/unused-test.ts"],
+        ["packages/unpredicted.ts"],
+        policy,
+      ),
+    ).toMatchObject({
+      name: "repository-policy",
+      exitCode: 0,
+      stdout:
+        "Final patch changes 1 path(s) permitted by trusted repository policy.",
+    });
+    expect(
+      planComplianceValidation(
+        ["packages/planned.ts"],
+        ["packages/protected/secret.ts"],
+        policy,
+      ),
+    ).toMatchObject({
+      exitCode: 1,
+      stderr: expect.stringContaining("trusted repository policy"),
     });
   });
 

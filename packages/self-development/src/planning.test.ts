@@ -10,6 +10,7 @@ import {
   qualifiedPlanSchema,
   qualifyAndPlan,
   rejectedQualificationSchema,
+  selfDevelopmentPathPolicyForProfile,
 } from "./planning.js";
 
 const input = {
@@ -46,10 +47,27 @@ describe("issue qualification and planning", () => {
       risk: "medium",
       exactPaths: [...input.requestedPaths].sort(),
       limits: {
-        maxFiles: 2,
+        maxFiles: 12,
         automaticAttemptLimit: 3,
         operatorAttemptLimit: 10,
       },
+    });
+  });
+
+  it("does not confuse advisory path count with the hard patch file limit", async () => {
+    const requestedPaths = Array.from(
+      { length: 13 },
+      (_, index) => `packages/domain/src/advisory-${index}.ts`,
+    );
+    await expect(
+      qualifyAndPlan(
+        { ...input, requestedPaths },
+        new Date("2026-07-12T00:00:00Z"),
+      ),
+    ).resolves.toMatchObject({
+      status: "proposed",
+      exactPaths: [...requestedPaths].sort(),
+      limits: { maxFiles: 12 },
     });
   });
 
@@ -110,7 +128,7 @@ describe("issue qualification and planning", () => {
       ),
     ).resolves.toMatchObject({
       status: "proposed",
-      profileVersion: 2,
+      profileVersion: 3,
       exactPaths: ["README.md"],
     });
     await expect(
@@ -134,10 +152,19 @@ describe("issue qualification and planning", () => {
       input,
       new Date("2026-07-12T00:00:00Z"),
     );
-    expect(proposed).toMatchObject({ profileVersion: 2 });
+    expect(proposed).toMatchObject({ profileVersion: 3 });
     expect(
       qualifiedPlanSchema.parse({ ...proposed, profileVersion: 1 }),
     ).toMatchObject({ profileVersion: 1 });
+    expect(
+      qualifiedPlanSchema.parse({ ...proposed, profileVersion: 2 }),
+    ).toMatchObject({ profileVersion: 2 });
+    expect(selfDevelopmentPathPolicyForProfile(1)).toBeUndefined();
+    expect(selfDevelopmentPathPolicyForProfile(2)).toBeUndefined();
+    expect(selfDevelopmentPathPolicyForProfile(3)).toMatchObject({
+      maxChangedFiles: 12,
+      deniedPrefixes: expect.arrayContaining(["containers/"]),
+    });
 
     const rejected = await qualifyAndPlan(
       { ...input, requestedPaths: ["scripts/not-enrolled.mjs"] },

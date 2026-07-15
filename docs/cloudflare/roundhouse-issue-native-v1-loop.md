@@ -11,8 +11,9 @@ and produces a repository-policy-qualified plan before it can create a run.
 ## Operator path
 
 1. Write the desired outcome in an issue. An optional `Scope is exactly:`
-   section can supply literal repository-relative paths when the scope is
-   already known.
+   section can supply likely repository-relative implementation paths when the
+   scope is already known. These paths guide planning; they do not replace the
+   trusted repository policy.
 2. Post `/rh start`. The bounded read-only planning agent classifies the issue
    as proposed, needing clarification, already satisfied, duplicate, or
    rejected. Roundhouse stores the issue snapshot, plan JSON, and immutable R2
@@ -21,9 +22,9 @@ and produces a repository-policy-qualified plan before it can create a run.
    `/rh clarify PLAN REVISION SHA256` command. After editing an issue, use the
    displayed `/rh replan PLAN REVISION SHA256` command. Both operations require
    the current durable revision binding; prior commands cannot replace a plan.
-4. For a medium- or high-risk proposal, review the base commit, exact paths,
-   profile, limits, risk, plan SHA-256, and evidence identity, then approve from
-   the Access-protected plan page or post the exact
+4. For a medium- or high-risk proposal, review the base commit, objective,
+   acceptance criteria, likely paths, profile, limits, risk, plan SHA-256, and
+   evidence identity, then approve from the Access-protected plan page or post the exact
    `/rh implement PLAN REVISION SHA256` command shown by Roundhouse. A low-risk
    proposal by the verified maintainer proceeds directly toward a draft PR.
 5. Follow the run link. The page polls every five seconds and displays durable
@@ -39,21 +40,27 @@ only Access-bypassed path remains the exact signed GitHub webhook endpoint.
 
 ## Planning policy
 
-The reviewed profile is `roundhouse-self-development-v1@2`. It permits no more
-than twelve literal files under `apps/`, `packages/`, or `docs/`, plus the exact
-root `README.md`. It rejects
-traversal, globs, repository policy/configuration, workflows, licensing files,
-container definitions, D1 migrations, and paths outside the enrolled prefixes.
+The reviewed profile is `roundhouse-self-development-v1@3`. A plan may retain
+up to fifty canonical likely paths as advisory guidance. The final patch may
+change no more than twelve files under `apps/`, `packages/`, or `docs/`, plus
+the exact root `README.md`. The trusted path policy rejects traversal,
+repository policy/configuration, workflows, licensing files, protected
+manifest basenames, container definitions, D1 migrations, and paths outside
+the enrolled prefixes even when a plan or issue suggests them.
 The current bounded limits are a 512 KiB patch, 900 seconds, 256 model requests,
 three automatic attempts, and ten explicit operator attempts.
 
 Plan identity is a SHA-256 binding over the issue snapshot, base commit, planning
-attempt, exact paths, qualification outcome and evidence, operator clarification,
-profile, validation level, risk, and limits. D1 holds the durable plan state and
-R2 object identity; R2 holds every immutable plan revision under its plan ID.
+attempt, advisory path predictions, qualification outcome and evidence,
+operator clarification, profile, validation level, risk, and limits. D1 holds
+the durable plan state and R2 object identity; R2 holds every immutable plan revision under its plan ID.
 Approval uses a compare-and-swap revision and records the authenticated actor.
 Only a proposal can run. Duplicate webhooks, commands, UI requests, and Queue
 deliveries are idempotent.
+
+Plans retained under profile versions 1 or 2 keep their historical exact-path
+execution boundary. Advisory paths apply only to newly issued profile-v3 plans;
+deployment does not retroactively widen an approved durable plan.
 
 ## Execution and security boundary
 
@@ -61,10 +68,13 @@ Approved plans materialize the existing platform-neutral task contract. The
 existing Queue and resumable coordinator lease one run attempt to the existing
 Cloudflare Container. The Container clones the exact public commit through the
 measured checkout allowlist, removes checkout network access, and then gives the
-trusted coding agent only the schema-validated task and exact path list. It has
-no GitHub or Cloudflare credential. The temporary development Codex credential
-remains confined to the previously authorized Container boundary and is never
-evidence.
+trusted coding agent only the schema-validated task, advisory likely paths, and
+trusted repository path policy. The Container and Worker independently enforce
+the policy, denied paths and basenames, twelve-file limit, and 512 KiB patch
+limit. A necessary unpredicted path is permitted only when that policy allows
+it; an unused predicted path need not be changed. The agent has no GitHub or
+Cloudflare credential. The temporary development Codex credential remains
+confined to the previously authorized Container boundary and is never evidence.
 
 Only the reviewed profile commands execute. Patch and validation evidence are
 immutable in R2 and hash-bound into D1. Publication uses the GitHub App in the

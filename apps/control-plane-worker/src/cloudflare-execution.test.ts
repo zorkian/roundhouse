@@ -125,6 +125,71 @@ function trustedResult() {
 }
 
 describe("CloudflareTrustedImplementationBackend", () => {
+  it("accepts an unpredicted policy path and rejects a protected basename", async () => {
+    const policyRequest: TrustedImplementationRequest = {
+      ...trustedRequest,
+      pathPolicy: {
+        allowedExactPaths: ["README.md"],
+        allowedPrefixes: ["docs/"],
+        deniedExactPaths: [],
+        deniedPrefixes: [],
+        deniedBasenames: ["package.json"],
+        maxChangedFiles: 12,
+      },
+      maxChangedFiles: 12,
+    };
+    const implementationFor = async (path: string) => {
+      const patch = `diff --git a/${path} b/${path}\n`;
+      const bytes = new TextEncoder().encode(patch);
+      const digest = await crypto.subtle.digest("SHA-256", bytes);
+      return {
+        ...trustedResult(),
+        patch,
+        patchSha256: [...new Uint8Array(digest)]
+          .map((byte) => byte.toString(16).padStart(2, "0"))
+          .join(""),
+        patchBytes: bytes.byteLength,
+        changedFiles: [path],
+      };
+    };
+    const executeResult = async (
+      implementation: Awaited<ReturnType<typeof implementationFor>>,
+    ) =>
+      new CloudflareTrustedImplementationBackend(
+        {
+          getByName: () => ({
+            runJob: async () => result(),
+            runTrustedJob: async () => implementation,
+            destroy: async () => undefined,
+          }),
+        },
+        new MemoryEvidence(),
+        "unused",
+      ).execute(policyRequest);
+    const execute = async (path: string) =>
+      executeResult(await implementationFor(path));
+
+    await expect(execute("docs/unpredicted.md")).resolves.toMatchObject({
+      state: "awaiting_approval",
+    });
+    await expect(execute("docs/example/package.json")).rejects.toMatchObject({
+      classification: "implementation_binding_mismatch",
+      retryable: false,
+    });
+    await expect(
+      executeResult({
+        ...(await implementationFor("docs/unpredicted.md")),
+        changedFiles: Array.from(
+          { length: 13 },
+          (_, index) => `docs/unpredicted-${index}.md`,
+        ),
+      }),
+    ).rejects.toMatchObject({
+      classification: "implementation_binding_mismatch",
+      retryable: false,
+    });
+  });
+
   it("retains the trusted runner's canonical bug regression validation", async () => {
     const evidence = new MemoryEvidence();
     const implementation = trustedResult();

@@ -6,6 +6,7 @@ import { z } from "zod";
 import {
   bugReproductionPlanSchema,
   repositoryRelativePathSchema,
+  type RepositoryPathPolicy,
 } from "./trusted-loop.js";
 
 const sha40 = z.string().regex(/^[a-f0-9]{40}$/);
@@ -13,26 +14,51 @@ const sha64 = z.string().regex(/^[a-f0-9]{64}$/);
 export { bugReproductionPlanSchema } from "./trusted-loop.js";
 export const maxPlannedInstructionCharacters = 18_000;
 const maxRequestedPaths = 1_000;
-const protectedManifestNames = new Set([
+const protectedManifestNames = [
   "package.json",
   "package-lock.json",
   "pnpm-lock.yaml",
   "yarn.lock",
-]);
+] as const;
+
+export const roundhouseSelfDevelopmentPathPolicy = {
+  allowedExactPaths: ["README.md"],
+  allowedPrefixes: ["apps/", "docs/", "packages/"],
+  deniedExactPaths: ["LICENSE", "NOTICE", "package.json", "pnpm-lock.yaml"],
+  deniedPrefixes: [
+    ".github/",
+    "apps/control-plane-worker/migrations/",
+    "apps/control-plane-worker/wrangler",
+    "containers/",
+  ],
+  deniedBasenames: [...protectedManifestNames],
+  maxChangedFiles: 12,
+} satisfies RepositoryPathPolicy;
+
+export function selfDevelopmentPathPolicyForProfile(
+  profileVersion: number,
+): RepositoryPathPolicy | undefined {
+  if (profileVersion < 3) return undefined;
+  return {
+    allowedExactPaths: [
+      ...roundhouseSelfDevelopmentPathPolicy.allowedExactPaths,
+    ],
+    allowedPrefixes: [...roundhouseSelfDevelopmentPathPolicy.allowedPrefixes],
+    deniedExactPaths: [...roundhouseSelfDevelopmentPathPolicy.deniedExactPaths],
+    deniedPrefixes: [...roundhouseSelfDevelopmentPathPolicy.deniedPrefixes],
+    deniedBasenames: [...roundhouseSelfDevelopmentPathPolicy.deniedBasenames],
+    maxChangedFiles: roundhouseSelfDevelopmentPathPolicy.maxChangedFiles,
+  };
+}
 
 export const roundhouseSelfDevelopmentProfile = {
   profileId: "roundhouse-self-development-v1",
-  profileVersion: 2,
-  allowedExactPaths: ["README.md"],
-  allowedPrefixes: ["apps/", "packages/", "docs/"],
-  deniedPrefixes: [
-    ".github/",
-    "containers/",
-    "apps/control-plane-worker/migrations/",
-    "apps/control-plane-worker/wrangler",
-  ],
-  deniedExactPaths: ["LICENSE", "NOTICE", "package.json", "pnpm-lock.yaml"],
-  maxPaths: 12,
+  profileVersion: 3,
+  allowedExactPaths: roundhouseSelfDevelopmentPathPolicy.allowedExactPaths,
+  allowedPrefixes: roundhouseSelfDevelopmentPathPolicy.allowedPrefixes,
+  deniedPrefixes: roundhouseSelfDevelopmentPathPolicy.deniedPrefixes,
+  deniedExactPaths: roundhouseSelfDevelopmentPathPolicy.deniedExactPaths,
+  maxPaths: roundhouseSelfDevelopmentPathPolicy.maxChangedFiles,
   maxPatchBytes: 512 * 1024,
   agentTimeoutSeconds: 900,
   modelRequestLimit: 256,
@@ -42,6 +68,7 @@ export const roundhouseSelfDevelopmentProfile = {
 
 const roundhouseSelfDevelopmentProfileVersionSchema = z.union([
   z.literal(1),
+  z.literal(2),
   z.literal(roundhouseSelfDevelopmentProfile.profileVersion),
 ]);
 
@@ -134,7 +161,7 @@ export const planningAgentResultSchema = z
       context.addIssue({
         code: "custom",
         path: ["exactPaths"],
-        message: "A proposed plan requires exact paths",
+        message: "A proposed plan requires at least one likely path",
       });
     if (
       ["clarification", "needs_clarification"].includes(value.status) &&
@@ -189,7 +216,7 @@ export const qualifiedPlanSchema = z.object({
   subject: z.string().min(1).max(500),
   instructionsSha256: sha64,
   baseCommit: sha40,
-  exactPaths: z.array(repositoryRelativePathSchema).min(1).max(12),
+  exactPaths: z.array(repositoryRelativePathSchema).min(1).max(50),
   validationLevel: z.literal("full"),
   risk: z.enum(["low", "medium", "high"]),
   understanding: z.string().min(1).max(4_000).optional(),
@@ -326,10 +353,10 @@ function pathFindings(paths: string[]) {
       message:
         "Issue must include a Scope is exactly section with literal files",
     });
-  if (paths.length > roundhouseSelfDevelopmentProfile.maxPaths)
+  if (paths.length > 50)
     findings.push({
       code: "too_many_paths",
-      message: `Scope exceeds ${roundhouseSelfDevelopmentProfile.maxPaths} files`,
+      message: "Advisory planning scope exceeds 50 paths",
     });
   for (const path of paths) {
     if (!repositoryRelativePathSchema.safeParse(path).success) {
@@ -344,7 +371,10 @@ function pathFindings(paths: string[]) {
       roundhouseSelfDevelopmentProfile.deniedExactPaths.includes(
         path as never,
       ) ||
-      protectedManifestNames.has(path.split("/").at(-1) ?? "") ||
+      protectedManifestNames.includes(
+        (path.split("/").at(-1) ??
+          "") as (typeof protectedManifestNames)[number],
+      ) ||
       roundhouseSelfDevelopmentProfile.deniedPrefixes.some((prefix) =>
         path.startsWith(prefix),
       )
@@ -504,7 +534,7 @@ export async function qualifyAndPlan(
     bugReproduction: issue.bugReproduction,
     limits: {
       maxPatchBytes: roundhouseSelfDevelopmentProfile.maxPatchBytes,
-      maxFiles: exactPaths.length,
+      maxFiles: roundhouseSelfDevelopmentProfile.maxPaths,
       agentTimeoutSeconds: roundhouseSelfDevelopmentProfile.agentTimeoutSeconds,
       modelRequestLimit: roundhouseSelfDevelopmentProfile.modelRequestLimit,
       automaticAttemptLimit:

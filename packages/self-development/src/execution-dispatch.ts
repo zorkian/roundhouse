@@ -6,6 +6,7 @@ import { z } from "zod";
 import { bugReproductionPlanSchema } from "./planning.js";
 import type { JobStageExecutor, StageResult } from "./job-ports.js";
 import type { JobStage, SelfDevelopmentRun } from "./task.js";
+import type { RepositoryPathPolicy } from "./trusted-loop.js";
 
 export const repositoryExecutionRequestSchema = z.object({
   schemaVersion: z.literal(1),
@@ -77,6 +78,7 @@ export type ExecutionDispatchRequest = {
   retryContext?: string;
   retryFromAttemptId?: string;
   allowedPaths: string[];
+  pathPolicy?: RepositoryPathPolicy;
   baseCommit: string;
   validationLevel: "quick" | "full";
   bugReproduction?: z.infer<typeof bugReproductionPlanSchema>;
@@ -116,6 +118,7 @@ export class DispatchingStageExecutor implements JobStageExecutor {
       retryContext: priorFailure?.error,
       retryFromAttemptId: priorFailure?.attemptId,
       allowedPaths: run.task.allowedPaths,
+      pathPolicy: run.task.pathPolicy,
       baseCommit: run.task.baseCommit,
       validationLevel: run.task.validationLevel,
       bugReproduction: run.task.bugReproduction,

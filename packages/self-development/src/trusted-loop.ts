@@ -50,6 +50,78 @@ export const repositoryRelativePathSchema = z
     "Path must be a normalized repository-relative path",
   );
 
+const repositoryPathPrefixSchema = z
+  .string()
+  .min(2)
+  .max(300)
+  .refine(
+    (value) =>
+      repositoryRelativePathSchema.safeParse(
+        value.endsWith("/") ? value.slice(0, -1) : value,
+      ).success,
+    "Prefix must be normalized and repository-relative",
+  );
+
+const repositoryBasenameSchema = z
+  .string()
+  .min(1)
+  .max(100)
+  .refine(
+    (value) =>
+      !value.includes("/") &&
+      !value.includes("\\") &&
+      !/[\u0000-\u001f\u007f]/.test(value),
+    "Basename must not contain separators or control characters",
+  );
+
+function uniqueValues<T>(values: T[]): boolean {
+  return new Set(values).size === values.length;
+}
+
+export const repositoryPathPolicySchema = z.object({
+  allowedExactPaths: z
+    .array(repositoryRelativePathSchema)
+    .max(50)
+    .refine(uniqueValues),
+  allowedPrefixes: z
+    .array(repositoryPathPrefixSchema)
+    .max(50)
+    .refine(uniqueValues),
+  deniedExactPaths: z
+    .array(repositoryRelativePathSchema)
+    .max(50)
+    .refine(uniqueValues),
+  deniedPrefixes: z
+    .array(repositoryPathPrefixSchema)
+    .max(50)
+    .refine(uniqueValues),
+  deniedBasenames: z
+    .array(repositoryBasenameSchema)
+    .max(50)
+    .refine(uniqueValues),
+  maxChangedFiles: z.number().int().positive().max(50),
+});
+
+export type RepositoryPathPolicy = z.infer<typeof repositoryPathPolicySchema>;
+
+export function repositoryPathAllowed(
+  policy: RepositoryPathPolicy,
+  path: string,
+): boolean {
+  if (!repositoryRelativePathSchema.safeParse(path).success) return false;
+  const basename = path.split("/").at(-1) ?? "";
+  if (
+    policy.deniedExactPaths.includes(path) ||
+    policy.deniedPrefixes.some((prefix) => path.startsWith(prefix)) ||
+    policy.deniedBasenames.includes(basename)
+  )
+    return false;
+  return (
+    policy.allowedExactPaths.includes(path) ||
+    policy.allowedPrefixes.some((prefix) => path.startsWith(prefix))
+  );
+}
+
 export const publicationFileSchema = z.discriminatedUnion("operation", [
   z.object({
     path: repositoryRelativePathSchema,
@@ -80,82 +152,95 @@ export type TrustedPublicationManifest = z.infer<
   typeof trustedPublicationManifestSchema
 >;
 
-export const trustedImplementationRequestSchema = z.object({
-  schemaVersion: z.literal(1),
-  runId: runIdentity,
-  attemptId: boundedIdentity,
-  attemptNumber: z.number().int().positive(),
-  expectedRevision: z.number().int().positive(),
-  repositoryUrl: z.literal("https://github.com/zorkian/roundhouse.git"),
-  baseCommit: commit,
-  subject: z.string().min(1).max(500),
-  instructions: z.string().min(1).max(20_000),
-  retryContext: z.string().min(1).max(20_000).optional(),
-  retryFromAttemptId: boundedIdentity.optional(),
-  retryCandidate: z
-    .object({
-      attemptId: boundedIdentity,
-      patch: z
-        .string()
-        .min(1)
-        .max(512 * 1024),
-      patchSha256: sha256,
-      changedFiles: z.array(repositoryRelativePathSchema).min(1).max(50),
-    })
-    .optional(),
-  allowedPaths: z.array(repositoryRelativePathSchema).min(1).max(50),
-  validationLevel: z.enum(["quick", "full"]),
-  formatter: z
-    .object({
-      command: z.literal(roundhouseFormatterWriteCommand.command),
-      args: z.tuple([
-        z.literal("exec"),
-        z.literal("prettier"),
-        z.literal("--write"),
-      ]),
-    })
-    .default({
-      command: roundhouseFormatterWriteCommand.command,
-      args: [...roundhouseFormatterWriteCommand.args],
-    }),
-  bugReproduction: bugReproductionPlanSchema.optional(),
-  planning: z
-    .object({
-      planId: z.string().regex(/^plan_[a-f0-9]{40}$/),
-      planSha256: sha256,
-    })
-    .optional(),
-  agentTimeoutMs: z
-    .number()
-    .int()
-    .positive()
-    .max(2 * 60 * 60_000),
-  validationTimeoutMs: z
-    .number()
-    .int()
-    .positive()
-    .max(30 * 60_000),
-  maxPatchBytes: z
-    .number()
-    .int()
-    .positive()
-    .max(512 * 1024),
-  maxChangedFiles: z.number().int().positive().max(50),
-  maxOutputBytes: z
-    .number()
-    .int()
-    .positive()
-    .max(5 * 1024 * 1024),
-  scenario: z
-    .enum([
-      "success",
-      "agent-failure",
-      "timeout",
-      "interrupt-once",
-      "credential-cleanup-failure",
-    ])
-    .default("success"),
-});
+export const trustedImplementationRequestSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    runId: runIdentity,
+    attemptId: boundedIdentity,
+    attemptNumber: z.number().int().positive(),
+    expectedRevision: z.number().int().positive(),
+    repositoryUrl: z.literal("https://github.com/zorkian/roundhouse.git"),
+    baseCommit: commit,
+    subject: z.string().min(1).max(500),
+    instructions: z.string().min(1).max(20_000),
+    retryContext: z.string().min(1).max(20_000).optional(),
+    retryFromAttemptId: boundedIdentity.optional(),
+    retryCandidate: z
+      .object({
+        attemptId: boundedIdentity,
+        patch: z
+          .string()
+          .min(1)
+          .max(512 * 1024),
+        patchSha256: sha256,
+        changedFiles: z.array(repositoryRelativePathSchema).min(1).max(50),
+      })
+      .optional(),
+    allowedPaths: z.array(repositoryRelativePathSchema).min(1).max(50),
+    pathPolicy: repositoryPathPolicySchema.optional(),
+    validationLevel: z.enum(["quick", "full"]),
+    formatter: z
+      .object({
+        command: z.literal(roundhouseFormatterWriteCommand.command),
+        args: z.tuple([
+          z.literal("exec"),
+          z.literal("prettier"),
+          z.literal("--write"),
+        ]),
+      })
+      .default({
+        command: roundhouseFormatterWriteCommand.command,
+        args: [...roundhouseFormatterWriteCommand.args],
+      }),
+    bugReproduction: bugReproductionPlanSchema.optional(),
+    planning: z
+      .object({
+        planId: z.string().regex(/^plan_[a-f0-9]{40}$/),
+        planSha256: sha256,
+      })
+      .optional(),
+    agentTimeoutMs: z
+      .number()
+      .int()
+      .positive()
+      .max(2 * 60 * 60_000),
+    validationTimeoutMs: z
+      .number()
+      .int()
+      .positive()
+      .max(30 * 60_000),
+    maxPatchBytes: z
+      .number()
+      .int()
+      .positive()
+      .max(512 * 1024),
+    maxChangedFiles: z.number().int().positive().max(50),
+    maxOutputBytes: z
+      .number()
+      .int()
+      .positive()
+      .max(5 * 1024 * 1024),
+    scenario: z
+      .enum([
+        "success",
+        "agent-failure",
+        "timeout",
+        "interrupt-once",
+        "credential-cleanup-failure",
+      ])
+      .default("success"),
+  })
+  .superRefine((request, context) => {
+    if (
+      request.pathPolicy &&
+      request.pathPolicy.maxChangedFiles !== request.maxChangedFiles
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["maxChangedFiles"],
+        message: "Changed-file limit must match the trusted path policy",
+      });
+  });
 
 export type TrustedImplementationRequest = z.infer<
   typeof trustedImplementationRequestSchema
@@ -164,6 +249,7 @@ export type TrustedImplementationRequest = z.infer<
 export const validationCommandEvidenceSchema = z.object({
   name: z.enum([
     "plan-compliance",
+    "repository-policy",
     "bug-regression",
     "format-write",
     "diff-check",
