@@ -26,6 +26,16 @@ export const roundhouseFormatterWriteCommand = Object.freeze({
   command: "pnpm",
   args: Object.freeze(["exec", "prettier", "--write"]),
 });
+export const trustedValidationEvidenceNames = Object.freeze([
+  "repository-policy",
+  "format-write",
+  "bug-regression",
+  "diff-check",
+  "format",
+  "license",
+  "typecheck",
+  "test",
+]);
 const formattablePathPattern =
   /\.(?:cjs|css|html|js|json|jsonc|jsx|md|mdx|mjs|ts|tsx|yaml|yml)$/;
 export const planningOutputLimits = Object.freeze({
@@ -1816,6 +1826,17 @@ async function validateImplementation(value) {
     validation.push(skippedValidation("typecheck", "not-applicable", reason));
     validation.push(skippedValidation("test", "not-applicable", reason));
   }
+  if (
+    validation.length !== trustedValidationEvidenceNames.length ||
+    !["repository-policy", "plan-compliance"].includes(validation[0]?.name) ||
+    validation
+      .slice(1)
+      .some(
+        (item, index) =>
+          item.name !== trustedValidationEvidenceNames[index + 1],
+      )
+  )
+    throw new Error("validation_evidence_contract_drift");
   const failedValidation = validation.filter(
     (item) => item.exitCode !== 0 || item.timedOut || item.outputTruncated,
   );

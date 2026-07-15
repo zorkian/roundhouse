@@ -7,6 +7,10 @@ import {
   parseRepositoryProfile,
   roundhouseFormatterWriteCommand as configuredFormatterWriteCommand,
 } from "../../packages/repository-profile/src/index.ts";
+import {
+  trustedImplementationResultSchema,
+  trustedValidationEvidenceLimit,
+} from "../../packages/self-development/src/trusted-loop.ts";
 
 import {
   assertCompleteAgentOutput,
@@ -37,6 +41,7 @@ import {
   roundhouseFormatterWriteCommand,
   secretStrings,
   skippedValidation,
+  trustedValidationEvidenceNames,
   validRepositoryPath,
   validRepositoryPathPolicy,
   validBugReproduction,
@@ -604,6 +609,26 @@ describe("trusted agent output boundary", () => {
 });
 
 describe("trusted validation budget", () => {
+  it("matches the shared bound for every standard runner evidence phase", () => {
+    expect(trustedValidationEvidenceNames).toHaveLength(
+      trustedValidationEvidenceLimit,
+    );
+    const validation = trustedValidationEvidenceNames.map((name) => ({
+      name,
+      command: `internal:${name}`,
+      exitCode: 0,
+      timedOut: false,
+      durationMs: 0,
+      stdout: "",
+      stderr: "",
+      outputTruncated: false,
+    }));
+    expect(
+      trustedImplementationResultSchema.shape.validation.safeParse(validation)
+        .success,
+    ).toBe(true);
+  });
+
   it("shares one deadline across validation commands", () => {
     expect(remainingValidationBudget(10_000, 4_000)).toBe(6_000);
     expect(remainingValidationBudget(10_000, 12_000)).toBe(1);
