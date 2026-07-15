@@ -11,6 +11,12 @@ import {
 } from "@roundhouse/self-development/cloudflare";
 import { importPKCS8, SignJWT } from "jose";
 
+import {
+  renderPullRequestPackage,
+  replacePullRequestPackageSection,
+  type PullRequestPackage,
+} from "./github-pr-package.js";
+
 type Fetch = typeof fetch;
 
 type GatewayConfig = {
@@ -682,6 +688,7 @@ export class GitHubAppGateway {
     pullRequestTitle: string;
     issueNumber: number;
     approvedAt: string;
+    reviewPackage: PullRequestPackage;
   }): Promise<GitHubPublicationResult> {
     const manifest = trustedPublicationManifestSchema.parse(input.manifest);
     const baseCommit = (
@@ -797,19 +804,10 @@ export class GitHubAppGateway {
             title: input.pullRequestTitle,
             head: input.branch,
             base: "main",
-            body: [
-              "## Summary",
-              "",
-              `Roundhouse implemented #${input.issueNumber} through the issue-driven development workflow.`,
-              "",
-              "## Human review",
-              "",
-              "- The pull request contains the exact validated patch approved from the source issue.",
-              "- Roundhouse posts the independent Claude review and any findings below.",
-              "- Merging remains a human decision.",
-              "",
-              `Closes #${input.issueNumber}`,
-            ].join("\n"),
+            body: renderPullRequestPackage({
+              ...input.reviewPackage,
+              headSha: commit,
+            }),
             draft: true,
           })
         ).value;
@@ -827,6 +825,12 @@ export class GitHubAppGateway {
         reconciled = true;
       }
     }
+    await this.api("PATCH", `${this.repositoryPath}/pulls/${pull.number}`, {
+      body: renderPullRequestPackage({
+        ...input.reviewPackage,
+        headSha: commit,
+      }),
+    });
     const verifiedCommit = (
       await this.api<{
         sha: string;
@@ -855,5 +859,42 @@ export class GitHubAppGateway {
       verifiedAt: this.now().toISOString(),
       reconciled,
     };
+  }
+
+  async updatePullRequestPackage(input: {
+    repositoryFullName: string;
+    pullRequestNumber: number;
+    expectedHeadSha: string;
+    sections: Partial<
+      Record<"review" | "ci" | "limitations" | "action", string>
+    >;
+  }): Promise<void> {
+    const base = repositoryPath(input.repositoryFullName);
+    const pull = (
+      await this.api<{
+        number: number;
+        body: string | null;
+        head: { sha: string };
+      }>("GET", `${base}/pulls/${input.pullRequestNumber}`)
+    ).value;
+    if (
+      pull.number !== input.pullRequestNumber ||
+      pull.head.sha !== input.expectedHeadSha
+    )
+      throw new GitHubAppGatewayError(
+        "stale_head",
+        "Pull request package update does not match the current head",
+      );
+    let body = pull.body ?? "";
+    for (const [name, value] of Object.entries(input.sections))
+      if (value !== undefined)
+        body = replacePullRequestPackageSection(
+          body,
+          name as "review" | "ci" | "limitations" | "action",
+          value,
+        );
+    await this.api("PATCH", `${base}/pulls/${input.pullRequestNumber}`, {
+      body,
+    });
   }
 }

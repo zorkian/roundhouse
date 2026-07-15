@@ -118,5 +118,25 @@ export async function publishApprovedGitHubRun(input: {
     pullRequestTitle: input.pullRequestTitle,
     issueNumber: input.issueNumber,
     approvedAt: run.approval.approvedAt,
+    reviewPackage: {
+      issueNumber: input.issueNumber,
+      issueUrl:
+        run.task.source?.issueUrl ??
+        `https://github.com/zorkian/roundhouse/issues/${input.issueNumber}`,
+      issueTitle: run.task.subject,
+      planId: run.task.planning?.planId ?? "unavailable",
+      planSha256: run.task.planning?.planSha256 ?? "unavailable",
+      problem: run.task.instructions,
+      implementation: result.agent.summary,
+      files: result.publicationManifest.files.map((file) => ({
+        path: file.path,
+        reason:
+          file.operation === "delete"
+            ? "removed by the approved implementation"
+            : "updated by the approved implementation",
+      })),
+      validation: result.validation,
+      regressionEvidence: result.regressionEvidence,
+    },
   });
 }

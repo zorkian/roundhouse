@@ -1202,6 +1202,59 @@ async function enqueueReviewComment(
   const disposition = new Map(
     review.dispositions.map((value) => [value.findingId, value]),
   );
+  const reviewPackageLines = [
+    "## Independent Claude review",
+    "",
+    `**Exact head:** \`${review.request.headCommit}\``,
+    `**Status:** ${review.status}`,
+    ...(review.execution
+      ? [
+          `**Verdict:** ${findings.length === 0 ? "No substantive findings." : `${findings.length} substantive ${findings.length === 1 ? "finding" : "findings"}.`}`,
+          review.execution.result.summary || "Review completed.",
+        ]
+      : ["Verdict, findings, and dispositions are pending."]),
+  ];
+  for (const finding of findings) {
+    const decision = disposition.get(finding.findingId);
+    reviewPackageLines.push(
+      "",
+      `### ${finding.severity.toUpperCase()} — ${finding.title}`,
+      `- Location: \`${finding.path}${finding.line ? `:${finding.line}` : ""}\``,
+      `- Finding: ${finding.rationale}`,
+      `- Recommendation: ${finding.recommendation}`,
+      `- Disposition: ${decision?.disposition ?? "recorded"}${decision?.rationale ? ` — ${decision.rationale}` : ""}`,
+    );
+  }
+  const advisory = findings.filter(
+    (finding) => disposition.get(finding.findingId)?.disposition !== "accepted",
+  );
+  await githubGateway(env).updatePullRequestPackage({
+    repositoryFullName: identity.repositoryFullName,
+    pullRequestNumber: review.request.pullRequestNumber,
+    expectedHeadSha: review.request.headCommit,
+    sections: {
+      review: reviewPackageLines.join("\n"),
+      limitations: [
+        "## Known limitations and deferred findings",
+        "",
+        ...(advisory.length === 0
+          ? ["None recorded for this head."]
+          : advisory.map(
+              (finding) =>
+                `- **${finding.severity.toUpperCase()}** — ${finding.title}: ${disposition.get(finding.findingId)?.disposition ?? "recorded for human consideration"}`,
+            )),
+      ].join("\n"),
+      action: [
+        "## Next human action",
+        "",
+        readyForHumanReview
+          ? `Confirm repository CI is passing for \`${review.request.headCommit}\`, then review and merge PR #${review.request.pullRequestNumber} if it looks right.`
+          : review.status === "failed"
+            ? "Inspect the failed independent review; do not merge until a head-bound review completes."
+            : "Wait for independent review and repository CI to complete; do not merge while this PR is a draft.",
+      ].join("\n"),
+    },
+  });
   const pullLines = [...common, `Source issue: ${review.request.issueUrl}`];
   if (findings.length > 0) {
     pullLines.push("### Findings");
@@ -1564,6 +1617,54 @@ async function handleExactCiTarget(
   target: CiObservation & { runId: string; issueNumber: number },
 ): Promise<void> {
   await recordCiOutcome(env, target);
+  const observedChecks = await env.DB.prepare(
+    "SELECT check_run_id, check_name, details_url, status, conclusion FROM github_ci_outcomes WHERE repository_full_name = ? AND pull_request_number = ? AND head_sha = ? ORDER BY check_run_id",
+  )
+    .bind(target.repositoryFullName, target.pullRequestNumber, target.headSha)
+    .all<{
+      check_run_id: number;
+      check_name: string | null;
+      details_url: string | null;
+      status: string;
+      conclusion: string | null;
+    }>();
+  const checks = observedChecks.results ?? [];
+  const allPassing =
+    checks.length > 0 &&
+    checks.every(
+      (check) =>
+        check.status === "completed" &&
+        check.conclusion !== null &&
+        ["success", "neutral", "skipped"].includes(check.conclusion),
+    );
+  await githubGateway(env).updatePullRequestPackage({
+    repositoryFullName: target.repositoryFullName,
+    pullRequestNumber: target.pullRequestNumber,
+    expectedHeadSha: target.headSha,
+    sections: {
+      ci: [
+        "## Repository CI",
+        "",
+        `**Exact head:** \`${target.headSha}\``,
+        `**State:** ${allPassing ? "passing" : checks.some((check) => check.status !== "completed") ? "in progress" : "not passing"}`,
+        "",
+        ...checks.map((check) => {
+          const label = check.check_name ?? `Check ${check.check_run_id}`;
+          const state =
+            check.status === "completed"
+              ? (check.conclusion ?? "completed")
+              : check.status;
+          return `- ${check.details_url ? `[${label}](${check.details_url})` : label} — ${state}`;
+        }),
+      ].join("\n"),
+      ...(!allPassing
+        ? {
+            action:
+              "## Next human action\n\nWait for all repository CI checks and independent review to pass for this exact head; do not merge yet.",
+          }
+        : {}),
+    },
+  });
   const passing =
     target.status === "completed" &&
     target.conclusion !== undefined &&
