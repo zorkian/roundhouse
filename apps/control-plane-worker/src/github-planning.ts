@@ -123,6 +123,20 @@ type PlanningJobRow = {
   completed_at: string | null;
 };
 
+async function planningGenerationJobId(
+  requestKey: string,
+  generation: number,
+): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`${requestKey}:generation:${generation}`),
+  );
+  const value = [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+  return `planning_job_${value.slice(0, 40)}`;
+}
+
 async function planningJob(
   env: ControlPlaneEnv,
   jobId: string,
@@ -208,7 +222,9 @@ export async function reservePlanningJob(
     return { job: (await planningJob(env, retained.job_id))!, created: false };
   const prior = retained ? await planningJob(env, retained.job_id) : undefined;
   const generation = prior ? prior.generation + 1 : 1;
-  const jobId = prior ? `${input.jobId}_g${generation}` : input.jobId;
+  const jobId = prior
+    ? await planningGenerationJobId(input.requestKey, generation)
+    : input.jobId;
   const insert = env.DB.prepare(
     "INSERT OR IGNORE INTO github_planning_jobs(job_id, request_key, roundhouse_environment, repository_full_name, issue_number, actor_id, command_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)",
   ).bind(
