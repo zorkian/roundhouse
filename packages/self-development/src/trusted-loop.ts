@@ -3,8 +3,8 @@
 
 import { z } from "zod";
 
-import { roundhouseFormatterWriteCommand } from "@roundhouse/repository-profile";
-export { roundhouseFormatterWriteCommand } from "@roundhouse/repository-profile";
+import { roundhouseFormatterWriteCommand } from "@roundhouse/repository-profile/contracts";
+export { roundhouseFormatterWriteCommand } from "@roundhouse/repository-profile/contracts";
 
 import type { StageResult } from "./job-ports.js";
 
