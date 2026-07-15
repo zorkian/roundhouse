@@ -86,10 +86,37 @@ export async function recordCiOutcome(
 export async function reserveCiRecovery(
   env: ControlPlaneEnv,
   value: CiObservation,
-): Promise<boolean> {
+): Promise<"reserved" | "duplicate" | "exhausted"> {
   const now = new Date().toISOString();
   const result = await env.DB.prepare(
-    "INSERT OR IGNORE INTO github_ci_remediations(repository_full_name, pull_request_number, head_sha, check_run_id, disposition, attempt_count, created_at, updated_at) VALUES (?, ?, ?, ?, 'diagnosing', 1, ?, ?)",
+    "INSERT OR IGNORE INTO github_ci_remediations(repository_full_name, pull_request_number, head_sha, check_run_id, disposition, attempt_count, created_at, updated_at) SELECT ?, ?, ?, ?, 'diagnosing', 1, ?, ? WHERE NOT EXISTS (SELECT 1 FROM github_ci_remediations WHERE repository_full_name = ? AND pull_request_number = ? AND head_sha = ?)",
+  )
+    .bind(
+      value.repositoryFullName,
+      value.pullRequestNumber,
+      value.headSha,
+      value.checkRunId,
+      now,
+      now,
+      value.repositoryFullName,
+      value.pullRequestNumber,
+      value.headSha,
+    )
+    .run();
+  if ((result.meta.changes ?? 0) === 1) return "reserved";
+  const duplicate = await env.DB.prepare(
+    "SELECT 1 AS found FROM github_ci_remediations WHERE repository_full_name = ? AND pull_request_number = ? AND head_sha = ? AND check_run_id = ? LIMIT 1",
+  )
+    .bind(
+      value.repositoryFullName,
+      value.pullRequestNumber,
+      value.headSha,
+      value.checkRunId,
+    )
+    .first<{ found: number }>();
+  if (duplicate?.found === 1) return "duplicate";
+  await env.DB.prepare(
+    "INSERT OR IGNORE INTO github_ci_remediations(repository_full_name, pull_request_number, head_sha, check_run_id, disposition, attempt_count, classification, next_action, created_at, updated_at) VALUES (?, ?, ?, ?, 'manual_required', 0, 'recovery_exhausted', 'Inspect the failing Check; the automatic recovery budget for this exact head is exhausted.', ?, ?)",
   )
     .bind(
       value.repositoryFullName,
@@ -100,7 +127,7 @@ export async function reserveCiRecovery(
       now,
     )
     .run();
-  return (result.meta.changes ?? 0) === 1;
+  return "exhausted";
 }
 
 export async function recordCiRecovery(
@@ -143,7 +170,7 @@ export async function resolveCiRecoveriesForHead(
   value: CiObservation,
 ): Promise<void> {
   await env.DB.prepare(
-    "UPDATE github_ci_remediations SET disposition = 'resolved', classification = 'ci_passed', next_action = 'No action is needed.', updated_at = ? WHERE repository_full_name = ? AND pull_request_number = ? AND head_sha = ? AND disposition IN ('diagnosing', 'rerun_requested')",
+    "UPDATE github_ci_remediations SET disposition = 'resolved', classification = 'ci_passed', next_action = 'No action is needed.', updated_at = ? WHERE repository_full_name = ? AND pull_request_number = ? AND head_sha = ? AND disposition IN ('diagnosing', 'rerun_requested', 'manual_required')",
   )
     .bind(
       new Date().toISOString(),

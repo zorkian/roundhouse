@@ -88,8 +88,13 @@ describe("GitHub CI coordination", () => {
   });
 
   it("reserves exactly one recovery for duplicate deliveries", async () => {
-    await expect(reserveCiRecovery(env, observation)).resolves.toBe(true);
-    await expect(reserveCiRecovery(env, observation)).resolves.toBe(false);
+    await expect(reserveCiRecovery(env, observation)).resolves.toBe("reserved");
+    await expect(reserveCiRecovery(env, observation)).resolves.toBe(
+      "duplicate",
+    );
+    await expect(
+      reserveCiRecovery(env, { ...observation, checkRunId: 92 }),
+    ).resolves.toBe("exhausted");
     await resolveCiRecoveriesForHead(env, {
       ...observation,
       checkRunId: 92,
@@ -97,12 +102,21 @@ describe("GitHub CI coordination", () => {
     });
     await expect(
       env.DB.prepare(
-        "SELECT disposition, classification, next_action FROM github_ci_remediations",
-      ).first(),
-    ).resolves.toEqual({
-      disposition: "resolved",
-      classification: "ci_passed",
-      next_action: "No action is needed.",
+        "SELECT disposition, classification, next_action FROM github_ci_remediations ORDER BY check_run_id",
+      ).all(),
+    ).resolves.toMatchObject({
+      results: [
+        {
+          disposition: "resolved",
+          classification: "ci_passed",
+          next_action: "No action is needed.",
+        },
+        {
+          disposition: "resolved",
+          classification: "ci_passed",
+          next_action: "No action is needed.",
+        },
+      ],
     });
   });
 

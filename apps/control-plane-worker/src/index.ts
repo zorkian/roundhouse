@@ -1560,7 +1560,18 @@ async function handleExactCiTarget(
     return;
   }
   if (target.status !== "completed" || !target.conclusion) return;
-  if (!(await reserveCiRecovery(env, target))) return;
+  const recovery = await reserveCiRecovery(env, target);
+  if (recovery === "duplicate") return;
+  if (recovery === "exhausted") {
+    await enqueueComment(
+      env,
+      `ci-exhausted:${target.repositoryFullName}:${target.pullRequestNumber}:${target.headSha}:${target.checkRunId}`,
+      target.issueNumber,
+      `Roundhouse observed failing Check \`${target.name ?? target.checkRunId}\` on exact head \`${target.headSha}\`, but the one automatic recovery permitted for this head has already been used. Next action: open ${target.detailsUrl ?? `https://github.com/${target.repositoryFullName}/pull/${target.pullRequestNumber}/checks`} and inspect the failure.`,
+      target.repositoryFullName,
+    );
+    return;
+  }
 
   const gateway = githubGateway(env);
   let logs = "";
