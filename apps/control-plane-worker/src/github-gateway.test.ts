@@ -144,6 +144,16 @@ describe("GitHub App gateway", () => {
       expectedCode: "base_advanced_out_of_scope",
     },
     {
+      name: "rejects a full page of intervening files",
+      comparison: {
+        status: "ahead",
+        files: Array.from({ length: 100 }, (_, index) => ({
+          filename: `docs/unrelated-${index}.md`,
+        })),
+      },
+      expectedCode: "base_advanced_out_of_scope",
+    },
+    {
       name: "rejects a diverged base",
       comparison: {
         status: "diverged",
