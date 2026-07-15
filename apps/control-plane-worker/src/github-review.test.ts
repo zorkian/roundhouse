@@ -469,6 +469,7 @@ describe("durable independent review coordination", () => {
         input.reviewId,
         claim!.token,
         {
+          attemptId: claim!.review.request.attemptId,
           retryable: true,
           classification: "container_interrupted",
           reason: "simulated interruption",
@@ -476,6 +477,19 @@ describe("durable independent review coordination", () => {
         new Date(`2026-07-12T00:00:0${attempt}.250Z`),
       );
       expect(failed.status).toBe(attempt < 3 ? "pending" : "failed");
+      const replayed = await failIndependentReview(
+        env,
+        input.reviewId,
+        claim!.token,
+        {
+          attemptId: claim!.review.request.attemptId,
+          retryable: true,
+          classification: "container_interrupted",
+          reason: "simulated interruption",
+        },
+        new Date(`2026-07-12T00:00:0${attempt}.300Z`),
+      );
+      expect(replayed.revision).toBe(failed.revision);
     }
     expect(
       (await readIndependentReview(env, input.reviewId))?.attemptCount,

@@ -2146,7 +2146,6 @@ async function executeWorkflowReview(
     now,
     4 * 60 * 60_000,
   );
-  const ownsClaim = claim !== null;
   if (!claim) {
     const resumed = await readIndependentReview(env, delivery.reviewId);
     if (resumed?.execution) return resumed.execution;
@@ -2161,21 +2160,21 @@ async function executeWorkflowReview(
   try {
     return await reviewBackend(env).execute(claim.review.request);
   } catch (error) {
-    if (ownsClaim)
-      await failIndependentReview(
-        env,
-        delivery.reviewId,
-        claim.token,
-        {
-          retryable: true,
-          classification:
-            claim.review.attemptCount >= 3
-              ? "review_workflow_exhausted"
-              : "review_workflow_step_interrupted",
-          reason: redactedReason(error),
-        },
-        new Date(),
-      );
+    await failIndependentReview(
+      env,
+      delivery.reviewId,
+      claim.token,
+      {
+        attemptId: claim.review.request.attemptId,
+        retryable: true,
+        classification:
+          claim.review.attemptCount >= 3
+            ? "review_workflow_exhausted"
+            : "review_workflow_step_interrupted",
+        reason: redactedReason(error),
+      },
+      new Date(),
+    );
     throw error;
   }
 }
@@ -2221,6 +2220,7 @@ async function failWorkflowReview(
       delivery.reviewId,
       current.lease.token,
       {
+        attemptId: current.request.attemptId,
         retryable: false,
         classification: "review_workflow_exhausted",
         reason: redactedReason(error),
@@ -2277,6 +2277,7 @@ async function consumeReviewMessage(
       parsed.data.reviewId,
       claim.token,
       {
+        attemptId: claim.review.request.attemptId,
         retryable,
         classification: retryable
           ? "review_infrastructure_interrupted"
