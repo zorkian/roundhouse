@@ -15,7 +15,10 @@ import { readFile } from "node:fs/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import type { ControlPlaneEnv } from "./environment.js";
-import { createControlPlaneHandler } from "./index.js";
+import {
+  createControlPlaneHandler,
+  executeTrustedExecutionWorkflow,
+} from "./index.js";
 import {
   controlPlaneSubmissionMigration,
   reserveSubmission,
@@ -41,6 +44,7 @@ import { trustedExecutionWorkflowMigration } from "./trusted-execution-workflow.
 let instance: Miniflare;
 let database: D1Database;
 const resetTables = [
+  "trusted_review_workflows",
   "trusted_execution_workflows",
   "execution_attempt_phases",
   "github_pull_request_lifecycle",
@@ -1415,75 +1419,107 @@ describe("local control-plane Worker", () => {
     env.ROUNDHOUSE_CLAUDE_AUTH_JSON = JSON.stringify({
       oauthToken: `setup-token-${"s".repeat(80)}`,
     });
+    let reviewExecutions = 0;
     env.EXECUTION_CONTAINERS = {
       getByName: () => ({
         runJob: async () => {
           throw new Error("ordinary execution is not expected in this test");
         },
-        runReviewJob: async (review) => ({
-          schemaVersion: 1,
-          reviewId: review.reviewId,
-          attemptId: review.attemptId,
-          cycle: review.cycle,
-          runId: review.runId,
-          baseCommit: review.baseCommit,
-          headCommit: review.headCommit,
-          patchSha256: review.patchSha256,
-          startedAt: "2026-07-12T00:04:00.000Z",
-          completedAt: "2026-07-12T00:04:01.000Z",
-          startupDurationMs: 1,
-          provider: "claude-subscription",
-          model: "claude-sonnet-4-6",
-          summary: "One material finding.",
-          findings: await normalizeReviewFindings(
-            review.reviewId,
-            review.headCommit,
-            [
-              {
-                severity: "medium",
-                path: review.allowedPaths[0]!,
-                title: "Correct the exact implementation",
-                rationale: "The implementation misses the requested case.",
-                recommendation: "Handle the requested case.",
-              },
-            ],
-            review.maxFindings,
-          ),
-          outputBytes: 100,
-          usage: { inputTokens: 10, outputTokens: 10, turns: 1 },
-          network: {
-            checkoutHosts: ["github.com"],
-            modelHosts: ["api.anthropic.com"],
-            reviewerToolsEnabled: false,
-            arbitraryInternetEnabled: false,
-            deniedHttpProbe: true,
-            deniedTcpProbe: true,
-          },
-          credential: {
-            installedAtRuntime: true,
-            writtenToFilesystem: false,
-            absentFromEvidence: true,
-          },
-          resources: { diskBytes: 1, memoryBytes: 1 },
-        }),
+        runReviewJob: async (review) => {
+          reviewExecutions += 1;
+          if (reviewExecutions === 1)
+            throw new Error("instance disappeared during independent review");
+          return {
+            schemaVersion: 1,
+            reviewId: review.reviewId,
+            attemptId: review.attemptId,
+            cycle: review.cycle,
+            runId: review.runId,
+            baseCommit: review.baseCommit,
+            headCommit: review.headCommit,
+            patchSha256: review.patchSha256,
+            startedAt: "2026-07-12T00:04:00.000Z",
+            completedAt: "2026-07-12T00:04:01.000Z",
+            startupDurationMs: 1,
+            provider: "claude-subscription",
+            model: "claude-sonnet-4-6",
+            summary: "One material finding.",
+            findings: await normalizeReviewFindings(
+              review.reviewId,
+              review.headCommit,
+              [
+                {
+                  severity: "medium",
+                  path: review.allowedPaths[0]!,
+                  title: "Correct the exact implementation",
+                  rationale: "The implementation misses the requested case.",
+                  recommendation: "Handle the requested case.",
+                },
+              ],
+              review.maxFindings,
+            ),
+            outputBytes: 100,
+            usage: { inputTokens: 10, outputTokens: 10, turns: 1 },
+            network: {
+              checkoutHosts: ["github.com"],
+              modelHosts: ["api.anthropic.com"],
+              reviewerToolsEnabled: false,
+              arbitraryInternetEnabled: false,
+              deniedHttpProbe: true,
+              deniedTcpProbe: true,
+            },
+            credential: {
+              installedAtRuntime: true,
+              writtenToFilesystem: false,
+              absentFromEvidence: true,
+            },
+            resources: { diskBytes: 1, memoryBytes: 1 },
+          };
+        },
         destroy: async () => undefined,
       }),
     };
     const reviewDelivery = queued.messages.find(
       (message) => (message as { kind?: string }).kind === "independent_review",
     )!;
+    env.EXECUTION_MODE = "cloudflare-trusted-codex";
+    env.TRUSTED_EXECUTION_WORKFLOW = {
+      createBatch: async (batch) => batch.map(({ id }) => ({ id })),
+    };
     await expect(deliver(handler, env, [reviewDelivery])).resolves.toEqual([
       "ack:0",
     ]);
+    await executeTrustedExecutionWorkflow(env, reviewDelivery, {
+      do: async (name, _config, callback) => {
+        if (name !== "execute independent review") return callback();
+        try {
+          return await callback();
+        } catch {
+          return callback();
+        }
+      },
+    });
+    expect(reviewExecutions).toBe(2);
     const reviewResponse = await handler.fetch!(
       request(`/v1/reviews/${firstBody.review.request.reviewId}`),
       env,
       {} as ExecutionContext,
     );
-    expect(await reviewResponse.json()).toMatchObject({
+    const reviewBody = await reviewResponse.json();
+    expect(reviewBody).toMatchObject({
       status: "remediated",
-      request: { headCommit: commit, cycle: 1 },
+      attemptCount: 2,
+      request: { headCommit: commit, cycle: 1, attemptNumber: 2 },
       remediationRunId: expect.stringMatching(/^run_/),
+      workflows: [
+        {
+          workflowInstanceId: expect.stringMatching(/^review-[a-f0-9]{64}$/),
+          status: "completed",
+        },
+      ],
+      events: expect.arrayContaining([
+        expect.objectContaining({ type: "review.retry_scheduled" }),
+      ]),
     });
     expect(checkWrites).toBe(1);
     expect(reviewCheck).toMatchObject({
@@ -1794,6 +1830,41 @@ describe("local control-plane Worker", () => {
           status: "dispatched",
         },
       ],
+    });
+  });
+
+  it("hands independent review to one idempotent Workflow without starting a Container in the Queue", async () => {
+    const { env } = await runtime();
+    const handler = createControlPlaneHandler();
+    const created = new Set<string>();
+    env.EXECUTION_MODE = "cloudflare-trusted-codex";
+    env.TRUSTED_EXECUTION_WORKFLOW = {
+      createBatch: async (batch) => {
+        const added = batch.filter(({ id }) => !created.has(id));
+        for (const { id } of added) created.add(id);
+        return added.map(({ id }) => ({ id }));
+      },
+    };
+    const reviewId = `review_${"a".repeat(40)}`;
+    const reviewDelivery = {
+      schemaVersion: 1,
+      kind: "independent_review",
+      reviewId,
+      deliveryId: `review_delivery_${reviewId}_1`,
+    };
+
+    expect(
+      await deliver(handler, env, [reviewDelivery, reviewDelivery]),
+    ).toEqual(["ack:0", "ack:1"]);
+    expect(created.size).toBe(1);
+    await expect(
+      env.DB.prepare(
+        "SELECT review_id, delivery_id, status FROM trusted_review_workflows",
+      ).first(),
+    ).resolves.toEqual({
+      review_id: reviewId,
+      delivery_id: reviewDelivery.deliveryId,
+      status: "dispatched",
     });
   });
 

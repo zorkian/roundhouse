@@ -16,6 +16,8 @@ import {
   DispatchingStageExecutor,
   ResumableCoordinator,
   type DurableIndependentReview,
+  type IndependentReviewExecution,
+  type ReviewDelivery,
   type RunDelivery,
   type SelfDevelopmentTask,
 } from "@roundhouse/self-development/cloudflare";
@@ -107,11 +109,15 @@ import {
 } from "./github-review.js";
 import { DeterministicLocalDispatcher } from "./local-dispatch.js";
 import {
+  consumeTrustedReviewDelivery,
   consumeTrustedExecutionDelivery,
   readTrustedExecutionWorkflows,
+  runTrustedReviewWorkflow,
   runTrustedExecutionWorkflow,
+  trustedReviewWorkflowId,
   type TrustedExecutionWorkflowResult,
   type TrustedExecutionWorkflowStepPort,
+  type TrustedReviewWorkflowResult,
 } from "./trusted-execution-workflow.js";
 import {
   IdempotencyConflictError,
@@ -1060,7 +1066,17 @@ export async function executeTrustedExecutionWorkflow(
   env: ControlPlaneEnv,
   input: unknown,
   step: TrustedExecutionWorkflowStepPort,
-): Promise<TrustedExecutionWorkflowResult> {
+): Promise<TrustedExecutionWorkflowResult | TrustedReviewWorkflowResult> {
+  const reviewDelivery = reviewDeliverySchema.safeParse(input);
+  if (reviewDelivery.success)
+    return runTrustedReviewWorkflow(
+      env,
+      reviewDelivery.data,
+      step,
+      (delivery) => executeWorkflowReview(env, delivery),
+      (delivery, execution) => finalizeWorkflowReview(env, delivery, execution),
+      (delivery, error) => failWorkflowReview(env, delivery, error),
+    );
   const jobs = new D1JobStore(env.DB);
   return runTrustedExecutionWorkflow(
     env,
@@ -1460,6 +1476,176 @@ async function startPullRequestFeedbackRemediation(
   return { runId: run.runId, state: run.state, revision: run.revision };
 }
 
+function reviewWorkflowResult(
+  review: DurableIndependentReview,
+): TrustedReviewWorkflowResult {
+  return {
+    schemaVersion: 1,
+    reviewId: review.request.reviewId,
+    revision: review.revision,
+    status: review.status,
+  };
+}
+
+async function finalizeIndependentReviewProjection(
+  env: ControlPlaneEnv,
+  initial: DurableIndependentReview,
+): Promise<DurableIndependentReview> {
+  let completed = initial;
+  if (completed.status === "remediation_pending") {
+    await startReviewRemediation(env, completed);
+    completed =
+      (await readIndependentReview(env, completed.request.reviewId)) ??
+      completed;
+  }
+  let readyForHumanReview = false;
+  if (completed.status === "completed")
+    try {
+      await githubGateway(env).markPullRequestReady({
+        repositoryFullName: runtimeIdentity(env).repositoryFullName,
+        pullRequestNumber: completed.request.pullRequestNumber,
+        expectedHeadSha: completed.request.headCommit,
+      });
+      readyForHumanReview = true;
+    } catch (error) {
+      console.warn("GitHub pull request readiness update deferred", {
+        reviewId: completed.request.reviewId,
+        reason: redactedReason(error),
+      });
+    }
+  await enqueueReviewComment(env, completed, readyForHumanReview);
+  await flushGitHubOutputs(env).catch((error) =>
+    console.warn("Independent review GitHub status delivery deferred", {
+      reviewId: completed.request.reviewId,
+      reason: redactedReason(error),
+    }),
+  );
+  return completed;
+}
+
+async function executeWorkflowReview(
+  env: ControlPlaneEnv,
+  delivery: ReviewDelivery,
+): Promise<IndependentReviewExecution> {
+  const instanceId = await trustedReviewWorkflowId(delivery);
+  const workerId = `${runtimeIdentity(env).workerId}-workflow-${instanceId}`;
+  const retained = await readIndependentReview(env, delivery.reviewId);
+  if (!retained) throw new Error("Independent review is unavailable");
+  if (retained.execution) return retained.execution;
+  let claim = await claimIndependentReview(
+    env,
+    delivery.reviewId,
+    workerId,
+    new Date(),
+    4 * 60 * 60_000,
+  );
+  if (!claim) {
+    const resumed = await readIndependentReview(env, delivery.reviewId);
+    if (resumed?.execution) return resumed.execution;
+    if (resumed?.status !== "running" || resumed.lease?.workerId !== workerId)
+      throw new Error("Independent review Workflow claim is unavailable");
+    await failIndependentReview(
+      env,
+      delivery.reviewId,
+      resumed.lease.token,
+      {
+        retryable: true,
+        classification:
+          resumed.attemptCount >= 3
+            ? "review_workflow_exhausted"
+            : "review_workflow_step_interrupted",
+        reason: "Independent review Workflow step restarted before completion",
+      },
+      new Date(),
+    );
+    claim = await claimIndependentReview(
+      env,
+      delivery.reviewId,
+      workerId,
+      new Date(),
+      4 * 60 * 60_000,
+    );
+    if (!claim)
+      throw new Error("Independent review Workflow retry claim is unavailable");
+  }
+  try {
+    return await reviewBackend(env).execute(claim.review.request);
+  } catch (error) {
+    await failIndependentReview(
+      env,
+      delivery.reviewId,
+      claim.token,
+      {
+        retryable: true,
+        classification:
+          claim.review.attemptCount >= 3
+            ? "review_workflow_exhausted"
+            : "review_workflow_step_interrupted",
+        reason: redactedReason(error),
+      },
+      new Date(),
+    );
+    throw error;
+  }
+}
+
+async function finalizeWorkflowReview(
+  env: ControlPlaneEnv,
+  delivery: ReviewDelivery,
+  execution: IndependentReviewExecution,
+): Promise<TrustedReviewWorkflowResult> {
+  const instanceId = await trustedReviewWorkflowId(delivery);
+  const workerId = `${runtimeIdentity(env).workerId}-workflow-${instanceId}`;
+  const current = await readIndependentReview(env, delivery.reviewId);
+  if (!current) throw new Error("Independent review is unavailable");
+  if (
+    !current.execution &&
+    (current.status !== "running" || current.lease?.workerId !== workerId)
+  )
+    throw new Error("Independent review Workflow completion is unowned");
+  const completed = await completeIndependentReview(
+    env,
+    delivery.reviewId,
+    current.lease?.token ?? "review_workflow_replay",
+    execution,
+    new Date(),
+  );
+  return reviewWorkflowResult(
+    await finalizeIndependentReviewProjection(env, completed),
+  );
+}
+
+async function failWorkflowReview(
+  env: ControlPlaneEnv,
+  delivery: ReviewDelivery,
+  error: unknown,
+): Promise<TrustedReviewWorkflowResult> {
+  const instanceId = await trustedReviewWorkflowId(delivery);
+  const workerId = `${runtimeIdentity(env).workerId}-workflow-${instanceId}`;
+  let current = await readIndependentReview(env, delivery.reviewId);
+  if (!current) throw new Error("Independent review is unavailable");
+  if (current.status === "running" && current.lease?.workerId === workerId)
+    current = await failIndependentReview(
+      env,
+      delivery.reviewId,
+      current.lease.token,
+      {
+        retryable: false,
+        classification: "review_workflow_exhausted",
+        reason: redactedReason(error),
+      },
+      new Date(),
+    );
+  await enqueueReviewComment(env, current);
+  await flushGitHubOutputs(env).catch((deliveryError) =>
+    console.warn("Independent review failure status delivery deferred", {
+      reviewId: delivery.reviewId,
+      reason: redactedReason(deliveryError),
+    }),
+  );
+  return reviewWorkflowResult(current);
+}
+
 async function consumeReviewMessage(
   message: {
     body: unknown;
@@ -1483,40 +1669,14 @@ async function consumeReviewMessage(
   }
   try {
     const execution = await reviewBackend(env).execute(claim.review.request);
-    let completed = await completeIndependentReview(
+    const completed = await completeIndependentReview(
       env,
       parsed.data.reviewId,
       claim.token,
       execution,
       new Date(),
     );
-    if (completed.status === "remediation_pending") {
-      await startReviewRemediation(env, completed);
-      completed =
-        (await readIndependentReview(env, parsed.data.reviewId)) ?? completed;
-    }
-    let readyForHumanReview = false;
-    if (completed.status === "completed")
-      try {
-        await githubGateway(env).markPullRequestReady({
-          repositoryFullName: runtimeIdentity(env).repositoryFullName,
-          pullRequestNumber: completed.request.pullRequestNumber,
-          expectedHeadSha: completed.request.headCommit,
-        });
-        readyForHumanReview = true;
-      } catch (error) {
-        console.warn("GitHub pull request readiness update deferred", {
-          reviewId: parsed.data.reviewId,
-          reason: redactedReason(error),
-        });
-      }
-    await enqueueReviewComment(env, completed, readyForHumanReview);
-    await flushGitHubOutputs(env).catch((error) =>
-      console.warn("Independent review GitHub status delivery deferred", {
-        reviewId: parsed.data.reviewId,
-        reason: redactedReason(error),
-      }),
-    );
+    await finalizeIndependentReviewProjection(env, completed);
     message.ack();
   } catch (error) {
     const reason = redactedReason(error);
@@ -2796,6 +2956,20 @@ export function createControlPlaneHandler(
         Boolean(env.TRUSTED_EXECUTION_WORKFLOW);
       const worker = workflowBacked ? undefined : coordinator(env);
       for (const message of batch.messages) {
+        if (workflowBacked) {
+          const review = reviewDeliverySchema.safeParse(message.body);
+          if (review.success) {
+            await consumeTrustedReviewDelivery(
+              {
+                body: review.data,
+                ack: () => message.ack(),
+                retry: () => message.retry(),
+              },
+              env,
+            );
+            continue;
+          }
+        }
         if (await consumeReviewMessage(message, env)) continue;
         if (workflowBacked) {
           await consumeTrustedExecutionDelivery(

@@ -3,11 +3,15 @@
 
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import type { IndependentReviewExecution } from "@roundhouse/self-development/cloudflare";
 
 import type { ControlPlaneEnv } from "./environment.js";
 import {
+  consumeTrustedReviewDelivery,
   consumeTrustedExecutionDelivery,
+  runTrustedReviewWorkflow,
   runTrustedExecutionWorkflow,
+  trustedReviewWorkflowId,
   trustedExecutionWorkflowId,
   trustedExecutionWorkflowMigration,
   type TrustedExecutionWorkflowStepPort,
@@ -22,6 +26,23 @@ const delivery = {
   deliveryId: "delivery_trusted_workflow_1",
   expectedRevision: 1,
 };
+
+const reviewDelivery = {
+  schemaVersion: 1 as const,
+  kind: "independent_review" as const,
+  reviewId: `review_${"a".repeat(40)}`,
+  deliveryId: `review_delivery_review_${"a".repeat(40)}_1`,
+};
+
+const reviewExecution = {
+  result: {
+    schemaVersion: 1,
+    reviewId: reviewDelivery.reviewId,
+  },
+  evidence: {
+    evidenceId: "review_evidence",
+  },
+} as unknown as IndependentReviewExecution;
 
 function environment(created: Set<string>): ControlPlaneEnv {
   return {
@@ -56,6 +77,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await database.prepare("DELETE FROM trusted_execution_workflows").run();
+  await database.prepare("DELETE FROM trusted_review_workflows").run();
 });
 
 afterAll(async () => {
@@ -106,6 +128,49 @@ describe("trusted execution Workflow dispatch", () => {
         status: "dispatched",
       },
     ]);
+  });
+});
+
+describe("trusted review Workflow dispatch", () => {
+  it("derives a distinct deterministic identity from the exact review delivery", async () => {
+    const first = await trustedReviewWorkflowId(reviewDelivery);
+    expect(first).toMatch(/^review-[a-f0-9]{64}$/);
+    expect(first.length).toBeLessThanOrEqual(100);
+    await expect(trustedReviewWorkflowId(reviewDelivery)).resolves.toBe(first);
+    await expect(
+      trustedReviewWorkflowId({
+        ...reviewDelivery,
+        deliveryId: "review_delivery_trusted_workflow_2",
+      }),
+    ).resolves.not.toBe(first);
+  });
+
+  it("acknowledges duplicate review delivery after one durable dispatch", async () => {
+    const created = new Set<string>();
+    const env = environment(created);
+    const outcomes: string[] = [];
+    const message = () => ({
+      body: reviewDelivery,
+      ack: () => outcomes.push("ack"),
+      retry: () => outcomes.push("retry"),
+    });
+
+    await consumeTrustedReviewDelivery(message(), env);
+    await consumeTrustedReviewDelivery(message(), env);
+
+    expect(outcomes).toEqual(["ack", "ack"]);
+    expect(created.size).toBe(1);
+    await expect(
+      database
+        .prepare(
+          "SELECT review_id, delivery_id, status FROM trusted_review_workflows",
+        )
+        .first(),
+    ).resolves.toEqual({
+      review_id: reviewDelivery.reviewId,
+      delivery_id: reviewDelivery.deliveryId,
+      status: "dispatched",
+    });
   });
 });
 
@@ -223,5 +288,80 @@ describe("trusted execution Workflow lifecycle", () => {
       executions: 2,
       finalizations: 1,
     });
+  });
+});
+
+describe("trusted review Workflow lifecycle", () => {
+  it("replays an interrupted long review without duplicating finalization", async () => {
+    const created = new Set<string>();
+    const env = environment(created);
+    await consumeTrustedReviewDelivery(
+      { body: reviewDelivery, ack: () => undefined, retry: () => undefined },
+      env,
+    );
+    const steps: string[] = [];
+    const step: TrustedExecutionWorkflowStepPort = {
+      do: async (name, _config, callback) => {
+        steps.push(name);
+        if (name !== "execute independent review") return callback();
+        try {
+          return await callback();
+        } catch {
+          return callback();
+        }
+      },
+    };
+    let executions = 0;
+    let finalizations = 0;
+    let failures = 0;
+
+    const result = await runTrustedReviewWorkflow(
+      env,
+      reviewDelivery,
+      step,
+      async () => {
+        executions += 1;
+        if (executions === 1)
+          throw new Error("simulated mid-review Worker interruption");
+        return reviewExecution;
+      },
+      async () => {
+        finalizations += 1;
+        return {
+          schemaVersion: 1,
+          reviewId: reviewDelivery.reviewId,
+          revision: 4,
+          status: "completed",
+        };
+      },
+      async () => {
+        failures += 1;
+        return {
+          schemaVersion: 1,
+          reviewId: reviewDelivery.reviewId,
+          revision: 4,
+          status: "failed",
+        };
+      },
+    );
+
+    expect(result.status).toBe("completed");
+    expect({ executions, finalizations, failures }).toEqual({
+      executions: 2,
+      finalizations: 1,
+      failures: 0,
+    });
+    expect(steps).toEqual([
+      "execute independent review",
+      "finalize independent review",
+    ]);
+    await expect(
+      database
+        .prepare(
+          "SELECT status FROM trusted_review_workflows WHERE review_id = ?",
+        )
+        .bind(reviewDelivery.reviewId)
+        .first(),
+    ).resolves.toEqual({ status: "completed" });
   });
 });

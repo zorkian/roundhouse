@@ -15,12 +15,14 @@ hostname, and Access boundary named below. Additive D1 migrations and a
 development deployment are authorized with up to USD 5 of incremental usage.
 No production resource or configuration may be changed.
 
-The Workflow is the durable owner of long-running trusted implementation
-attempts. Queue consumers only create an idempotently named Workflow instance
-and acknowledge delivery; they do not wait for agent execution or validation.
-The Workflow does not receive or persist credentials in its event parameters or
-step results. The existing narrow Codex credential exception remains confined
-to the disposable Container attempt.
+The Workflow is the durable owner of long-running trusted implementation and
+independent-review attempts. Queue consumers only create an idempotently named
+Workflow instance and acknowledge delivery; they do not wait for agent
+execution, validation, or review. Additive migration
+`0012_trusted_review_workflow.sql` records exact review delivery ownership. The
+Workflow does not receive or persist credentials in its event parameters or
+step results. The existing narrow Codex and Claude credential exceptions remain
+confined to their disposable Container attempts.
 
 This manifest records the complete external mutation envelope for implementing
 ADR 0008 and demonstrating the accelerated POC workflow. It authorizes changes

@@ -171,10 +171,12 @@ class `RoundhouseTrustedExecutionWorkflow`.
 
 The Workflow uses only the existing production D1 database, Queue, R2 bucket,
 Container application, immutable execution image, encrypted credentials,
-hostname, and Access boundary. Migration
-`0011_trusted_execution_workflow.sql` is additive and creates only the durable
-Workflow projection used to bind an exact run delivery to its Workflow
-instance. No other production resource or configuration changes.
+hostname, and Access boundary. Migrations
+`0011_trusted_execution_workflow.sql` and
+`0012_trusted_review_workflow.sql` are additive and create only the durable
+Workflow projections used to bind exact run and independent-review deliveries
+to their Workflow instances. No other production resource or configuration
+changes.
 
 The amendment permits up to USD 5 of incremental Cloudflare usage. The
 Workflow and its retained development or production execution records are not
