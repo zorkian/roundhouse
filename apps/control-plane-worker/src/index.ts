@@ -75,6 +75,7 @@ import {
   reservePlanningJob,
   requireQualifiedPlan,
   type DurableIssuePlan,
+  type DurablePlanningJob,
 } from "./github-planning.js";
 import {
   bindIssueRun,
@@ -712,16 +713,21 @@ async function enqueuePlanningStartedComment(
   env: ControlPlaneEnv,
   repositoryFullName: string,
   issueNumber: number,
-  jobId: string,
+  job: DurablePlanningJob,
 ): Promise<void> {
   const identity = runtimeIdentity(env);
   await enqueueComment(
     env,
-    `planning-started:${repositoryFullName}:${jobId}`,
+    `planning-started:${repositoryFullName}:${job.jobId}`,
     issueNumber,
     [
       "## ⏳ Roundhouse started planning",
-      `Planning job \`${jobId}\` is durably queued. No action is needed while Roundhouse prepares the plan.`,
+      `Planning job \`${job.jobId}\` (generation ${job.generation}) is durably queued. No action is needed while Roundhouse prepares the plan.`,
+      ...(job.priorJobId
+        ? [
+            `This retries failed planning job \`${job.priorJobId}\`. Prior failure: \`${job.priorFailureReason ?? "unspecified failure"}\`.`,
+          ]
+        : []),
       `Workflow: ${identity.origin}/repositories/${repositoryFullName}/issues/${issueNumber}`,
     ].join("\n\n"),
     repositoryFullName,
@@ -2265,17 +2271,17 @@ async function scheduleGitHubPlanning(
       env,
       repositoryFullName,
       issueNumber,
-      jobId,
+      reservation.job,
     );
     await env.RUN_QUEUE.send({
       schemaVersion: 1,
       kind: "github_issue_planning",
-      jobId,
+      jobId: reservation.job.jobId,
     });
   }
   return {
     kind: "planning",
-    jobId,
+    jobId: reservation.job.jobId,
     state: reservation.job.status,
     revision: reservation.job.attemptCount,
   };

@@ -99,6 +99,9 @@ export type DurablePlanningJob = {
     "queued" | "running" | "retrying" | "completed" | "failed" | "timed_out";
   attemptCount: number;
   failureReason?: string;
+  generation: number;
+  priorJobId?: string;
+  priorFailureReason?: string;
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
@@ -131,10 +134,27 @@ async function planningJob(
     .first<PlanningJobRow>();
   if (!row) return undefined;
   const events = await env.DB.prepare(
-    "SELECT sequence, event_type, occurred_at FROM github_planning_job_events WHERE job_id = ? ORDER BY sequence",
+    "SELECT sequence, event_type, detail_json, occurred_at FROM github_planning_job_events WHERE job_id = ? ORDER BY sequence",
   )
     .bind(jobId)
-    .all<{ sequence: number; event_type: string; occurred_at: string }>();
+    .all<{
+      sequence: number;
+      event_type: string;
+      detail_json: string;
+      occurred_at: string;
+    }>();
+  const queued = events.results.find(
+    (event) => event.event_type === "planning.queued",
+  );
+  const queuedDetail = queued
+    ? (JSON.parse(queued.detail_json) as Record<string, unknown>)
+    : {};
+  const generation =
+    typeof queuedDetail.generation === "number" &&
+    Number.isSafeInteger(queuedDetail.generation) &&
+    queuedDetail.generation > 0
+      ? queuedDetail.generation
+      : 1;
   return {
     jobId: row.job_id,
     roundhouseEnvironment: row.roundhouse_environment,
@@ -145,6 +165,15 @@ async function planningJob(
     status: row.status,
     attemptCount: row.attempt_count,
     failureReason: row.failure_reason ?? undefined,
+    generation,
+    priorJobId:
+      typeof queuedDetail.priorJobId === "string"
+        ? queuedDetail.priorJobId
+        : undefined,
+    priorFailureReason:
+      typeof queuedDetail.priorFailureReason === "string"
+        ? queuedDetail.priorFailureReason
+        : undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     completedAt: row.completed_at ?? undefined,
@@ -170,33 +199,62 @@ export async function reservePlanningJob(
   },
 ): Promise<{ job: DurablePlanningJob; created: boolean }> {
   const now = input.now.toISOString();
-  const inserted = await env.DB.prepare(
-    "INSERT OR IGNORE INTO github_planning_jobs(job_id, request_key, roundhouse_environment, repository_full_name, issue_number, actor_id, command_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)",
+  const retained = await env.DB.prepare(
+    "SELECT job_id, status FROM github_planning_jobs WHERE request_key = ?",
   )
-    .bind(
-      input.jobId,
-      input.requestKey,
-      input.roundhouseEnvironment,
-      input.repositoryFullName,
-      input.issueNumber,
-      input.actorId,
-      JSON.stringify(input.command),
-      now,
-      now,
-    )
-    .run();
+    .bind(input.requestKey)
+    .first<{ job_id: string; status: DurablePlanningJob["status"] }>();
+  if (retained && !["failed", "timed_out"].includes(retained.status))
+    return { job: (await planningJob(env, retained.job_id))!, created: false };
+  const prior = retained ? await planningJob(env, retained.job_id) : undefined;
+  const generation = prior ? prior.generation + 1 : 1;
+  const jobId = prior ? `${input.jobId}_g${generation}` : input.jobId;
+  const insert = env.DB.prepare(
+    "INSERT OR IGNORE INTO github_planning_jobs(job_id, request_key, roundhouse_environment, repository_full_name, issue_number, actor_id, command_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)",
+  ).bind(
+    jobId,
+    input.requestKey,
+    input.roundhouseEnvironment,
+    input.repositoryFullName,
+    input.issueNumber,
+    input.actorId,
+    JSON.stringify(input.command),
+    now,
+    now,
+  );
+  const queuedDetail = JSON.stringify({
+    generation,
+    ...(prior
+      ? {
+          priorJobId: prior.jobId,
+          priorFailureReason:
+            prior.failureReason?.slice(0, 1_000) ?? "unspecified failure",
+        }
+      : {}),
+  });
+  const event = env.DB.prepare(
+    "INSERT OR IGNORE INTO github_planning_job_events(event_id, job_id, sequence, event_type, detail_json, occurred_at) SELECT ?, ?, 1, 'planning.queued', ?, ? WHERE EXISTS (SELECT 1 FROM github_planning_jobs WHERE job_id = ? AND request_key = ?)",
+  ).bind(`${jobId}:1`, jobId, queuedDetail, now, jobId, input.requestKey);
+  const results = prior
+    ? await env.DB.batch([
+        env.DB.prepare(
+          "UPDATE github_planning_jobs SET request_key = ? WHERE job_id = ? AND request_key = ? AND status IN ('failed', 'timed_out')",
+        ).bind(
+          `${input.requestKey}:generation:${prior.generation}`,
+          prior.jobId,
+          input.requestKey,
+        ),
+        insert,
+        event,
+      ])
+    : await env.DB.batch([insert, event]);
+  const inserted = results[prior ? 1 : 0]!;
   const row = await env.DB.prepare(
     "SELECT job_id FROM github_planning_jobs WHERE request_key = ?",
   )
     .bind(input.requestKey)
     .first<{ job_id: string }>();
   if (!row) throw new Error("Planning job reservation was not retained");
-  if ((inserted.meta.changes ?? 0) === 1)
-    await env.DB.prepare(
-      "INSERT INTO github_planning_job_events(event_id, job_id, sequence, event_type, detail_json, occurred_at) VALUES (?, ?, 1, 'planning.queued', '{}', ?)",
-    )
-      .bind(`${input.jobId}:1`, input.jobId, now)
-      .run();
   return {
     job: (await planningJob(env, row.job_id))!,
     created: (inserted.meta.changes ?? 0) === 1,
