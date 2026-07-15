@@ -39,6 +39,60 @@ describe("independent review contracts", () => {
         .success,
     ).toBe(false);
   });
+
+  it("keeps pull-request review provenance distinct from issue-run provenance", () => {
+    const request = {
+      schemaVersion: 1,
+      reviewId: `review_${"a".repeat(40)}`,
+      attemptId: `review_${"a".repeat(40)}-attempt-1`,
+      attemptNumber: 1,
+      cycle: 1,
+      sourceKind: "pull_request",
+      manualFallback: true,
+      advisoryOnly: true,
+      runId: `manual_pr_23_${"b".repeat(40)}`,
+      repositoryUrl: "https://github.com/zorkian/roundhouse.git",
+      pullRequestNumber: 23,
+      pullRequestUrl: "https://github.com/zorkian/roundhouse/pull/23",
+      branch: "codex/advisory-review",
+      baseCommit: "c".repeat(40),
+      headCommit: "d".repeat(40),
+      patchSha256: "e".repeat(64),
+      subject: "Review an existing pull request",
+      instructions: "Review the exact pull request patch.",
+      allowedPaths: ["packages/self-development/src/review.ts"],
+      evidence: [],
+      timeoutMs: 60_000,
+      maxOutputBytes: 64_000,
+      maxFindings: 10,
+      scenario: "success",
+    } as const;
+
+    expect(independentReviewRequestSchema.safeParse(request).success).toBe(
+      true,
+    );
+    expect(
+      independentReviewRequestSchema.safeParse({
+        ...request,
+        issueNumber: 23,
+        issueUrl: "https://github.com/zorkian/roundhouse/issues/23",
+        planning: {
+          planId: `plan_${"f".repeat(40)}`,
+          planRevision: 1,
+          planSha256: "f".repeat(64),
+        },
+        evidence: [
+          {
+            evidenceId: "fabricated",
+            objectKey: "https://github.com/zorkian/roundhouse/pull/23.diff",
+            sha256: "e".repeat(64),
+            size: 100,
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
   it("creates deterministic review and finding identities", async () => {
     const reviewId = await reviewIdentity({
       runId: "run_review_contract",

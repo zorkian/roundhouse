@@ -384,7 +384,7 @@ describe("durable independent review coordination", () => {
     await expect(
       isIssueRemediationRun(env, {
         repositoryFullName: "zorkian/roundhouse",
-        issueNumber: input.issueNumber,
+        issueNumber: input.issueNumber!,
         sourceRunId: input.runId,
         remediationRunId: "run_remediation_1",
       }),
@@ -392,7 +392,7 @@ describe("durable independent review coordination", () => {
     await expect(
       isIssueRemediationRun(env, {
         repositoryFullName: "another/roundhouse",
-        issueNumber: input.issueNumber,
+        issueNumber: input.issueNumber!,
         sourceRunId: input.runId,
         remediationRunId: "run_remediation_1",
       }),

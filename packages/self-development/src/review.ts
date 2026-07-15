@@ -27,60 +27,111 @@ export const reviewEvidenceBindingSchema = z.object({
   size: z.number().int().nonnegative(),
 });
 
-export const independentReviewRequestSchema = z.object({
-  schemaVersion: z.literal(1),
-  reviewId: z.string().regex(/^review_[a-f0-9]{40}$/),
-  attemptId: boundedIdentitySchema,
-  attemptNumber: z.number().int().positive().max(3),
-  cycle: z.number().int().min(1).max(2),
-  manualFallback: z.boolean().optional(),
-  runId: runIdentitySchema,
-  repositoryUrl: z.literal("https://github.com/zorkian/roundhouse.git"),
-  issueNumber: z.number().int().positive(),
-  issueUrl: z
-    .string()
-    .regex(/^https:\/\/github\.com\/zorkian\/roundhouse\/issues\/[1-9][0-9]*$/),
-  pullRequestNumber: z.number().int().positive(),
-  pullRequestUrl: z
-    .string()
-    .regex(/^https:\/\/github\.com\/zorkian\/roundhouse\/pull\/[1-9][0-9]*$/),
-  branch: z
-    .string()
-    .regex(/^[a-zA-Z0-9][a-zA-Z0-9._\/-]{0,199}$/)
-    .refine(
-      (value) =>
-        !value.includes("..") &&
-        !value.includes("//") &&
-        !value.endsWith("/") &&
-        !value.split("/").some((part) => part.endsWith(".lock")),
-    ),
-  baseCommit: commitSchema,
-  headCommit: commitSchema,
-  patchSha256: sha256Schema,
-  subject: z.string().min(1).max(500),
-  instructions: z.string().min(1).max(20_000),
-  allowedPaths: z.array(repositoryRelativePathSchema).min(1).max(50),
-  planning: z.object({
-    planId: z.string().regex(/^plan_[a-f0-9]{40}$/),
-    planRevision: z.number().int().positive(),
-    planSha256: sha256Schema,
-  }),
-  evidence: z.array(reviewEvidenceBindingSchema).min(1).max(20),
-  timeoutMs: z
-    .number()
-    .int()
-    .positive()
-    .max(15 * 60_000),
-  maxOutputBytes: z
-    .number()
-    .int()
-    .positive()
-    .max(256 * 1024),
-  maxFindings: z.number().int().positive().max(50),
-  scenario: z
-    .enum(["success", "timeout", "interrupt-once", "invalid-output"])
-    .default("success"),
-});
+export const independentReviewRequestSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    reviewId: z.string().regex(/^review_[a-f0-9]{40}$/),
+    attemptId: boundedIdentitySchema,
+    attemptNumber: z.number().int().positive().max(3),
+    cycle: z.number().int().min(1).max(2),
+    sourceKind: z.enum(["implementation_run", "pull_request"]).optional(),
+    manualFallback: z.boolean().optional(),
+    advisoryOnly: z.boolean().optional(),
+    runId: runIdentitySchema,
+    repositoryUrl: z.literal("https://github.com/zorkian/roundhouse.git"),
+    issueNumber: z.number().int().positive().optional(),
+    issueUrl: z
+      .string()
+      .regex(
+        /^https:\/\/github\.com\/zorkian\/roundhouse\/issues\/[1-9][0-9]*$/,
+      )
+      .optional(),
+    pullRequestNumber: z.number().int().positive(),
+    pullRequestUrl: z
+      .string()
+      .regex(/^https:\/\/github\.com\/zorkian\/roundhouse\/pull\/[1-9][0-9]*$/),
+    branch: z
+      .string()
+      .regex(/^[a-zA-Z0-9][a-zA-Z0-9._\/-]{0,199}$/)
+      .refine(
+        (value) =>
+          !value.includes("..") &&
+          !value.includes("//") &&
+          !value.endsWith("/") &&
+          !value.split("/").some((part) => part.endsWith(".lock")),
+      ),
+    baseCommit: commitSchema,
+    headCommit: commitSchema,
+    patchSha256: sha256Schema,
+    subject: z.string().min(1).max(500),
+    instructions: z.string().min(1).max(20_000),
+    allowedPaths: z.array(repositoryRelativePathSchema).min(1).max(50),
+    planning: z
+      .object({
+        planId: z.string().regex(/^plan_[a-f0-9]{40}$/),
+        planRevision: z.number().int().positive(),
+        planSha256: sha256Schema,
+      })
+      .optional(),
+    evidence: z.array(reviewEvidenceBindingSchema).max(20),
+    timeoutMs: z
+      .number()
+      .int()
+      .positive()
+      .max(15 * 60_000),
+    maxOutputBytes: z
+      .number()
+      .int()
+      .positive()
+      .max(256 * 1024),
+    maxFindings: z.number().int().positive().max(50),
+    scenario: z
+      .enum(["success", "timeout", "interrupt-once", "invalid-output"])
+      .default("success"),
+  })
+  .superRefine((request, context) => {
+    if (request.sourceKind === "pull_request") {
+      if (request.advisoryOnly !== true || request.manualFallback !== true)
+        context.addIssue({
+          code: "custom",
+          message: "Pull-request review must be advisory manual fallback",
+          path: ["sourceKind"],
+        });
+      for (const field of ["issueNumber", "issueUrl", "planning"] as const)
+        if (request[field] !== undefined)
+          context.addIssue({
+            code: "custom",
+            message: "Pull-request review cannot claim issue-run provenance",
+            path: [field],
+          });
+      if (request.evidence.length !== 0)
+        context.addIssue({
+          code: "custom",
+          message: "Pull-request review uses the exact GitHub patch binding",
+          path: ["evidence"],
+        });
+      if (!request.runId.startsWith("manual_pr_"))
+        context.addIssue({
+          code: "custom",
+          message: "Pull-request review correlation identity is invalid",
+          path: ["runId"],
+        });
+      return;
+    }
+    for (const field of ["issueNumber", "issueUrl", "planning"] as const)
+      if (request[field] === undefined)
+        context.addIssue({
+          code: "custom",
+          message: "Implementation review requires issue-run provenance",
+          path: [field],
+        });
+    if (request.evidence.length < 1)
+      context.addIssue({
+        code: "custom",
+        message: "Implementation review requires retained evidence",
+        path: ["evidence"],
+      });
+  });
 
 export type IndependentReviewRequest = z.infer<
   typeof independentReviewRequestSchema

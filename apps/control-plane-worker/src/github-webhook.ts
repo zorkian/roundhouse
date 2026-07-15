@@ -188,6 +188,7 @@ export type GitHubCommand =
       revision: number;
       headCommit: string;
     }
+  | { kind: "review-pr"; headCommit: string }
   | {
       kind: "approve";
       runId: string;
@@ -290,6 +291,12 @@ export function parseGitHubCommand(
       runId: parts[2]!,
       revision,
     };
+  if (
+    parts[1] === "review-pr" &&
+    parts.length === 3 &&
+    sha40.test(parts[2] ?? "")
+  )
+    return { kind: "review-pr", headCommit: parts[2]! };
   if (
     parts[1] === "review" &&
     parts.length === 5 &&
@@ -532,7 +539,8 @@ export function issueCommand(
   const payload = issueCommentSchema.parse(value.payload);
   if (payload.action !== "created" || payload.issue.pull_request) return null;
   const command = parseGitHubCommand(payload.comment.body, commandPrefixes);
-  if (!command || command.kind === "review") return null;
+  if (!command || command.kind === "review" || command.kind === "review-pr")
+    return null;
   return {
     repositoryFullName: payload.repository.full_name,
     issueNumber: payload.issue.number,
@@ -548,7 +556,7 @@ export function manualReviewCommand(
   repositoryFullName: string;
   pullRequestNumber: number;
   actor: string;
-  command: Extract<GitHubCommand, { kind: "review" }>;
+  command: Extract<GitHubCommand, { kind: "review" | "review-pr" }>;
 } | null {
   if (value.eventName !== "issue_comment") return null;
   const payload = pullRequestIssueCommentSchema.safeParse(value.payload);
@@ -557,7 +565,8 @@ export function manualReviewCommand(
     payload.data.comment.body,
     commandPrefixes,
   );
-  if (!command || command.kind !== "review") return null;
+  if (!command || (command.kind !== "review" && command.kind !== "review-pr"))
+    return null;
   return {
     repositoryFullName: payload.data.repository.full_name,
     pullRequestNumber: payload.data.issue.number,

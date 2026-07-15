@@ -255,9 +255,39 @@ function validateTrusted(value) {
   return value;
 }
 
+function validReviewProvenance(value) {
+  const sourceKind = value?.sourceKind ?? "implementation_run";
+  if (sourceKind === "pull_request")
+    return (
+      value.advisoryOnly === true &&
+      value.manualFallback === true &&
+      /^manual_pr_[a-zA-Z0-9_-]{1,117}$/.test(value.runId) &&
+      value.issueNumber === undefined &&
+      value.issueUrl === undefined &&
+      value.planning === undefined &&
+      Array.isArray(value.evidence) &&
+      value.evidence.length === 0
+    );
+  return (
+    sourceKind === "implementation_run" &&
+    Number.isInteger(value?.issueNumber) &&
+    value.issueNumber > 0 &&
+    /^https:\/\/github\.com\/zorkian\/roundhouse\/issues\/[1-9][0-9]*$/.test(
+      value.issueUrl,
+    ) &&
+    /^plan_[a-f0-9]{40}$/.test(value?.planning?.planId ?? "") &&
+    Number.isInteger(value?.planning?.planRevision) &&
+    value.planning.planRevision > 0 &&
+    /^[a-f0-9]{64}$/.test(value?.planning?.planSha256 ?? "") &&
+    Array.isArray(value.evidence) &&
+    value.evidence.length >= 1
+  );
+}
+
 function validateReview(value) {
   if (
     value?.schemaVersion !== 1 ||
+    !validReviewProvenance(value) ||
     !/^review_[a-f0-9]{40}$/.test(value.reviewId) ||
     !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(value.runId) ||
     !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,199}$/.test(value.attemptId) ||
@@ -282,7 +312,6 @@ function validateReview(value) {
     value.allowedPaths.length > 50 ||
     !value.allowedPaths.every(validRepositoryPath) ||
     !Array.isArray(value.evidence) ||
-    value.evidence.length < 1 ||
     value.evidence.length > 20 ||
     !Number.isInteger(value.timeoutMs) ||
     value.timeoutMs < 1 ||

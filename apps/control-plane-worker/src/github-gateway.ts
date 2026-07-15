@@ -559,8 +559,8 @@ export class GitHubAppGateway {
     repositoryFullName: string;
     pullRequestNumber: number;
     expectedHeadSha: string;
-    expectedBaseSha: string;
-    approvedPaths: string[];
+    expectedBaseSha?: string;
+    approvedPaths?: string[];
   }): Promise<{
     number: number;
     url: string;
@@ -568,6 +568,7 @@ export class GitHubAppGateway {
     baseCommit: string;
     headCommit: string;
     patchSha256: string;
+    patchSize: number;
     changedFiles: string[];
   }> {
     const base = repositoryPath(input.repositoryFullName);
@@ -587,14 +588,18 @@ export class GitHubAppGateway {
       pull.head.repo.full_name !== input.repositoryFullName ||
       pull.head.sha !== input.expectedHeadSha ||
       !/^[a-f0-9]{40}$/.test(pull.base.sha) ||
-      !/^[a-f0-9]{40}$/.test(input.expectedBaseSha) ||
+      (input.expectedBaseSha !== undefined &&
+        !/^[a-f0-9]{40}$/.test(input.expectedBaseSha)) ||
       !/^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,199}$/.test(pull.head.ref)
     )
       throw new GitHubAppGatewayError(
         "stale_head",
         "Manual review pull request binding did not match",
       );
-    if (pull.base.sha !== input.expectedBaseSha) {
+    if (
+      input.expectedBaseSha !== undefined &&
+      pull.base.sha !== input.expectedBaseSha
+    ) {
       const comparison = (
         await this.api<{
           status: string;
@@ -622,7 +627,7 @@ export class GitHubAppGateway {
         new Set(interveningFiles.map((file) => file.filename)).size !==
           interveningFiles.length ||
         interveningFiles.some((file) =>
-          input.approvedPaths.includes(file.filename),
+          input.approvedPaths?.includes(file.filename),
         )
       )
         throw new GitHubAppGatewayError(
@@ -664,6 +669,24 @@ export class GitHubAppGateway {
         "invalid_response",
         "Manual review patch exceeded the bounded size",
       );
+    const confirmed = (
+      await this.api<{
+        number: number;
+        base: { sha: string; repo: { full_name: string } };
+        head: { sha: string; repo: { full_name: string } };
+      }>("GET", `${base}/pulls/${pull.number}`)
+    ).value;
+    if (
+      confirmed.number !== pull.number ||
+      confirmed.base.sha !== pull.base.sha ||
+      confirmed.head.sha !== pull.head.sha ||
+      confirmed.base.repo.full_name !== input.repositoryFullName ||
+      confirmed.head.repo.full_name !== input.repositoryFullName
+    )
+      throw new GitHubAppGatewayError(
+        "stale_head",
+        "Manual review pull request changed while evidence was read",
+      );
     return {
       number: pull.number,
       url: pull.html_url,
@@ -671,6 +694,7 @@ export class GitHubAppGateway {
       baseCommit: pull.base.sha,
       headCommit: pull.head.sha,
       patchSha256: await sha256(patch),
+      patchSize: patch.byteLength,
       changedFiles: files,
     };
   }

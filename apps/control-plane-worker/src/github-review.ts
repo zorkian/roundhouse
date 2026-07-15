@@ -251,6 +251,25 @@ export async function listIssueReviews(
   return rows.results.reverse().map(record);
 }
 
+export async function listPullRequestReviews(
+  env: ControlPlaneEnv,
+  repositoryFullName: string,
+  pullRequestNumber: number,
+  limit = 20,
+): Promise<DurableIndependentReview[]> {
+  if (!/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(repositoryFullName)) return [];
+  const rows = await env.DB.prepare(
+    "SELECT review_id, request_hash, revision, status, attempt_count, lease_expires_at, dispatch_state, payload FROM independent_reviews WHERE json_extract(payload, '$.request.repositoryUrl') = ? AND json_extract(payload, '$.request.pullRequestNumber') = ? AND json_extract(payload, '$.request.advisoryOnly') = 1 ORDER BY updated_at DESC LIMIT ?",
+  )
+    .bind(
+      `https://github.com/${repositoryFullName}.git`,
+      pullRequestNumber,
+      Math.max(1, Math.min(limit, 100)),
+    )
+    .all<ReviewRow>();
+  return rows.results.map(record);
+}
+
 export async function listRunReviews(
   env: ControlPlaneEnv,
   runId: string,
@@ -416,13 +435,14 @@ export async function completeIndependentReview(
         current.request.allowedPaths,
         now,
       );
-      return current.request.cycle === 2 &&
+      return (current.request.advisoryOnly || current.request.cycle === 2) &&
         disposition.disposition === "accepted"
         ? {
             ...disposition,
             disposition: "deferred" as const,
-            rationale:
-              "The bounded two-cycle remediation limit was reached; this finding remains visible for later work.",
+            rationale: current.request.advisoryOnly
+              ? "This independently requested review is advisory; merge and remediation authority remains human-only."
+              : "The bounded two-cycle remediation limit was reached; this finding remains visible for later work.",
           }
         : disposition;
     });
