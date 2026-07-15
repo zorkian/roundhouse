@@ -471,8 +471,8 @@ describe("durable independent review coordination", () => {
         {
           attemptId: claim!.review.request.attemptId,
           retryable: true,
-          classification: "container_interrupted",
-          reason: "simulated interruption",
+          classification: "replayed_container_interruption",
+          reason: "same attempt observed through a different wrapper",
         },
         new Date(`2026-07-12T00:00:0${attempt}.250Z`),
       );

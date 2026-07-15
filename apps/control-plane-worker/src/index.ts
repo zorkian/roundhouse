@@ -2220,7 +2220,7 @@ async function failWorkflowReview(
       delivery.reviewId,
       current.lease.token,
       {
-        attemptId: current.request.attemptId,
+        attemptId: current.activeAttemptId ?? current.request.attemptId,
         retryable: false,
         classification: "review_workflow_exhausted",
         reason: redactedReason(error),

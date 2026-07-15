@@ -520,9 +520,7 @@ export async function failIndependentReview(
     if (current.status !== "running" || current.lease?.token !== token) {
       if (
         ["pending", "failed"].includes(current.status) &&
-        current.activeAttemptId === failure.attemptId &&
-        current.failureClassification === classification &&
-        current.failureReason === reason
+        current.activeAttemptId === failure.attemptId
       )
         return current;
       throw new Error("Independent review failure binding mismatch");
