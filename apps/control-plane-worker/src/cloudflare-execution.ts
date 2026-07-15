@@ -126,6 +126,20 @@ async function validateTrustedResult(
   );
   const publicationManifest = result.publicationManifest;
   const retryLineage = result.retryLineage;
+  const regression = result.regressionEvidence;
+  const regressionBindingValid = regression
+    ? request.planning !== undefined &&
+      regression.repositoryUrl === request.repositoryUrl &&
+      regression.baseCommit === request.baseCommit &&
+      regression.planId === request.planning.planId &&
+      regression.planSha256 === request.planning.planSha256 &&
+      regression.attemptId === request.attemptId &&
+      regression.headPatchSha256 === result.patchSha256 &&
+      regression.command ===
+        (request.bugReproduction?.applicability === "applicable"
+          ? request.bugReproduction.command
+          : undefined)
+    : request.bugReproduction === undefined;
   const retryBindingValid = request.retryCandidate
     ? retryLineage?.priorAttemptId === request.retryCandidate.attemptId &&
       retryLineage.priorPatchSha256 === request.retryCandidate.patchSha256 &&
@@ -198,6 +212,7 @@ async function validateTrustedResult(
       result.publicationManifest !== undefined) ||
     !manifestBindingValid ||
     !retryBindingValid ||
+    !regressionBindingValid ||
     publicationBytes > request.maxPatchBytes ||
     result.changedFiles.length > request.maxChangedFiles ||
     !result.changedFiles.every((path) => request.allowedPaths.includes(path))
@@ -636,6 +651,8 @@ export class CloudflareTrustedExecutionDispatcher implements ExecutionDispatcher
       retryFromAttemptId: request.retryFromAttemptId,
       allowedPaths: request.allowedPaths,
       validationLevel: request.validationLevel,
+      bugReproduction: request.bugReproduction,
+      planning: request.planning,
       // The development Workflow, rather than a Queue invocation, owns this
       // bounded long-running attempt. These are total agent and validation
       // budgets; the Workflow itself retains a small finalization margin.

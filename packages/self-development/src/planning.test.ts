@@ -53,6 +53,26 @@ describe("issue qualification and planning", () => {
     });
   });
 
+  it("retains the bounded bug reproduction command in the approved plan", async () => {
+    await expect(
+      qualifyAndPlan(
+        {
+          ...input,
+          bugReproduction: {
+            applicability: "applicable",
+            command: "pnpm vitest run packages/example.test.ts",
+          },
+        },
+        new Date("2026-07-12T00:00:00Z"),
+      ),
+    ).resolves.toMatchObject({
+      bugReproduction: {
+        applicability: "applicable",
+        command: "pnpm vitest run packages/example.test.ts",
+      },
+    });
+  });
+
   it("normalizes the planning agent's empty non-duplicate sentinel", async () => {
     await expect(
       qualifyAndPlan(

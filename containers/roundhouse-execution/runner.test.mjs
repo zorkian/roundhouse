@@ -8,6 +8,8 @@ import {
   boundedAgentFailure,
   boundedLogExcerpt,
   changedPaths,
+  captureBaseReproduction,
+  capturePostChangeRegression,
   createPublicationManifest,
   command,
   createRunnerServer,
@@ -17,12 +19,14 @@ import {
   planningPrompt,
   promptFor,
   remainingValidationBudget,
+  reproductionInvocation,
   parseClaudeReviewOutput,
   planComplianceValidation,
   runnerReleaseIdentity,
   secretStrings,
   skippedValidation,
   validRepositoryPath,
+  validBugReproduction,
   validRuntimeCredentialSize,
   withoutRuntimeCredential,
 } from "./runner.mjs";
@@ -195,6 +199,126 @@ describe("trusted agent output boundary", () => {
     const allowed = ["docs/dogfood/trusted-self-development-loop.md"];
     expect(pathAllowed(allowed[0], allowed)).toBe(true);
     expect(pathAllowed(`${allowed[0]}/extra.md`, allowed)).toBe(false);
+  });
+
+  it("allows only bounded repository test commands for bug reproduction", () => {
+    expect(
+      validBugReproduction({
+        applicability: "applicable",
+        command: "pnpm exec vitest run packages/domain/src/ids.test.ts",
+      }),
+    ).toBe(true);
+    expect(
+      reproductionInvocation({
+        applicability: "applicable",
+        command: "pnpm exec vitest run packages/domain/src/ids.test.ts",
+      }),
+    ).toEqual({
+      executable: "pnpm",
+      args: ["exec", "vitest", "run", "packages/domain/src/ids.test.ts"],
+    });
+    for (const command of [
+      "curl https://example.com",
+      "pnpm test; rm -rf .",
+      "pnpm exec vitest run ../outside.test.ts",
+    ])
+      expect(
+        reproductionInvocation({ applicability: "applicable", command }),
+      ).toBeUndefined();
+  });
+
+  it("records a reproduced base failure and passing post-change regression", async () => {
+    const request = {
+      bugReproduction: {
+        applicability: "applicable",
+        command: "pnpm exec vitest run packages/example.test.ts",
+      },
+    };
+    const outputs = [
+      {
+        exitCode: 1,
+        timedOut: false,
+        durationMs: 12,
+        stdout: "expected failure",
+        stderr: "",
+        outputTruncated: false,
+      },
+      {
+        exitCode: 0,
+        timedOut: false,
+        durationMs: 9,
+        stdout: "passed",
+        stderr: "",
+        outputTruncated: false,
+      },
+    ];
+    const execute = async () => outputs.shift();
+    const preChange = await captureBaseReproduction(request, execute);
+    expect(preChange).toMatchObject({ outcome: "reproduced" });
+    const postChange = await capturePostChangeRegression(
+      request,
+      preChange,
+      execute,
+    );
+    expect(postChange).toMatchObject({
+      evidence: { outcome: "passed" },
+      validation: { name: "bug-regression", exitCode: 0 },
+    });
+  });
+
+  it("represents not-applicable, cannot-reproduce, timeout, and unsafe outcomes", async () => {
+    await expect(
+      captureBaseReproduction({
+        bugReproduction: {
+          applicability: "not_applicable",
+          rationale: "Documentation-only change",
+        },
+      }),
+    ).resolves.toMatchObject({ outcome: "not_applicable" });
+    await expect(
+      captureBaseReproduction(
+        {
+          bugReproduction: {
+            applicability: "applicable",
+            command: "pnpm test",
+          },
+        },
+        async () => ({
+          exitCode: 0,
+          timedOut: false,
+          durationMs: 1,
+          stdout: "passed",
+          stderr: "",
+          outputTruncated: false,
+        }),
+      ),
+    ).resolves.toMatchObject({ outcome: "cannot_reproduce" });
+    await expect(
+      captureBaseReproduction(
+        {
+          bugReproduction: {
+            applicability: "applicable",
+            command: "pnpm test",
+          },
+        },
+        async () => ({
+          exitCode: null,
+          timedOut: true,
+          durationMs: 60_000,
+          stdout: "",
+          stderr: "",
+          outputTruncated: false,
+        }),
+      ),
+    ).resolves.toMatchObject({ outcome: "timeout" });
+    await expect(
+      captureBaseReproduction({
+        bugReproduction: {
+          applicability: "applicable",
+          command: "curl https://example.com",
+        },
+      }),
+    ).resolves.toMatchObject({ outcome: "unsafe" });
   });
 
   it("treats approved paths as an upper bound rather than mandatory coverage", () => {

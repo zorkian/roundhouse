@@ -3,10 +3,14 @@
 
 import { z } from "zod";
 
-import { repositoryRelativePathSchema } from "./trusted-loop.js";
+import {
+  bugReproductionPlanSchema,
+  repositoryRelativePathSchema,
+} from "./trusted-loop.js";
 
 const sha40 = z.string().regex(/^[a-f0-9]{40}$/);
 const sha64 = z.string().regex(/^[a-f0-9]{64}$/);
+export { bugReproductionPlanSchema } from "./trusted-loop.js";
 export const maxPlannedInstructionCharacters = 18_000;
 const maxRequestedPaths = 1_000;
 const protectedManifestNames = new Set([
@@ -76,6 +80,7 @@ export const qualificationIssueSchema = z.object({
     ])
     .optional(),
   planningEvidence: z.array(z.string().min(1).max(10_000)).max(20).default([]),
+  bugReproduction: bugReproductionPlanSchema.optional(),
 });
 
 export type QualificationIssue = z.input<typeof qualificationIssueSchema>;
@@ -122,6 +127,7 @@ export const planningAgentResultSchema = z
     risk: z.enum(["low", "medium", "high"]),
     evidence: z.array(z.string().min(1).max(1_000)).max(20).optional(),
     duplicateOf: z.string().max(1_000).optional(),
+    bugReproduction: bugReproductionPlanSchema.optional(),
   })
   .superRefine((value, context) => {
     if (value.status === "proposed" && value.exactPaths.length === 0)
@@ -193,6 +199,7 @@ export const qualifiedPlanSchema = z.object({
     .regex(/^planning_[a-f0-9]{40}$/)
     .optional(),
   planningEvidence: z.array(z.string().min(1).max(10_000)).max(20).default([]),
+  bugReproduction: bugReproductionPlanSchema.optional(),
   limits: z.object({
     maxPatchBytes: z.number().int().positive(),
     maxFiles: z.number().int().positive(),
@@ -404,6 +411,7 @@ export async function qualifyAndPlan(
     evidence: issue.evidence,
     duplicateOf: issue.duplicateOf,
     planningEvidence: issue.planningEvidence,
+    bugReproduction: issue.bugReproduction,
   });
   const planId = `plan_${(await sha256(identity)).slice(0, 40)}`;
   const createdAt = now.toISOString();
@@ -493,6 +501,7 @@ export async function qualifyAndPlan(
     acceptanceCriteria: issue.acceptanceCriteria,
     planningAttemptId: issue.planningAttemptId,
     planningEvidence: issue.planningEvidence,
+    bugReproduction: issue.bugReproduction,
     limits: {
       maxPatchBytes: roundhouseSelfDevelopmentProfile.maxPatchBytes,
       maxFiles: exactPaths.length,

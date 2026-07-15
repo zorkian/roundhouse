@@ -3,6 +3,7 @@
 
 import { z } from "zod";
 
+import { bugReproductionPlanSchema } from "./planning.js";
 import type { JobStageExecutor, StageResult } from "./job-ports.js";
 import type { JobStage, SelfDevelopmentRun } from "./task.js";
 
@@ -78,6 +79,11 @@ export type ExecutionDispatchRequest = {
   allowedPaths: string[];
   baseCommit: string;
   validationLevel: "quick" | "full";
+  bugReproduction?: z.infer<typeof bugReproductionPlanSchema>;
+  planning?: {
+    planId: string;
+    planSha256: string;
+  };
 };
 
 export interface ExecutionDispatcher {
@@ -112,6 +118,13 @@ export class DispatchingStageExecutor implements JobStageExecutor {
       allowedPaths: run.task.allowedPaths,
       baseCommit: run.task.baseCommit,
       validationLevel: run.task.validationLevel,
+      bugReproduction: run.task.bugReproduction,
+      planning: run.task.planning
+        ? {
+            planId: run.task.planning.planId,
+            planSha256: run.task.planning.planSha256,
+          }
+        : undefined,
     });
   }
 }

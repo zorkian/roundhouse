@@ -42,6 +42,28 @@ const planningOutputSchema = JSON.stringify({
     evidence: { type: "array", items: { type: "string" } },
     duplicateOf: { type: "string" },
     risk: { type: "string", enum: ["low", "medium", "high"] },
+    bugReproduction: {
+      oneOf: [
+        {
+          type: "object",
+          properties: {
+            applicability: { const: "applicable" },
+            command: { type: "string" },
+          },
+          required: ["applicability", "command"],
+          additionalProperties: false,
+        },
+        {
+          type: "object",
+          properties: {
+            applicability: { const: "not_applicable" },
+            rationale: { type: "string" },
+          },
+          required: ["applicability", "rationale"],
+          additionalProperties: false,
+        },
+      ],
+    },
   },
   required: [
     "status",
@@ -52,6 +74,7 @@ const planningOutputSchema = JSON.stringify({
     "evidence",
     "duplicateOf",
     "risk",
+    "bugReproduction",
   ],
   additionalProperties: false,
 });
@@ -137,6 +160,37 @@ export function validRepositoryPath(value) {
   );
 }
 
+export function validBugReproduction(value) {
+  return (
+    (value?.applicability === "applicable" &&
+      typeof value.command === "string" &&
+      value.command.length >= 1 &&
+      value.command.length <= 500) ||
+    (value?.applicability === "not_applicable" &&
+      typeof value.rationale === "string" &&
+      value.rationale.length >= 1 &&
+      value.rationale.length <= 500)
+  );
+}
+
+export function reproductionInvocation(value) {
+  if (value?.applicability !== "applicable") return undefined;
+  const source = value.command.trim();
+  if (
+    source.length === 0 ||
+    /[;&|><`$\\\n\r]/.test(source) ||
+    source.includes("..")
+  )
+    return undefined;
+  const parts = source.split(/\s+/);
+  if (parts.some((part) => part.startsWith("/"))) return undefined;
+  const allowed =
+    parts[0] === "pnpm" &&
+    (parts[1] === "test" ||
+      (parts[1] === "exec" && parts[2] === "vitest" && parts[3] === "run"));
+  return allowed ? { executable: parts[0], args: parts.slice(1) } : undefined;
+}
+
 function validateTrusted(value) {
   if (
     value?.schemaVersion !== 1 ||
@@ -177,6 +231,12 @@ function validateTrusted(value) {
     value.allowedPaths.length > 50 ||
     !value.allowedPaths.every(validRepositoryPath) ||
     !["quick", "full"].includes(value.validationLevel) ||
+    (value.bugReproduction !== undefined &&
+      !validBugReproduction(value.bugReproduction)) ||
+    ((value.bugReproduction !== undefined || value.planning !== undefined) &&
+      (!value.planning ||
+        !/^plan_[a-f0-9]{40}$/.test(value.planning.planId) ||
+        !/^[a-f0-9]{64}$/.test(value.planning.planSha256))) ||
     !Number.isInteger(value.agentTimeoutMs) ||
     value.agentTimeoutMs <= 0 ||
     value.agentTimeoutMs > 7_200_000 ||
@@ -287,6 +347,7 @@ export function planningPrompt(request) {
     "Use already_satisfied only with concrete repository evidence, and duplicate only with a concrete issue or work-item identity.",
     "Use rejected only when the requested work cannot safely fit the bounded development policy.",
     "For proposed, return literal existing or new repository-relative file paths and testable acceptance criteria.",
+    "For bug work, return one bounded existing repository test command in bugReproduction; otherwise explicitly mark bugReproduction not_applicable with a rationale.",
     "Return only the required structured output.",
     "",
     `Issue #${request.issueNumber}: ${request.subject}`,
@@ -770,6 +831,8 @@ export function parsePlanningOutput(value, request) {
     typeof value.duplicateOf !== "string" ||
     value.duplicateOf.length > 1_000 ||
     !["low", "medium", "high"].includes(value.risk) ||
+    (value.bugReproduction !== undefined &&
+      !validBugReproduction(value.bugReproduction)) ||
     (value.status === "proposed" && value.exactPaths.length === 0) ||
     (value.status === "needs_clarification" && value.questions.length === 0) ||
     (value.status === "already_satisfied" && value.evidence.length === 0) ||
@@ -788,6 +851,7 @@ export function parsePlanningOutput(value, request) {
     evidence: value.evidence,
     duplicateOf: value.duplicateOf,
     risk: value.risk,
+    bugReproduction: value.bugReproduction,
   };
 }
 
@@ -1224,6 +1288,94 @@ export function skippedValidation(name, commandName, reason) {
   };
 }
 
+function boundedReproductionOutput(result, maximum = 20_000) {
+  const combined = [result.stdout, result.stderr].filter(Boolean).join("\n");
+  return {
+    output: combined.slice(0, maximum),
+    outputTruncated:
+      result.outputTruncated || Buffer.byteLength(combined) > maximum,
+  };
+}
+
+export async function captureBaseReproduction(request, execute = command) {
+  const specification = request.bugReproduction;
+  if (!specification) return undefined;
+  if (specification.applicability === "not_applicable")
+    return {
+      outcome: "not_applicable",
+      summary: specification.rationale,
+      output: "",
+      outputTruncated: false,
+    };
+  const invocation = reproductionInvocation(specification);
+  if (!invocation)
+    return {
+      outcome: "unsafe",
+      summary:
+        "The proposed reproduction command is outside the bounded test-command policy.",
+      output: "",
+      outputTruncated: false,
+    };
+  const result = await execute(invocation.executable, invocation.args, {
+    timeoutMs: 60_000,
+    maxOutputBytes: 20_000,
+  });
+  const captured = boundedReproductionOutput(result);
+  return {
+    outcome: result.timedOut
+      ? "timeout"
+      : result.exitCode === 0
+        ? "cannot_reproduce"
+        : "reproduced",
+    summary: result.timedOut
+      ? "The bounded pre-change reproduction timed out."
+      : result.exitCode === 0
+        ? "The proposed command passed against the exact base checkout."
+        : `The proposed command reproduced the bug with exit code ${result.exitCode}.`,
+    ...captured,
+  };
+}
+
+export async function capturePostChangeRegression(
+  request,
+  preChange,
+  execute = command,
+) {
+  if (!preChange || preChange.outcome !== "reproduced") return undefined;
+  const invocation = reproductionInvocation(request.bugReproduction);
+  if (!invocation) throw new Error("reproduction_binding_lost");
+  const result = await execute(invocation.executable, invocation.args, {
+    timeoutMs: 60_000,
+    maxOutputBytes: 20_000,
+  });
+  const captured = boundedReproductionOutput(result);
+  return {
+    evidence: {
+      outcome: result.timedOut
+        ? "timeout"
+        : result.exitCode === 0
+          ? "passed"
+          : "failed",
+      summary: result.timedOut
+        ? "The bounded post-change regression timed out."
+        : result.exitCode === 0
+          ? "The reproduced behavior passes after the candidate change."
+          : `The reproduced behavior still fails with exit code ${result.exitCode}.`,
+      ...captured,
+    },
+    validation: {
+      name: "bug-regression",
+      command: request.bugReproduction.command,
+      exitCode: result.timedOut ? 1 : result.exitCode,
+      timedOut: result.timedOut,
+      durationMs: result.durationMs,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      outputTruncated: result.outputTruncated,
+    },
+  };
+}
+
 export function planComplianceValidation(allowedPaths, changedFiles) {
   const disallowedPaths = changedFiles.filter(
     (path) => !allowedPaths.includes(path),
@@ -1298,6 +1450,22 @@ async function validateImplementation(value) {
   const validation = [];
   validation.push(
     planComplianceValidation(request.allowedPaths, trusted.changedFiles),
+  );
+  const regression = await capturePostChangeRegression(
+    request,
+    prepared.preChange,
+  );
+  validation.push(
+    regression?.validation ??
+      skippedValidation(
+        "bug-regression",
+        request.bugReproduction?.applicability === "applicable"
+          ? request.bugReproduction.command
+          : "not-applicable",
+        prepared.preChange
+          ? `Pre-change outcome: ${prepared.preChange.outcome}`
+          : "No bug reproduction was requested",
+      ),
   );
   validation.push(
     await validationCommand(
@@ -1392,6 +1560,23 @@ async function validateImplementation(value) {
     retryLineage: trusted.retryLineage,
     validationOutcome,
     publicationManifest,
+    regressionEvidence:
+      request.bugReproduction && request.planning && prepared.preChange
+        ? {
+            repositoryUrl: request.repositoryUrl,
+            baseCommit: request.baseCommit,
+            planId: request.planning.planId,
+            planSha256: request.planning.planSha256,
+            attemptId: request.attemptId,
+            headPatchSha256: trusted.patchSha256,
+            command:
+              request.bugReproduction.applicability === "applicable"
+                ? request.bugReproduction.command
+                : undefined,
+            preChange: prepared.preChange,
+            postChange: regression?.evidence,
+          }
+        : undefined,
     startedAt: trusted.startedAt,
     completedAt: new Date().toISOString(),
     checkoutDurationMs: prepared.checkoutDurationMs,
@@ -1559,6 +1744,13 @@ async function prepare(value, mode) {
       head.durationMs +
       dependencies.durationMs,
   };
+  if (mode === "trusted" && request.bugReproduction) {
+    prepared.preChange = await captureBaseReproduction(request);
+    const restored = await command("git", ["reset", "--hard", checkoutTarget]);
+    const cleaned = await command("git", ["clean", "-fd"]);
+    if (restored.exitCode !== 0 || cleaned.exitCode !== 0)
+      throw new Error("reproduction_checkout_restore_failed");
+  }
   return prepared;
 }
 

@@ -9,7 +9,10 @@ import {
   publicationAuthorNameSchema,
   repositoryRelativePathSchema,
 } from "./trusted-loop.js";
-import { planningBindingSchema } from "./planning.js";
+import {
+  bugReproductionPlanSchema,
+  planningBindingSchema,
+} from "./planning.js";
 
 export const selfDevelopmentTaskSchema = z.object({
   schemaVersion: z.literal(1),
@@ -21,6 +24,7 @@ export const selfDevelopmentTaskSchema = z.object({
   validationLevel: z.enum(["quick", "full"]).default("quick"),
   allowedPaths: z.array(z.string().min(1)).min(1),
   planning: planningBindingSchema.optional(),
+  bugReproduction: bugReproductionPlanSchema.optional(),
   source: z
     .object({
       kind: z.literal("github_issue"),
