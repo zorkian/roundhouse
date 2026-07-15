@@ -403,7 +403,7 @@ describe("operator UI", () => {
     expect(operatorPage("/plans/bad/path")).toBeUndefined();
   });
 
-  it("renders the public run-inspection contract without an internal task", async () => {
+  it("organizes the dashboard around repository-qualified issues", async () => {
     const response = operatorPage("/")!;
     const script = /<script[^>]*>([\s\S]+)<\/script>/.exec(
       await response.text(),
@@ -418,18 +418,60 @@ describe("operator UI", () => {
       vi.fn(async () =>
         Response.json({
           schemaVersion: 1,
-          plans: [],
+          plans: [
+            {
+              status: "materialized",
+              runId: "run_ui_contract",
+              plan: {
+                planId: `plan_${"b".repeat(40)}`,
+                issueNumber: 66,
+                subject: "Improve the operator dashboard",
+                createdAt: "2026-07-14T18:00:00.000Z",
+              },
+            },
+            {
+              status: "needs_clarification",
+              plan: {
+                planId: `plan_${"c".repeat(40)}`,
+                issueNumber: 65,
+                subject: "Clarify production rollout",
+                createdAt: "2026-07-14T19:00:00.000Z",
+              },
+            },
+          ],
           runs: [
             {
               schemaVersion: 1,
               runId: "run_ui_contract",
               taskId: "task_ui_contract",
-              subject: "Public inspection subject",
+              subject: "Improve the operator dashboard",
               baseCommit: "a".repeat(40),
-              state: "created",
+              state: "implementing",
               revision: 3,
+              updatedAt: "2026-07-14T20:00:00.000Z",
+              source: {
+                owner: "zorkian",
+                repository: "roundhouse",
+                issueNumber: 66,
+                issueUrl: "https://github.com/zorkian/roundhouse/issues/66",
+              },
               attempts: [],
               evidence: [],
+            },
+          ],
+          reviews: [
+            {
+              status: "completed",
+              updatedAt: "2026-07-14T21:00:00.000Z",
+              request: {
+                reviewId: `review_${"d".repeat(40)}`,
+                repositoryUrl: "https://github.com/zorkian/roundhouse.git",
+                issueNumber: 64,
+                issueUrl: "https://github.com/zorkian/roundhouse/issues/64",
+                subject: "Make status understandable",
+                pullRequestNumber: 70,
+                pullRequestUrl: "https://github.com/zorkian/roundhouse/pull/70",
+              },
             },
           ],
         }),
@@ -438,8 +480,22 @@ describe("operator UI", () => {
 
     new Function(script!)();
     await vi.waitFor(() =>
-      expect(app.innerHTML).toContain("Public inspection subject"),
+      expect(app.innerHTML).toContain("Improve the operator dashboard"),
     );
+    expect(app.innerHTML).toContain("zorkian/roundhouse");
+    expect(app.innerHTML).toContain("#66");
+    expect(app.innerHTML).toContain("Implementing");
+    expect(app.innerHTML).toContain("Clarification needed");
+    expect(app.innerHTML).toContain("Ready for human review");
+    expect(app.innerHTML).toContain("Review pull request #70");
+    expect(app.innerHTML).toContain("Needs attention");
+    expect(app.innerHTML).toContain("In progress");
+    expect(app.innerHTML).toContain("Finished");
+    expect(app.innerHTML).not.toContain("<h2>Plans</h2>");
+    expect(app.innerHTML).not.toContain("<h2>Runs</h2>");
+    expect(app.innerHTML).not.toContain("<h2>Independent reviews</h2>");
+    expect(app.innerHTML).not.toContain(`>plan_${"b".repeat(40)}<`);
+    expect(app.innerHTML).not.toContain(">run_ui_contract<");
   });
 
   it("links retained failed-validation diagnostics without making them approval eligible", async () => {
