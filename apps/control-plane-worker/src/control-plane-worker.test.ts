@@ -36,10 +36,12 @@ import {
   readPullRequestLifecycle,
   recordPullRequestLifecycle,
 } from "./github-lifecycle.js";
+import { trustedExecutionWorkflowMigration } from "./trusted-execution-workflow.js";
 
 let instance: Miniflare;
 let database: D1Database;
 const resetTables = [
+  "trusted_execution_workflows",
   "execution_attempt_phases",
   "github_pull_request_lifecycle",
   "github_review_check_outbox",
@@ -289,7 +291,7 @@ beforeAll(async () => {
     new URL("../migrations/0008_independent_review.sql", import.meta.url),
     "utf8",
   );
-  for (const statement of `${d1JobStoreMigration}\n${controlPlaneSubmissionMigration}\n${cloudOperationsMigration}\n${githubPocMigration}\n${githubNativeOperatorMigration}\n${githubPlanningMigration}\n${independentReviewMigration}\n${githubReviewCheckMigration}\n${executionProgressMigration}`
+  for (const statement of `${d1JobStoreMigration}\n${controlPlaneSubmissionMigration}\n${cloudOperationsMigration}\n${githubPocMigration}\n${githubNativeOperatorMigration}\n${githubPlanningMigration}\n${independentReviewMigration}\n${githubReviewCheckMigration}\n${executionProgressMigration}\n${trustedExecutionWorkflowMigration}`
     .split(";")
     .map((value) => value.trim())
     .filter(Boolean))
@@ -1744,6 +1746,55 @@ describe("local control-plane Worker", () => {
       "created",
     );
     expect(queued.messages).toHaveLength(1);
+  });
+
+  it("hands trusted execution to one idempotent Workflow without holding the Queue", async () => {
+    const { env, queued } = await runtime();
+    const handler = createControlPlaneHandler();
+    const submitted = await handler.fetch!(
+      submission("trusted-workflow-handoff-01"),
+      env,
+      {} as ExecutionContext,
+    );
+    const { runId } = (await submitted.json()) as { runId: string };
+    const created = new Set<string>();
+    env.EXECUTION_MODE = "cloudflare-trusted-codex";
+    env.TRUSTED_EXECUTION_WORKFLOW = {
+      createBatch: async (batch) => {
+        const added = batch.filter(({ id }) => !created.has(id));
+        for (const { id } of added) created.add(id);
+        return added.map(({ id }) => ({ id }));
+      },
+    };
+
+    expect(
+      await deliver(handler, env, [queued.messages[0], queued.messages[0]]),
+    ).toEqual(["ack:0", "ack:1"]);
+    expect(created.size).toBe(1);
+    expect(await new D1JobStore(env.DB).read(runId)).toMatchObject({
+      state: "created",
+      attempts: [],
+    });
+    await expect(
+      env.DB.prepare(
+        "SELECT run_id, status FROM trusted_execution_workflows",
+      ).first<{ run_id: string; status: string }>(),
+    ).resolves.toEqual({ run_id: runId, status: "dispatched" });
+    const inspected = await handler.fetch!(
+      request(`/v1/runs/${runId}`),
+      env,
+      {} as ExecutionContext,
+    );
+    await expect(inspected.json()).resolves.toMatchObject({
+      workflows: [
+        {
+          workflowInstanceId: expect.stringMatching(/^trusted-[a-f0-9]{64}$/),
+          deliveryId: expect.any(String),
+          expectedRevision: 1,
+          status: "dispatched",
+        },
+      ],
+    });
   });
 
   it("repairs an API interruption before Queue delivery", async () => {

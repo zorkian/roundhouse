@@ -5,10 +5,12 @@ import type {
   EvidenceBucketPort,
   ExecutionContainerNamespacePort,
 } from "./cloudflare-execution.js";
+import type { TrustedExecutionWorkflowBindingPort } from "./trusted-execution-workflow.js";
 
 export type ControlPlaneEnv = {
   DB: D1Database;
   RUN_QUEUE: Queue<unknown>;
+  TRUSTED_EXECUTION_WORKFLOW?: TrustedExecutionWorkflowBindingPort;
   EXECUTION_CONTAINERS?: ExecutionContainerNamespacePort;
   EXECUTION_EVIDENCE?: EvidenceBucketPort;
   AUTH_MODE?: "local" | "access";

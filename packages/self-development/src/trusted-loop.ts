@@ -96,12 +96,12 @@ export const trustedImplementationRequestSchema = z.object({
     .number()
     .int()
     .positive()
-    .max(20 * 60_000),
+    .max(2 * 60 * 60_000),
   validationTimeoutMs: z
     .number()
     .int()
     .positive()
-    .max(15 * 60_000),
+    .max(30 * 60_000),
   maxPatchBytes: z
     .number()
     .int()

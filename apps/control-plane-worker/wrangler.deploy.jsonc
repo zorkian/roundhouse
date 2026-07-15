@@ -17,6 +17,13 @@
   "triggers": {
     "crons": ["*/5 * * * *"],
   },
+  "workflows": [
+    {
+      "name": "roundhouse-dev-trusted-execution",
+      "binding": "TRUSTED_EXECUTION_WORKFLOW",
+      "class_name": "RoundhouseTrustedExecutionWorkflow",
+    },
+  ],
   "vars": {
     "ROUNDHOUSE_ENVIRONMENT": "development",
     "ROUNDHOUSE_PUBLIC_ORIGIN": "https://roundhouse-dev.rm-rf.rip",

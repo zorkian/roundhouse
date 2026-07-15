@@ -5,6 +5,23 @@
 
 Status: approved on 2026-07-13; unapplied by this commit.
 
+## Trusted execution Workflow amendment
+
+Approved on 2026-07-14. This amendment authorizes one development Cloudflare
+Workflow named `roundhouse-dev-trusted-execution`, bound to the existing
+`roundhouse-dev-control-plane` Worker. It may use only the existing development
+D1 database, Queue, R2 bucket, Container application and image, credentials,
+hostname, and Access boundary named below. Additive D1 migrations and a
+development deployment are authorized with up to USD 5 of incremental usage.
+No production resource or configuration may be changed.
+
+The Workflow is the durable owner of long-running trusted implementation
+attempts. Queue consumers only create an idempotently named Workflow instance
+and acknowledge delivery; they do not wait for agent execution or validation.
+The Workflow does not receive or persist credentials in its event parameters or
+step results. The existing narrow Codex credential exception remains confined
+to the disposable Container attempt.
+
 This manifest records the complete external mutation envelope for implementing
 ADR 0008 and demonstrating the accelerated POC workflow. It authorizes changes
 only to the existing development deployment. Production is explicitly outside
@@ -34,11 +51,12 @@ Container versions, development-only Wrangler bindings, retained diagnostic
 rows and evidence, and rollback to a previously healthy development version.
 The incremental Cloudflare and model-usage ceiling is USD 20.
 
-No new Worker, database, Queue, bucket, Durable Object class, Container
-application, hostname, DNS record, route, Access application, service token,
-secret, certificate, billing plan, or unrelated Cloudflare resource is
-authorized. No production resource may be read as a test dependency or
-mutated, deployed, promoted, or rolled back.
+Except for the single Workflow authorized by the amendment above, no new
+Worker, database, Queue, bucket, Durable Object class, Container application,
+hostname, DNS record, route, Access application, service token, secret,
+certificate, billing plan, or unrelated Cloudflare resource is authorized. No
+production resource may be read as a test dependency or mutated, deployed,
+promoted, or rolled back.
 
 ## Credential boundary
 
