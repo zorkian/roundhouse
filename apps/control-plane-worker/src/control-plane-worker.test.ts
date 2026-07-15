@@ -19,6 +19,7 @@ import {
   createControlPlaneHandler,
   executeTrustedExecutionWorkflow,
   independentReviewCheckOutcome,
+  reservePullRequestReview,
   safePlanningFailureSummary,
 } from "./index.js";
 import {
@@ -389,6 +390,128 @@ describe("planning failure summaries", () => {
 });
 
 describe("local control-plane Worker", () => {
+  async function configureAdvisoryPullRequest(
+    env: ControlPlaneEnv,
+    headCommit: () => string,
+  ): Promise<void> {
+    const pair = await generateKeyPair("RS256", { extractable: true });
+    env.GITHUB_APP_ID = "1";
+    env.GITHUB_INSTALLATION_ID = "2";
+    env.ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY = await exportPKCS8(pair.privateKey);
+    env.GITHUB_API_FETCHER = async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/access_tokens"))
+        return new Response(
+          JSON.stringify({
+            token: "installation-token",
+            expires_at: "2026-07-16T00:00:00Z",
+          }),
+          { status: 201 },
+        );
+      if (url.pathname.endsWith("/pulls/23/files"))
+        return new Response(
+          JSON.stringify([
+            { filename: "apps/control-plane-worker/src/index.ts" },
+          ]),
+        );
+      if (url.pathname.endsWith("/pulls/23")) {
+        if (
+          new Headers(init?.headers).get("accept") ===
+          "application/vnd.github.diff"
+        )
+          return new Response(`diff for ${headCommit()}`);
+        return new Response(
+          JSON.stringify({
+            number: 23,
+            html_url: "https://github.com/zorkian/roundhouse/pull/23",
+            base: {
+              sha: "a".repeat(40),
+              repo: { full_name: "zorkian/roundhouse" },
+            },
+            head: {
+              sha: headCommit(),
+              ref: "codex/advisory-review",
+              repo: { full_name: "zorkian/roundhouse" },
+            },
+          }),
+        );
+      }
+      return new Response("{}", { status: 404 });
+    };
+  }
+
+  it("rejects advisory pull-request review commands from other actors", async () => {
+    const { env } = await runtime();
+    await expect(
+      reservePullRequestReview(env, {
+        repositoryFullName: "zorkian/roundhouse",
+        pullRequestNumber: 23,
+        actor: "other",
+        expectedHeadCommit: "b".repeat(40),
+      }),
+    ).rejects.toMatchObject({ status: 403, code: "unauthorized_actor" });
+  });
+
+  it("rejects an advisory review command bound to a stale head", async () => {
+    const { env } = await runtime();
+    await configureAdvisoryPullRequest(env, () => "b".repeat(40));
+    await expect(
+      reservePullRequestReview(env, {
+        repositoryFullName: "zorkian/roundhouse",
+        pullRequestNumber: 23,
+        actor: "zorkian",
+        expectedHeadCommit: "c".repeat(40),
+      }),
+    ).rejects.toMatchObject({ code: "stale_head" });
+  });
+
+  it("dispatches an advisory review once and reuses its exact head binding", async () => {
+    const { env, queued } = await runtime();
+    await configureAdvisoryPullRequest(env, () => "b".repeat(40));
+    const input = {
+      repositoryFullName: "zorkian/roundhouse",
+      pullRequestNumber: 23,
+      actor: "zorkian",
+      expectedHeadCommit: "b".repeat(40),
+    };
+    const first = await reservePullRequestReview(env, input);
+    const repeated = await reservePullRequestReview(env, input);
+
+    expect(repeated.request.reviewId).toBe(first.request.reviewId);
+    expect(first.request).not.toHaveProperty("issueNumber");
+    expect(first.request).not.toHaveProperty("issueUrl");
+    expect(first.request).not.toHaveProperty("planning");
+    expect(first.request.evidence).toEqual([]);
+    expect(queued.messages).toHaveLength(1);
+    const comments = await env.DB.prepare(
+      "SELECT issue_number FROM github_comment_outbox",
+    ).all<{ issue_number: number }>();
+    expect(comments.results.map((row) => row.issue_number)).toEqual([23]);
+  });
+
+  it("reserves and dispatches a new advisory review after the head changes", async () => {
+    const { env, queued } = await runtime();
+    let head = "b".repeat(40);
+    await configureAdvisoryPullRequest(env, () => head);
+    const first = await reservePullRequestReview(env, {
+      repositoryFullName: "zorkian/roundhouse",
+      pullRequestNumber: 23,
+      actor: "zorkian",
+      expectedHeadCommit: head,
+    });
+    head = "c".repeat(40);
+    const changed = await reservePullRequestReview(env, {
+      repositoryFullName: "zorkian/roundhouse",
+      pullRequestNumber: 23,
+      actor: "zorkian",
+      expectedHeadCommit: head,
+    });
+
+    expect(changed.request.reviewId).not.toBe(first.request.reviewId);
+    expect(changed.request.cycle).toBe(1);
+    expect(queued.messages).toHaveLength(2);
+  });
+
   it("keeps advisory review findings visible without requiring human Check action", () => {
     expect(
       independentReviewCheckOutcome({

@@ -118,6 +118,7 @@ import {
   failIndependentReview,
   isIssueRemediationRun,
   listIssueReviews,
+  listPullRequestReviews,
   listRunReviews,
   markReviewDispatched,
   readIndependentReview,
@@ -1207,7 +1208,7 @@ async function enqueueReviewComment(
         ? "**Next action: no action needed; wait for the advisory review result.**"
         : review.status === "failed"
           ? "**Next action: inspect the failed review, then request a new exact-head review if needed.**"
-          : `**Next action: review the advisory verdict, then merge pull request #${review.request.pullRequestNumber} only if it looks right and repository CI is passing.**`,
+          : `**Next action: review the advisory verdict; if it looks right and repository CI is passing, mark pull request #${review.request.pullRequestNumber} ready and merge it.**`,
     );
   if (readyForHumanReview)
     common.push(
@@ -1291,7 +1292,9 @@ async function enqueueReviewComment(
         ].join("\n"),
       },
     });
-  const pullLines = [...common, `Source issue: ${review.request.issueUrl}`];
+  const pullLines = [...common];
+  if (review.request.issueUrl)
+    pullLines.push(`Source issue: ${review.request.issueUrl}`);
   if (findings.length > 0) {
     pullLines.push("### Findings");
     for (const finding of findings.slice(0, 10)) {
@@ -1309,23 +1312,25 @@ async function enqueueReviewComment(
         `_${findings.length - 10} additional findings are available in the complete retained review._`,
       );
   }
-  const issueMarker = progressMarker(
-    identity,
-    review.request.issueNumber,
-    review.request.reviewId,
-  );
   const pullMarker = progressMarker(
     identity,
     review.request.pullRequestNumber,
     review.request.reviewId,
   );
-  await enqueueProgressComment(
-    env,
-    identity.repositoryFullName,
-    review.request.issueNumber,
-    review.request.reviewId,
-    `${issueMarker}\n\n${issueLines.join("\n\n")}`,
-  );
+  if (review.request.issueNumber !== undefined) {
+    const issueMarker = progressMarker(
+      identity,
+      review.request.issueNumber,
+      review.request.reviewId,
+    );
+    await enqueueProgressComment(
+      env,
+      identity.repositoryFullName,
+      review.request.issueNumber,
+      review.request.reviewId,
+      `${issueMarker}\n\n${issueLines.join("\n\n")}`,
+    );
+  }
   await enqueueProgressComment(
     env,
     identity.repositoryFullName,
@@ -1637,7 +1642,7 @@ async function reserveManualReview(
   return reserved.review;
 }
 
-async function reservePullRequestReview(
+export async function reservePullRequestReview(
   env: ControlPlaneEnv,
   input: {
     repositoryFullName: string;
@@ -1656,7 +1661,7 @@ async function reservePullRequestReview(
     pullRequestNumber: input.pullRequestNumber,
     expectedHeadSha: input.expectedHeadCommit,
   });
-  const existing = await listIssueReviews(
+  const existing = await listPullRequestReviews(
     env,
     input.repositoryFullName,
     input.pullRequestNumber,
@@ -1670,13 +1675,7 @@ async function reservePullRequestReview(
       review.request.patchSha256 === pull.patchSha256,
   );
   if (retained) return retained;
-  const cycles = existing.filter(
-    (review) => review.request.advisoryOnly === true,
-  );
-  const cycle =
-    Math.max(0, ...cycles.map((review) => review.request.cycle)) + 1;
-  if (cycle > 2)
-    throw new GitHubWebhookError(409, "manual_review_cycle_limit_exceeded");
+  const cycle = 1;
   const binding = await sha256(
     JSON.stringify({
       repositoryFullName: input.repositoryFullName,
@@ -1700,12 +1699,11 @@ async function reservePullRequestReview(
       attemptId: `${reviewId}-attempt-1`,
       attemptNumber: 1,
       cycle,
+      sourceKind: "pull_request",
       manualFallback: true,
       advisoryOnly: true,
       runId,
       repositoryUrl: "https://github.com/zorkian/roundhouse.git",
-      issueNumber: pull.number,
-      issueUrl: `https://github.com/${input.repositoryFullName}/issues/${pull.number}`,
       pullRequestNumber: pull.number,
       pullRequestUrl: pull.url,
       branch: pull.branch,
@@ -1716,19 +1714,7 @@ async function reservePullRequestReview(
       instructions:
         "Independently review the exact repository-qualified pull request base, head, changed paths, and bounded patch. Report findings only; do not publish, remediate, or merge.",
       allowedPaths: pull.changedFiles,
-      planning: {
-        planId: `plan_${binding.slice(0, 40)}`,
-        planRevision: 1,
-        planSha256: binding,
-      },
-      evidence: [
-        {
-          evidenceId: `github_pr_patch_${pull.number}`,
-          objectKey: `${pull.url}.diff`,
-          sha256: pull.patchSha256,
-          size: pull.patchSize,
-        },
-      ],
+      evidence: [],
       timeoutMs: 15 * 60_000,
       maxOutputBytes: 256 * 1024,
       maxFindings: 50,
@@ -2075,7 +2061,7 @@ async function finalizeIndependentReviewProjection(
       completed;
   }
   let readyForHumanReview = false;
-  if (completed.status === "completed")
+  if (completed.status === "completed" && !completed.request.advisoryOnly)
     try {
       await githubGateway(env).markPullRequestReady({
         repositoryFullName: runtimeIdentity(env).repositoryFullName,
