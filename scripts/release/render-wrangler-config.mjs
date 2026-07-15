@@ -57,15 +57,13 @@ const config = {
     ? [{ pattern: "roundhouse.rm-rf.rip", custom_domain: true }]
     : undefined,
   triggers: { crons: ["*/5 * * * *"] },
-  workflows: production
-    ? undefined
-    : [
-        {
-          name: "roundhouse-dev-trusted-execution",
-          binding: "TRUSTED_EXECUTION_WORKFLOW",
-          class_name: "RoundhouseTrustedExecutionWorkflow",
-        },
-      ],
+  workflows: [
+    {
+      name: `${prefix}-trusted-execution`,
+      binding: "TRUSTED_EXECUTION_WORKFLOW",
+      class_name: "RoundhouseTrustedExecutionWorkflow",
+    },
+  ],
   vars: {
     ROUNDHOUSE_ENVIRONMENT: environment,
     ROUNDHOUSE_PUBLIC_ORIGIN: origin,

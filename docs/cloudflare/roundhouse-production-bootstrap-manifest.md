@@ -161,3 +161,22 @@ retarget either GitHub App webhook.
 
 No retained database, Queue, R2 object, Worker, Access application, DNS record,
 or secret is deleted by rollback.
+
+## Trusted execution Workflow amendment
+
+The production deployment adds one Cloudflare Workflow named
+`roundhouse-prod-trusted-execution`, bound to the existing
+`roundhouse-prod-control-plane` Worker as `TRUSTED_EXECUTION_WORKFLOW` using
+class `RoundhouseTrustedExecutionWorkflow`.
+
+The Workflow uses only the existing production D1 database, Queue, R2 bucket,
+Container application, immutable execution image, encrypted credentials,
+hostname, and Access boundary. Migration
+`0011_trusted_execution_workflow.sql` is additive and creates only the durable
+Workflow projection used to bind an exact run delivery to its Workflow
+instance. No other production resource or configuration changes.
+
+The amendment permits up to USD 5 of incremental Cloudflare usage. The
+Workflow and its retained development or production execution records are not
+deleted by rollback. Worker rollback may select the previous code version, but
+must not delete the Workflow or its D1 projection.

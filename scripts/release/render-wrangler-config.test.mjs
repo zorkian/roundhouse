@@ -67,15 +67,13 @@ describe("release Wrangler configuration", () => {
           max_concurrency: 10,
         }),
       ]);
-      if (environment === "development")
-        expect(config.workflows).toEqual([
-          {
-            name: "roundhouse-dev-trusted-execution",
-            binding: "TRUSTED_EXECUTION_WORKFLOW",
-            class_name: "RoundhouseTrustedExecutionWorkflow",
-          },
-        ]);
-      else expect(config.workflows).toBeUndefined();
+      expect(config.workflows).toEqual([
+        {
+          name: `roundhouse-${environment === "production" ? "prod" : "dev"}-trusted-execution`,
+          binding: "TRUSTED_EXECUTION_WORKFLOW",
+          class_name: "RoundhouseTrustedExecutionWorkflow",
+        },
+      ]);
     }
   });
 });
