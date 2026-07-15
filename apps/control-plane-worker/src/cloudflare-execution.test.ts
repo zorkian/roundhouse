@@ -120,6 +120,77 @@ function trustedResult() {
 }
 
 describe("CloudflareTrustedImplementationBackend", () => {
+  it("retains the trusted runner's canonical bug regression validation", async () => {
+    const evidence = new MemoryEvidence();
+    const implementation = trustedResult();
+    const backend = new CloudflareTrustedImplementationBackend(
+      {
+        getByName: () => ({
+          runJob: async () => result(),
+          runTrustedJob: async () => ({
+            ...implementation,
+            validation: [
+              ...implementation.validation,
+              {
+                name: "bug-regression",
+                command: "not-applicable",
+                exitCode: 0,
+                timedOut: false,
+                durationMs: 0,
+                stdout: "No bug reproduction was requested",
+                stderr: "",
+                outputTruncated: false,
+              },
+            ],
+          }),
+          destroy: async () => undefined,
+        }),
+      },
+      evidence,
+      "unused",
+    );
+
+    await expect(backend.execute(trustedRequest)).resolves.toMatchObject({
+      state: "awaiting_approval",
+      updates: {
+        evidence: [expect.objectContaining({ approvalEligible: true })],
+      },
+    });
+    const retained = new TextDecoder().decode(
+      [...evidence.objects.values()][0],
+    );
+    expect(retained).toContain('"name":"bug-regression"');
+  });
+
+  it("rejects an arbitrary validation label as a binding mismatch", async () => {
+    const implementation = trustedResult();
+    const backend = new CloudflareTrustedImplementationBackend(
+      {
+        getByName: () => ({
+          runJob: async () => result(),
+          runTrustedJob: async () => ({
+            ...implementation,
+            validation: [
+              ...implementation.validation,
+              {
+                ...implementation.validation[0],
+                name: "agent-advisory",
+              },
+            ],
+          }),
+          destroy: async () => undefined,
+        }),
+      },
+      new MemoryEvidence(),
+      "unused",
+    );
+
+    await expect(backend.execute(trustedRequest)).rejects.toMatchObject({
+      classification: "implementation_binding_mismatch",
+      retryable: false,
+    });
+  });
+
   it("retains reproduced-failing then passing regression evidence", async () => {
     const requestWithReproduction: TrustedImplementationRequest = {
       ...trustedRequest,
