@@ -49,6 +49,20 @@ describe("Cloudflare planning backend", () => {
       ),
     ).toBe(true);
     expect(
+      isDeterministicPlanningFailure(
+        new Error(
+          "Container runner failed with HTTP 400: planning_credential_leak_detected",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      isDeterministicPlanningFailure(
+        new Error(
+          "Container runner failed with HTTP 400: planning_modified_checkout",
+        ),
+      ),
+    ).toBe(true);
+    expect(
       isDeterministicPlanningFailure(new Error("instance disappeared")),
     ).toBe(false);
   });

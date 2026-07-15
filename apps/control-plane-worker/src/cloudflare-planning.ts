@@ -20,8 +20,8 @@ export function isDeterministicPlanningFailure(error: unknown): boolean {
     "planning_invalid_structured_output",
     "planning result binding does not match request",
     "planning result failed schema validation",
-    "planning credential leak detected",
-    "planning modified checkout",
+    "planning_credential_leak_detected",
+    "planning_modified_checkout",
   ].some((fragment) => reason.includes(fragment));
 }
 
