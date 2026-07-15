@@ -117,6 +117,7 @@ import {
   completeIndependentReview,
   failIndependentReview,
   isIssueRemediationRun,
+  listIssueReviews,
   listRunReviews,
   markReviewDispatched,
   readIndependentReview,
@@ -1200,6 +1201,14 @@ async function enqueueReviewComment(
       `> ${review.execution.result.summary || "Review completed."}`,
     );
   }
+  if (review.request.advisoryOnly)
+    common.push(
+      running
+        ? "**Next action: no action needed; wait for the advisory review result.**"
+        : review.status === "failed"
+          ? "**Next action: inspect the failed review, then request a new exact-head review if needed.**"
+          : `**Next action: review the advisory verdict, then merge pull request #${review.request.pullRequestNumber} only if it looks right and repository CI is passing.**`,
+    );
   if (readyForHumanReview)
     common.push(
       `**The draft flag has been removed. Next action: confirm repository CI is passing, then merge pull request #${review.request.pullRequestNumber} if the change looks right.**`,
@@ -1614,6 +1623,112 @@ async function reserveManualReview(
           sha256,
           size,
         })),
+      timeoutMs: 15 * 60_000,
+      maxOutputBytes: 256 * 1024,
+      maxFindings: 50,
+      scenario: env.INDEPENDENT_REVIEW_SCENARIO ?? "success",
+    },
+    new Date(),
+  );
+  if (reserved.created) {
+    await dispatchReview(env, reserved.review);
+    await enqueueReviewComment(env, reserved.review);
+  }
+  return reserved.review;
+}
+
+async function reservePullRequestReview(
+  env: ControlPlaneEnv,
+  input: {
+    repositoryFullName: string;
+    pullRequestNumber: number;
+    actor: string;
+    expectedHeadCommit: string;
+  },
+): Promise<DurableIndependentReview> {
+  const identity = runtimeIdentity(env);
+  if (identity.environment !== "development")
+    throw new GitHubWebhookError(403, "development_command_required");
+  if (input.actor !== "zorkian")
+    throw new GitHubWebhookError(403, "unauthorized_actor");
+  const pull = await githubGateway(env).manualReviewPullRequest({
+    repositoryFullName: input.repositoryFullName,
+    pullRequestNumber: input.pullRequestNumber,
+    expectedHeadSha: input.expectedHeadCommit,
+  });
+  const existing = await listIssueReviews(
+    env,
+    input.repositoryFullName,
+    input.pullRequestNumber,
+  );
+  const retained = existing.find(
+    (review) =>
+      review.request.advisoryOnly === true &&
+      review.request.pullRequestNumber === pull.number &&
+      review.request.baseCommit === pull.baseCommit &&
+      review.request.headCommit === pull.headCommit &&
+      review.request.patchSha256 === pull.patchSha256,
+  );
+  if (retained) return retained;
+  const cycles = existing.filter(
+    (review) => review.request.advisoryOnly === true,
+  );
+  const cycle =
+    Math.max(0, ...cycles.map((review) => review.request.cycle)) + 1;
+  if (cycle > 2)
+    throw new GitHubWebhookError(409, "manual_review_cycle_limit_exceeded");
+  const binding = await sha256(
+    JSON.stringify({
+      repositoryFullName: input.repositoryFullName,
+      pullRequestNumber: pull.number,
+      baseCommit: pull.baseCommit,
+      headCommit: pull.headCommit,
+      patchSha256: pull.patchSha256,
+    }),
+  );
+  const runId = `manual_pr_${pull.number}_${binding.slice(0, 40)}`;
+  const reviewId = await reviewIdentity({
+    runId,
+    headCommit: pull.headCommit,
+    cycle,
+  });
+  const reserved = await reserveIndependentReview(
+    env,
+    {
+      schemaVersion: 1,
+      reviewId,
+      attemptId: `${reviewId}-attempt-1`,
+      attemptNumber: 1,
+      cycle,
+      manualFallback: true,
+      advisoryOnly: true,
+      runId,
+      repositoryUrl: "https://github.com/zorkian/roundhouse.git",
+      issueNumber: pull.number,
+      issueUrl: `https://github.com/${input.repositoryFullName}/issues/${pull.number}`,
+      pullRequestNumber: pull.number,
+      pullRequestUrl: pull.url,
+      branch: pull.branch,
+      baseCommit: pull.baseCommit,
+      headCommit: pull.headCommit,
+      patchSha256: pull.patchSha256,
+      subject: `Independent advisory review of pull request #${pull.number}`,
+      instructions:
+        "Independently review the exact repository-qualified pull request base, head, changed paths, and bounded patch. Report findings only; do not publish, remediate, or merge.",
+      allowedPaths: pull.changedFiles,
+      planning: {
+        planId: `plan_${binding.slice(0, 40)}`,
+        planRevision: 1,
+        planSha256: binding,
+      },
+      evidence: [
+        {
+          evidenceId: `github_pr_patch_${pull.number}`,
+          objectKey: `${pull.url}.diff`,
+          sha256: pull.patchSha256,
+          size: pull.patchSize,
+        },
+      ],
       timeoutMs: 15 * 60_000,
       maxOutputBytes: 256 * 1024,
       maxFindings: 50,
@@ -2439,6 +2554,8 @@ async function executeGitHubCommand(
 > {
   if (actor !== "zorkian")
     throw new GitHubWebhookError(403, "unauthorized_actor");
+  if (command.kind === "review-pr")
+    throw new GitHubWebhookError(400, "pull_request_comment_required");
   const actorId = `github:${actor}`;
   let runId: string;
   if (command.kind === "start") {
@@ -2715,14 +2832,22 @@ async function githubWebhook(
         repositoryFullName: manualReview.repositoryFullName,
         command: manualReview.command,
       };
-      const review = await reserveManualReview(env, {
-        repositoryFullName: manualReview.repositoryFullName,
-        pullRequestNumber: manualReview.pullRequestNumber,
-        actor: manualReview.actor,
-        runId: manualReview.command.runId,
-        expectedRevision: manualReview.command.revision,
-        expectedHeadCommit: manualReview.command.headCommit,
-      });
+      const review =
+        manualReview.command.kind === "review-pr"
+          ? await reservePullRequestReview(env, {
+              repositoryFullName: manualReview.repositoryFullName,
+              pullRequestNumber: manualReview.pullRequestNumber,
+              actor: manualReview.actor,
+              expectedHeadCommit: manualReview.command.headCommit,
+            })
+          : await reserveManualReview(env, {
+              repositoryFullName: manualReview.repositoryFullName,
+              pullRequestNumber: manualReview.pullRequestNumber,
+              actor: manualReview.actor,
+              runId: manualReview.command.runId,
+              expectedRevision: manualReview.command.revision,
+              expectedHeadCommit: manualReview.command.headCommit,
+            });
       const result = {
         kind: "manual_review",
         reviewId: review.request.reviewId,

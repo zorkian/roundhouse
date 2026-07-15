@@ -315,6 +315,24 @@ describe("GitHub-native operator webhook", () => {
     });
     expect(issueCommand(webhook)).toBeNull();
     expect(
+      manualReviewCommand(
+        {
+          ...webhook,
+          payload: {
+            ...webhook.payload,
+            comment: {
+              ...webhook.payload.comment,
+              body: `/rhd review-pr ${headCommit}`,
+            },
+          },
+        },
+        ["/rhd", "/roundhouse-dev"],
+      ),
+    ).toMatchObject({
+      pullRequestNumber: 92,
+      command: { kind: "review-pr", headCommit },
+    });
+    expect(
       manualReviewCommand({
         ...webhook,
         payload: {

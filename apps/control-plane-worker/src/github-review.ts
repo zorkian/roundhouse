@@ -416,13 +416,14 @@ export async function completeIndependentReview(
         current.request.allowedPaths,
         now,
       );
-      return current.request.cycle === 2 &&
+      return (current.request.advisoryOnly || current.request.cycle === 2) &&
         disposition.disposition === "accepted"
         ? {
             ...disposition,
             disposition: "deferred" as const,
-            rationale:
-              "The bounded two-cycle remediation limit was reached; this finding remains visible for later work.",
+            rationale: current.request.advisoryOnly
+              ? "This independently requested review is advisory; merge and remediation authority remains human-only."
+              : "The bounded two-cycle remediation limit was reached; this finding remains visible for later work.",
           }
         : disposition;
     });

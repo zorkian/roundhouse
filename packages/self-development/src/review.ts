@@ -34,6 +34,7 @@ export const independentReviewRequestSchema = z.object({
   attemptNumber: z.number().int().positive().max(3),
   cycle: z.number().int().min(1).max(2),
   manualFallback: z.boolean().optional(),
+  advisoryOnly: z.boolean().optional(),
   runId: runIdentitySchema,
   repositoryUrl: z.literal("https://github.com/zorkian/roundhouse.git"),
   issueNumber: z.number().int().positive(),

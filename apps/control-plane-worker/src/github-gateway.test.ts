@@ -113,6 +113,7 @@ describe("GitHub App gateway", () => {
       baseCommit,
       headCommit,
       patchSha256: digest,
+      patchSize: new TextEncoder().encode(diff).byteLength,
       changedFiles: ["docs/a.md"],
     });
     await expect(
