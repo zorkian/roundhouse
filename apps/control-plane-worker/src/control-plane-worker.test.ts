@@ -5,6 +5,8 @@ import {
   D1JobStore,
   d1JobStoreMigration,
   normalizeReviewFindings,
+  reviewIdentity,
+  type IndependentReviewRequest,
   type TrustedImplementationResult,
   type RunDelivery,
   type SelfDevelopmentTask,
@@ -44,6 +46,10 @@ import {
   recordPullRequestLifecycle,
 } from "./github-lifecycle.js";
 import { trustedExecutionWorkflowMigration } from "./trusted-execution-workflow.js";
+import {
+  readIndependentReview,
+  reserveIndependentReview,
+} from "./github-review.js";
 
 let instance: Miniflare;
 let database: D1Database;
@@ -2357,6 +2363,182 @@ describe("local control-plane Worker", () => {
       delivery_id: reviewDelivery.deliveryId,
       status: "dispatched",
     });
+  });
+
+  it("reuses the active review lease when the same Workflow callback is replayed", async () => {
+    const { env } = await runtime();
+    const identity = {
+      runId: "run_workflow_review_replay",
+      headCommit: "a".repeat(40),
+      cycle: 1,
+    };
+    const reviewId = await reviewIdentity(identity);
+    const reviewRequest: IndependentReviewRequest = {
+      schemaVersion: 1,
+      reviewId,
+      attemptId: `${reviewId}-attempt-1`,
+      attemptNumber: 1,
+      cycle: identity.cycle,
+      runId: identity.runId,
+      repositoryUrl: "https://github.com/zorkian/roundhouse.git",
+      issueNumber: 24,
+      issueUrl: "https://github.com/zorkian/roundhouse/issues/24",
+      pullRequestNumber: 25,
+      pullRequestUrl: "https://github.com/zorkian/roundhouse/pull/25",
+      branch: "codex/workflow-review-replay",
+      baseCommit: "b".repeat(40),
+      headCommit: identity.headCommit,
+      patchSha256: "c".repeat(64),
+      subject: "Review exact Workflow replay behavior",
+      instructions: "Verify that an active lease is reused.",
+      allowedPaths: ["apps/control-plane-worker/src/index.ts"],
+      planning: {
+        planId: `plan_${"d".repeat(40)}`,
+        planRevision: 1,
+        planSha256: "e".repeat(64),
+      },
+      evidence: [
+        {
+          evidenceId: "evidence_workflow_review_replay",
+          objectKey: "reviews/workflow-review-replay.patch",
+          sha256: "f".repeat(64),
+          size: 1,
+        },
+      ],
+      timeoutMs: 60_000,
+      maxOutputBytes: 1024,
+      maxFindings: 10,
+      scenario: "success",
+      manualFallback: true,
+    };
+    await reserveIndependentReview(env, reviewRequest, new Date());
+    const delivery = {
+      schemaVersion: 1 as const,
+      kind: "independent_review" as const,
+      reviewId,
+      deliveryId: `review_delivery_${reviewId}_1`,
+    };
+    env.EXECUTION_MODE = "cloudflare-trusted-codex";
+    env.ROUNDHOUSE_CLAUDE_AUTH_JSON = JSON.stringify({
+      oauthToken: `setup-token-${"s".repeat(80)}`,
+    });
+    const reviewEvidence = new Map<string, string>();
+    env.EXECUTION_EVIDENCE = {
+      get: async (key) => {
+        const value = reviewEvidence.get(key);
+        return value ? { text: async () => value } : null;
+      },
+      put: async (key, bytes) => {
+        if (reviewEvidence.has(key)) return null;
+        reviewEvidence.set(key, new TextDecoder().decode(bytes));
+        return {};
+      },
+    };
+    env.TRUSTED_EXECUTION_WORKFLOW = {
+      createBatch: async (batch) => batch.map(({ id }) => ({ id })),
+    };
+    await expect(
+      deliver(createControlPlaneHandler(), env, [delivery]),
+    ).resolves.toEqual(["ack:0"]);
+
+    let releaseBackend!: () => void;
+    const backendReleased = new Promise<void>((resolve) => {
+      releaseBackend = resolve;
+    });
+    let backendEntries = 0;
+    let firstBackendEntered!: () => void;
+    const firstBackendEntry = new Promise<void>((resolve) => {
+      firstBackendEntered = resolve;
+    });
+    let secondBackendEntered!: () => void;
+    const secondBackendEntry = new Promise<void>((resolve) => {
+      secondBackendEntered = resolve;
+    });
+    const attemptIds: string[] = [];
+    env.EXECUTION_CONTAINERS = {
+      getByName: () => ({
+        runJob: async () => {
+          throw new Error("ordinary execution is not expected in this test");
+        },
+        runReviewJob: async (request) => {
+          attemptIds.push(request.attemptId);
+          backendEntries += 1;
+          if (backendEntries === 1) firstBackendEntered();
+          if (backendEntries === 2) secondBackendEntered();
+          await backendReleased;
+          return {
+            schemaVersion: 1 as const,
+            reviewId: request.reviewId,
+            attemptId: request.attemptId,
+            cycle: request.cycle,
+            runId: request.runId,
+            baseCommit: request.baseCommit,
+            headCommit: request.headCommit,
+            patchSha256: request.patchSha256,
+            startedAt: "2026-07-15T00:00:00.000Z",
+            completedAt: "2026-07-15T00:00:01.000Z",
+            startupDurationMs: 1,
+            provider: "claude-subscription" as const,
+            model: "claude-sonnet-4-6",
+            summary: "No material findings.",
+            findings: [],
+            outputBytes: 1,
+            usage: { inputTokens: 1, outputTokens: 1, turns: 1 },
+            network: {
+              checkoutHosts: ["github.com"],
+              modelHosts: ["api.anthropic.com"],
+              reviewerToolsEnabled: false,
+              arbitraryInternetEnabled: false,
+              deniedHttpProbe: true,
+              deniedTcpProbe: true,
+            },
+            credential: {
+              installedAtRuntime: true,
+              writtenToFilesystem: false,
+              absentFromEvidence: true,
+            },
+            resources: { diskBytes: 1, memoryBytes: 1 },
+          };
+        },
+        destroy: async () => undefined,
+      }),
+    };
+
+    await executeTrustedExecutionWorkflow(env, delivery, {
+      do: async (name, _config, callback) => {
+        if (name !== "execute independent review") return callback();
+        const first = callback();
+        await firstBackendEntry;
+        const replay = callback();
+        await secondBackendEntry;
+        const active = await readIndependentReview(env, reviewId);
+        expect(active).toMatchObject({
+          status: "running",
+          attemptCount: 1,
+          request: { attemptId: `${reviewId}-attempt-1` },
+        });
+        expect(
+          active?.events.filter(
+            ({ type }) => type === "review.retry_scheduled",
+          ),
+        ).toHaveLength(0);
+        releaseBackend();
+        await replay;
+        return first;
+      },
+    });
+
+    expect(attemptIds).toEqual([
+      `${reviewId}-attempt-1`,
+      `${reviewId}-attempt-1`,
+    ]);
+    const completed = await readIndependentReview(env, reviewId);
+    expect(completed).toMatchObject({ status: "completed", attemptCount: 1 });
+    expect(completed?.events).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "review.retry_scheduled" }),
+      ]),
+    );
   });
 
   it("repairs an API interruption before Queue delivery", async () => {
