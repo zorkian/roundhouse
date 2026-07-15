@@ -3639,15 +3639,7 @@ async function route(
       throw error;
     }
     const attempt = run.attempts.find((value) => value.attemptId === attemptId);
-    const progress = await readExecutionProgress(env, runId);
-    if (
-      !attempt ||
-      !progress.some(
-        (value) =>
-          value.attemptId === attemptId && value.phase.startsWith("agent."),
-      )
-    )
-      throw new HttpError(404, "Run agent attempt not found");
+    if (!attempt) throw new HttpError(404, "Run agent attempt not found");
     const cursor = parseAgentOutputCursor(url.searchParams.get("cursor"));
     if (attempt.status !== "running")
       return json({

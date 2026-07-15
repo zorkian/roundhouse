@@ -2261,7 +2261,7 @@ describe("local control-plane Worker", () => {
     expect(text).toContain('"status":"running"');
   });
 
-  it("serves cursor-bound live output only for an agent attempt owned by the run", async () => {
+  it("serves cursor-bound live output for a run attempt before progress projection", async () => {
     const { env } = await runtime();
     const handler = createControlPlaneHandler();
     const runId = "run_agent_output_binding";
@@ -2280,14 +2280,6 @@ describe("local control-plane Worker", () => {
       new Date("2026-07-15T00:00:01Z"),
     );
     const attemptId = running.attempts.at(-1)!.attemptId;
-    await recordExecutionPhase(env, {
-      runId,
-      attemptId,
-      phase: "agent.implement",
-      status: "running",
-      occurredAt: "2026-07-15T00:00:02.000Z",
-      detail: {},
-    });
     let containerName = "";
     let containerRequest: unknown;
     env.EXECUTION_CONTAINERS = {

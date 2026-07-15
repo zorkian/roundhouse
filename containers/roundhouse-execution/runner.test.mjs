@@ -321,6 +321,25 @@ describe("execution runner observability", () => {
     );
   });
 
+  it("preserves replay output and caps retained attempt identities", () => {
+    const replayed = "run_replayed-prepare-1";
+    startAgentOutput(replayed);
+    appendAgentOutput(replayed, "stdout", "before replay");
+    startAgentOutput(replayed);
+    expect(readAgentOutput(replayed).lines.map((line) => line.text)).toEqual([
+      "Agent started",
+      "before replay",
+      "Agent resumed",
+    ]);
+
+    for (let index = 1; index <= 9; index += 1)
+      startAgentOutput(`bounded-attempt-${index}`);
+    expect(readAgentOutput("bounded-attempt-1")).toBeUndefined();
+    expect(readAgentOutput("bounded-attempt-9")).toMatchObject({
+      status: "running",
+    });
+  });
+
   it("rejects unknown attempt bindings and malformed cursors", async () => {
     const server = createRunnerServer({ port: 0, host: "127.0.0.1" });
     await once(server, "listening");
@@ -337,6 +356,11 @@ describe("execution runner observability", () => {
       fetch(`${origin}/agent-output?attemptId=unknown-attempt&cursor=01`).then(
         (response) => response.status,
       ),
+    ).resolves.toBe(400);
+    await expect(
+      fetch(
+        `${origin}/agent-output?attemptId=unknown-attempt&cursor=%205`,
+      ).then((response) => response.status),
     ).resolves.toBe(400);
     await new Promise((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve(undefined))),

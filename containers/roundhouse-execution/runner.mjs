@@ -156,6 +156,7 @@ export function redactKnownSecrets(value, secrets) {
 
 const retainedAgentOutputLines = 1_000;
 const returnedAgentOutputLines = 100;
+const retainedAgentOutputAttempts = 8;
 
 function redactAgentOutput(value, secrets) {
   return boundedLogExcerpt(redactKnownSecrets(value, secrets), 2_000)
@@ -170,6 +171,17 @@ function redactAgentOutput(value, secrets) {
 }
 
 export function startAgentOutput(attemptId) {
+  const existing = agentOutputByAttempt.get(attemptId);
+  if (existing) {
+    existing.status = "running";
+    appendAgentOutput(attemptId, "system", "Agent resumed", []);
+    return existing;
+  }
+  while (agentOutputByAttempt.size >= retainedAgentOutputAttempts) {
+    const oldest = agentOutputByAttempt.keys().next().value;
+    if (oldest === undefined) break;
+    agentOutputByAttempt.delete(oldest);
+  }
   const output = {
     attemptId,
     status: "running",
@@ -2311,15 +2323,19 @@ export function createRunnerServer({ port = 8080, host = "0.0.0.0" } = {}) {
         const rawCursor = url.searchParams.get("cursor");
         if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(attemptId))
           return json(response, 400, { error: "invalid_attempt_id" });
+        if (
+          rawCursor !== null &&
+          rawCursor !== "" &&
+          !/^(?:0|[1-9][0-9]*)$/.test(rawCursor)
+        )
+          return json(response, 400, { error: "invalid_cursor" });
         const cursor =
           rawCursor === null || rawCursor === ""
             ? undefined
             : Number.parseInt(rawCursor, 10);
         if (
           cursor !== undefined &&
-          (!Number.isSafeInteger(cursor) ||
-            cursor < 0 ||
-            String(cursor) !== rawCursor)
+          (!Number.isSafeInteger(cursor) || cursor < 0)
         )
           return json(response, 400, { error: "invalid_cursor" });
         const output = readAgentOutput(attemptId, cursor);
