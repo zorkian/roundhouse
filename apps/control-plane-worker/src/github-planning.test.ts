@@ -8,6 +8,7 @@ import {
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
+import { githubPlanningDeliverySchema } from "./contracts.js";
 import type { ControlPlaneEnv } from "./environment.js";
 import {
   approvePlan,
@@ -82,9 +83,10 @@ describe("durable issue planning", () => {
     "creates one fresh planning generation after %s terminal work",
     async (_status, timedOut) => {
       const env = await runtime();
+      const requestKey = (timedOut ? "b" : "a").repeat(64);
       const input = {
-        requestKey: `planning-request-${_status}`,
-        jobId: `planning_job_${_status}`,
+        requestKey,
+        jobId: `planning_job_${requestKey.slice(0, 40)}`,
         roundhouseEnvironment: "development" as const,
         repositoryFullName: "zorkian/roundhouse",
         issueNumber: 49,
@@ -131,6 +133,14 @@ describe("durable issue planning", () => {
         1,
       );
       expect(retry.job.jobId).toBe(duplicate.job.jobId);
+      expect(retry.job.jobId).not.toContain("_g2");
+      expect(() =>
+        githubPlanningDeliverySchema.parse({
+          schemaVersion: 1,
+          kind: "github_issue_planning",
+          jobId: retry.job.jobId,
+        }),
+      ).not.toThrow();
       expect(retry.job).toMatchObject({
         generation: 2,
         priorJobId: first.job.jobId,
