@@ -161,6 +161,7 @@ jobs:
           set -euo pipefail
           source_commit="${{ steps.release.outputs.source_commit }}"
           canary_status="$(curl \
+            --fail-with-body \
             --silent \
             --show-error \
             --retry 60 \
