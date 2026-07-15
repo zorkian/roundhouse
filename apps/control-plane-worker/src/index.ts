@@ -982,6 +982,19 @@ async function enqueueRunComment(
   );
 }
 
+async function enqueueActiveRunComments(env: ControlPlaneEnv): Promise<void> {
+  const rows = await env.DB.prepare(
+    `SELECT issue_runs.issue_number, issue_runs.run_id
+     FROM github_issue_runs AS issue_runs
+     INNER JOIN self_development_runs AS runs ON runs.run_id = issue_runs.run_id
+     WHERE runs.state NOT IN ('completed', 'cancelled', 'failed')
+     ORDER BY runs.updated_at ASC
+     LIMIT 100`,
+  ).all<{ issue_number: number; run_id: string }>();
+  for (const row of rows.results)
+    await enqueueRunComment(env, row.issue_number, row.run_id);
+}
+
 async function enqueueReviewComment(
   env: ControlPlaneEnv,
   review: DurableIndependentReview,
@@ -2760,6 +2773,7 @@ export function createControlPlaneHandler(
     async scheduled(_controller, env): Promise<void> {
       try {
         await runRecoveryCycle(env, new Date());
+        await enqueueActiveRunComments(env);
       } catch (error) {
         await recordAlert(env, {
           key: "scheduled_recovery_failed",

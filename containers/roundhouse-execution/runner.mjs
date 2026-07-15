@@ -1246,10 +1246,14 @@ export function planComplianceValidation(allowedPaths, changedFiles) {
   };
 }
 
-async function validationCommand(name, executable, args, request) {
+export function remainingValidationBudget(deadlineAt, now = Date.now()) {
+  return Math.max(1, deadlineAt - now);
+}
+
+async function validationCommand(name, executable, args, request, deadlineAt) {
   lifecycle("validation.command.started", request, { name });
   const result = await command(executable, args, {
-    timeoutMs: request.validationTimeoutMs,
+    timeoutMs: remainingValidationBudget(deadlineAt),
     maxOutputBytes: Math.min(request.maxOutputBytes, 512 * 1024),
   });
   lifecycle("validation.command.completed", request, {
@@ -1286,6 +1290,7 @@ async function validateImplementation(value) {
   if (existsSync(`${codexHome}/auth.json`))
     throw new Error("credential_present_during_validation");
   const validationStarted = Date.now();
+  const validationDeadlineAt = validationStarted + request.validationTimeoutMs;
   const deniedHttp = await deniedHttpProbe();
   const deniedTcp = await deniedTcpProbe();
   if (!deniedHttp || !deniedTcp)
@@ -1295,7 +1300,13 @@ async function validateImplementation(value) {
     planComplianceValidation(request.allowedPaths, trusted.changedFiles),
   );
   validation.push(
-    await validationCommand("diff-check", "git", ["diff", "--check"], request),
+    await validationCommand(
+      "diff-check",
+      "git",
+      ["diff", "--check"],
+      request,
+      validationDeadlineAt,
+    ),
   );
   const formattable = trusted.changedFiles.filter((path) =>
     /\.(?:cjs|css|html|js|json|jsonc|jsx|md|mdx|mjs|ts|tsx|yaml|yml)$/.test(
@@ -1309,6 +1320,7 @@ async function validateImplementation(value) {
           "prettier",
           ["--check", "--", ...formattable],
           request,
+          validationDeadlineAt,
         )
       : skippedValidation(
           "format",
@@ -1322,6 +1334,7 @@ async function validateImplementation(value) {
       "node",
       ["scripts/check-license-headers.mjs"],
       request,
+      validationDeadlineAt,
     ),
   );
   const codeChanged = trusted.changedFiles.some((path) =>
@@ -1329,9 +1342,23 @@ async function validateImplementation(value) {
   );
   if (request.validationLevel === "full" && codeChanged) {
     validation.push(
-      await validationCommand("typecheck", "pnpm", ["typecheck"], request),
+      await validationCommand(
+        "typecheck",
+        "pnpm",
+        ["typecheck"],
+        request,
+        validationDeadlineAt,
+      ),
     );
-    validation.push(await validationCommand("test", "pnpm", ["test"], request));
+    validation.push(
+      await validationCommand(
+        "test",
+        "pnpm",
+        ["test"],
+        request,
+        validationDeadlineAt,
+      ),
+    );
   } else {
     const reason = codeChanged
       ? "Skipped because the submitted validation level is quick"

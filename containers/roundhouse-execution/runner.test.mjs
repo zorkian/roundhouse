@@ -16,6 +16,7 @@ import {
   parsePlanningOutput,
   planningPrompt,
   promptFor,
+  remainingValidationBudget,
   parseClaudeReviewOutput,
   planComplianceValidation,
   runnerReleaseIdentity,
@@ -246,6 +247,13 @@ describe("trusted agent output boundary", () => {
     expect(changedPaths("C  docs/source.md\0docs/copy.md\0")).toEqual([
       "docs/copy.md",
     ]);
+  });
+});
+
+describe("trusted validation budget", () => {
+  it("shares one deadline across validation commands", () => {
+    expect(remainingValidationBudget(10_000, 4_000)).toBe(6_000);
+    expect(remainingValidationBudget(10_000, 12_000)).toBe(1);
   });
 });
 
