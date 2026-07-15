@@ -18,7 +18,8 @@ const protectedManifestNames = new Set([
 
 export const roundhouseSelfDevelopmentProfile = {
   profileId: "roundhouse-self-development-v1",
-  profileVersion: 1,
+  profileVersion: 2,
+  allowedExactPaths: ["README.md"],
   allowedPrefixes: ["apps/", "packages/", "docs/"],
   deniedPrefixes: [
     ".github/",
@@ -344,6 +345,9 @@ function pathFindings(paths: string[]) {
       continue;
     }
     if (
+      !roundhouseSelfDevelopmentProfile.allowedExactPaths.includes(
+        path as never,
+      ) &&
       !roundhouseSelfDevelopmentProfile.allowedPrefixes.some((prefix) =>
         path.startsWith(prefix),
       )
