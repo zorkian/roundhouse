@@ -7,6 +7,8 @@ import {
   approvalMatches,
   exactApprovalSchema,
   publicationRequestSchema,
+  repositoryPathAllowed,
+  repositoryPathPolicySchema,
   repositoryRelativePathSchema,
   trustedImplementationRequestSchema,
   trustedImplementationResultSchema,
@@ -111,6 +113,37 @@ describe("trusted self-development contracts", () => {
         args: ["exec", "prettier", "--write"],
       },
     });
+    const pathPolicy = repositoryPathPolicySchema.parse({
+      allowedExactPaths: ["README.md"],
+      allowedPrefixes: ["packages/"],
+      deniedExactPaths: ["LICENSE"],
+      deniedPrefixes: [
+        "packages/protected/",
+        "apps/control-plane-worker/wrangler",
+      ],
+      deniedBasenames: ["package.json"],
+      maxChangedFiles: 12,
+    });
+    expect(
+      trustedImplementationRequestSchema.parse({
+        ...request,
+        pathPolicy,
+        maxChangedFiles: 12,
+      }).pathPolicy,
+    ).toEqual(pathPolicy);
+    expect(repositoryPathAllowed(pathPolicy, "packages/unpredicted.ts")).toBe(
+      true,
+    );
+    expect(
+      repositoryPathAllowed(pathPolicy, "packages/example/package.json"),
+    ).toBe(false);
+    expect(() =>
+      trustedImplementationRequestSchema.parse({
+        ...request,
+        pathPolicy,
+        maxChangedFiles: 50,
+      }),
+    ).toThrow();
     expect(() =>
       trustedImplementationRequestSchema.parse({
         ...request,

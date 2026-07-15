@@ -7,7 +7,11 @@ import {
   extractExactPaths,
   maxPlannedInstructionCharacters,
   qualifyAndPlan,
+  repositoryPathAllowed,
+  repositoryPathPolicySchema,
   repositoryRelativePathSchema,
+  roundhouseSelfDevelopmentPathPolicy,
+  selfDevelopmentPathPolicyForProfile,
   reviewDeliverySchema,
   reviewIdentity,
   trustedImplementationResultSchema,
@@ -298,6 +302,12 @@ async function submitTask(
       .min(1)
       .max(50)
       .parse(task.allowedPaths);
+    if (
+      task.pathPolicy &&
+      JSON.stringify(repositoryPathPolicySchema.parse(task.pathPolicy)) !==
+        JSON.stringify(roundhouseSelfDevelopmentPathPolicy)
+    )
+      throw new HttpError(403, "Repository path policy is not enrolled");
     dogfoodPublicationBranchSchema.parse(task.publication.branch);
   }
   if (
@@ -508,6 +518,7 @@ async function materializeGitHubPlan(
       baseCommit: plan.baseCommit,
       validationLevel: plan.validationLevel,
       allowedPaths: plan.exactPaths,
+      pathPolicy: selfDevelopmentPathPolicyForProfile(plan.profileVersion),
       planning: {
         planId: plan.planId,
         planSha256: plan.planSha256,
@@ -670,9 +681,9 @@ async function planComment(
       );
     lines.push(
       `Risk: **${value.plan.risk}**`,
-      "Exact approved scope:",
+      "Likely implementation paths (advisory):",
       ...value.plan.exactPaths.map((path) => `- \`${path}\``),
-      `Validation: \`${value.plan.validationLevel}\`; patch limit: ${value.plan.limits.maxPatchBytes} bytes; model-request limit: ${value.plan.limits.modelRequestLimit}.`,
+      `Hard repository policy: at most ${value.plan.limits.maxFiles} changed files and ${value.plan.limits.maxPatchBytes} patch bytes; validation: \`${value.plan.validationLevel}\`; model-request limit: ${value.plan.limits.modelRequestLimit}.`,
     );
     if (value.status === "proposed" || value.status === "approved")
       lines.push(
@@ -1493,7 +1504,7 @@ async function reservePublicationReview(
       patchSha256: run.implementation.patchSha256,
       subject: run.task.subject,
       instructions: run.task.instructions,
-      allowedPaths: run.task.allowedPaths,
+      allowedPaths: run.implementation.changedFiles,
       planning: {
         planId: run.task.planning.planId,
         planRevision: 1,
@@ -1565,7 +1576,13 @@ async function reserveManualReview(
     expectedBaseSha: run.task.baseCommit,
     approvedPaths: run.task.allowedPaths,
   });
-  if (pull.changedFiles.some((path) => !run.task.allowedPaths.includes(path)))
+  if (
+    pull.changedFiles.some((path) =>
+      run.task.pathPolicy
+        ? !repositoryPathAllowed(run.task.pathPolicy, path)
+        : !run.task.allowedPaths.includes(path),
+    )
+  )
     throw new GitHubWebhookError(
       409,
       "manual_review_pull_request_out_of_scope",
@@ -1617,7 +1634,7 @@ async function reserveManualReview(
       patchSha256: pull.patchSha256,
       subject: run.task.subject,
       instructions: run.task.instructions,
-      allowedPaths: run.task.allowedPaths,
+      allowedPaths: pull.changedFiles,
       planning: {
         planId: run.task.planning.planId,
         planRevision: 1,

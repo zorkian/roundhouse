@@ -7,6 +7,7 @@ import {
   exactApprovalSchema,
   publicationAuthorEmailSchema,
   publicationAuthorNameSchema,
+  repositoryPathPolicySchema,
   repositoryRelativePathSchema,
 } from "./trusted-loop.js";
 import {
@@ -23,6 +24,7 @@ export const selfDevelopmentTaskSchema = z.object({
   baseCommit: z.string().regex(/^[a-f0-9]{40}$/),
   validationLevel: z.enum(["quick", "full"]).default("quick"),
   allowedPaths: z.array(z.string().min(1)).min(1),
+  pathPolicy: repositoryPathPolicySchema.optional(),
   planning: planningBindingSchema.optional(),
   bugReproduction: bugReproductionPlanSchema.optional(),
   source: z

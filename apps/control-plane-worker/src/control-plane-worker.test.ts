@@ -821,7 +821,9 @@ describe("local control-plane Worker", () => {
       env,
       {} as ExecutionContext,
     );
-    expect(implementation.status).toBe(202);
+    expect(implementation.status, await implementation.clone().text()).toBe(
+      202,
+    );
     const implementationResult = (await implementation.json()) as {
       runId: string;
     };
@@ -834,6 +836,12 @@ describe("local control-plane Worker", () => {
       roundhouseEnvironment: "development",
     });
     expect(developmentRun.task.taskId).toContain("task_development_");
+    expect(developmentRun.task.pathPolicy).toMatchObject({
+      allowedPrefixes: ["apps/", "docs/", "packages/"],
+      deniedPrefixes: expect.arrayContaining([".github/", "containers/"]),
+      deniedBasenames: expect.arrayContaining(["package.json"]),
+      maxChangedFiles: 12,
+    });
     expect(developmentRun.task.publication.branch).toBe(
       "codex/dogfood-development-issue-17",
     );
@@ -1344,6 +1352,29 @@ describe("local control-plane Worker", () => {
       {} as ExecutionContext,
     );
     expect(response.status).toBe(400);
+    const widenedPolicy = structuredClone(task);
+    widenedPolicy.allowedPaths = [
+      "docs/dogfood/trusted-self-development-loop.md",
+    ];
+    widenedPolicy.pathPolicy = {
+      allowedExactPaths: [],
+      allowedPrefixes: [".github/"],
+      deniedExactPaths: [],
+      deniedPrefixes: [],
+      deniedBasenames: [],
+      maxChangedFiles: 50,
+    };
+    widenedPolicy.publication.branch =
+      "codex/dogfood-development-policy-boundary";
+    expect(
+      (
+        await handler.fetch!(
+          submission("trusted-policy-boundary-01", widenedPolicy),
+          env,
+          {} as ExecutionContext,
+        )
+      ).status,
+    ).toBe(403);
     const invalidBranch = structuredClone(task);
     invalidBranch.allowedPaths = [
       "docs/dogfood/trusted-self-development-loop.md",

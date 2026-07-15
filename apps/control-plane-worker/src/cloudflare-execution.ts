@@ -4,6 +4,7 @@
 import {
   repositoryExecutionRequestSchema,
   repositoryExecutionResultSchema,
+  repositoryPathAllowed,
   roundhouseFormatterWriteCommand,
   type IndependentReviewRequest,
   type IndependentReviewResult,
@@ -216,7 +217,11 @@ async function validateTrustedResult(
     !regressionBindingValid ||
     publicationBytes > request.maxPatchBytes ||
     result.changedFiles.length > request.maxChangedFiles ||
-    !result.changedFiles.every((path) => request.allowedPaths.includes(path))
+    !result.changedFiles.every((path) =>
+      request.pathPolicy
+        ? repositoryPathAllowed(request.pathPolicy, path)
+        : request.allowedPaths.includes(path),
+    )
   )
     throw new StageFailure(
       "Trusted implementation result did not match its immutable request",
@@ -651,6 +656,7 @@ export class CloudflareTrustedExecutionDispatcher implements ExecutionDispatcher
       retryContext: request.retryContext,
       retryFromAttemptId: request.retryFromAttemptId,
       allowedPaths: request.allowedPaths,
+      pathPolicy: request.pathPolicy,
       validationLevel: request.validationLevel,
       formatter: {
         command: roundhouseFormatterWriteCommand.command,
@@ -664,7 +670,7 @@ export class CloudflareTrustedExecutionDispatcher implements ExecutionDispatcher
       agentTimeoutMs: 2 * 60 * 60_000,
       validationTimeoutMs: 30 * 60_000,
       maxPatchBytes: 512 * 1024,
-      maxChangedFiles: 50,
+      maxChangedFiles: request.pathPolicy?.maxChangedFiles ?? 50,
       maxOutputBytes: 5 * 1024 * 1024,
       scenario: this.scenario,
     });
