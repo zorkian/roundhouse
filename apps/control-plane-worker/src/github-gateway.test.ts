@@ -922,6 +922,7 @@ describe("GitHub App gateway", () => {
       let branch = prior;
       let pullReads = 0;
       let pullCreates = 0;
+      const sleeps: number[] = [];
       const fetcher: typeof fetch = async (input, init) => {
         const url = new URL(String(input));
         const method = init?.method ?? "GET";
@@ -973,6 +974,9 @@ describe("GitHub App gateway", () => {
         { appId: "1", installationId: "2", privateKey },
         fetcher,
         () => new Date("2026-07-12T01:00:00Z"),
+        async (milliseconds) => {
+          sleeps.push(milliseconds);
+        },
       );
       const publication = gateway.publish({
         manifest: {
@@ -1010,6 +1014,7 @@ describe("GitHub App gateway", () => {
         });
       expect(pullReads).toBe(3);
       expect(pullCreates).toBe(0);
+      expect(sleeps).toEqual([500, 1_000]);
     },
   );
 

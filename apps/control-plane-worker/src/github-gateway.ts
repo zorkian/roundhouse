@@ -77,6 +77,9 @@ export class GitHubAppGateway {
     private readonly config: GatewayConfig,
     private readonly fetcher: Fetch = fetch,
     private readonly now: () => Date = () => new Date(),
+    private readonly sleep: (milliseconds: number) => Promise<void> = (
+      milliseconds,
+    ) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
   ) {}
 
   private get repositoryFullName(): "zorkian/roundhouse" {
@@ -826,6 +829,7 @@ export class GitHubAppGateway {
       const exact = pulls.find((pull) => pull.head.sha === expectedHeadSha);
       if (exact) return exact;
       stalePullFound ||= pulls.length > 0;
+      if (attempt < 2) await this.sleep(500 * (attempt + 1));
     }
     if (stalePullFound)
       throw new GitHubAppGatewayError(
