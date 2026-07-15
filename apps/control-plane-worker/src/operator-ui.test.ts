@@ -63,6 +63,13 @@ describe("operator UI", () => {
           schemaVersion: 1,
           repositoryFullName: "zorkian/roundhouse",
           issueNumber: 24,
+          planning: {
+            jobId: "planning_job_generation_2",
+            generation: 2,
+            status: "completed",
+            priorJobId: "planning_job_generation_1",
+            priorFailureReason: "planner configuration rejected the request",
+          },
           plan: {
             plan: { planId: "plan_issue_workflow" },
           },
@@ -93,6 +100,12 @@ describe("operator UI", () => {
     );
     new Function(script!)();
     await vi.waitFor(() => expect(app.innerHTML).toContain("run_remediation"));
+    expect(app.innerHTML).toContain("Planning timeline");
+    expect(app.innerHTML).toContain("planning_job_generation_2");
+    expect(app.innerHTML).toContain("planning_job_generation_1");
+    expect(app.innerHTML).toContain(
+      "planner configuration rejected the request",
+    );
     expect(app.innerHTML).toContain("What happens next");
     expect(app.innerHTML).toContain("This issue is complete");
     expect(app.innerHTML).toContain(`/reviews/${reviewId}`);

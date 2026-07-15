@@ -11,11 +11,15 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { ControlPlaneEnv } from "./environment.js";
 import {
   approvePlan,
+  claimPlanningJob,
+  failPlanningJob,
+  finishPlanningJob,
   githubPlanningMigration,
   listIssuePlans,
   materializePlan,
   readIssuePlan,
   recordPlanningDecision,
+  reservePlanningJob,
 } from "./github-planning.js";
 
 let instance: Miniflare;
@@ -47,6 +51,8 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
+  await sharedEnv.DB.prepare("DELETE FROM github_planning_job_events").run();
+  await sharedEnv.DB.prepare("DELETE FROM github_planning_jobs").run();
   await sharedEnv.DB.prepare("DELETE FROM github_plan_events").run();
   await sharedEnv.DB.prepare("DELETE FROM github_issue_plans").run();
   delete sharedEnv.EXECUTION_EVIDENCE;
@@ -69,6 +75,111 @@ async function proposed(issueNumber = 22) {
 }
 
 describe("durable issue planning", () => {
+  it.each([
+    ["failed", false],
+    ["timed_out", true],
+  ] as const)(
+    "creates one fresh planning generation after %s terminal work",
+    async (_status, timedOut) => {
+      const env = await runtime();
+      const input = {
+        requestKey: `planning-request-${_status}`,
+        jobId: `planning_job_${_status}`,
+        roundhouseEnvironment: "development" as const,
+        repositoryFullName: "zorkian/roundhouse",
+        issueNumber: 49,
+        actorId: "github:zorkian",
+        command: { kind: "replan" as const, planId: "plan_49" },
+        now: new Date("2026-07-15T00:00:00Z"),
+      };
+      const first = await reservePlanningJob(env, input);
+      expect(first).toMatchObject({
+        created: true,
+        job: { generation: 1, status: "queued" },
+      });
+      const firstClaim = await claimPlanningJob(
+        env,
+        first.job.jobId,
+        {
+          roundhouseEnvironment: "development",
+          repositoryFullName: "zorkian/roundhouse",
+        },
+        input.now,
+        30_000,
+      );
+      await failPlanningJob(
+        env,
+        first.job.jobId,
+        firstClaim!.claimId,
+        "planner configuration rejected the request",
+        false,
+        timedOut,
+        input.now,
+      );
+
+      const [retry, duplicate] = await Promise.all([
+        reservePlanningJob(env, {
+          ...input,
+          now: new Date("2026-07-15T00:01:00Z"),
+        }),
+        reservePlanningJob(env, {
+          ...input,
+          now: new Date("2026-07-15T00:01:00Z"),
+        }),
+      ]);
+      expect([retry.created, duplicate.created].filter(Boolean)).toHaveLength(
+        1,
+      );
+      expect(retry.job.jobId).toBe(duplicate.job.jobId);
+      expect(retry.job).toMatchObject({
+        generation: 2,
+        priorJobId: first.job.jobId,
+        priorFailureReason: "planner configuration rejected the request",
+        attemptCount: 0,
+        status: "queued",
+        roundhouseEnvironment: input.roundhouseEnvironment,
+        repositoryFullName: input.repositoryFullName,
+        issueNumber: input.issueNumber,
+        actorId: input.actorId,
+        command: input.command,
+      });
+
+      const activeRepeat = await reservePlanningJob(env, {
+        ...input,
+        now: new Date("2026-07-15T00:01:30Z"),
+      });
+      expect(activeRepeat).toMatchObject({
+        created: false,
+        job: { jobId: retry.job.jobId, generation: 2, status: "queued" },
+      });
+      const retryClaim = await claimPlanningJob(
+        env,
+        retry.job.jobId,
+        {
+          roundhouseEnvironment: "development",
+          repositoryFullName: "zorkian/roundhouse",
+        },
+        new Date("2026-07-15T00:02:00Z"),
+        30_000,
+      );
+      await finishPlanningJob(
+        env,
+        retry.job.jobId,
+        retryClaim!.claimId,
+        { corrected: true },
+        new Date("2026-07-15T00:03:00Z"),
+      );
+      const completedRepeat = await reservePlanningJob(env, {
+        ...input,
+        now: new Date("2026-07-15T00:04:00Z"),
+      });
+      expect(completedRepeat).toMatchObject({
+        created: false,
+        job: { jobId: retry.job.jobId, generation: 2, status: "completed" },
+      });
+    },
+  );
+
   it("records one immutable issue plan and replays exact writes", async () => {
     const env = await runtime();
     const decision = await proposed();
