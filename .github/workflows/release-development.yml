@@ -123,6 +123,7 @@ jobs:
         run: |
           set -euo pipefail
           canary_status="$(curl \
+            --fail-with-body \
             --silent \
             --show-error \
             --retry 60 \

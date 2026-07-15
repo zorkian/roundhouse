@@ -27,6 +27,12 @@ describe("release workflow handoff", () => {
     expect(development).toContain("ROUNDHOUSE_RELEASE_COMMIT=${GITHUB_SHA}");
     expect(development).toContain("/v1/releases/${GITHUB_SHA}/canary");
     expect(production).toContain("/v1/releases/${source_commit}/canary");
+    expect(development).toMatch(
+      /canary_status="\$\(curl \\\n\s+--fail-with-body \\\n[\s\S]*?--retry-all-errors/,
+    );
+    expect(production).toMatch(
+      /canary_status="\$\(curl \\\n\s+--fail-with-body \\\n[\s\S]*?--retry-all-errors/,
+    );
     expect(development).toContain("development-canary.json");
     expect(production).toContain("production-canary.json");
     expect(development).not.toContain("development-fleet.json");
