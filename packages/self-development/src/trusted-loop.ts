@@ -148,6 +148,7 @@ export type TrustedImplementationRequest = z.infer<
 export const validationCommandEvidenceSchema = z.object({
   name: z.enum([
     "plan-compliance",
+    "bug-regression",
     "diff-check",
     "format",
     "license",
