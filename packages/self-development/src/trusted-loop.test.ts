@@ -10,6 +10,7 @@ import {
   repositoryRelativePathSchema,
   trustedImplementationRequestSchema,
   trustedImplementationResultSchema,
+  regressionEvidenceSchema,
 } from "./trusted-loop.js";
 import { selfDevelopmentRunSchema, selfDevelopmentTaskSchema } from "./task.js";
 
@@ -31,6 +32,58 @@ const approval = exactApprovalSchema.parse({
 });
 
 describe("trusted self-development contracts", () => {
+  it.each(["cannot_reproduce", "timeout", "unsafe", "not_applicable"] as const)(
+    "represents the %s reproduction outcome",
+    (outcome) => {
+      expect(
+        regressionEvidenceSchema.parse({
+          repositoryUrl: "https://github.com/zorkian/roundhouse.git",
+          baseCommit: "a".repeat(40),
+          planId: `plan_${"b".repeat(40)}`,
+          planSha256: "c".repeat(64),
+          attemptId: "run_trusted_contract-implement-1",
+          headPatchSha256: "d".repeat(64),
+          preChange: {
+            outcome,
+            summary: "Bounded reproduction outcome retained.",
+            output: "",
+            outputTruncated: false,
+          },
+        }).preChange.outcome,
+      ).toBe(outcome);
+    },
+  );
+
+  it("requires passing-after-change evidence for a reproduced bug", () => {
+    const evidence = {
+      repositoryUrl: "https://github.com/zorkian/roundhouse.git" as const,
+      baseCommit: "a".repeat(40),
+      planId: `plan_${"b".repeat(40)}`,
+      planSha256: "c".repeat(64),
+      attemptId: "run_trusted_contract-implement-1",
+      headPatchSha256: "d".repeat(64),
+      command: "pnpm vitest run packages/example.test.ts",
+      preChange: {
+        outcome: "reproduced" as const,
+        summary: "Regression test failed before the change.",
+        output: "1 test failed",
+        outputTruncated: false,
+      },
+    };
+    expect(regressionEvidenceSchema.safeParse(evidence).success).toBe(false);
+    expect(
+      regressionEvidenceSchema.parse({
+        ...evidence,
+        postChange: {
+          outcome: "passed",
+          summary: "The same regression test passed after the change.",
+          output: "1 test passed",
+          outputTruncated: false,
+        },
+      }).postChange?.outcome,
+    ).toBe("passed");
+  });
+
   it("rejects traversal, absolute paths, and oversized execution envelopes", () => {
     const request = {
       schemaVersion: 1,

@@ -429,6 +429,7 @@ async function planGitHubIssue(
       planningEvidence: revisionRequest?.answers
         ? [revisionRequest.answers]
         : [],
+      bugReproduction: agentPlan?.bugReproduction,
     },
     new Date(snapshot.updatedAt),
   );
@@ -501,6 +502,7 @@ async function materializeGitHubPlan(
         approvedBy: approved.approvedBy!,
         approvedAt: approved.approvedAt!,
       },
+      bugReproduction: plan.bugReproduction,
       source: {
         kind: "github_issue",
         roundhouseEnvironment: identity.environment,
@@ -2750,6 +2752,7 @@ async function implementationEvidence(
     patchBytes: result.patchBytes,
     summary: result.agent.summary,
     validation: result.validation,
+    regressionEvidence: result.regressionEvidence,
     retryLineage: result.retryLineage,
     evidence: reference,
   });

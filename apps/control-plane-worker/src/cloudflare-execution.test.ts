@@ -120,6 +120,64 @@ function trustedResult() {
 }
 
 describe("CloudflareTrustedImplementationBackend", () => {
+  it("retains reproduced-failing then passing regression evidence", async () => {
+    const requestWithReproduction: TrustedImplementationRequest = {
+      ...trustedRequest,
+      planning: {
+        planId: `plan_${"b".repeat(40)}`,
+        planSha256: "c".repeat(64),
+      },
+      bugReproduction: {
+        applicability: "applicable",
+        command: "pnpm vitest run packages/example.test.ts",
+      },
+    };
+    const implementation = trustedResult();
+    const backend = new CloudflareTrustedImplementationBackend(
+      {
+        getByName: () => ({
+          runJob: async () => result(),
+          runTrustedJob: async () => ({
+            ...implementation,
+            regressionEvidence: {
+              repositoryUrl: requestWithReproduction.repositoryUrl,
+              baseCommit: requestWithReproduction.baseCommit,
+              planId: requestWithReproduction.planning!.planId,
+              planSha256: requestWithReproduction.planning!.planSha256,
+              attemptId: requestWithReproduction.attemptId,
+              headPatchSha256: implementation.patchSha256,
+              command: "pnpm vitest run packages/example.test.ts",
+              preChange: {
+                outcome: "reproduced",
+                summary: "The regression test failed before the change.",
+                output: "1 test failed",
+                outputTruncated: false,
+              },
+              postChange: {
+                outcome: "passed",
+                summary: "The regression test passed after the change.",
+                output: "1 test passed",
+                outputTruncated: false,
+              },
+            },
+          }),
+          destroy: async () => undefined,
+        }),
+      },
+      new MemoryEvidence(),
+      "unused",
+    );
+
+    await expect(
+      backend.execute(requestWithReproduction),
+    ).resolves.toMatchObject({
+      state: "awaiting_approval",
+      updates: {
+        evidence: [expect.objectContaining({ approvalEligible: true })],
+      },
+    });
+  });
+
   it("classifies trusted validation failure as non-retryable", async () => {
     let destroyed = 0;
     const backend = new CloudflareTrustedImplementationBackend(

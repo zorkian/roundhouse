@@ -9,6 +9,16 @@ const boundedIdentity = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,199}$/);
 const runIdentity = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/);
 const commit = z.string().regex(/^[a-f0-9]{40}$/);
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
+export const bugReproductionPlanSchema = z.discriminatedUnion("applicability", [
+  z.object({
+    applicability: z.literal("applicable"),
+    command: z.string().min(1).max(500),
+  }),
+  z.object({
+    applicability: z.literal("not_applicable"),
+    rationale: z.string().min(1).max(500),
+  }),
+]);
 export const publicationAuthorNameSchema = z
   .string()
   .min(1)
@@ -92,6 +102,13 @@ export const trustedImplementationRequestSchema = z.object({
     .optional(),
   allowedPaths: z.array(repositoryRelativePathSchema).min(1).max(50),
   validationLevel: z.enum(["quick", "full"]),
+  bugReproduction: bugReproductionPlanSchema.optional(),
+  planning: z
+    .object({
+      planId: z.string().regex(/^plan_[a-f0-9]{40}$/),
+      planSha256: sha256,
+    })
+    .optional(),
   agentTimeoutMs: z
     .number()
     .int()
@@ -146,6 +163,51 @@ export const validationCommandEvidenceSchema = z.object({
   outputTruncated: z.boolean(),
 });
 
+export const regressionEvidenceSchema = z
+  .object({
+    repositoryUrl: z.literal("https://github.com/zorkian/roundhouse.git"),
+    baseCommit: commit,
+    planId: z.string().regex(/^plan_[a-f0-9]{40}$/),
+    planSha256: sha256,
+    attemptId: boundedIdentity,
+    headPatchSha256: sha256,
+    command: z.string().min(1).max(500).optional(),
+    preChange: z.object({
+      outcome: z.enum([
+        "reproduced",
+        "cannot_reproduce",
+        "timeout",
+        "unsafe",
+        "not_applicable",
+      ]),
+      summary: z.string().min(1).max(2_000),
+      output: z.string().max(20_000),
+      outputTruncated: z.boolean(),
+    }),
+    postChange: z
+      .object({
+        outcome: z.enum(["passed", "failed", "timeout", "unsafe"]),
+        summary: z.string().min(1).max(2_000),
+        output: z.string().max(20_000),
+        outputTruncated: z.boolean(),
+      })
+      .optional(),
+  })
+  .superRefine((value, context) => {
+    if (value.preChange.outcome === "reproduced" && !value.postChange)
+      context.addIssue({
+        code: "custom",
+        path: ["postChange"],
+        message: "A reproduced bug requires a post-change regression result",
+      });
+    if (value.preChange.outcome === "not_applicable" && value.command)
+      context.addIssue({
+        code: "custom",
+        path: ["command"],
+        message: "Not-applicable evidence cannot authorize a command",
+      });
+  });
+
 export const trustedImplementationResultSchema = z.object({
   schemaVersion: z.literal(1),
   runId: runIdentity,
@@ -192,7 +254,8 @@ export const trustedImplementationResultSchema = z.object({
       .nonnegative()
       .max(5 * 1024 * 1024),
   }),
-  validation: z.array(validationCommandEvidenceSchema).min(1).max(6),
+  validation: z.array(validationCommandEvidenceSchema).min(1).max(7),
+  regressionEvidence: regressionEvidenceSchema.optional(),
   network: z.object({
     checkoutHosts: z.array(z.literal("github.com")),
     modelHosts: z.array(z.string().min(1).max(253)).max(10),
