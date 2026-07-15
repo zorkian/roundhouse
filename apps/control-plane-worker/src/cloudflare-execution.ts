@@ -125,15 +125,17 @@ async function validateTrustedResult(
     await crypto.subtle.digest("SHA-256", patchBytes),
   );
   const publicationManifest = result.publicationManifest;
+  const retryLineage = result.retryLineage;
   const retryBindingValid = request.retryCandidate
-    ? result.retryLineage?.priorAttemptId ===
-        request.retryCandidate.attemptId &&
-      result.retryLineage.priorPatchSha256 ===
-        request.retryCandidate.patchSha256 &&
-      result.retryLineage.retainedAllPriorPaths &&
-      [...result.retryLineage.priorChangedFiles].sort().join("\0") ===
-        [...request.retryCandidate.changedFiles].sort().join("\0")
-    : result.retryLineage === undefined;
+    ? retryLineage?.priorAttemptId === request.retryCandidate.attemptId &&
+      retryLineage.priorPatchSha256 === request.retryCandidate.patchSha256 &&
+      [...retryLineage.priorChangedFiles].sort().join("\0") ===
+        [...request.retryCandidate.changedFiles].sort().join("\0") &&
+      retryLineage.retainedAllPriorPaths ===
+        retryLineage.priorChangedFiles.every((path) =>
+          result.changedFiles.includes(path),
+        )
+    : retryLineage === undefined;
   let manifestBindingValid = true;
   let publicationBytes = 0;
   if (publicationManifest) {

@@ -83,9 +83,11 @@ An explicit retry of a failed trusted implementation does not begin again with
 only error text. The Worker retrieves the exact immutable failed evidence from
 R2, verifies its binding, and supplies the complete prior patch and changed-file
 inventory to the new attempt. The Container applies that patch to the exact base
-before invoking the agent. Plan-compliance validation requires the final patch
-to retain every prior candidate path and cover every exact approved path; retry
-lineage and the prior patch SHA-256 are retained in the new evidence.
+before invoking the agent. The approved path set is an upper bound: every final
+changed path must be approved, but the implementation need not change every path
+predicted by planning. A retry may revise or revert prior edits when they are no
+longer needed. Retry lineage, whether all prior paths remain, and the prior patch
+SHA-256 are retained in the new evidence.
 
 When a run needs implementation approval, Roundhouse creates one idempotent
 timeline notification in addition to updating the rolling status comment. The
