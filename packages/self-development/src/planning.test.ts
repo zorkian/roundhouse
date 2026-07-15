@@ -3,7 +3,14 @@
 
 import { describe, expect, it } from "vitest";
 
-import { extractExactPaths, qualifyAndPlan } from "./planning.js";
+import {
+  extractExactPaths,
+  nonImplementationQualificationSchema,
+  planningBindingSchema,
+  qualifiedPlanSchema,
+  qualifyAndPlan,
+  rejectedQualificationSchema,
+} from "./planning.js";
 
 const input = {
   issueNumber: 21,
@@ -100,6 +107,54 @@ describe("issue qualification and planning", () => {
         }),
       ],
     });
+  });
+
+  it("decodes historical profile bindings while issuing only the current version", async () => {
+    const proposed = await qualifyAndPlan(
+      input,
+      new Date("2026-07-12T00:00:00Z"),
+    );
+    expect(proposed).toMatchObject({ profileVersion: 2 });
+    expect(
+      qualifiedPlanSchema.parse({ ...proposed, profileVersion: 1 }),
+    ).toMatchObject({ profileVersion: 1 });
+
+    const rejected = await qualifyAndPlan(
+      { ...input, requestedPaths: ["scripts/not-enrolled.mjs"] },
+      new Date("2026-07-12T00:00:00Z"),
+    );
+    expect(
+      rejectedQualificationSchema.parse({ ...rejected, profileVersion: 1 }),
+    ).toMatchObject({ profileVersion: 1, status: "rejected" });
+
+    const satisfied = await qualifyAndPlan(
+      {
+        ...input,
+        requestedPaths: [],
+        outcome: "already_satisfied",
+        evidence: ["The requested behavior is already covered."],
+      },
+      new Date("2026-07-12T00:00:00Z"),
+    );
+    expect(
+      nonImplementationQualificationSchema.parse({
+        ...satisfied,
+        profileVersion: 1,
+      }),
+    ).toMatchObject({ profileVersion: 1, status: "already_satisfied" });
+
+    expect(
+      planningBindingSchema.parse({
+        planId: `plan_${"a".repeat(40)}`,
+        planSha256: "b".repeat(64),
+        profileId: "roundhouse-self-development-v1",
+        profileVersion: 1,
+        issueContentSha256: "c".repeat(64),
+        exactPathsSha256: "d".repeat(64),
+        approvedBy: "github:zorkian",
+        approvedAt: "2026-07-12T00:00:00.000Z",
+      }),
+    ).toMatchObject({ profileVersion: 1 });
   });
 
   it("distinguishes non-implementation qualification outcomes", async () => {

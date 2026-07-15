@@ -36,6 +36,11 @@ export const roundhouseSelfDevelopmentProfile = {
   operatorAttemptLimit: 10,
 } as const;
 
+const roundhouseSelfDevelopmentProfileVersionSchema = z.union([
+  z.literal(1),
+  z.literal(roundhouseSelfDevelopmentProfile.profileVersion),
+]);
+
 export const qualificationIssueSchema = z.object({
   issueNumber: z.number().int().positive(),
   issueContentSha256: sha64,
@@ -172,7 +177,7 @@ export const qualifiedPlanSchema = z.object({
   revision: z.literal(1),
   status: z.literal("proposed"),
   profileId: z.literal(roundhouseSelfDevelopmentProfile.profileId),
-  profileVersion: z.literal(roundhouseSelfDevelopmentProfile.profileVersion),
+  profileVersion: roundhouseSelfDevelopmentProfileVersionSchema,
   issueNumber: z.number().int().positive(),
   issueContentSha256: sha64,
   subject: z.string().min(1).max(500),
@@ -208,7 +213,7 @@ export const rejectedQualificationSchema = z.object({
   revision: z.literal(1),
   status: z.literal("rejected"),
   profileId: z.literal(roundhouseSelfDevelopmentProfile.profileId),
-  profileVersion: z.literal(roundhouseSelfDevelopmentProfile.profileVersion),
+  profileVersion: roundhouseSelfDevelopmentProfileVersionSchema,
   issueNumber: z.number().int().positive(),
   issueContentSha256: sha64,
   subject: z.string().min(1).max(500),
@@ -227,7 +232,7 @@ export const nonImplementationQualificationSchema = z
     revision: z.literal(1),
     status: z.enum(["needs_clarification", "already_satisfied", "duplicate"]),
     profileId: z.literal(roundhouseSelfDevelopmentProfile.profileId),
-    profileVersion: z.literal(roundhouseSelfDevelopmentProfile.profileVersion),
+    profileVersion: roundhouseSelfDevelopmentProfileVersionSchema,
     issueNumber: z.number().int().positive(),
     issueContentSha256: sha64,
     subject: z.string().min(1).max(500),
@@ -510,7 +515,7 @@ export const planningBindingSchema = z.object({
   planId: z.string().regex(/^plan_[a-f0-9]{40}$/),
   planSha256: sha64,
   profileId: z.literal(roundhouseSelfDevelopmentProfile.profileId),
-  profileVersion: z.literal(roundhouseSelfDevelopmentProfile.profileVersion),
+  profileVersion: roundhouseSelfDevelopmentProfileVersionSchema,
   issueContentSha256: sha64,
   exactPathsSha256: sha64,
   approvedBy: z.string().min(1).max(200),
