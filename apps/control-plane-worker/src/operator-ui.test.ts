@@ -519,9 +519,9 @@ describe("operator UI", () => {
               validation: [
                 {
                   name: "plan-compliance",
-                  command: "internal: exact approved and retry path coverage",
+                  command: "internal: approved path boundary",
                   exitCode: 0,
-                  stdout: "Final patch covers 1 approved path(s).",
+                  stdout: "Final patch changes 1 of 2 approved path(s).",
                   stderr: "",
                 },
               ],

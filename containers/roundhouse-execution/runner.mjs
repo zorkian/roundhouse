@@ -413,7 +413,7 @@ export function promptFor(request) {
       ? [
           "",
           `The complete failed candidate from ${request.retryCandidate.attemptId} is already applied to the checkout.`,
-          "Preserve that implementation while correcting validation failures. Do not replace it with only a narrow symptom fix.",
+          "Use it as the starting point while correcting validation failures. You may revise or revert prior edits when the final implementation no longer needs them.",
         ]
       : []),
   ].join("\n");
@@ -1224,6 +1224,28 @@ export function skippedValidation(name, commandName, reason) {
   };
 }
 
+export function planComplianceValidation(allowedPaths, changedFiles) {
+  const disallowedPaths = changedFiles.filter(
+    (path) => !allowedPaths.includes(path),
+  );
+  return {
+    name: "plan-compliance",
+    command: "internal: approved path boundary",
+    exitCode: disallowedPaths.length > 0 ? 1 : 0,
+    timedOut: false,
+    durationMs: 0,
+    stdout:
+      disallowedPaths.length > 0
+        ? ""
+        : `Final patch changes ${changedFiles.length} of ${allowedPaths.length} approved path(s).`,
+    stderr:
+      disallowedPaths.length > 0
+        ? `Final patch contains paths outside the approved boundary: ${disallowedPaths.join(", ")}`
+        : "",
+    outputTruncated: false,
+  };
+}
+
 async function validationCommand(name, executable, args, request) {
   lifecycle("validation.command.started", request, { name });
   const result = await command(executable, args, {
@@ -1269,38 +1291,9 @@ async function validateImplementation(value) {
   if (!deniedHttp || !deniedTcp)
     throw new Error("validation_network_not_denied");
   const validation = [];
-  const missingApprovedPaths = request.allowedPaths.filter(
-    (path) => !trusted.changedFiles.includes(path),
+  validation.push(
+    planComplianceValidation(request.allowedPaths, trusted.changedFiles),
   );
-  const missingPriorPaths =
-    trusted.retryLineage?.priorChangedFiles.filter(
-      (path) => !trusted.changedFiles.includes(path),
-    ) ?? [];
-  const complianceFailures = [
-    ...(missingApprovedPaths.length > 0
-      ? [
-          `Approved paths absent from the final patch: ${missingApprovedPaths.join(", ")}`,
-        ]
-      : []),
-    ...(missingPriorPaths.length > 0
-      ? [
-          `Prior candidate paths dropped by retry: ${missingPriorPaths.join(", ")}`,
-        ]
-      : []),
-  ];
-  validation.push({
-    name: "plan-compliance",
-    command: "internal: exact approved and retry path coverage",
-    exitCode: complianceFailures.length > 0 ? 1 : 0,
-    timedOut: false,
-    durationMs: 0,
-    stdout:
-      complianceFailures.length > 0
-        ? ""
-        : `Final patch covers ${trusted.changedFiles.length} approved path(s).`,
-    stderr: complianceFailures.join("\n"),
-    outputTruncated: false,
-  });
   validation.push(
     await validationCommand("diff-check", "git", ["diff", "--check"], request),
   );

@@ -17,6 +17,7 @@ import {
   planningPrompt,
   promptFor,
   parseClaudeReviewOutput,
+  planComplianceValidation,
   runnerReleaseIdentity,
   secretStrings,
   skippedValidation,
@@ -193,6 +194,23 @@ describe("trusted agent output boundary", () => {
     const allowed = ["docs/dogfood/trusted-self-development-loop.md"];
     expect(pathAllowed(allowed[0], allowed)).toBe(true);
     expect(pathAllowed(`${allowed[0]}/extra.md`, allowed)).toBe(false);
+  });
+
+  it("treats approved paths as an upper bound rather than mandatory coverage", () => {
+    const approved = ["packages/implementation.ts", "packages/planned-test.ts"];
+    expect(
+      planComplianceValidation(approved, ["packages/implementation.ts"]),
+    ).toMatchObject({
+      exitCode: 0,
+      stdout: "Final patch changes 1 of 2 approved path(s).",
+      stderr: "",
+    });
+    expect(
+      planComplianceValidation(approved, ["packages/outside.ts"]),
+    ).toMatchObject({
+      exitCode: 1,
+      stderr: expect.stringContaining("packages/outside.ts"),
+    });
   });
 
   it("captures bounded publication file snapshots", async () => {

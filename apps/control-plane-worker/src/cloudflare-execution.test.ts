@@ -542,7 +542,7 @@ describe("CloudflareRepositoryExecutionBackend", () => {
     expect(evidence.objects.size).toBe(1);
   });
 
-  it("rehydrates the complete failed candidate into an exact retry", async () => {
+  it("allows a retry to remove an unnecessary prior edit", async () => {
     const evidence = new MemoryEvidence();
     const prior = {
       ...trustedResult(),
@@ -571,6 +571,7 @@ describe("CloudflareRepositoryExecutionBackend", () => {
       attemptNumber: 2,
       retryFromAttemptId: trustedRequest.attemptId,
       retryContext: "formatting failed",
+      allowedPaths: [...trustedRequest.allowedPaths, "docs/replacement.md"],
     };
     let received: TrustedImplementationRequest | undefined;
     const backend = new CloudflareTrustedImplementationBackend(
@@ -579,14 +580,21 @@ describe("CloudflareRepositoryExecutionBackend", () => {
           runJob: async () => result(),
           runTrustedJob: async (request) => {
             received = request;
+            const patch =
+              "diff --git a/docs/replacement.md b/docs/replacement.md\n";
             return {
               ...trustedResult(),
               attemptId: retryRequest.attemptId,
+              patch,
+              patchSha256:
+                "5639ab4d0391265e8ae4291f969b7ee8e7ec4a5d1189b5867d7c6ac729a9922f",
+              patchBytes: new TextEncoder().encode(patch).byteLength,
+              changedFiles: ["docs/replacement.md"],
               retryLineage: {
                 priorAttemptId: prior.attemptId,
                 priorPatchSha256: prior.patchSha256,
                 priorChangedFiles: prior.changedFiles,
-                retainedAllPriorPaths: true,
+                retainedAllPriorPaths: false,
               },
             };
           },
