@@ -12,6 +12,47 @@ import type { ExecutionContainerNamespacePort } from "./cloudflare-execution.js"
 
 const retryDelaysMs = [250, 1_000];
 
+export function isDeterministicPlanningFailure(error: unknown): boolean {
+  const reason = (
+    error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+  ).toLowerCase();
+  return [
+    "planning_invalid_structured_output",
+    "planning result binding does not match request",
+    "planning result failed schema validation",
+    "planning credential leak detected",
+    "planning modified checkout",
+  ].some((fragment) => reason.includes(fragment));
+}
+
+export function planningSchemaDiagnostics(error: unknown): string {
+  if (
+    typeof error !== "object" ||
+    error === null ||
+    !("issues" in error) ||
+    !Array.isArray(error.issues)
+  )
+    return "unknown_contract_violation";
+  const values = error.issues.slice(0, 8).map((issue) => {
+    if (typeof issue !== "object" || issue === null) return "unknown:invalid";
+    const path =
+      "path" in issue && Array.isArray(issue.path)
+        ? issue.path
+            .filter(
+              (part: unknown): part is string | number =>
+                typeof part === "string" || typeof part === "number",
+            )
+            .join(".")
+        : "unknown";
+    const code =
+      "code" in issue && typeof issue.code === "string"
+        ? issue.code
+        : "invalid";
+    return `${path || "root"}:${code}`;
+  });
+  return values.join(",").slice(0, 500) || "unknown_contract_violation";
+}
+
 export function isRetryablePlanningInterruption(error: unknown): boolean {
   if (
     typeof error === "object" &&
@@ -48,9 +89,15 @@ export class CloudflarePlanningBackend {
       try {
         if (!container.runPlanningJob)
           throw new Error("Planning Container adapter is unavailable");
-        const result = planningAgentResultSchema.parse(
-          await container.runPlanningJob(request, this.codexAuthJson),
-        );
+        const raw = await container.runPlanningJob(request, this.codexAuthJson);
+        let result: PlanningAgentResult;
+        try {
+          result = planningAgentResultSchema.parse(raw);
+        } catch (error) {
+          throw new Error(
+            `Planning result failed schema validation: ${planningSchemaDiagnostics(error)}`,
+          );
+        }
         if (
           result.attemptId !== request.attemptId ||
           result.baseCommit !== request.baseCommit

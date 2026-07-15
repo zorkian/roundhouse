@@ -23,6 +23,8 @@ import {
   formatCandidateImplementation,
   pathAllowed,
   parsePlanningOutput,
+  planningOutputContract,
+  planningOutputLimits,
   planningPrompt,
   planningOutputSchema,
   promptFor,
@@ -159,6 +161,28 @@ describe("planning structured output", () => {
       "command",
       "rationale",
     ]);
+    expect(schema.properties.summary.description).toBe(
+      planningOutputContract.summary,
+    );
+    expect(schema.properties.summary).not.toHaveProperty("minLength");
+    expect(schema.properties.summary).not.toHaveProperty("maxLength");
+    expect(schema.properties.acceptanceCriteria).toMatchObject({
+      minItems: planningOutputLimits.acceptanceCriteria.minItems,
+      maxItems: planningOutputLimits.acceptanceCriteria.maxItems,
+    });
+    expect(schema.properties.acceptanceCriteria.description).toBe(
+      planningOutputContract.acceptanceCriteria,
+    );
+    expect(schema.properties.acceptanceCriteria.items).toEqual({
+      type: "string",
+    });
+    expect(
+      planningPrompt({
+        issueNumber: 1,
+        subject: "subject",
+        instructions: "instructions",
+      }),
+    ).toContain(planningOutputContract.acceptanceCriteria);
   });
 });
 
