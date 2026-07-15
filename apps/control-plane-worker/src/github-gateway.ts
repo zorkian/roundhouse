@@ -555,6 +555,8 @@ export class GitHubAppGateway {
     repositoryFullName: string;
     pullRequestNumber: number;
     expectedHeadSha: string;
+    expectedBaseSha: string;
+    approvedPaths: string[];
   }): Promise<{
     number: number;
     url: string;
@@ -581,12 +583,49 @@ export class GitHubAppGateway {
       pull.head.repo.full_name !== input.repositoryFullName ||
       pull.head.sha !== input.expectedHeadSha ||
       !/^[a-f0-9]{40}$/.test(pull.base.sha) ||
+      !/^[a-f0-9]{40}$/.test(input.expectedBaseSha) ||
       !/^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,199}$/.test(pull.head.ref)
     )
       throw new GitHubAppGatewayError(
         "stale_head",
         "Manual review pull request binding did not match",
       );
+    if (pull.base.sha !== input.expectedBaseSha) {
+      const comparison = (
+        await this.api<{
+          status: string;
+          ahead_by: number;
+          total_commits: number;
+          base_commit: { sha: string };
+          merge_base_commit: { sha: string };
+          commits: Array<{ sha: string }>;
+          files?: Array<{ filename: string }>;
+        }>(
+          "GET",
+          `${base}/compare/${input.expectedBaseSha}...${pull.base.sha}?per_page=100&page=1`,
+        )
+      ).value;
+      const interveningFiles = comparison.files;
+      if (
+        comparison.status !== "ahead" ||
+        comparison.base_commit.sha !== input.expectedBaseSha ||
+        comparison.merge_base_commit.sha !== input.expectedBaseSha ||
+        comparison.ahead_by !== comparison.total_commits ||
+        comparison.total_commits !== comparison.commits.length ||
+        comparison.commits.at(-1)?.sha !== pull.base.sha ||
+        !interveningFiles ||
+        interveningFiles.length >= 300 ||
+        new Set(interveningFiles.map((file) => file.filename)).size !==
+          interveningFiles.length ||
+        interveningFiles.some((file) =>
+          input.approvedPaths.includes(file.filename),
+        )
+      )
+        throw new GitHubAppGatewayError(
+          "base_advanced_out_of_scope",
+          "Manual review pull request base advancement was not safe",
+        );
+    }
     const files = (
       await this.api<Array<{ filename: string }>>(
         "GET",

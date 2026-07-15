@@ -103,6 +103,8 @@ describe("GitHub App gateway", () => {
         repositoryFullName: "zorkian/roundhouse",
         pullRequestNumber: 92,
         expectedHeadSha: headCommit,
+        expectedBaseSha: baseCommit,
+        approvedPaths: ["docs/a.md"],
       }),
     ).resolves.toEqual({
       number: 92,
@@ -118,8 +120,100 @@ describe("GitHub App gateway", () => {
         repositoryFullName: "zorkian/roundhouse",
         pullRequestNumber: 92,
         expectedHeadSha: "c".repeat(40),
+        expectedBaseSha: baseCommit,
+        approvedPaths: ["docs/a.md"],
       }),
     ).rejects.toMatchObject({ code: "stale_head" });
+  });
+
+  it.each([
+    {
+      name: "allows an unrelated descendant base",
+      comparison: {
+        status: "ahead",
+        files: [{ filename: "docs/unrelated.md" }],
+      },
+      expectedCode: undefined,
+    },
+    {
+      name: "rejects approved-path drift on a descendant base",
+      comparison: {
+        status: "ahead",
+        files: [{ filename: "docs/a.md" }],
+      },
+      expectedCode: "base_advanced_out_of_scope",
+    },
+    {
+      name: "rejects a diverged base",
+      comparison: {
+        status: "diverged",
+        files: [{ filename: "docs/unrelated.md" }],
+      },
+      expectedCode: "base_advanced_out_of_scope",
+    },
+  ])("$name", async ({ comparison, expectedCode }) => {
+    const failedBase = "a".repeat(40);
+    const pullBase = "c".repeat(40);
+    const headCommit = "b".repeat(40);
+    const fetcher: typeof fetch = async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/access_tokens"))
+        return json({
+          token: "installation-token",
+          expires_at: "2026-07-12T02:00:00Z",
+        });
+      if (url.pathname.includes("/compare/")) {
+        expect(url.pathname).toContain(`${failedBase}...${pullBase}`);
+        expect(url.searchParams.get("per_page")).toBe("100");
+        expect(url.searchParams.get("page")).toBe("1");
+        return json({
+          ...comparison,
+          ahead_by: 1,
+          total_commits: 1,
+          base_commit: { sha: failedBase },
+          merge_base_commit: { sha: failedBase },
+          commits: [{ sha: pullBase }],
+        });
+      }
+      if (url.pathname.endsWith("/pulls/92/files"))
+        return json([{ filename: "docs/a.md" }]);
+      if (url.pathname.endsWith("/pulls/92")) {
+        if (
+          new Headers(init?.headers).get("accept") ===
+          "application/vnd.github.diff"
+        )
+          return new Response("diff --git a/docs/a.md b/docs/a.md\n");
+        return json({
+          number: 92,
+          html_url: "https://github.com/zorkian/roundhouse/pull/92",
+          base: {
+            sha: pullBase,
+            repo: { full_name: "zorkian/roundhouse" },
+          },
+          head: {
+            sha: headCommit,
+            ref: "codex/issue-92-manual-review",
+            repo: { full_name: "zorkian/roundhouse" },
+          },
+        });
+      }
+      return json({}, 404);
+    };
+    const gateway = new GitHubAppGateway(
+      { appId: "1", installationId: "2", privateKey },
+      fetcher,
+      () => new Date("2026-07-12T01:00:00Z"),
+    );
+    const review = gateway.manualReviewPullRequest({
+      repositoryFullName: "zorkian/roundhouse",
+      pullRequestNumber: 92,
+      expectedHeadSha: headCommit,
+      expectedBaseSha: failedBase,
+      approvedPaths: ["docs/a.md"],
+    });
+    if (expectedCode)
+      await expect(review).rejects.toMatchObject({ code: expectedCode });
+    else await expect(review).resolves.toMatchObject({ baseCommit: pullBase });
   });
 
   it("bounds GitHub Actions job logs before returning evidence", async () => {
