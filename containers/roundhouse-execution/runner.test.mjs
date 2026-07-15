@@ -4,9 +4,15 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  parseRepositoryProfile,
+  roundhouseFormatterWriteCommand as configuredFormatterWriteCommand,
+} from "../../packages/repository-profile/src/index.ts";
+
+import {
   assertCompleteAgentOutput,
   boundedAgentFailure,
   boundedLogExcerpt,
+  candidateChangedFiles,
   changedPaths,
   captureBaseReproduction,
   capturePostChangeRegression,
@@ -14,16 +20,19 @@ import {
   command,
   createRunnerServer,
   drainRunner,
+  formatCandidateImplementation,
   pathAllowed,
   parsePlanningOutput,
   planningPrompt,
   planningOutputSchema,
   promptFor,
+  redactKnownSecrets,
   remainingValidationBudget,
   reproductionInvocation,
   parseClaudeReviewOutput,
   planComplianceValidation,
   runnerReleaseIdentity,
+  roundhouseFormatterWriteCommand,
   secretStrings,
   skippedValidation,
   validRepositoryPath,
@@ -32,7 +41,7 @@ import {
   withoutRuntimeCredential,
 } from "./runner.mjs";
 import { once } from "node:events";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -43,6 +52,99 @@ describe("execution runner command", () => {
       command("/roundhouse-missing-executable", [], { timeoutMs: 10_000 }),
     ).rejects.toMatchObject({ code: "ENOENT" });
     expect(Date.now() - started).toBeLessThan(1_000);
+  });
+});
+
+describe("candidate formatter boundary", () => {
+  const request = {
+    runId: "run_formatter",
+    attemptId: "run_formatter-prepare-1",
+    formatter: roundhouseFormatterWriteCommand,
+    allowedPaths: ["packages/example.ts"],
+    validationTimeoutMs: 30_000,
+    maxOutputBytes: 262_144,
+    maxChangedFiles: 10,
+  };
+
+  it("uses the exact formatter declared by the repository profile", async () => {
+    const profile = parseRepositoryProfile(
+      await readFile("profiles/roundhouse.v1.yaml", "utf8"),
+    );
+    expect(profile.validation.formatWrite).toEqual(
+      configuredFormatterWriteCommand,
+    );
+    expect(roundhouseFormatterWriteCommand).toEqual(
+      configuredFormatterWriteCommand,
+    );
+  });
+
+  it("formats an otherwise valid candidate without another model attempt", async () => {
+    let source = "export const value={answer:42}\n";
+    let formatterCalls = 0;
+    const evidence = await formatCandidateImplementation(
+      request,
+      ["packages/example.ts"],
+      [],
+      async (executable, args) => {
+        formatterCalls += 1;
+        expect([executable, ...args]).toEqual([
+          "pnpm",
+          "exec",
+          "prettier",
+          "--write",
+          "--",
+          "packages/example.ts",
+        ]);
+        source = "export const value = { answer: 42 };\n";
+        return {
+          exitCode: 0,
+          timedOut: false,
+          durationMs: 3,
+          stdout: "packages/example.ts 3ms\n",
+          stderr: "",
+          outputTruncated: false,
+        };
+      },
+    );
+    expect(formatterCalls).toBe(1);
+    expect(source).toBe("export const value = { answer: 42 };\n");
+    expect(evidence).toMatchObject({ name: "format-write", exitCode: 0 });
+  });
+
+  it("rejects formatter mutations outside the approved paths", () => {
+    expect(() =>
+      candidateChangedFiles(
+        " M packages/example.ts\0 M packages/outside.ts\0",
+        request,
+        "formatter",
+      ),
+    ).toThrow("formatter_changed_path_not_allowed: packages/outside.ts");
+  });
+
+  it("retains bounded redacted formatter failure diagnostics", async () => {
+    await expect(
+      formatCandidateImplementation(
+        request,
+        ["packages/example.ts"],
+        ["formatter-secret"],
+        async () => ({
+          exitCode: 2,
+          timedOut: false,
+          durationMs: 4,
+          stdout: "",
+          stderr: "Could not parse formatter-secret",
+          outputTruncated: false,
+        }),
+      ),
+    ).rejects.toThrow(
+      "formatter_failed: pnpm exec prettier --write -- packages/example.ts (exit 2): Could not parse [redacted]",
+    );
+  });
+
+  it("redacts known credentials before formatter evidence is retained", () => {
+    expect(
+      redactKnownSecrets("before token-value after", ["token-value"]),
+    ).toBe("before [redacted] after");
   });
 });
 

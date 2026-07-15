@@ -3,6 +3,9 @@
 
 import { z } from "zod";
 
+import { roundhouseFormatterWriteCommand } from "@roundhouse/repository-profile";
+export { roundhouseFormatterWriteCommand } from "@roundhouse/repository-profile";
+
 import type { StageResult } from "./job-ports.js";
 
 const boundedIdentity = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,199}$/);
@@ -102,6 +105,19 @@ export const trustedImplementationRequestSchema = z.object({
     .optional(),
   allowedPaths: z.array(repositoryRelativePathSchema).min(1).max(50),
   validationLevel: z.enum(["quick", "full"]),
+  formatter: z
+    .object({
+      command: z.literal(roundhouseFormatterWriteCommand.command),
+      args: z.tuple([
+        z.literal("exec"),
+        z.literal("prettier"),
+        z.literal("--write"),
+      ]),
+    })
+    .default({
+      command: roundhouseFormatterWriteCommand.command,
+      args: [...roundhouseFormatterWriteCommand.args],
+    }),
   bugReproduction: bugReproductionPlanSchema.optional(),
   planning: z
     .object({
@@ -149,6 +165,7 @@ export const validationCommandEvidenceSchema = z.object({
   name: z.enum([
     "plan-compliance",
     "bug-regression",
+    "format-write",
     "diff-check",
     "format",
     "license",

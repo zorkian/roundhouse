@@ -18,6 +18,11 @@ const quickValidationSchema = z.object({
   fullWhenChanged: z.array(z.string().min(1)).default([]),
 });
 
+export const roundhouseFormatterWriteCommand = Object.freeze({
+  command: "pnpm" as const,
+  args: ["exec", "prettier", "--write"] as const,
+});
+
 export const repositoryProfileSchema = z.object({
   version: z.literal(1),
   runtime: z.object({
@@ -28,6 +33,7 @@ export const repositoryProfileSchema = z.object({
   validation: z.object({
     license: commandSchema.optional(),
     format: commandSchema,
+    formatWrite: commandSchema.optional(),
     compile: commandSchema,
     targeted: commandSchema,
     quick: quickValidationSchema.optional(),
