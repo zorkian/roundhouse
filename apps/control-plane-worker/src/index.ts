@@ -1529,11 +1529,10 @@ async function reserveManualReview(
     repositoryFullName: input.repositoryFullName,
     pullRequestNumber: input.pullRequestNumber,
     expectedHeadSha: input.expectedHeadCommit,
+    expectedBaseSha: run.task.baseCommit,
+    approvedPaths: run.task.allowedPaths,
   });
-  if (
-    pull.baseCommit !== run.task.baseCommit ||
-    pull.changedFiles.some((path) => !run.task.allowedPaths.includes(path))
-  )
+  if (pull.changedFiles.some((path) => !run.task.allowedPaths.includes(path)))
     throw new GitHubWebhookError(
       409,
       "manual_review_pull_request_out_of_scope",
