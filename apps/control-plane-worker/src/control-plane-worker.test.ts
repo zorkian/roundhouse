@@ -2435,6 +2435,21 @@ describe("local control-plane Worker", () => {
         )
       ).status,
     ).toBe(404);
+
+    await env.DB.prepare(
+      "UPDATE independent_reviews SET payload = json_set(payload, '$.activeAttemptId', ?) WHERE review_id = ?",
+    )
+      .bind(`${reviewId}-attempt-2`, reviewId)
+      .run();
+    expect(
+      (
+        await handler.fetch!(
+          request(`/v1/reviews/${reviewId}/agent-output/${attemptId}`),
+          env,
+          {} as ExecutionContext,
+        )
+      ).status,
+    ).toBe(404);
   });
 
   it("repairs interruption between submission reservation and run creation", async () => {

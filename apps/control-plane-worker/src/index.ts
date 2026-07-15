@@ -3536,10 +3536,10 @@ async function route(
   ) {
     const review = await readIndependentReview(env, reviewAgentOutputMatch[1]);
     const attemptId = reviewAgentOutputMatch[2];
-    if (
-      !review ||
-      ![review.activeAttemptId, review.request.attemptId].includes(attemptId)
-    )
+    if (!review)
+      throw new HttpError(404, "Independent review attempt not found");
+    const currentAttemptId = review.activeAttemptId ?? review.request.attemptId;
+    if (attemptId !== currentAttemptId)
       throw new HttpError(404, "Independent review attempt not found");
     const cursor = parseAgentOutputCursor(url.searchParams.get("cursor"));
     if (!["pending", "running"].includes(review.status))

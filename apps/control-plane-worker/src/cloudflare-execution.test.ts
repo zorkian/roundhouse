@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 import {
   CloudflareRepositoryExecutionBackend,
   CloudflareTrustedImplementationBackend,
+  isValidAgentOutputTail,
   readAgentOutput,
   type EvidenceBucketPort,
   type ExecutionContainerPort,
@@ -48,6 +49,51 @@ describe("repository execution request", () => {
 });
 
 describe("agent output adapter", () => {
+  const outputRequest = { attemptId: "run-example-prepare-1", cursor: 4 };
+  const tail = {
+    schemaVersion: 1 as const,
+    attemptId: outputRequest.attemptId,
+    status: "running" as const,
+    nextCursor: 6,
+    truncated: false,
+    lines: [
+      {
+        cursor: 5,
+        stream: "stdout" as const,
+        text: "first",
+        occurredAt: "2026-07-15T00:00:00.000Z",
+      },
+      {
+        cursor: 6,
+        stream: "stderr" as const,
+        text: "second",
+        occurredAt: "2026-07-15T00:00:01.000Z",
+      },
+    ],
+  };
+
+  it("requires strictly increasing line cursors", () => {
+    expect(isValidAgentOutputTail(tail, outputRequest)).toBe(true);
+    expect(
+      isValidAgentOutputTail(
+        { ...tail, lines: [tail.lines[0]!, tail.lines[0]!] },
+        outputRequest,
+      ),
+    ).toBe(false);
+  });
+
+  it("bounds timestamps returned by the trusted container", () => {
+    expect(
+      isValidAgentOutputTail(
+        {
+          ...tail,
+          lines: [{ ...tail.lines[0]!, occurredAt: "x".repeat(31) }],
+        },
+        outputRequest,
+      ),
+    ).toBe(false);
+  });
+
   it("passes the exact attempt and cursor to the named Container", async () => {
     let name = "";
     let input: unknown;

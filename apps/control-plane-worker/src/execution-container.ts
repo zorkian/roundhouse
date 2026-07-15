@@ -30,9 +30,10 @@ import {
 } from "./execution-egress.js";
 import { recordExecutionPhase } from "./execution-progress.js";
 import { withContainerControlTimeout } from "./execution-control.js";
-import type {
-  AgentOutputRequest,
-  AgentOutputTail,
+import {
+  isValidAgentOutputTail,
+  type AgentOutputRequest,
+  type AgentOutputTail,
 } from "./cloudflare-execution.js";
 
 const modelHosts = ["chatgpt.com", "auth.openai.com"];
@@ -157,29 +158,9 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
     if (!response.ok)
       throw new Error(`Agent output unavailable: HTTP ${response.status}`);
     const value = (await response.json()) as Partial<AgentOutputTail>;
-    if (
-      value.schemaVersion !== 1 ||
-      value.attemptId !== input.attemptId ||
-      !["running", "completed", "failed", "unavailable"].includes(
-        value.status ?? "",
-      ) ||
-      !Number.isSafeInteger(value.nextCursor) ||
-      (value.nextCursor ?? -1) < (input.cursor ?? 0) ||
-      typeof value.truncated !== "boolean" ||
-      !Array.isArray(value.lines) ||
-      value.lines.length > 100 ||
-      !value.lines.every(
-        (line) =>
-          Number.isSafeInteger(line.cursor) &&
-          line.cursor > (input.cursor ?? 0) &&
-          ["stdout", "stderr", "system"].includes(line.stream) &&
-          typeof line.text === "string" &&
-          line.text.length <= 2_000 &&
-          typeof line.occurredAt === "string",
-      )
-    )
+    if (!isValidAgentOutputTail(value, input))
       throw new Error("Agent output binding mismatch");
-    return value as AgentOutputTail;
+    return value;
   }
 
   override onStop({

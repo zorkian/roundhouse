@@ -362,6 +362,11 @@ describe("execution runner observability", () => {
         `${origin}/agent-output?attemptId=unknown-attempt&cursor=%205`,
       ).then((response) => response.status),
     ).resolves.toBe(400);
+    await expect(
+      fetch(`${origin}/agent-output-v2?attemptId=unknown-attempt`).then(
+        (response) => response.status,
+      ),
+    ).resolves.toBe(404);
     await new Promise((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve(undefined))),
     );

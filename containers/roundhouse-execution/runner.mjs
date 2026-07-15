@@ -2316,7 +2316,8 @@ export function createRunnerServer({ port = 8080, host = "0.0.0.0" } = {}) {
         return json(response, 200, runnerReleaseIdentity());
       if (
         request.method === "GET" &&
-        request.url?.startsWith("/agent-output")
+        (request.url === "/agent-output" ||
+          request.url?.startsWith("/agent-output?"))
       ) {
         const url = new URL(request.url, "http://runner");
         const attemptId = url.searchParams.get("attemptId") ?? "";

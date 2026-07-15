@@ -69,6 +69,35 @@ export type AgentOutputTail = {
   lines: AgentOutputLine[];
 };
 
+export function isValidAgentOutputTail(
+  value: Partial<AgentOutputTail>,
+  input: AgentOutputRequest,
+): value is AgentOutputTail {
+  return (
+    value.schemaVersion === 1 &&
+    value.attemptId === input.attemptId &&
+    ["running", "completed", "failed", "unavailable"].includes(
+      value.status ?? "",
+    ) &&
+    Number.isSafeInteger(value.nextCursor) &&
+    (value.nextCursor ?? -1) >= (input.cursor ?? 0) &&
+    typeof value.truncated === "boolean" &&
+    Array.isArray(value.lines) &&
+    value.lines.length <= 100 &&
+    value.lines.every(
+      (line, index, lines) =>
+        Number.isSafeInteger(line.cursor) &&
+        line.cursor > (input.cursor ?? 0) &&
+        (index === 0 || line.cursor > lines[index - 1]!.cursor) &&
+        ["stdout", "stderr", "system"].includes(line.stream) &&
+        typeof line.text === "string" &&
+        line.text.length <= 2_000 &&
+        typeof line.occurredAt === "string" &&
+        line.occurredAt.length <= 30,
+    )
+  );
+}
+
 export type ExecutionContainerNamespacePort = {
   getByName(name: string): ExecutionContainerPort;
 };
