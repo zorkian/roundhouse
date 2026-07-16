@@ -173,6 +173,14 @@ const maxDeployInterruptionAttempts = 6;
 const maxOperatorStageAttempts = 10;
 const operatorRetryableClassifications = new Set(["validation_failed"]);
 
+function recoveryDeliveryId(
+  runId: string,
+  revision: number,
+  now: Date,
+): string {
+  return `recovery_${runId}_${revision}_${now.toISOString().replace(/[^0-9A-Z]/gi, "")}`;
+}
+
 export async function retryFailedRun(
   env: ControlPlaneEnv,
   runId: string,
@@ -319,7 +327,7 @@ export async function runRecoveryCycle(
     await env.RUN_QUEUE.send({
       schemaVersion: 1,
       runId: run.runId,
-      deliveryId: `recovery_${run.runId}_${run.revision}`,
+      deliveryId: recoveryDeliveryId(run.runId, run.revision, now),
       expectedRevision: run.revision,
     });
     await recordAlert(env, {
@@ -465,7 +473,7 @@ export async function runRecoveryCycle(
           await env.RUN_QUEUE.send({
             schemaVersion: 1,
             runId: run.runId,
-            deliveryId: `recovery_${run.runId}_${run.revision}`,
+            deliveryId: recoveryDeliveryId(run.runId, run.revision, now),
             expectedRevision: run.revision,
           });
           await recordAlert(env, {

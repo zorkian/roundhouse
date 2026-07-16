@@ -322,7 +322,7 @@ describe("cloud operator persistence", () => {
       {
         schemaVersion: 1,
         runId: "run_low_risk_recovery",
-        deliveryId: "recovery_run_low_risk_recovery_1",
+        deliveryId: "recovery_run_low_risk_recovery_1_20260712T000100000Z",
         expectedRevision: 1,
       },
     ]);
@@ -339,13 +339,43 @@ describe("cloud operator persistence", () => {
     });
 
     await env.DB.prepare(
+      "INSERT INTO trusted_execution_workflows(workflow_instance_id, run_id, delivery_id, expected_revision, status, created_at, started_at, completed_at) VALUES (?, ?, ?, ?, 'failed', ?, ?, ?)",
+    )
+      .bind(
+        `trusted-${"1".repeat(64)}`,
+        "run_low_risk_recovery",
+        "recovery_run_low_risk_recovery_1_20260712T000100000Z",
+        1,
+        new Date(start.getTime() + 60_000).toISOString(),
+        new Date(start.getTime() + 60_001).toISOString(),
+        new Date(start.getTime() + 60_500).toISOString(),
+      )
+      .run();
+    env.queued.length = 0;
+
+    const retryCycle = await runRecoveryCycle(
+      env,
+      new Date(start.getTime() + 180_000),
+    );
+
+    expect(retryCycle).toMatchObject({ requeuedRuns: 1, alertsRecorded: 1 });
+    expect(env.queued).toEqual([
+      {
+        schemaVersion: 1,
+        runId: "run_low_risk_recovery",
+        deliveryId: "recovery_run_low_risk_recovery_1_20260712T000300000Z",
+        expectedRevision: 1,
+      },
+    ]);
+
+    await env.DB.prepare(
       "UPDATE github_issue_plans SET plan_json = ? WHERE plan_id = ?",
     )
       .bind(JSON.stringify({ status: "proposed", risk: "low" }), planId)
       .run();
     const malformedCycle = await runRecoveryCycle(
       env,
-      new Date(start.getTime() + 120_000),
+      new Date(start.getTime() + 240_000),
     );
     expect(malformedCycle.requeuedRuns).toBe(0);
     expect(env.queued).toHaveLength(1);
