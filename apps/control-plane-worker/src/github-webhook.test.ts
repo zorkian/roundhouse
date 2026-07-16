@@ -255,6 +255,26 @@ describe("GitHub-native operator webhook", () => {
     expect(parseGitHubCommand("/roundhouse-dev start", production)).toBeNull();
   });
 
+  it("accepts command prefixes case-insensitively without changing command words", () => {
+    const development = ["/rhd", "/roundhouse-dev"];
+    const production = ["/rh", "/roundhouse"];
+    expect(parseGitHubCommand("/RHD start", development)).toEqual({
+      kind: "start",
+    });
+    expect(parseGitHubCommand("/ROUNDHOUSE-DEV status", development)).toEqual({
+      kind: "status",
+    });
+    expect(parseGitHubCommand("/RH start", production)).toEqual({
+      kind: "start",
+    });
+    expect(parseGitHubCommand("/ROUNDHOUSE status", production)).toEqual({
+      kind: "status",
+    });
+    expect(parseGitHubCommand("/RHD START", development)).toBeNull();
+    expect(parseGitHubCommand("/RHD start", production)).toBeNull();
+    expect(parseGitHubCommand("/RH start", development)).toBeNull();
+  });
+
   it("carries the verified repository into issue command identity", () => {
     expect(
       issueCommand({
