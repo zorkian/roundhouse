@@ -276,7 +276,34 @@ describe("cloud operator persistence", () => {
       .bind(
         planId,
         planSha256,
-        JSON.stringify({ status: "proposed", risk: "low" }),
+        JSON.stringify({
+          schemaVersion: 1,
+          planId,
+          revision: 1,
+          status: "proposed",
+          profileId: "roundhouse-self-development-v1",
+          profileVersion: 1,
+          issueNumber: 171,
+          issueContentSha256: "c".repeat(64),
+          subject: "Recover a stranded run",
+          instructionsSha256: "2".repeat(64),
+          baseCommit: "a".repeat(40),
+          exactPaths: ["docs/operations.md"],
+          validationLevel: "full",
+          risk: "low",
+          acceptanceCriteria: [],
+          planningEvidence: [],
+          limits: {
+            maxPatchBytes: 1024,
+            maxFiles: 1,
+            agentTimeoutSeconds: 60,
+            modelRequestLimit: 1,
+            automaticAttemptLimit: 3,
+            operatorAttemptLimit: 10,
+          },
+          createdAt: start.toISOString(),
+          planSha256,
+        }),
         "1".repeat(64),
         approvedBy,
         start.toISOString(),
@@ -309,6 +336,31 @@ describe("cloud operator persistence", () => {
     expect(JSON.parse(alert!.detail_json)).toEqual({
       revision: 1,
       state: "awaiting_approval",
+    });
+
+    await env.DB.prepare(
+      "UPDATE github_issue_plans SET plan_json = ? WHERE plan_id = ?",
+    )
+      .bind(JSON.stringify({ status: "proposed", risk: "low" }), planId)
+      .run();
+    const malformedCycle = await runRecoveryCycle(
+      env,
+      new Date(start.getTime() + 120_000),
+    );
+    expect(malformedCycle.requeuedRuns).toBe(0);
+    expect(env.queued).toHaveLength(1);
+    const malformedAlert = await env.DB.prepare(
+      "SELECT kind, severity, detail_json FROM operational_alerts WHERE alert_key = ?",
+    )
+      .bind("invalid_recovery_plan:run_low_risk_recovery:1")
+      .first<{ kind: string; severity: string; detail_json: string }>();
+    expect(malformedAlert).toMatchObject({
+      kind: "invalid_recovery_plan",
+      severity: "warning",
+    });
+    expect(JSON.parse(malformedAlert!.detail_json)).toEqual({
+      revision: 1,
+      planId,
     });
   });
 

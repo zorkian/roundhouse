@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import {
+  qualifiedPlanSchema,
   selfDevelopmentRunSchema,
   type SelfDevelopmentRun,
 } from "@roundhouse/self-development/cloudflare";
@@ -402,19 +403,34 @@ export async function runRecoveryCycle(
           approved_by: string | null;
         }>();
       let lowRiskPlan = false;
+      let invalidPlan = false;
       try {
-        const detail = JSON.parse(plan?.plan_json ?? "null") as {
-          status?: string;
-          risk?: string;
-        } | null;
-        lowRiskPlan =
-          plan?.status === "materialized" &&
-          plan.plan_sha256 === planning.planSha256 &&
-          plan.approved_by === planning.approvedBy &&
-          detail?.status === "proposed" &&
-          detail.risk === "low";
+        const detail = qualifiedPlanSchema.safeParse(
+          JSON.parse(plan?.plan_json ?? "null"),
+        );
+        invalidPlan = !detail.success;
+        if (detail.success) {
+          lowRiskPlan =
+            plan?.status === "materialized" &&
+            plan.plan_sha256 === planning.planSha256 &&
+            plan.approved_by === planning.approvedBy &&
+            detail.data.planId === planning.planId &&
+            detail.data.planSha256 === planning.planSha256 &&
+            detail.data.risk === "low";
+        }
       } catch {
-        lowRiskPlan = false;
+        invalidPlan = true;
+      }
+      if (plan && invalidPlan) {
+        await recordAlert(env, {
+          key: `invalid_recovery_plan:${run.runId}:${run.revision}`,
+          kind: "invalid_recovery_plan",
+          severity: "warning",
+          runId: run.runId,
+          detail: { revision: run.revision, planId: planning.planId },
+          now,
+        });
+        alertsRecorded += 1;
       }
       if (lowRiskPlan) {
         const activeWorkflow = await env.DB.prepare(
