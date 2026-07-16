@@ -20,6 +20,7 @@ import {
   materializePlan,
   readIssuePlan,
   recordPlanningDecision,
+  recoverablePlanningJobs,
   reservePlanningJob,
 } from "./github-planning.js";
 
@@ -76,6 +77,57 @@ async function proposed(issueNumber = 22) {
 }
 
 describe("durable issue planning", () => {
+  it("reclaims interrupted planning after the five-minute lease without overlapping healthy work", async () => {
+    const env = await runtime();
+    const now = new Date("2026-07-16T05:03:01Z");
+    const reservation = await reservePlanningJob(env, {
+      requestKey: "c".repeat(64),
+      jobId: `planning_job_${"c".repeat(40)}`,
+      roundhouseEnvironment: "development",
+      repositoryFullName: "zorkian/roundhouse",
+      issueNumber: 139,
+      actorId: "github:zorkian",
+      command: { kind: "start" },
+      now,
+    });
+    const binding = {
+      roundhouseEnvironment: "development" as const,
+      repositoryFullName: "zorkian/roundhouse",
+    };
+    expect(
+      await claimPlanningJob(
+        env,
+        reservation.job.jobId,
+        binding,
+        now,
+        5 * 60_000,
+      ),
+    ).toBeDefined();
+    expect(
+      await recoverablePlanningJobs(
+        env,
+        binding,
+        new Date("2026-07-16T05:08:00Z"),
+      ),
+    ).toEqual([]);
+    expect(
+      await recoverablePlanningJobs(
+        env,
+        binding,
+        new Date("2026-07-16T05:08:01Z"),
+      ),
+    ).toEqual([reservation.job.jobId]);
+    await expect(
+      claimPlanningJob(
+        env,
+        reservation.job.jobId,
+        binding,
+        new Date("2026-07-16T05:08:01Z"),
+        5 * 60_000,
+      ),
+    ).resolves.toMatchObject({ attemptCount: 2, status: "running" });
+  });
+
   it.each([
     ["failed", false],
     ["timed_out", true],
