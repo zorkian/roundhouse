@@ -28,10 +28,25 @@ The run page refreshes every five seconds and shows:
 - durable run state, revision, base, plan, and publication;
 - current and completed Container phases with elapsed time;
 - attempt classification and actionable failure text;
+- a bounded, cursor-polled live agent-output tail for active implementation and
+  independent review attempts;
 - exact retained implementation, changed files, diff, and validation;
 - immutable evidence links;
 - independent review status and findings; and
 - safe retry and cancellation controls.
+
+The live tail is an operator aid, not authoritative evidence. It is bounded in
+the UI and stops polling after the attempt reaches a terminal state or output
+remains unavailable. Retained implementation and review evidence remain the
+durable basis for approval and diagnosis.
+
+Trusted repository policy is the hard execution boundary. Approved issue
+objectives and acceptance criteria express intent, while likely paths are only
+advisory. A material topology difference is allowed only when repository policy
+permits every resulting path. Roundhouse retains the exact changed-file
+inventory and implementation summary so deterministic validation, independent
+review of the exact published head, repository CI on that head, and human merge
+review can evaluate the actual result.
 
 The issue workflow links the GitHub issue, plan, source and remediation runs,
 draft pull request, exact reviewed heads, merged commit, and post-merge checks.
@@ -53,6 +68,13 @@ revision-bound cancellation or retry command stale. Existing Queue delivery,
 lease ownership, attempt idempotency, R2 evidence, retry limits, and exact
 publication behavior are unchanged.
 
+Operators should distinguish deterministic contract or repository-policy
+failures, transient infrastructure failures, mechanical validation failures,
+semantic independent-review findings, and repository CI failures. Retry
+transient interruptions; correct policy or contract violations and mechanical
+checks; address or disposition semantic findings; and inspect failed repository
+checks on the exact head before merge.
+
 ## Operational verification
 
 Before production promotion:
@@ -73,10 +95,11 @@ and checks.
 
 ## Remaining POC limitations
 
-The live status projection is polling rather than streaming. A Worker that dies may
-still take up to the five-minute lease plus scheduled-trigger latency to be
-reclaimed. GitHub displays the authoritative development check result; Roundhouse
-links to it rather than duplicating workflow-run state in D1. Multi-repository
-enrollment, external maintainers, private source, automatic merge, automatic
-production promotion, and production model credential brokerage remain out of
-scope.
+The live status projection and bounded agent tail are cursor-polled rather than
+an unbounded stream. A Worker that dies may still take up to the five-minute
+lease plus scheduled-trigger latency to be reclaimed. GitHub displays the
+authoritative development check result; Roundhouse links to it rather than
+duplicating workflow-run state in D1. Human-only merge and protected production
+promotion remain explicit boundaries. Multi-repository enrollment, external
+maintainers, private repositories, automatic merge, automatic production
+promotion, and production model credential brokerage remain out of scope.
