@@ -79,6 +79,7 @@ const config = {
     INDEPENDENT_REVIEW_ENABLED: "true",
     INDEPENDENT_REVIEW_SCENARIO: "success",
     GITHUB_REVIEW_CHECKS_ENABLED: "true",
+    ...(production ? {} : { LOW_RISK_AUTO_MERGE_ENABLED: "true" }),
     GITHUB_APP_ID: production ? "4290654" : "4281837",
     GITHUB_INSTALLATION_ID: production ? "146381255" : "146147681",
     ALLOWED_REPOSITORY_PATH: "/workspace/roundhouse",

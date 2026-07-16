@@ -74,6 +74,9 @@ describe("release Wrangler configuration", () => {
           class_name: "RoundhouseTrustedExecutionWorkflow",
         },
       ]);
+      expect(config.vars.LOW_RISK_AUTO_MERGE_ENABLED).toBe(
+        environment === "development" ? "true" : undefined,
+      );
     }
   });
 });

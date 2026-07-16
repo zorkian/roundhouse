@@ -36,6 +36,37 @@ export type PullRequestLifecycle = {
   updatedAt: string;
 };
 
+async function writePullRequestLifecycle(
+  env: ControlPlaneEnv,
+  value: PullRequestLifecycle,
+): Promise<PullRequestLifecycle> {
+  const recorded = await env.DB.prepare(
+    `INSERT INTO github_pull_request_lifecycle(repository_full_name, pull_request_number, run_id, head_sha, state, merge_commit_sha, merged_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(repository_full_name, pull_request_number) DO UPDATE SET
+       state = excluded.state,
+       merge_commit_sha = excluded.merge_commit_sha,
+       merged_at = excluded.merged_at,
+       updated_at = excluded.updated_at
+     WHERE github_pull_request_lifecycle.run_id = excluded.run_id
+       AND github_pull_request_lifecycle.head_sha = excluded.head_sha`,
+  )
+    .bind(
+      value.repositoryFullName,
+      value.pullRequestNumber,
+      value.runId,
+      value.headSha,
+      value.state,
+      value.mergeCommitSha ?? null,
+      value.mergedAt ?? null,
+      value.updatedAt,
+    )
+    .run();
+  if ((recorded.meta.changes ?? 0) !== 1)
+    throw new Error("Pull-request lifecycle identity conflict");
+  return value;
+}
+
 export async function recordPullRequestLifecycle(
   env: ControlPlaneEnv,
   webhook: VerifiedWebhook,
@@ -58,32 +89,7 @@ export async function recordPullRequestLifecycle(
   )
     throw new Error("Pull-request lifecycle does not match published run");
   const state = value.pull_request.merged ? "merged" : value.pull_request.state;
-  const updatedAt = new Date().toISOString();
-  const recorded = await env.DB.prepare(
-    `INSERT INTO github_pull_request_lifecycle(repository_full_name, pull_request_number, run_id, head_sha, state, merge_commit_sha, merged_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(repository_full_name, pull_request_number) DO UPDATE SET
-       state = excluded.state,
-       merge_commit_sha = excluded.merge_commit_sha,
-       merged_at = excluded.merged_at,
-       updated_at = excluded.updated_at
-     WHERE github_pull_request_lifecycle.run_id = excluded.run_id
-       AND github_pull_request_lifecycle.head_sha = excluded.head_sha`,
-  )
-    .bind(
-      value.repository.full_name,
-      value.pull_request.number,
-      run.runId,
-      value.pull_request.head.sha,
-      state,
-      value.pull_request.merge_commit_sha,
-      value.pull_request.merged_at,
-      updatedAt,
-    )
-    .run();
-  if ((recorded.meta.changes ?? 0) !== 1)
-    throw new Error("Pull-request lifecycle identity conflict");
-  return {
+  return writePullRequestLifecycle(env, {
     repositoryFullName: value.repository.full_name,
     pullRequestNumber: value.pull_request.number,
     runId: run.runId,
@@ -92,8 +98,39 @@ export async function recordPullRequestLifecycle(
     state,
     mergeCommitSha: value.pull_request.merge_commit_sha ?? undefined,
     mergedAt: value.pull_request.merged_at ?? undefined,
-    updatedAt,
-  };
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+export async function recordMergedPullRequestLifecycle(
+  env: ControlPlaneEnv,
+  input: {
+    repositoryFullName: string;
+    pullRequestNumber: number;
+    runId: string;
+    issueNumber: number;
+    headSha: string;
+    mergeCommitSha: string;
+    mergedAt: string;
+  },
+): Promise<PullRequestLifecycle> {
+  const run = await new D1JobStore(env.DB).read(input.runId);
+  const expectedUrl = `https://github.com/${input.repositoryFullName}/pull/${input.pullRequestNumber}`;
+  if (
+    run.task.source?.kind !== "github_issue" ||
+    run.task.source.issueNumber !== input.issueNumber ||
+    run.publication?.pullRequestUrl !== expectedUrl ||
+    run.publication.commit !== input.headSha ||
+    !/^[a-f0-9]{40}$/.test(input.mergeCommitSha) ||
+    !Number.isFinite(Date.parse(input.mergedAt))
+  )
+    throw new Error("Automatic merge lifecycle does not match published run");
+  const now = new Date().toISOString();
+  return writePullRequestLifecycle(env, {
+    ...input,
+    state: "merged",
+    updatedAt: now,
+  });
 }
 
 export async function readPullRequestLifecycle(
