@@ -13,3 +13,15 @@ Candidate development commit:
 | Issue | Pull request | Result | Notes |
 | ----- | ------------ | ------ | ----- |
 |       |              |        |       |
+
+## Clean candidate after recovery repair
+
+Development candidate:
+`9a3d433cca15dee06ebda3c9c810060b9f582fd6`
+
+This table records the repaired Goal 1 run set. It does not mark Goal 1 as
+accepted.
+
+| Issue | Pull request | Scenario type | Start time | PR time | Merge time | CI/review | Notes |
+| ----- | ------------ | ------------- | ---------- | ------- | ---------- | --------- | ----- |
+|       |              |               |            |         |            |           |       |
