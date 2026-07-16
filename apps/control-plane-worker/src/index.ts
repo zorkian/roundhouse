@@ -148,6 +148,7 @@ import {
   readReviewByRemediationRun,
   recordReviewRemediation,
   recoverableReviewDeliveries,
+  reconcileStaleIndependentReviews,
   reserveIndependentReview,
 } from "./github-review.js";
 import { DeterministicLocalDispatcher } from "./local-dispatch.js";
@@ -1782,7 +1783,24 @@ export async function reservePullRequestReview(
       review.request.headCommit === pull.headCommit &&
       review.request.patchSha256 === pull.patchSha256,
   );
-  if (retained) return retained;
+  if (retained) {
+    await enqueueReviewComment(env, retained);
+    await enqueueComment(
+      env,
+      `review-command:${retained.request.reviewId}:${retained.revision}`,
+      pull.number,
+      [
+        `Roundhouse already has a retained independent review for exact head \`${retained.request.headCommit}\`.`,
+        `Review: \`${retained.request.reviewId}\``,
+        `Status: \`${retained.status}\`.`,
+        retained.status === "pending" || retained.status === "running"
+          ? "Next action: no action needed; wait for the retained review result."
+          : "Next action: inspect the retained review result before requesting another review.",
+      ].join("\n\n"),
+      input.repositoryFullName,
+    );
+    return retained;
+  }
   const cycle = 1;
   const binding = await sha256(
     JSON.stringify({
@@ -4485,8 +4503,29 @@ export function createControlPlaneHandler(
         });
       }
       if (env.INDEPENDENT_REVIEW_ENABLED === "true") {
+        const staleReviews = await reconcileStaleIndependentReviews(
+          env,
+          new Date(),
+        );
+        for (const delivery of staleReviews.deliveries) {
+          await env.RUN_QUEUE.send(delivery);
+          await markReviewDispatched(env, delivery.reviewId);
+        }
+        const staleReviewIds = new Set(
+          staleReviews.deliveries.map((delivery) => delivery.reviewId),
+        );
+        for (const review of staleReviews.terminalReviews) {
+          await enqueueReviewComment(env, review);
+        }
+        if (staleReviews.terminalReviews.length > 0)
+          await flushGitHubOutputs(env).catch((error) =>
+            console.warn("Stale independent review status delivery deferred", {
+              reason: redactedReason(error),
+            }),
+          );
         const deliveries = await recoverableReviewDeliveries(env, new Date());
         for (const delivery of deliveries) {
+          if (staleReviewIds.has(delivery.reviewId)) continue;
           await env.RUN_QUEUE.send(delivery);
           const review = await readIndependentReview(env, delivery.reviewId);
           if (review?.status === "pending")

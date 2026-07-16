@@ -25,7 +25,8 @@ export type Id<K extends IdKind> = string & { readonly __idKind: K };
 export const idSchema = <K extends IdKind>(kind: K) =>
   z
     .string()
-    .regex(ulidPattern, `Expected ${kind} ULID`)
+    .transform((value) => value.toUpperCase())
+    .pipe(z.string().regex(ulidPattern, `Expected ${kind} ULID`))
     .transform((value) => value as Id<K>);
 
 export function newId<K extends IdKind>(_kind: K): Id<K> {
