@@ -82,6 +82,12 @@ describe("agent output adapter", () => {
     ).toBe(false);
   });
 
+  it("requires the next cursor to cover every returned line", () => {
+    expect(
+      isValidAgentOutputTail({ ...tail, nextCursor: 5 }, outputRequest),
+    ).toBe(false);
+  });
+
   it("bounds timestamps returned by the trusted container", () => {
     expect(
       isValidAgentOutputTail(

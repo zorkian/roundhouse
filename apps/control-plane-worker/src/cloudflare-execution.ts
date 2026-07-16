@@ -84,6 +84,8 @@ export function isValidAgentOutputTail(
     typeof value.truncated === "boolean" &&
     Array.isArray(value.lines) &&
     value.lines.length <= 100 &&
+    (value.lines.length === 0 ||
+      (value.nextCursor ?? -1) >= value.lines.at(-1)!.cursor) &&
     value.lines.every(
       (line, index, lines) =>
         Number.isSafeInteger(line.cursor) &&

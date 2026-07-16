@@ -173,6 +173,8 @@ function redactAgentOutput(value, secrets) {
 export function startAgentOutput(attemptId) {
   const existing = agentOutputByAttempt.get(attemptId);
   if (existing) {
+    agentOutputByAttempt.delete(attemptId);
+    agentOutputByAttempt.set(attemptId, existing);
     existing.status = "running";
     appendAgentOutput(attemptId, "system", "Agent resumed", []);
     return existing;
@@ -224,6 +226,8 @@ export function finishAgentOutput(attemptId, status, secrets = []) {
 export function readAgentOutput(attemptId, cursor) {
   const output = agentOutputByAttempt.get(attemptId);
   if (!output) return undefined;
+  agentOutputByAttempt.delete(attemptId);
+  agentOutputByAttempt.set(attemptId, output);
   const hasCursor = cursor !== undefined;
   const firstRetained = output.lines[0]?.cursor ?? output.nextCursor + 1;
   const truncated = hasCursor

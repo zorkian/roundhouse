@@ -332,9 +332,13 @@ describe("execution runner observability", () => {
       "Agent resumed",
     ]);
 
-    for (let index = 1; index <= 9; index += 1)
+    for (let index = 1; index <= 8; index += 1)
       startAgentOutput(`bounded-attempt-${index}`);
-    expect(readAgentOutput("bounded-attempt-1")).toBeUndefined();
+    expect(readAgentOutput("bounded-attempt-1")).toMatchObject({
+      status: "running",
+    });
+    startAgentOutput("bounded-attempt-9");
+    expect(readAgentOutput("bounded-attempt-2")).toBeUndefined();
     expect(readAgentOutput("bounded-attempt-9")).toMatchObject({
       status: "running",
     });
