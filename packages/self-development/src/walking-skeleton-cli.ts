@@ -27,6 +27,7 @@ function parseArguments(argv: string[]): Arguments {
     const value = rest[index + 1];
     if (!key?.startsWith("--") || value === undefined)
       throw new Error("Arguments must be --name value pairs");
+    if (values.has(key.slice(2))) throw new Error(`Duplicate option: ${key}`);
     values.set(key.slice(2), value);
   }
   return { command, values };
