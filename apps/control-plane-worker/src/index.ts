@@ -307,6 +307,7 @@ function coordinator(env: ControlPlaneEnv): ResumableCoordinator {
           ? trustedImplementationHeartbeatMs
           : undefined,
       maxAttemptsPerStage: 3,
+      maxDeployInterruptionsPerStage: 6,
     },
   );
 }

@@ -124,6 +124,54 @@ describe("ResumableCoordinator", () => {
     });
   });
 
+  it("keeps deploy interruptions outside the normal retry budget while bounding recovery", async () => {
+    const root = await mkdtemp(join(tmpdir(), "roundhouse-deploy-retry-"));
+    paths.push(root);
+    const store = new FileRunStore(root);
+    const clock = new MutableClock(new Date("2026-07-12T00:00:00Z"));
+    let executions = 0;
+    const executor: JobStageExecutor = {
+      async execute() {
+        executions += 1;
+        if (executions <= 3)
+          throw new StageFailure(
+            "Durable Object reset because its code was updated",
+            "container_interrupted",
+            true,
+          );
+        return { state: "workspace_ready" };
+      },
+    };
+    const worker = new ResumableCoordinator(store, executor, clock, {
+      workerId: "worker-deploy-retry",
+      maxAttemptsPerStage: 3,
+      maxDeployInterruptionsPerStage: 4,
+    });
+    await worker.submit("run_deploy_retry", task);
+
+    expect((await worker.workOnce())?.state).toBe("created");
+    expect((await worker.workOnce())?.state).toBe("created");
+    expect((await worker.workOnce())?.state).toBe("created");
+    expect((await worker.workOnce())?.state).toBe("workspace_ready");
+
+    const boundedExecutor: JobStageExecutor = {
+      async execute() {
+        throw new StageFailure(
+          "code updated again",
+          "container_interrupted",
+          true,
+        );
+      },
+    };
+    const bounded = new ResumableCoordinator(store, boundedExecutor, clock, {
+      workerId: "worker-deploy-bound",
+      maxDeployInterruptionsPerStage: 2,
+    });
+    await bounded.submit("run_deploy_bound", task);
+    expect((await bounded.workRun("run_deploy_bound"))?.state).toBe("created");
+    expect((await bounded.workRun("run_deploy_bound"))?.state).toBe("failed");
+  });
+
   it.each([
     ["prepare", 0],
     ["implement", 1],

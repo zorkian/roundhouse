@@ -169,6 +169,7 @@ const retryState = {
   complete: "pushed",
 } as const;
 const maxStageAttempts = 3;
+const maxDeployInterruptionAttempts = 6;
 const maxOperatorStageAttempts = 10;
 const operatorRetryableClassifications = new Set(["validation_failed"]);
 
@@ -355,10 +356,23 @@ export async function runRecoveryCycle(
     const stageAttempts = latest
       ? run.attempts.filter((attempt) => attempt.stage === latest.stage).length
       : 0;
+    const deployInterruptionAttempts = latest
+      ? run.attempts.filter(
+          (attempt) =>
+            attempt.stage === latest.stage &&
+            attempt.classification === "container_interrupted",
+        ).length
+      : 0;
     if (
       run.state === "failed" &&
       latest &&
-      ((latest.retryable && stageAttempts >= maxStageAttempts) ||
+      ((latest.retryable &&
+        (latest.classification === "container_interrupted"
+          ? deployInterruptionAttempts
+          : stageAttempts) >=
+          (latest.classification === "container_interrupted"
+            ? maxDeployInterruptionAttempts
+            : maxStageAttempts)) ||
         (operatorRetryableClassifications.has(latest.classification ?? "") &&
           stageAttempts >= maxOperatorStageAttempts))
     ) {
@@ -370,8 +384,15 @@ export async function runRecoveryCycle(
         detail: {
           revision: run.revision,
           stage: latest.stage,
-          attempts: stageAttempts,
-          limit: latest.retryable ? maxStageAttempts : maxOperatorStageAttempts,
+          attempts:
+            latest.classification === "container_interrupted"
+              ? deployInterruptionAttempts
+              : stageAttempts,
+          limit: latest.retryable
+            ? latest.classification === "container_interrupted"
+              ? maxDeployInterruptionAttempts
+              : maxStageAttempts
+            : maxOperatorStageAttempts,
           classification: latest.classification,
         },
         now,

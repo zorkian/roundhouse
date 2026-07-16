@@ -49,7 +49,10 @@ export type ResumableCoordinatorOptions = {
   leaseMs?: number;
   leaseHeartbeatMs?: number;
   maxAttemptsPerStage?: number;
+  maxDeployInterruptionsPerStage?: number;
 };
+
+const deployInterruptionClassification = "container_interrupted";
 
 export class ResumableCoordinator {
   constructor(
@@ -122,9 +125,6 @@ export class ResumableCoordinator {
       stage,
       this.clock.now(),
     );
-    const attemptCount = started.attempts.filter(
-      (attempt) => attempt.stage === stage,
-    ).length;
     try {
       const result = await this.executeWithLeaseHeartbeat(
         stage,
@@ -151,9 +151,20 @@ export class ResumableCoordinator {
               "unexpected",
               false,
             );
+      const stageAttempts = started.attempts.filter(
+        (attempt) => attempt.stage === stage,
+      );
+      const deployInterruptions = stageAttempts.filter(
+        (attempt) =>
+          attempt.classification === deployInterruptionClassification,
+      ).length;
+      const normalAttempts = stageAttempts.length - deployInterruptions;
       const terminal =
         !failure.retryable ||
-        attemptCount >= (this.options.maxAttemptsPerStage ?? 3);
+        (failure.classification === deployInterruptionClassification
+          ? deployInterruptions + 1 >=
+            (this.options.maxDeployInterruptionsPerStage ?? 6)
+          : normalAttempts >= (this.options.maxAttemptsPerStage ?? 3));
       const failed = await this.store.failAttempt(
         started.runId,
         claim.token,
