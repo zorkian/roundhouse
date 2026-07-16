@@ -17,6 +17,7 @@ import {
   finishPlanningJob,
   githubPlanningMigration,
   listIssuePlans,
+  listPlanningJobs,
   materializePlan,
   readIssuePlan,
   recordPlanningDecision,
@@ -76,6 +77,34 @@ async function proposed(issueNumber = 22) {
 }
 
 describe("durable issue planning", () => {
+  it("lists planning jobs for the dashboard repository", async () => {
+    const env = await runtime();
+    const input = {
+      requestKey: "c".repeat(64),
+      jobId: `planning_job_${"c".repeat(40)}`,
+      roundhouseEnvironment: "development" as const,
+      repositoryFullName: "zorkian/roundhouse",
+      issueNumber: 133,
+      actorId: "github:zorkian",
+      command: { kind: "start" as const },
+      now: new Date("2026-07-16T00:00:00Z"),
+    };
+    const { job } = await reservePlanningJob(env, input);
+
+    expect(
+      await listPlanningJobs(env, {
+        roundhouseEnvironment: "development",
+        repositoryFullName: "zorkian/roundhouse",
+      }),
+    ).toEqual([job]);
+    expect(
+      await listPlanningJobs(env, {
+        roundhouseEnvironment: "production",
+        repositoryFullName: "zorkian/roundhouse",
+      }),
+    ).toEqual([]);
+  });
+
   it.each([
     ["failed", false],
     ["timed_out", true],

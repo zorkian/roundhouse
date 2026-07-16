@@ -397,6 +397,29 @@ export async function planningJobForIssue(
   return row ? planningJob(env, row.job_id) : undefined;
 }
 
+export async function listPlanningJobs(
+  env: ControlPlaneEnv,
+  binding: {
+    roundhouseEnvironment: DurablePlanningJob["roundhouseEnvironment"];
+    repositoryFullName: string;
+  },
+  limit = 50,
+): Promise<DurablePlanningJob[]> {
+  const rows = await env.DB.prepare(
+    "SELECT job_id FROM github_planning_jobs WHERE roundhouse_environment = ? AND repository_full_name = ? ORDER BY updated_at DESC LIMIT ?",
+  )
+    .bind(
+      binding.roundhouseEnvironment,
+      binding.repositoryFullName,
+      Math.max(1, Math.min(limit, 100)),
+    )
+    .all<{ job_id: string }>();
+  const jobs = await Promise.all(
+    rows.results.map((row) => planningJob(env, row.job_id)),
+  );
+  return jobs.filter((job): job is DurablePlanningJob => job !== undefined);
+}
+
 export async function recoverablePlanningJobs(
   env: ControlPlaneEnv,
   binding: {
