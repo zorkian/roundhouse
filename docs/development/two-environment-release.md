@@ -35,6 +35,11 @@ boundary because Cloudflare API tokens cannot be restricted to one Worker.
 
 ## Development release
 
+For V1 maintainer acceptance, Roundhouse's product responsibility ends with the
+merged pull request and closed issue. The release and deployment evidence
+described here is Roundhouse engineering evidence, not a product responsibility
+or maintainer acceptance requirement.
+
 `Release development` runs after each merge to `main`:
 
 1. run repository checks;
