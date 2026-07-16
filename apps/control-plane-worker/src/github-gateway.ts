@@ -690,7 +690,9 @@ export class GitHubAppGateway {
         );
       if (!pull.merged && pull.base.sha !== input.expectedBaseSha) {
         const approvedPaths = new Set(
-          (input.approvedPaths ?? []).map((path) => path.toLowerCase()),
+          (input.approvedPaths ?? []).map((approvedPath) =>
+            approvedPath.toLowerCase(),
+          ),
         );
         const comparison = (
           await this.api<{

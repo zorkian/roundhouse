@@ -2171,7 +2171,10 @@ async function attemptEligibleAutomaticMerge(
       await flushGitHubOutputs(env).catch(() => undefined);
       return "manual_required";
     }
-    if (recoveryStatus !== "merged" && !approvedPaths)
+    if (
+      recoveryStatus !== "merged" &&
+      (!approvedPaths || approvedPaths.length === 0)
+    )
       throw new GitHubAppGatewayError(
         "internal_failure",
         "Roundhouse could not load the approved implementation paths for automatic merge",
