@@ -112,10 +112,187 @@ or tests passed. The final recommendation is one of:
 - **Do not merge** -- reproduction, validation, review, policy, or risk
   evidence contradicts the proposed change.
 
+## Prioritized delivery goals
+
+The acceptance work is delivered as four concentric goals. Each goal is a
+usable maintainer experience, not a collection of backend components. Goals
+are cumulative: accepting a later goal requires every earlier goal to remain
+green on the same release candidate.
+
+The active product goal should be tracked explicitly. Work that only benefits
+a later goal should not displace a broken earlier journey unless it is a
+necessary foundation for that journey.
+
+### Goal 1: Delegate one clear low-risk issue
+
+**Maintainer outcome:** "I start Roundhouse on a clear issue, walk away, and
+come back to a tested, independently reviewed pull request with a useful risk
+analysis and recommendation."
+
+This is the smallest complete product loop. It includes the clear happy-path
+parts of qualification, successful bug reproduction, low-risk planning,
+implementation, formatting and validation, passing repository CI, one
+independent adversarial review, visible progress, and the final decision
+package.
+
+Goal 1 deliberately does not require clarification, free-form questions,
+medium/high-risk approval, automatic repair of seeded failures, fault-injected
+recovery, or external repository enrollment.
+
+**Exit gate:**
+
+- [ ] Three consecutive live clear low-risk issues at one candidate commit
+      reach a supported final recommendation.
+- [ ] At least one is a reproduced bug with a passing post-change regression
+      and at least one is a small maintenance change.
+- [ ] No human acts between the initial start and final merge review.
+- [ ] Start, progress, plan, pull-request, review, and recommendation timing
+      meet the speed targets.
+- [ ] Each exact pull-request head passes repository CI and independent review.
+- [ ] The final package states residual risk and exactly one recommendation.
+- [ ] No severity-1 or severity-2 Goal 1 defect remains.
+- [ ] A maintainer reviews the three journeys and explicitly accepts that this
+      basic delegation loop feels fast, clear, and worth using.
+
+### Goal 2: Understand and steer ordinary work
+
+**Maintainer outcome:** "When the request is not perfectly clear, I can answer
+a question, ask my own question, approve proportionate risk, or request a
+change without learning Roundhouse internals."
+
+Goal 2 adds targeted clarification, feature qualification, plan and run
+questions, discoverable help, medium-risk plan approval, question-only PR
+conversation, and in-scope PR revisions. These interactions resume or inspect
+the existing work item; they do not silently restart work or turn questions
+into code changes.
+
+**Exit gate:**
+
+- [ ] One unclear issue completes after exactly one useful clarification
+      round.
+- [ ] One feature request becomes testable acceptance criteria and a supported
+      recommendation.
+- [ ] One plan or run question receives an evidence-backed answer without any
+      workflow mutation or implementation spend.
+- [ ] One medium-risk issue requires at most one plan approval and then
+      progresses autonomously to its recommendation.
+- [ ] One PR question is answered without code changes, and one in-scope change
+      request produces a new validated and reviewed exact head.
+- [ ] Help is discoverable and malformed commands receive actionable guidance.
+- [ ] No interaction requires the maintainer to construct or discover an
+      internal identifier manually.
+- [ ] Goals 1 and 2 have no open severity-1 or severity-2 defects, and a
+      maintainer explicitly accepts the conversation and steering experience.
+
+### Goal 3: Self-correct and stop safely
+
+**Maintainer outcome:** "Roundhouse handles ordinary failure and iteration on
+its own, and asks me for help only when it reaches a real decision or a bounded
+limit."
+
+Goal 3 adds non-reproduction dispositions, already-satisfied and duplicate
+outcomes, automatic repair of mechanical validation failures, adversarial
+review remediation, CI diagnosis and repair, transient infrastructure
+recovery, high-risk and protected-path handling, cancellation, and bounded
+terminal behavior. It is the point where the system must demonstrate that it
+does not need routine babysitting when the happy path bends.
+
+**Exit gate:**
+
+- [ ] Non-reproducible and already-fixed reports stop with accurate evidence
+      and a useful recommendation rather than a fabricated patch.
+- [ ] Seeded formatter, compile, targeted-test, adversarial-review, and genuine
+      CI failures each receive the correct bounded automatic repair behavior.
+- [ ] A remediated patch is revalidated and independently reviewed on its new
+      exact head.
+- [ ] Repeated or already-dispositioned review findings terminate without a
+      review treadmill.
+- [ ] Provider, Queue, Workflow, Container, and GitHub API interruption
+      scenarios recover within the recovery target without duplicate paid or
+      published work.
+- [ ] A high-risk or protected-path request cannot proceed without the required
+      approval, and stale approval fails closed with one exact next action.
+- [ ] Prompt injection cannot grant authority, credentials, scope, network
+      access, publication, or merge capability.
+- [ ] Cancellation and exhausted limits stop new work promptly and preserve a
+      useful diagnostic record.
+- [ ] Goals 1 through 3 have no open severity-1 or severity-2 defects, and a
+      maintainer explicitly accepts the failure and recovery experience.
+
+### Goal 4: Prove the V1 on an external project
+
+**Maintainer outcome:** "A maintainer who does not work on Roundhouse can
+enroll a public repository and receive the same fast, low-babysitting
+experience."
+
+Goal 4 removes Roundhouse-specific assumptions, completes the external pilot,
+and applies the full release scorecard. It is the V1 acceptance gate, not a new
+feature tier after V1.
+
+**Exit gate:**
+
+- [ ] A non-Roundhouse public repository is enrolled without source edits,
+      direct database work, Queue manipulation, or manual Cloudflare resource
+      changes.
+- [ ] Its maintainer completes the required live clear-bug, clarification,
+      question-only, review-remediation, and CI-repair scenarios.
+- [ ] The external runs meet the same autonomy, speed, safety, review, risk,
+      and recommendation criteria as the Roundhouse runs.
+- [ ] The complete AC-01 through AC-14 evidence report and release scorecard
+      pass at one candidate commit.
+- [ ] The external maintainer explicitly accepts that the product saves more
+      time than it consumes.
+
+### Cross-cutting requirements
+
+The goals prioritize product journeys, not security regressions. These
+requirements apply from Goal 1 and cannot be deferred to a later circle:
+
+- authenticate and authorize state-changing or resource-spending actions;
+- keep GitHub, deployment, Cloudflare, and control-plane credentials out of
+  repository execution;
+- constrain execution time, attempts, output, storage, network, and model use;
+- prevent replay from duplicating paid work or GitHub writes;
+- bind publication, CI, and review to the intended repository and exact head;
+- publish only to constrained branches and pull requests; and
+- retain human review and merge as the final authority.
+
+### Criterion-to-goal map
+
+Some criteria intentionally span more than one goal. The table identifies the
+first required slice and when the full criterion becomes mandatory.
+
+| Criterion                           | First required slice                                | Full criterion required |
+| ----------------------------------- | --------------------------------------------------- | ----------------------- |
+| AC-01 Repository enrollment         | Existing Roundhouse enrollment is assumed in Goal 1 | Goal 4                  |
+| AC-02 Start and leave               | Clear low-risk path                                 | Goal 1                  |
+| AC-03 Qualification                 | Clear bug and maintenance classification            | Goal 2                  |
+| AC-04 Reproduction                  | Successful bug reproduction and regression          | Goal 3                  |
+| AC-05 Understand and question       | Concise understandable plan                         | Goal 2                  |
+| AC-06 Risk and approval             | Low-risk automatic progress                         | Goal 3                  |
+| AC-07 Implementation and validation | Passing validation path                             | Goal 3                  |
+| AC-08 Adversarial review            | One passing exact-head review                       | Goal 3                  |
+| AC-09 Repository CI                 | Observe passing exact-head CI                       | Goal 3                  |
+| AC-10 Maintainer conversation       | Questions and ordinary in-scope changes             | Goal 2                  |
+| AC-11 Automatic recovery            | Cross-cutting replay safety only                    | Goal 3                  |
+| AC-12 Understandable progress       | Clear low-risk path                                 | Goal 1                  |
+| AC-13 Decision package              | Clear low-risk path                                 | Goal 1                  |
+| AC-14 Stop safely                   | Hard resource limits apply from Goal 1              | Goal 3                  |
+
+### Goal progress record
+
+| Goal                                        | Status       | Candidate commit | Acceptance evidence | Maintainer sign-off |
+| ------------------------------------------- | ------------ | ---------------- | ------------------- | ------------------- |
+| Goal 1: Delegate one clear low-risk issue   | Not accepted | --               | --                  | --                  |
+| Goal 2: Understand and steer ordinary work  | Not accepted | --               | --                  | --                  |
+| Goal 3: Self-correct and stop safely        | Not accepted | --               | --                  | --                  |
+| Goal 4: Prove the V1 on an external project | Not accepted | --               | --                  | --                  |
+
 ## Maintainer acceptance journeys
 
 Each item requires an end-to-end demonstration. Unit tests alone do not check
-the box.
+the box. The criterion-to-goal map defines which slice is required at each
+increment; checking the complete AC item is reserved for full V1 acceptance.
 
 ### AC-01: Enroll a repository without Roundhouse internals
 
@@ -305,30 +482,50 @@ the box.
 - [ ] Time, attempt, output, and model-usage limits stop cleanly and explain
       whether bounded continuation is possible.
 
-## Acceptance set
+## Acceptance scenario set by goal
 
-The release candidate must complete at least these scenarios:
+The scenario set expands with the goals. A later goal reruns representative
+earlier scenarios so new capabilities cannot regress the basic delegation
+loop.
 
-1. clear reproducible bug;
-2. unclear bug requiring one clarification round;
-3. intermittent or non-reproducible report;
-4. already-fixed or duplicate issue;
-5. small maintenance or formatting change;
-6. feature request with testable acceptance criteria;
-7. medium-risk configuration or dependency change;
-8. high-risk migration or protected-path request;
-9. seeded implementation defect caught by independent review;
-10. genuine CI failure repaired automatically;
-11. transient Container or provider interruption recovered automatically;
-12. prompt-injection attempt in an issue, comment, repository file, or command
-    output;
-13. maintainer question that requires explanation but no code change; and
-14. in-scope PR change request followed by a new validated and reviewed head.
+### Goal 1 scenarios
 
-At least ten scenarios must use real or historically replayed issues. At least
-five, including a clear bug, clarification, review remediation, CI repair, and
-question-only interaction, must run live against a non-Roundhouse public
-repository.
+1. clear reproducible low-risk bug; and
+2. small low-risk maintenance or formatting change.
+
+At least three consecutive live runs are required, so one scenario type must
+be repeated on a distinct issue.
+
+### Goal 2 scenarios
+
+3. unclear bug requiring one clarification round;
+4. feature request converted into testable acceptance criteria;
+5. medium-risk change requiring one plan approval;
+6. maintainer question requiring explanation but no code change; and
+7. in-scope PR change request followed by a new validated and reviewed head.
+
+### Goal 3 scenarios
+
+8. intermittent or non-reproducible report;
+9. already-fixed or duplicate issue;
+10. high-risk migration or protected-path request;
+11. seeded implementation defect caught and remediated through independent
+    review;
+12. genuine CI failure repaired automatically;
+13. transient Container or provider interruption recovered automatically;
+14. prompt-injection attempt in an issue, comment, repository file, or command
+    output; and
+15. cancellation during active work.
+
+### Goal 4 scenarios
+
+Goal 4 reruns at least five scenarios live against a non-Roundhouse public
+repository: a clear bug, clarification, question-only interaction, review
+remediation, and CI repair.
+
+Across all goals, at least ten distinct scenarios must use real or historically
+replayed issues. Fault injection may supplement but not replace live evidence
+for ordinary maintainer journeys.
 
 ## Release scorecard
 
