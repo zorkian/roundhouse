@@ -123,6 +123,72 @@ The active product goal should be tracked explicitly. Work that only benefits
 a later goal should not displace a broken earlier journey unless it is a
 necessary foundation for that journey.
 
+### Goal authorization and execution autonomy
+
+Before implementation begins, the maintainer reviews the goal's journeys,
+exit gate, operating boundaries, and any goal-specific implementation plan.
+When the maintainer approves that plan and says **go**, that decision grants
+standing authority to complete the goal without further permission prompts.
+
+Within that standing authority, the implementing operator may autonomously:
+
+- create and update Roundhouse repository issues used to implement or dogfood
+  the goal;
+- use the Roundhouse development App through `/rhd` or `/roundhouse-dev` and
+  use development resources;
+- create worktrees, branches, commits, and pull requests;
+- implement changes, run formatters and validation, and revise failed work;
+- submit development-only Roundhouse commands and approvals that remain within
+  the approved goal;
+- request and evaluate independent reviews, address findings, and disposition
+  non-blocking advice;
+- investigate and repair CI, review, dogfood, and development-deployment
+  failures;
+- use manual implementation as a fallback when Roundhouse cannot progress its
+  own development issue;
+- merge reviewed, passing pull requests to `main` and verify the resulting
+  automatic development deployment; and
+- create or update non-destructive development resources, configuration, and
+  additive development migrations required by the approved plan.
+
+No additional approval is required for an individual implementation choice,
+Roundhouse plan or patch approval, remediation cycle, pull request, merge, or
+development deployment. Discovering that the goal needs more than one issue or
+pull request does not invalidate the standing authority.
+
+The operator continues until the goal's exit-gate evidence package is complete
+or the maintainer says **stop**. A dogfood failure, review finding, CI failure,
+transient infrastructure failure, or need for another in-scope PR is not by
+itself a reason to pause.
+
+Standing authority does **not** permit the operator to:
+
+- approve, trigger, or perform a production deployment or production
+  promotion;
+- use the production `/rh` or `/roundhouse` command family for goal
+  implementation or dogfooding;
+- create, modify, or delete production resources, data, credentials,
+  configuration, or protection rules;
+- delete, truncate, reset, or destructively migrate development data;
+- delete development resources unless separately authorized;
+- contact people, organizations, repositories, or services outside the
+  approved Roundhouse development scope;
+- materially change the approved maintainer journeys, exit gate, security
+  boundaries, or goal scope; or
+- perform an otherwise destructive or irreversible action that was not
+  included in the approved plan.
+
+The operator pauses only when continuing requires one of those excluded
+authorities, a material goal change, or an external decision that cannot be
+resolved from the approved journeys and repository evidence. If bounded
+automatic recovery is exhausted but safe in-scope manual work remains, the
+operator uses that fallback instead of stopping.
+
+Goal acceptance occurs after the evidence package is complete. It records the
+maintainer's product judgment that the finished journeys feel good enough to
+expand to the next circle; it is not a per-change approval gate and does not
+interrupt autonomous execution within the current goal.
+
 ### Goal 1: Delegate one clear low-risk issue
 
 **Maintainer outcome:** "I start Roundhouse on a clear issue, walk away, and
@@ -281,12 +347,12 @@ first required slice and when the full criterion becomes mandatory.
 
 ### Goal progress record
 
-| Goal                                        | Status       | Candidate commit | Acceptance evidence | Maintainer sign-off |
-| ------------------------------------------- | ------------ | ---------------- | ------------------- | ------------------- |
-| Goal 1: Delegate one clear low-risk issue   | Not accepted | --               | --                  | --                  |
-| Goal 2: Understand and steer ordinary work  | Not accepted | --               | --                  | --                  |
-| Goal 3: Self-correct and stop safely        | Not accepted | --               | --                  | --                  |
-| Goal 4: Prove the V1 on an external project | Not accepted | --               | --                  | --                  |
+| Goal                                        | Status       | Candidate commit | Acceptance evidence | Goal acceptance |
+| ------------------------------------------- | ------------ | ---------------- | ------------------- | --------------- |
+| Goal 1: Delegate one clear low-risk issue   | Not accepted | --               | --                  | --              |
+| Goal 2: Understand and steer ordinary work  | Not accepted | --               | --                  | --              |
+| Goal 3: Self-correct and stop safely        | Not accepted | --               | --                  | --              |
+| Goal 4: Prove the V1 on an external project | Not accepted | --               | --                  | --              |
 
 ## Maintainer acceptance journeys
 
