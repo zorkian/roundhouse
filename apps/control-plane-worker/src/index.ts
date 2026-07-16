@@ -205,7 +205,7 @@ const manualFallbackSchema = z.object({
 const trustedImplementationLeaseMs = 5 * 60_000;
 const trustedImplementationHeartbeatMs = 60_000;
 const githubPlanningBudgetMs = 5 * 60_000;
-const githubPlanningLeaseMs = 5 * 60_000;
+const githubPlanningLeaseMs = githubPlanningBudgetMs + 60_000;
 
 function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), { status, headers: jsonHeaders });
