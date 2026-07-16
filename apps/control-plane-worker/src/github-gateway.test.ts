@@ -702,7 +702,7 @@ describe("GitHub App gateway", () => {
           base_commit: { sha: originalBaseSha },
           merge_base_commit: { sha: originalBaseSha },
           commits: [{ sha: advancedBaseSha }],
-          files: [{ filename: "Makefile" }, { filename: "makefile" }],
+          files: [{ filename: "Makefile" }, { filename: "README.md" }],
         });
       if (url.pathname.endsWith("/pulls/7") && method === "GET")
         return json({
