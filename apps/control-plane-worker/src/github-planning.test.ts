@@ -21,6 +21,7 @@ import {
   materializePlan,
   readIssuePlan,
   recordPlanningDecision,
+  recoverablePlanningJobs,
   reservePlanningJob,
 } from "./github-planning.js";
 
@@ -77,7 +78,7 @@ async function proposed(issueNumber = 22) {
 }
 
 describe("durable issue planning", () => {
-  it("lists planning jobs for the dashboard repository", async () => {
+  it("lists only active planning jobs for the dashboard repository", async () => {
     const env = await runtime();
     const input = {
       requestKey: "c".repeat(64),
@@ -103,6 +104,81 @@ describe("durable issue planning", () => {
         repositoryFullName: "zorkian/roundhouse",
       }),
     ).toEqual([]);
+
+    const claimed = await claimPlanningJob(
+      env,
+      job.jobId,
+      {
+        roundhouseEnvironment: "development",
+        repositoryFullName: "zorkian/roundhouse",
+      },
+      new Date("2026-07-16T00:00:01Z"),
+      5 * 60_000,
+    );
+    await finishPlanningJob(
+      env,
+      job.jobId,
+      claimed!.claimId,
+      {},
+      new Date("2026-07-16T00:00:02Z"),
+    );
+    expect(
+      await listPlanningJobs(env, {
+        roundhouseEnvironment: "development",
+        repositoryFullName: "zorkian/roundhouse",
+      }),
+    ).toEqual([]);
+  });
+
+  it("reclaims interrupted planning after the five-minute lease without overlapping healthy work", async () => {
+    const env = await runtime();
+    const now = new Date("2026-07-16T05:03:01Z");
+    const reservation = await reservePlanningJob(env, {
+      requestKey: "c".repeat(64),
+      jobId: `planning_job_${"c".repeat(40)}`,
+      roundhouseEnvironment: "development",
+      repositoryFullName: "zorkian/roundhouse",
+      issueNumber: 139,
+      actorId: "github:zorkian",
+      command: { kind: "start" },
+      now,
+    });
+    const binding = {
+      roundhouseEnvironment: "development" as const,
+      repositoryFullName: "zorkian/roundhouse",
+    };
+    expect(
+      await claimPlanningJob(
+        env,
+        reservation.job.jobId,
+        binding,
+        now,
+        5 * 60_000,
+      ),
+    ).toBeDefined();
+    expect(
+      await recoverablePlanningJobs(
+        env,
+        binding,
+        new Date("2026-07-16T05:08:00Z"),
+      ),
+    ).toEqual([]);
+    expect(
+      await recoverablePlanningJobs(
+        env,
+        binding,
+        new Date("2026-07-16T05:08:01Z"),
+      ),
+    ).toEqual([reservation.job.jobId]);
+    await expect(
+      claimPlanningJob(
+        env,
+        reservation.job.jobId,
+        binding,
+        new Date("2026-07-16T05:08:01Z"),
+        5 * 60_000,
+      ),
+    ).resolves.toMatchObject({ attemptCount: 2, status: "running" });
   });
 
   it.each([
@@ -215,6 +291,22 @@ describe("durable issue planning", () => {
       expect(completedRepeat).toMatchObject({
         created: false,
         job: { jobId: retry.job.jobId, generation: 2, status: "completed" },
+      });
+
+      const missingProjectionRestart = await reservePlanningJob(env, {
+        ...input,
+        restartCompleted: true,
+        now: new Date("2026-07-15T00:05:00Z"),
+      });
+      expect(missingProjectionRestart).toMatchObject({
+        created: true,
+        job: {
+          generation: 3,
+          status: "queued",
+          priorJobId: retry.job.jobId,
+          priorFailureReason:
+            "completed without durable plan or run projection",
+        },
       });
     },
   );

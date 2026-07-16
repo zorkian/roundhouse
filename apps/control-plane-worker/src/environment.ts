@@ -33,6 +33,7 @@ export type ControlPlaneEnv = {
     "success" | "timeout" | "interrupt-once" | "invalid-output";
   INDEPENDENT_REVIEW_ENABLED?: "true";
   GITHUB_REVIEW_CHECKS_ENABLED?: "true";
+  LOW_RISK_AUTO_MERGE_ENABLED?: "true";
   ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY?: string;
   ROUNDHOUSE_GITHUB_WEBHOOK_SECRET?: string;
   GITHUB_APP_ID?: string;

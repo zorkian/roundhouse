@@ -21,6 +21,7 @@ import {
   createControlPlaneHandler,
   executeTrustedExecutionWorkflow,
   independentReviewCheckOutcome,
+  planningStatusComment,
   reservePullRequestReview,
   safePlanningFailureSummary,
 } from "./index.js";
@@ -56,6 +57,7 @@ import {
 let instance: Miniflare;
 let database: D1Database;
 const resetTables = [
+  "github_automatic_merges",
   "trusted_review_workflows",
   "trusted_execution_workflows",
   "execution_attempt_phases",
@@ -105,6 +107,68 @@ const task: SelfDevelopmentTask = {
     authorEmail: "roundhouse@example.invalid",
   },
 };
+
+describe("planning-only status", () => {
+  it.each(["queued", "running", "retrying"] as const)(
+    "reports active %s planning with no action needed",
+    (status) => {
+      const body = planningStatusComment(
+        {
+          jobId: "planning_job_active",
+          roundhouseEnvironment: "development",
+          repositoryFullName: "zorkian/roundhouse",
+          issueNumber: 139,
+          actorId: "github:zorkian",
+          command: { kind: "start" },
+          status,
+          attemptCount: status === "queued" ? 0 : 1,
+          generation: 1,
+          createdAt: "2026-07-16T05:03:01Z",
+          updatedAt: "2026-07-16T05:03:01Z",
+          events: [],
+        },
+        {
+          commandPrefix: "/rhd",
+        } as Parameters<typeof planningStatusComment>[1],
+        new Date("2026-07-16T05:04:01Z"),
+      );
+      expect(body).toContain(`is **${status}**`);
+      expect(body).toContain("60s elapsed");
+      expect(body).toContain("No action is needed");
+      expect(body).not.toContain("Next action:");
+    },
+  );
+
+  it.each(["failed", "timed_out", "completed"] as const)(
+    "reports terminal %s planning with one useful action",
+    (status) => {
+      const body = planningStatusComment(
+        {
+          jobId: "planning_job_terminal",
+          roundhouseEnvironment: "development",
+          repositoryFullName: "zorkian/roundhouse",
+          issueNumber: 139,
+          actorId: "github:zorkian",
+          command: { kind: "start" },
+          status,
+          attemptCount: 1,
+          generation: 1,
+          createdAt: "2026-07-16T05:03:01Z",
+          updatedAt: "2026-07-16T05:08:01Z",
+          completedAt: "2026-07-16T05:08:01Z",
+          events: [],
+        },
+        {
+          commandPrefix: "/rhd",
+        } as Parameters<typeof planningStatusComment>[1],
+        new Date("2026-07-16T05:08:01Z"),
+      );
+      expect(body).toContain(`is **${status}**`);
+      expect(body.match(/Next action:/g)).toHaveLength(1);
+      expect(body).toContain("`/rhd start`");
+    },
+  );
+});
 
 type Queued = { messages: unknown[]; failNext: boolean };
 
@@ -311,7 +375,11 @@ beforeAll(async () => {
     new URL("../migrations/0008_independent_review.sql", import.meta.url),
     "utf8",
   );
-  for (const statement of `${d1JobStoreMigration}\n${controlPlaneSubmissionMigration}\n${cloudOperationsMigration}\n${githubPocMigration}\n${githubNativeOperatorMigration}\n${githubPlanningMigration}\n${independentReviewMigration}\n${githubReviewCheckMigration}\n${githubCiMigration}\n${executionProgressMigration}\n${trustedExecutionWorkflowMigration}`
+  const automaticMergeMigration = await readFile(
+    new URL("../migrations/0015_github_automatic_merge.sql", import.meta.url),
+    "utf8",
+  );
+  for (const statement of `${d1JobStoreMigration}\n${controlPlaneSubmissionMigration}\n${cloudOperationsMigration}\n${githubPocMigration}\n${githubNativeOperatorMigration}\n${githubPlanningMigration}\n${independentReviewMigration}\n${githubReviewCheckMigration}\n${githubCiMigration}\n${automaticMergeMigration}\n${executionProgressMigration}\n${trustedExecutionWorkflowMigration}`
     .split(";")
     .map((value) => value.trim())
     .filter(Boolean))

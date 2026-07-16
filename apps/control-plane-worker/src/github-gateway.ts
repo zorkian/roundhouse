@@ -57,6 +57,7 @@ function safeGitHubError(status: number): GitHubAppGatewayError {
   return new GitHubAppGatewayError(
     `api_status_${status}`,
     `GitHub API request failed with status ${status}`,
+    status === 429 || status >= 500,
   );
 }
 
@@ -149,6 +150,7 @@ export class GitHubAppGateway {
       throw new GitHubAppGatewayError(
         "transport_failed",
         "GitHub API transport failed",
+        true,
       );
     }
     let value: T;
@@ -186,6 +188,7 @@ export class GitHubAppGateway {
       throw new GitHubAppGatewayError(
         "transport_failed",
         "GitHub API transport failed",
+        true,
       );
     }
     if (!response.ok) throw safeGitHubError(response.status);
@@ -555,6 +558,134 @@ export class GitHubAppGateway {
     return { number: ready.number, url: ready.url, ready: true };
   }
 
+  async mergePullRequest(input: {
+    repositoryFullName: string;
+    pullRequestNumber: number;
+    expectedBaseSha: string;
+    expectedHeadSha: string;
+  }): Promise<{
+    number: number;
+    url: string;
+    headSha: string;
+    mergeCommitSha: string;
+    mergedAt: string;
+    alreadyMerged: boolean;
+  }> {
+    if (
+      !Number.isSafeInteger(input.pullRequestNumber) ||
+      input.pullRequestNumber < 1 ||
+      !/^[a-f0-9]{40}$/.test(input.expectedBaseSha) ||
+      !/^[a-f0-9]{40}$/.test(input.expectedHeadSha)
+    )
+      throw new GitHubAppGatewayError(
+        "invalid_request",
+        "GitHub pull request merge identity is invalid",
+      );
+    const path = `${repositoryPath(input.repositoryFullName)}/pulls/${input.pullRequestNumber}`;
+    const expectedUrl = `https://github.com/${input.repositoryFullName}/pull/${input.pullRequestNumber}`;
+    const read = async () =>
+      (
+        await this.api<{
+          number: number;
+          html_url: string;
+          state: string;
+          draft: boolean;
+          merged: boolean;
+          merge_commit_sha: string | null;
+          merged_at: string | null;
+          base: { sha: string; repo: { full_name: string } };
+          head: { sha: string; repo: { full_name: string } };
+        }>("GET", path)
+      ).value;
+    const validate = (pull: Awaited<ReturnType<typeof read>>): void => {
+      if (
+        pull.number !== input.pullRequestNumber ||
+        pull.html_url !== expectedUrl ||
+        pull.base.repo.full_name !== input.repositoryFullName ||
+        pull.head.repo.full_name !== input.repositoryFullName
+      )
+        throw new GitHubAppGatewayError(
+          "invalid_response",
+          "GitHub pull request merge binding did not match",
+        );
+      if (pull.head.sha !== input.expectedHeadSha)
+        throw new GitHubAppGatewayError(
+          "stale_head",
+          "GitHub pull request head changed before merge",
+        );
+      if (!pull.merged && pull.base.sha !== input.expectedBaseSha)
+        throw new GitHubAppGatewayError(
+          "stale_base",
+          "GitHub pull request base changed before merge",
+        );
+    };
+    const reconciled = (pull: Awaited<ReturnType<typeof read>>) => {
+      validate(pull);
+      if (!pull.merged || !/^[a-f0-9]{40}$/.test(pull.merge_commit_sha ?? ""))
+        return undefined;
+      if (
+        typeof pull.merged_at !== "string" ||
+        !Number.isFinite(Date.parse(pull.merged_at))
+      )
+        throw new GitHubAppGatewayError(
+          "invalid_response",
+          "GitHub pull request merge timestamp was invalid",
+        );
+      return {
+        number: pull.number,
+        url: pull.html_url,
+        headSha: pull.head.sha,
+        mergeCommitSha: pull.merge_commit_sha!,
+        mergedAt: pull.merged_at,
+        alreadyMerged: true,
+      };
+    };
+    const before = await read();
+    validate(before);
+    const existing = reconciled(before);
+    if (existing) return existing;
+    if (before.state !== "open")
+      throw new GitHubAppGatewayError(
+        "closed_unmerged",
+        "GitHub pull request closed without merge",
+      );
+    if (before.draft)
+      throw new GitHubAppGatewayError(
+        "draft_pull_request",
+        "GitHub pull request is still a draft",
+      );
+    let requestedSha: string | undefined;
+    try {
+      const response = (
+        await this.api<{ sha: string; merged: boolean; message: string }>(
+          "PUT",
+          `${path}/merge`,
+          { sha: input.expectedHeadSha, merge_method: "merge" },
+        )
+      ).value;
+      if (!response.merged || !/^[a-f0-9]{40}$/.test(response.sha))
+        throw new GitHubAppGatewayError(
+          "merge_rejected",
+          "GitHub rejected the exact pull request merge",
+        );
+      requestedSha = response.sha;
+    } catch (error) {
+      const afterFailure = await read().catch(() => undefined);
+      const recovered = afterFailure ? reconciled(afterFailure) : undefined;
+      if (recovered) return recovered;
+      throw error;
+    }
+    const after = await read();
+    const completed = reconciled(after);
+    if (!completed || completed.mergeCommitSha !== requestedSha)
+      throw new GitHubAppGatewayError(
+        "ambiguous_merge",
+        "GitHub pull request merge could not be verified",
+        true,
+      );
+    return { ...completed, alreadyMerged: false };
+  }
+
   async manualReviewPullRequest(input: {
     repositoryFullName: string;
     pullRequestNumber: number;
@@ -816,6 +947,7 @@ export class GitHubAppGateway {
       throw new GitHubAppGatewayError(
         "transport_failed",
         "GitHub API transport failed",
+        true,
       );
     }
     if (response.status === 404) return null;

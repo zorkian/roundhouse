@@ -77,6 +77,7 @@ import {
   finishPlanningJob,
   materializePlan,
   PlanCommandRejectionError,
+  planningJobForIssue,
   readIssuePlan,
   readPlanById,
   recoverablePlanningJobs,
@@ -119,8 +120,21 @@ import {
 import { publishApprovedGitHubRun } from "./github-publication.js";
 import {
   readPullRequestLifecycle,
+  recordMergedPullRequestLifecycle,
   recordPullRequestLifecycle,
 } from "./github-lifecycle.js";
+import {
+  automaticMergeApprovalMatches,
+  automaticMergePolicy,
+  automaticMergeRecoveryStatus,
+  blockIneligibleAutomaticMerge,
+  claimAutomaticMerge,
+  completeAutomaticMerge,
+  completeAutomaticMergeProjection,
+  failAutomaticMerge,
+  recoverableAutomaticMerges,
+  type AutomaticMergeIdentity,
+} from "./github-merge.js";
 import {
   claimIndependentReview,
   completeIndependentReview,
@@ -190,6 +204,8 @@ const manualFallbackSchema = z.object({
 // reclaimable promptly without allowing a long-running healthy agent to overlap.
 const trustedImplementationLeaseMs = 5 * 60_000;
 const trustedImplementationHeartbeatMs = 60_000;
+const githubPlanningBudgetMs = 5 * 60_000;
+const githubPlanningLeaseMs = githubPlanningBudgetMs + 60_000;
 
 function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), { status, headers: jsonHeaders });
@@ -442,7 +458,7 @@ async function planGitHubIssue(
           issueNumber,
           subject: snapshot.title,
           instructions: plannedInstructions,
-          timeoutMs: 15 * 60_000,
+          timeoutMs: githubPlanningBudgetMs,
           maxOutputBytes: 256 * 1024,
         })
       : undefined;
@@ -773,6 +789,60 @@ async function enqueuePlanningStartedComment(
   );
 }
 
+export function planningStatusComment(
+  job: DurablePlanningJob,
+  identity: ReturnType<typeof runtimeIdentity>,
+  now = new Date(),
+): string {
+  const elapsedSeconds = Math.max(
+    0,
+    Math.floor((now.getTime() - Date.parse(job.createdAt)) / 1_000),
+  );
+  const stage =
+    job.status === "queued"
+      ? "waiting for a planner"
+      : job.status === "running"
+        ? "planning the issue"
+        : job.status === "retrying"
+          ? "waiting to retry planning"
+          : job.status === "completed"
+            ? "finalizing the planning result"
+            : "planning stopped";
+  const lines = [
+    "## ⏳ Roundhouse planning status",
+    `Planning job \`${job.jobId}\` is **${job.status}** (attempt ${job.attemptCount}, ${elapsedSeconds}s elapsed).`,
+    `Current stage: ${stage}.`,
+  ];
+  if (["queued", "running", "retrying"].includes(job.status))
+    lines.push("No action is needed while Roundhouse continues planning.");
+  else {
+    if (job.failureReason)
+      lines.push(
+        `Failure: \`${safePlanningFailureSummary(job.failureReason)}\``,
+      );
+    lines.push(
+      `Next action: \`${githubCommand(identity, job.command.kind === "start" ? "start" : "replan")}\``,
+    );
+  }
+  return lines.join("\n\n");
+}
+
+async function enqueuePlanningStatusComment(
+  env: ControlPlaneEnv,
+  repositoryFullName: string,
+  issueNumber: number,
+  job: DurablePlanningJob,
+): Promise<void> {
+  const identity = runtimeIdentity(env);
+  await enqueueProgressComment(
+    env,
+    repositoryFullName,
+    issueNumber,
+    job.jobId,
+    `${progressMarker(identity, issueNumber, job.jobId)}\n\n${planningStatusComment(job, identity)}`,
+  );
+}
+
 async function flushGitHubComments(env: ControlPlaneEnv): Promise<void> {
   const comments = await claimPendingComments(env);
   if (comments.length === 0) return;
@@ -1038,7 +1108,7 @@ async function enqueuePublicationComment(
       "## 🚀 Draft pull request opened",
       `**[Review pull request #${run.publication.pullRequestUrl.split("/").at(-1)} →](${run.publication.pullRequestUrl})**`,
       "The approved implementation is now a draft pull request. Independent Claude review has started and will report its verdict in a separate comment.",
-      "**What you need to do:** wait for the independent-review result, then review and merge the pull request if it looks right.",
+      "**Next action: no action needed.** Roundhouse is waiting for independent review and repository CI. Eligible low-risk changes merge automatically after both pass; otherwise Roundhouse will name the required human action.",
       `Live workflow: ${identity.origin}/repositories/${identity.repositoryFullName}/issues/${run.task.source.issueNumber}`,
     ].join("\n\n"),
     identity.repositoryFullName,
@@ -1060,7 +1130,6 @@ async function enqueueMergedComment(
     [
       "## ✅ Merged — this issue is complete",
       `Pull request [#${lifecycle.pullRequestNumber}](https://github.com/${lifecycle.repositoryFullName}/pull/${lifecycle.pullRequestNumber}) was merged as [\`${lifecycle.mergeCommitSha}\`](https://github.com/${lifecycle.repositoryFullName}/commit/${lifecycle.mergeCommitSha}).`,
-      `[Follow the development release and checks →](https://github.com/${lifecycle.repositoryFullName}/commit/${lifecycle.mergeCommitSha}/checks)`,
       "Roundhouse is closing this issue. Reopen it if the merged result needs follow-up.",
       `Final workflow record: ${identity.origin}/repositories/${identity.repositoryFullName}/issues/${lifecycle.issueNumber}`,
     ].join("\n\n"),
@@ -1078,7 +1147,7 @@ async function enqueueRunComment(
   const lifecycle = await readPullRequestLifecycle(env, runId);
   const lifecycleSummary = lifecycle
     ? lifecycle.state === "merged" && lifecycle.mergeCommitSha
-      ? `\n\nPull request: **merged** as [\`${lifecycle.mergeCommitSha}\`](https://github.com/${identity.repositoryFullName}/commit/${lifecycle.mergeCommitSha}). [Development release and checks](https://github.com/${identity.repositoryFullName}/commit/${lifecycle.mergeCommitSha}/checks).`
+      ? `\n\nPull request: **merged** as [\`${lifecycle.mergeCommitSha}\`](https://github.com/${identity.repositoryFullName}/commit/${lifecycle.mergeCommitSha}). No action needed; this Roundhouse workflow is complete.`
       : `\n\nPull request lifecycle: **${lifecycle.state}** at exact head \`${lifecycle.headSha}\`.`
     : "";
   await enqueueStatusComment(
@@ -1193,7 +1262,7 @@ export async function executeTrustedExecutionWorkflow(
 async function enqueueReviewComment(
   env: ControlPlaneEnv,
   review: DurableIndependentReview,
-  readyForHumanReview = false,
+  readyDisposition?: "human" | "automatic",
 ): Promise<void> {
   const identity = runtimeIdentity(env);
   const findings = review.execution?.result.findings ?? [];
@@ -1237,9 +1306,13 @@ async function enqueueReviewComment(
           ? "**Next action: inspect the failed review, then request a new exact-head review if needed.**"
           : `**Next action: review the advisory verdict; if it looks right and repository CI is passing, mark pull request #${review.request.pullRequestNumber} ready and merge it.**`,
     );
-  if (readyForHumanReview)
+  if (readyDisposition === "human")
     common.push(
       `**The draft flag has been removed. Next action: confirm repository CI is passing, then merge pull request #${review.request.pullRequestNumber} if the change looks right.**`,
+    );
+  if (readyDisposition === "automatic")
+    common.push(
+      "**The draft flag has been removed. Next action: no action needed; Roundhouse is handling this eligible low-risk exact head automatically.**",
     );
   if (review.status === "failed")
     common.push(
@@ -1309,13 +1382,15 @@ async function enqueueReviewComment(
               )),
         ].join("\n"),
         action: [
-          "## Next human action",
+          "## Next action",
           "",
-          readyForHumanReview
-            ? `Confirm repository CI is passing for \`${review.request.headCommit}\`, then review and merge PR #${review.request.pullRequestNumber} if it looks right.`
-            : review.status === "failed"
-              ? "Inspect the failed independent review; do not merge until a head-bound review completes."
-              : "Wait for independent review and repository CI to complete; do not merge while this PR is a draft.",
+          readyDisposition === "automatic"
+            ? `No action needed. Roundhouse is handling eligible low-risk exact head \`${review.request.headCommit}\` automatically.`
+            : readyDisposition === "human"
+              ? `Confirm repository CI is passing for \`${review.request.headCommit}\`, then review and merge PR #${review.request.pullRequestNumber} if it looks right.`
+              : review.status === "failed"
+                ? "Inspect the failed independent review; do not merge until a head-bound review completes."
+                : "Wait for independent review and repository CI to complete; do not merge while this PR is a draft.",
         ].join("\n"),
       },
     });
@@ -1897,6 +1972,256 @@ async function startPullRequestFeedbackRemediation(
   return { runId: run.runId, state: run.state, revision: run.revision };
 }
 
+type AutomaticMergeDisposition =
+  "not_eligible" | "waiting" | "automatic" | "manual_required" | "handled";
+type AutomaticMergeCandidate = Omit<AutomaticMergeIdentity, "baseSha"> & {
+  baseSha?: string;
+};
+
+async function automaticMergeIdentity(
+  env: ControlPlaneEnv,
+  target: AutomaticMergeCandidate,
+): Promise<AutomaticMergeIdentity | undefined> {
+  const runtime = runtimeIdentity(env);
+  if (target.repositoryFullName !== runtime.repositoryFullName)
+    return undefined;
+  const run = await new D1JobStore(env.DB).read(target.runId);
+  const source = run.task.source;
+  const publication = run.publication;
+  if (
+    source?.kind !== "github_issue" ||
+    source.issueNumber !== target.issueNumber ||
+    source.roundhouseEnvironment === "production" ||
+    (target.baseSha !== undefined && run.task.baseCommit !== target.baseSha) ||
+    publication?.commit !== target.headSha ||
+    publication.pullRequestUrl !==
+      `https://github.com/${target.repositoryFullName}/pull/${target.pullRequestNumber}` ||
+    !run.task.planning
+  )
+    return undefined;
+  const plan = await readPlanById(env, run.task.planning.planId);
+  if (!plan || plan.plan.status !== "proposed") return undefined;
+  if (
+    !automaticMergePolicy({
+      environment: runtime.environment,
+      enabled: env.LOW_RISK_AUTO_MERGE_ENABLED === "true",
+      sourceEnvironment: source.roundhouseEnvironment,
+      risk: plan.plan.risk,
+      planMaterialized: plan.status === "materialized",
+      runBoundToPlan: plan.runId === run.runId,
+      approvalMatches: automaticMergeApprovalMatches(
+        plan.approvedBy,
+        run.task.planning.approvedBy,
+      ),
+    })
+  )
+    return undefined;
+  return { ...target, baseSha: run.task.baseCommit };
+}
+
+async function finishAutomaticMerge(
+  env: ControlPlaneEnv,
+  identity: AutomaticMergeIdentity,
+  mergeCommitSha: string,
+  authoritativeMergedAt?: string,
+): Promise<void> {
+  const merged = authoritativeMergedAt
+    ? { mergeCommitSha, mergedAt: authoritativeMergedAt }
+    : await githubGateway(env).mergePullRequest({
+        repositoryFullName: identity.repositoryFullName,
+        pullRequestNumber: identity.pullRequestNumber,
+        expectedBaseSha: identity.baseSha,
+        expectedHeadSha: identity.headSha,
+      });
+  if (merged.mergeCommitSha !== mergeCommitSha)
+    throw new Error("Automatic merge projection commit did not match");
+  const lifecycle = await recordMergedPullRequestLifecycle(env, {
+    ...identity,
+    mergeCommitSha,
+    mergedAt: merged.mergedAt,
+  });
+  await enqueueRunComment(env, identity.issueNumber, identity.runId);
+  await enqueueMergedComment(env, lifecycle);
+  await githubGateway(env).closeIssue(
+    identity.repositoryFullName,
+    identity.issueNumber,
+  );
+  await flushGitHubOutputs(env).catch((error) =>
+    console.warn("Automatic merge GitHub status delivery deferred", {
+      runId: identity.runId,
+      reason: redactedReason(error),
+    }),
+  );
+}
+
+function automaticMergeFailure(error: unknown): {
+  code: string;
+  retryable: boolean;
+  nextAction: string;
+} {
+  const code =
+    error instanceof GitHubAppGatewayError ? error.code : "internal_failure";
+  const retryable =
+    !(error instanceof GitHubAppGatewayError) || error.retryable;
+  if (retryable)
+    return {
+      code,
+      retryable: true,
+      nextAction:
+        "No action needed; Roundhouse retained the exact merge identity and will retry automatically.",
+    };
+  const action =
+    code === "stale_head" || code === "stale_base"
+      ? "The pull request identity changed. Re-run validation and independent review for the current head and base before merging."
+      : code === "closed_unmerged"
+        ? "The pull request was closed without merging. Reopen it only after confirming this exact change is still wanted."
+        : "Inspect the pull request merge state or conflict, then resolve the named blocker before requesting another exact-head attempt.";
+  return { code, retryable: false, nextAction: action };
+}
+
+async function attemptEligibleAutomaticMerge(
+  env: ControlPlaneEnv,
+  target: AutomaticMergeCandidate,
+): Promise<AutomaticMergeDisposition> {
+  const recoveryIdentity =
+    target.baseSha === undefined
+      ? undefined
+      : ({
+          ...target,
+          baseSha: target.baseSha,
+        } satisfies AutomaticMergeIdentity);
+  const recoveryStatus = recoveryIdentity
+    ? await automaticMergeRecoveryStatus(env, recoveryIdentity)
+    : undefined;
+  const identity =
+    recoveryIdentity && recoveryStatus === "merged"
+      ? recoveryIdentity
+      : await automaticMergeIdentity(env, target);
+  if (!identity) {
+    if (
+      recoveryIdentity &&
+      (recoveryStatus === "pending" || recoveryStatus === "merging")
+    )
+      await blockIneligibleAutomaticMerge(env, recoveryIdentity);
+    return "not_eligible";
+  }
+  if (
+    recoveryStatus !== "merged" &&
+    !(await exactHeadIsReady(
+      env,
+      identity.repositoryFullName,
+      identity.pullRequestNumber,
+      identity.headSha,
+    ))
+  )
+    return "waiting";
+  const reservation = await claimAutomaticMerge(env, identity);
+  if (reservation.kind === "merged") {
+    if (!reservation.projectionComplete) {
+      await finishAutomaticMerge(env, identity, reservation.mergeCommitSha);
+      await completeAutomaticMergeProjection(
+        env,
+        identity,
+        reservation.mergeCommitSha,
+      );
+    }
+    return "handled";
+  }
+  if (reservation.kind !== "claimed")
+    return reservation.kind === "in_progress" ? "automatic" : "manual_required";
+  const { claim } = reservation;
+  let mergeCommitSha: string;
+  let mergedAt: string;
+  try {
+    const gateway = githubGateway(env);
+    await gateway.updatePullRequestPackage({
+      repositoryFullName: identity.repositoryFullName,
+      pullRequestNumber: identity.pullRequestNumber,
+      expectedHeadSha: identity.headSha,
+      sections: {
+        action:
+          "## Next action\n\nNo action needed. Exact-head independent review and repository CI passed; Roundhouse is merging this eligible low-risk change.",
+      },
+    });
+    await gateway.markPullRequestReady({
+      repositoryFullName: identity.repositoryFullName,
+      pullRequestNumber: identity.pullRequestNumber,
+      expectedHeadSha: identity.headSha,
+    });
+    if (!(await automaticMergeIdentity(env, identity))) {
+      const failure = {
+        code: "no_longer_eligible",
+        retryable: false,
+        nextAction:
+          "The retained run is no longer eligible for automatic merge. Review the current pull request state before taking any further action.",
+      };
+      await failAutomaticMerge(env, claim, failure);
+      await enqueueComment(
+        env,
+        `automatic-merge:${identity.repositoryFullName}:${identity.pullRequestNumber}:${identity.headSha}:${claim.attemptCount}`,
+        identity.issueNumber,
+        `Roundhouse did not automatically merge exact head \`${identity.headSha}\` because its eligibility changed after the merge claim. **Next action:** ${failure.nextAction}`,
+        identity.repositoryFullName,
+      );
+      await flushGitHubOutputs(env).catch(() => undefined);
+      return "manual_required";
+    }
+    const merged = await gateway.mergePullRequest({
+      repositoryFullName: identity.repositoryFullName,
+      pullRequestNumber: identity.pullRequestNumber,
+      expectedBaseSha: identity.baseSha,
+      expectedHeadSha: identity.headSha,
+    });
+    mergeCommitSha = merged.mergeCommitSha;
+    mergedAt = merged.mergedAt;
+  } catch (error) {
+    const failure = automaticMergeFailure(error);
+    await failAutomaticMerge(env, claim, failure);
+    await githubGateway(env)
+      .updatePullRequestPackage({
+        repositoryFullName: identity.repositoryFullName,
+        pullRequestNumber: identity.pullRequestNumber,
+        expectedHeadSha: identity.headSha,
+        sections: {
+          action: `## Next action\n\n${failure.nextAction}`,
+        },
+      })
+      .catch(() => undefined);
+    await enqueueComment(
+      env,
+      `automatic-merge:${identity.repositoryFullName}:${identity.pullRequestNumber}:${identity.headSha}:${claim.attemptCount}`,
+      identity.issueNumber,
+      `Roundhouse could not complete automatic merge for exact head \`${identity.headSha}\` (\`${failure.code}\`). **Next action:** ${failure.nextAction}`,
+      identity.repositoryFullName,
+    );
+    await flushGitHubOutputs(env).catch(() => undefined);
+    return failure.retryable ? "automatic" : "manual_required";
+  }
+  await completeAutomaticMerge(env, claim, mergeCommitSha);
+  try {
+    await finishAutomaticMerge(env, identity, mergeCommitSha, mergedAt);
+    await completeAutomaticMergeProjection(env, identity, mergeCommitSha);
+  } catch (error) {
+    console.warn("Automatic merge projection deferred", {
+      runId: identity.runId,
+      reason: redactedReason(error),
+    });
+  }
+  return "handled";
+}
+
+function automaticMergeTarget(
+  target: CiObservation & { runId: string; issueNumber: number },
+): AutomaticMergeCandidate {
+  return {
+    repositoryFullName: target.repositoryFullName,
+    pullRequestNumber: target.pullRequestNumber,
+    runId: target.runId,
+    issueNumber: target.issueNumber,
+    headSha: target.headSha,
+  };
+}
+
 async function handleExactCiTarget(
   env: ControlPlaneEnv,
   target: CiObservation & { runId: string; issueNumber: number },
@@ -1957,12 +2282,16 @@ async function handleExactCiTarget(
   if (passing) {
     await resolveCiRecoveriesForHead(env, target);
     if (
-      await exactHeadIsReady(
+      (await exactHeadIsReady(
         env,
         target.repositoryFullName,
         target.pullRequestNumber,
         target.headSha,
-      )
+      )) &&
+      (await attemptEligibleAutomaticMerge(
+        env,
+        automaticMergeTarget(target),
+      )) === "not_eligible"
     )
       await enqueueComment(
         env,
@@ -2093,7 +2422,7 @@ async function finalizeIndependentReviewProjection(
       (await readIndependentReview(env, completed.request.reviewId)) ??
       completed;
   }
-  let readyForHumanReview = false;
+  let pullRequestReady = false;
   if (completed.status === "completed" && !completed.request.advisoryOnly)
     try {
       await githubGateway(env).markPullRequestReady({
@@ -2101,14 +2430,35 @@ async function finalizeIndependentReviewProjection(
         pullRequestNumber: completed.request.pullRequestNumber,
         expectedHeadSha: completed.request.headCommit,
       });
-      readyForHumanReview = true;
+      pullRequestReady = true;
     } catch (error) {
       console.warn("GitHub pull request readiness update deferred", {
         reviewId: completed.request.reviewId,
         reason: redactedReason(error),
       });
     }
-  await enqueueReviewComment(env, completed, readyForHumanReview);
+  const candidate =
+    completed.request.issueNumber === undefined
+      ? undefined
+      : {
+          repositoryFullName: runtimeIdentity(env).repositoryFullName,
+          pullRequestNumber: completed.request.pullRequestNumber,
+          runId: completed.request.runId,
+          issueNumber: completed.request.issueNumber,
+          headSha: completed.request.headCommit,
+        };
+  const mergeDisposition = candidate
+    ? await attemptEligibleAutomaticMerge(env, candidate)
+    : "not_eligible";
+  await enqueueReviewComment(
+    env,
+    completed,
+    pullRequestReady
+      ? ["waiting", "automatic", "handled"].includes(mergeDisposition)
+        ? "automatic"
+        : "human"
+      : undefined,
+  );
   await flushGitHubOutputs(env).catch((error) =>
     console.warn("Independent review GitHub status delivery deferred", {
       reviewId: completed.request.reviewId,
@@ -2116,12 +2466,13 @@ async function finalizeIndependentReviewProjection(
     }),
   );
   if (
-    await exactHeadIsReady(
+    mergeDisposition === "not_eligible" &&
+    (await exactHeadIsReady(
       env,
       runtimeIdentity(env).repositoryFullName,
       completed.request.pullRequestNumber,
       completed.request.headCommit,
-    )
+    ))
   ) {
     await enqueueComment(
       env,
@@ -2404,6 +2755,7 @@ async function scheduleGitHubPlanning(
     issueNumber,
     actorId: `github:${actor}`,
     command,
+    restartCompleted: command.kind === "start" && !current,
     now: new Date(),
   });
   if (reservation.created) {
@@ -2456,7 +2808,7 @@ async function commandRejectionComment(
     ].join("\n\n");
   return [
     `Roundhouse rejected \`${githubCommand(identity, command.kind)}\` because the referenced plan or run is no longer current.`,
-    `Next action: \`${githubCommand(identity, "status")}\``,
+    `Next action: \`${githubCommand(identity, command.kind === "status" && !command.runId ? "start" : "status")}\``,
   ].join("\n\n");
 }
 
@@ -2538,7 +2890,7 @@ async function consumePlanningMessage(
       repositoryFullName: runtimeIdentity(env).repositoryFullName,
     },
     new Date(),
-    20 * 60_000,
+    githubPlanningLeaseMs,
   );
   if (!claim) {
     message.ack();
@@ -2702,8 +3054,33 @@ async function executeGitHubCommand(
     runId = await materializeGitHubPlan(env, issueNumber, command, actorId);
   } else if (command.kind === "status" && !(await issueRun(env, issueNumber))) {
     const plan = await readIssuePlan(env, issueNumber);
-    if (!plan)
-      throw new HttpError(409, "Issue does not have a Roundhouse plan");
+    if (!plan) {
+      const planning = await planningJobForIssue(
+        env,
+        runtimeIdentity(env).environment,
+        repositoryFullName,
+        issueNumber,
+      );
+      if (!planning)
+        throw new HttpError(409, "Issue does not have Roundhouse work");
+      if (command.runId && command.runId !== planning.jobId)
+        throw new HttpError(
+          409,
+          "Command planning job does not match this issue",
+        );
+      await enqueuePlanningStatusComment(
+        env,
+        repositoryFullName,
+        issueNumber,
+        planning,
+      );
+      return {
+        kind: "plan",
+        planId: planning.jobId,
+        state: planning.status,
+        revision: planning.attemptCount,
+      };
+    }
     if (command.runId && command.runId !== plan.plan.planId)
       throw new HttpError(409, "Command plan does not match this issue");
     await enqueuePlanComment(env, issueNumber, plan);
@@ -4062,6 +4439,15 @@ export function createControlPlaneHandler(
     async scheduled(_controller, env): Promise<void> {
       try {
         await runRecoveryCycle(env, new Date());
+        for (const merge of await recoverableAutomaticMerges(env, new Date()))
+          try {
+            await attemptEligibleAutomaticMerge(env, merge);
+          } catch (error) {
+            console.warn("Automatic merge recovery item deferred", {
+              runId: merge.runId,
+              reason: redactedReason(error),
+            });
+          }
         await enqueueActiveRunComments(env);
       } catch (error) {
         await recordAlert(env, {
