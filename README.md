@@ -5,12 +5,17 @@
 
 ![Roundhouse orchestration hub: coding-agent engines routed through a human-controlled software delivery workflow](docs/assets/roundhouse-banner.png)
 
-Roundhouse is a working V1 dogfood system for turning a GitHub issue into a
+Roundhouse is a working dogfood POC for turning a GitHub issue into a
 reviewable draft pull request. It qualifies untrusted issue text against
 repository policy, runs a bounded coding agent in an isolated container,
 validates the result, publishes it through a credentialed control plane, and
 asks Claude to review the exact pull-request head. GitHub remains the place
 where a human reviews and merges or rejects the change.
+
+V1 is defined by the
+[maintainer acceptance checklist](docs/v1-maintainer-acceptance.md), which is
+not yet passing. Internal components, tests, and successful dogfood deployments
+do not by themselves establish V1 acceptance.
 
 > [!CAUTION]
 > Roundhouse is experimental, pre-release software for enrolled public
@@ -84,14 +89,16 @@ pnpm test -- apps/control-plane-worker/src/control-plane-worker.test.ts
   Roundhouse.
 
 Start with [ADR 0008](docs/decisions/0008-lean-open-source-poc-security-boundary.md)
-for the V1 security boundary, [the current V1 architecture](docs/v1-plan.md),
+for the V1 security boundary, the
+[maintainer acceptance checklist](docs/v1-maintainer-acceptance.md),
+[the current V1 architecture](docs/v1-plan.md),
 [the issue-native V1 loop](docs/cloudflare/roundhouse-issue-native-v1-loop.md),
 [the issue-driven live workflow](docs/cloudflare/roundhouse-issue-driven-live-operations.md),
 and [the two-environment release design](docs/development/two-environment-release.md).
 
 ## Current limitations
 
-- V1 is a single-tenant dogfood POC for explicitly enrolled public
+- The current system is a single-tenant dogfood POC for explicitly enrolled public
   repositories, not a general multi-repository or private-source service.
 - Roundhouse creates draft pull requests but cannot merge, modify a protected
   default branch directly, or deploy generated changes.
