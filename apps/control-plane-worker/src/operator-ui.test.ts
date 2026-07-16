@@ -213,7 +213,9 @@ describe("operator UI", () => {
           reviews: [
             {
               status: "completed",
-              attemptCount: 1,
+              attemptCount: 2,
+              activeAttemptId:
+                "review_45406706e161b9dbdebd8485dea2f19bf7995bb4-attempt-2",
               request: {
                 reviewId: "review_45406706e161b9dbdebd8485dea2f19bf7995bb4",
                 attemptId:
@@ -276,13 +278,25 @@ describe("operator UI", () => {
     expect(app.innerHTML).toContain("The implementation is ready.");
     expect(app.innerHTML).toContain("Keep the timeline readable");
     expect(app.innerHTML).toContain("running");
+    expect(app.innerHTML).toContain("Live agent output");
+    expect(app.innerHTML).toContain(
+      "/v1/runs/run_live/agent-output/run_live-prepare-1",
+    );
+    expect(app.innerHTML).not.toContain(
+      "/v1/reviews/review_45406706e161b9dbdebd8485dea2f19bf7995bb4/agent-output/review_45406706e161b9dbdebd8485dea2f19bf7995bb4-attempt-1",
+    );
+    expect(app.innerHTML).toContain(
+      "/v1/reviews/review_45406706e161b9dbdebd8485dea2f19bf7995bb4/agent-output/review_45406706e161b9dbdebd8485dea2f19bf7995bb4-attempt-2",
+    );
     expect(app.innerHTML).toContain("durable execution");
     expect(app.innerHTML).toContain(`trusted-${"a".repeat(64)}`);
     expect(app.innerHTML).toContain("prepare outcome");
     expect(app.innerHTML).toContain("lease_expired");
     expect(app.innerHTML).toContain("Worker lease expired during execution");
     expect(app.innerHTML).toContain("5s");
-    expect(app.innerHTML).not.toContain("run_live-prepare-1");
+    expect(app.innerHTML).not.toContain(
+      '<strong class="event-attempt">run_live-prepare-1',
+    );
     expect(app.innerHTML).not.toContain(
       '<strong class="event-attempt">review_45406706e161b9dbdebd8485dea2f19bf7995bb4',
     );
@@ -292,7 +306,214 @@ describe("operator UI", () => {
     );
     expect(app.innerHTML).not.toContain("<h2>Attempts</h2>");
     expect(app.innerHTML).not.toContain("<h2>Evidence</h2>");
-    expect(app.innerHTML.match(/class="event-row"/g)).toHaveLength(4);
+    expect(app.innerHTML.match(/class="event-row"/g)).toHaveLength(5);
+  });
+
+  it("appends cursor-only output without duplicates and stops at terminal state", async () => {
+    const runId = "run_cursor_tail";
+    const attemptId = `${runId}-prepare-1`;
+    const outputUrl = `/v1/runs/${runId}/agent-output/${attemptId}`;
+    const response = operatorPage(`/runs/${runId}`)!;
+    const script = /<script[^>]*>([\s\S]+)<\/script>/.exec(
+      await response.text(),
+    )![1];
+    const app = { innerHTML: "Loading…" };
+    const outputElement = {
+      dataset: { agentOutputUrl: outputUrl },
+      textContent: "",
+      scrollTop: 0,
+      scrollHeight: 100,
+    };
+    const statusElement = {
+      dataset: { agentOutputStatus: outputUrl },
+      textContent: "",
+    };
+    let interval!: () => Promise<void>;
+    vi.stubGlobal("document", {
+      getElementById: (id: string) => (id === "app" ? app : null),
+      querySelectorAll: (selector: string) => {
+        if (selector === "[data-agent-output-url]") return [outputElement];
+        if (selector === "[data-agent-output-status]") return [statusElement];
+        return [];
+      },
+    });
+    vi.stubGlobal("setInterval", (callback: () => Promise<void>) => {
+      interval = callback;
+      return 0;
+    });
+    let outputRequests = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string) => {
+        if (input === `/v1/runs/${runId}`)
+          return Response.json({
+            schemaVersion: 1,
+            runId,
+            taskId: "task_cursor_tail",
+            state: "implementing",
+            revision: 2,
+            attempts: [
+              {
+                attemptId,
+                stage: "prepare",
+                number: 1,
+                status: "running",
+                startedAt: "2026-07-15T00:00:00.000Z",
+              },
+            ],
+            progress: [
+              {
+                attemptId,
+                phase: "agent.implement",
+                status: "running",
+                startedAt: "2026-07-15T00:00:01.000Z",
+              },
+            ],
+            events: [],
+            evidence: [],
+            reviews: [],
+            workflows: [],
+          });
+        outputRequests += 1;
+        if (outputRequests === 1) {
+          expect(input).toBe(outputUrl);
+          return Response.json({
+            schemaVersion: 1,
+            attemptId,
+            status: "running",
+            nextCursor: 1,
+            truncated: true,
+            lines: [
+              {
+                cursor: 1,
+                stream: "stdout",
+                text: "first line",
+                occurredAt: "2026-07-15T00:00:02.000Z",
+              },
+            ],
+          });
+        }
+        expect(input).toBe(`${outputUrl}?cursor=1`);
+        return Response.json({
+          schemaVersion: 1,
+          attemptId,
+          status: "completed",
+          nextCursor: 2,
+          truncated: false,
+          lines: [
+            {
+              cursor: 2,
+              stream: "system",
+              text: "Agent completed",
+              occurredAt: "2026-07-15T00:00:03.000Z",
+            },
+          ],
+        });
+      }),
+    );
+
+    new Function(script!)();
+    await vi.waitFor(() =>
+      expect(outputElement.textContent).toContain("first line"),
+    );
+    await interval();
+    await vi.waitFor(() =>
+      expect(outputElement.textContent).toContain("Agent completed"),
+    );
+    expect(outputElement.textContent.match(/first line/g)).toHaveLength(1);
+    expect(statusElement.textContent).toContain("polling stopped");
+    expect(statusElement.textContent).toContain("earlier output omitted");
+    await interval();
+    expect(outputRequests).toBe(2);
+  });
+
+  it("bounds retries when live output remains unavailable", async () => {
+    const runId = "run_unavailable_tail";
+    const attemptId = `${runId}-prepare-1`;
+    const outputUrl = `/v1/runs/${runId}/agent-output/${attemptId}`;
+    const script = /<script[^>]*>([\s\S]+)<\/script>/.exec(
+      await operatorPage(`/runs/${runId}`)!.text(),
+    )![1];
+    const app = { innerHTML: "Loading…" };
+    const outputElement = {
+      dataset: { agentOutputUrl: outputUrl },
+      textContent: "",
+      scrollTop: 0,
+      scrollHeight: 100,
+    };
+    const statusElement = {
+      dataset: { agentOutputStatus: outputUrl },
+      textContent: "",
+    };
+    let interval!: () => Promise<void>;
+    vi.stubGlobal("document", {
+      getElementById: (id: string) => (id === "app" ? app : null),
+      querySelectorAll: (selector: string) => {
+        if (selector === "[data-agent-output-url]") return [outputElement];
+        if (selector === "[data-agent-output-status]") return [statusElement];
+        return [];
+      },
+    });
+    vi.stubGlobal("setInterval", (callback: () => Promise<void>) => {
+      interval = callback;
+      return 0;
+    });
+    let outputRequests = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string) => {
+        if (input === `/v1/runs/${runId}`)
+          return Response.json({
+            schemaVersion: 1,
+            runId,
+            taskId: "task_unavailable_tail",
+            state: "implementing",
+            revision: 2,
+            attempts: [
+              {
+                attemptId,
+                stage: "prepare",
+                number: 1,
+                status: "running",
+                startedAt: "2026-07-15T00:00:00.000Z",
+              },
+            ],
+            progress: [
+              {
+                attemptId,
+                phase: "agent.implement",
+                status: "running",
+                startedAt: "2026-07-15T00:00:01.000Z",
+              },
+            ],
+            events: [],
+            evidence: [],
+            reviews: [],
+            workflows: [],
+          });
+        outputRequests += 1;
+        if (outputRequests > 1) throw new Error("temporary gateway failure");
+        return Response.json({
+          schemaVersion: 1,
+          attemptId,
+          status: "unavailable",
+          nextCursor: 0,
+          truncated: false,
+          lines: [],
+        });
+      }),
+    );
+
+    new Function(script!)();
+    await vi.waitFor(() => expect(outputRequests).toBe(1));
+    expect(statusElement.textContent).toContain("retrying");
+    await interval();
+    await vi.waitFor(() => expect(outputRequests).toBe(2));
+    await interval();
+    await vi.waitFor(() => expect(outputRequests).toBe(3));
+    expect(statusElement.textContent).toContain("polling stopped");
+    await interval();
+    expect(outputRequests).toBe(3);
   });
 
   it("does not label the source run as an active remediation", async () => {
@@ -393,6 +614,7 @@ describe("operator UI", () => {
           status: "completed",
           request: {
             reviewId,
+            attemptId: `${reviewId}-attempt-1`,
             cycle: 1,
             issueNumber: 24,
             issueUrl: "https://github.com/zorkian/roundhouse/issues/24",
@@ -433,6 +655,10 @@ describe("operator UI", () => {
     expect(app.innerHTML).toContain(`/v1/reviews/${reviewId}/evidence`);
     expect(app.innerHTML).toContain(
       "https://github.com/zorkian/roundhouse/pull/25",
+    );
+    expect(app.innerHTML).toContain("Agent status");
+    expect(app.innerHTML).toContain(
+      `/v1/reviews/${reviewId}/agent-output/${reviewId}-attempt-1`,
     );
   });
 

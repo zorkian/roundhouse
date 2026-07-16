@@ -13,6 +13,8 @@ import {
 } from "../../packages/self-development/src/trusted-loop.ts";
 
 import {
+  agentOutputCapture,
+  appendAgentOutput,
   assertCompleteAgentOutput,
   boundedAgentFailure,
   boundedLogExcerpt,
@@ -25,6 +27,7 @@ import {
   createRunnerServer,
   drainRunner,
   formatCandidateImplementation,
+  finishAgentOutput,
   pathAllowed,
   parsePlanningOutput,
   planningOutputContract,
@@ -33,6 +36,7 @@ import {
   planningOutputSchema,
   promptFor,
   redactKnownSecrets,
+  readAgentOutput,
   remainingValidationBudget,
   reproductionInvocation,
   parseClaudeReviewOutput,
@@ -41,6 +45,7 @@ import {
   roundhouseFormatterWriteCommand,
   secretStrings,
   skippedValidation,
+  startAgentOutput,
   trustedValidationEvidenceNames,
   validRepositoryPath,
   validRepositoryPathPolicy,
@@ -256,6 +261,135 @@ describe("execution runner observability", () => {
       );
     },
   );
+
+  it("returns a bounded initial tail and cursor-only continuation", () => {
+    const attemptId = "run_live-prepare-1";
+    startAgentOutput(attemptId);
+    for (let index = 1; index <= 105; index += 1)
+      appendAgentOutput(attemptId, "stdout", `line ${index}`);
+
+    const initial = readAgentOutput(attemptId);
+    expect(initial).toMatchObject({
+      schemaVersion: 1,
+      attemptId,
+      status: "running",
+      truncated: true,
+    });
+    expect(initial.lines).toHaveLength(100);
+    expect(initial.lines.at(-1)?.text).toBe("line 105");
+
+    appendAgentOutput(attemptId, "stderr", "new diagnostic");
+    finishAgentOutput(attemptId, "completed");
+    const continuation = readAgentOutput(attemptId, initial.nextCursor);
+    expect(continuation.lines.map((line) => line.text)).toEqual([
+      "new diagnostic",
+      "Agent completed",
+    ]);
+    expect(continuation.status).toBe("completed");
+  });
+
+  it("redacts known and credential-shaped values from live output", () => {
+    const attemptId = "review_live-attempt-1";
+    const secret = "known-secret-value";
+    startAgentOutput(attemptId);
+    appendAgentOutput(
+      attemptId,
+      "stderr",
+      `Authorization: Bearer ${secret} ghp_1234567890abcdefghijkl`,
+      [secret],
+    );
+    const output = readAgentOutput(attemptId);
+    expect(JSON.stringify(output)).not.toContain(secret);
+    expect(JSON.stringify(output)).not.toContain("ghp_1234567890abcdefghijkl");
+    expect(JSON.stringify(output)).toContain("[redacted]");
+  });
+
+  it("bounds partial lines and preserves split UTF-8 characters", () => {
+    const attemptId = "run_chunked_output-prepare-1";
+    const capture = agentOutputCapture(attemptId, []);
+    capture.write("stdout", Buffer.from([0xe2, 0x82]));
+    capture.write("stdout", Buffer.from([0xac, 0x0a]));
+    capture.write("stderr", Buffer.from("x".repeat(10_000)));
+    capture.write("unexpected", Buffer.from("ignored"));
+    capture.flush();
+    const output = readAgentOutput(attemptId);
+    expect(output.lines.map((line) => line.text)).toContain("€");
+    expect(output.lines.at(-1)?.text).toBe("x".repeat(2_000));
+    expect(JSON.stringify(output)).not.toContain("ignored");
+  });
+
+  it("keeps a terminal tail pollable until every cursor page is drained", () => {
+    const attemptId = "run_backlog-prepare-1";
+    startAgentOutput(attemptId);
+    for (let index = 1; index <= 205; index += 1)
+      appendAgentOutput(attemptId, "stdout", `backlog ${index}`);
+    finishAgentOutput(attemptId, "completed");
+
+    const first = readAgentOutput(attemptId, 1);
+    const second = readAgentOutput(attemptId, first.nextCursor);
+    const final = readAgentOutput(attemptId, second.nextCursor);
+    expect(first).toMatchObject({ status: "running" });
+    expect(second).toMatchObject({ status: "running" });
+    expect(final).toMatchObject({ status: "completed" });
+    expect(first.lines.length + second.lines.length + final.lines.length).toBe(
+      206,
+    );
+  });
+
+  it("preserves replay output and caps retained attempt identities", () => {
+    const replayed = "run_replayed-prepare-1";
+    startAgentOutput(replayed);
+    appendAgentOutput(replayed, "stdout", "before replay");
+    startAgentOutput(replayed);
+    expect(readAgentOutput(replayed).lines.map((line) => line.text)).toEqual([
+      "Agent started",
+      "before replay",
+      "Agent resumed",
+    ]);
+
+    for (let index = 1; index <= 8; index += 1)
+      startAgentOutput(`bounded-attempt-${index}`);
+    expect(readAgentOutput("bounded-attempt-1")).toMatchObject({
+      status: "running",
+    });
+    startAgentOutput("bounded-attempt-9");
+    expect(readAgentOutput("bounded-attempt-2")).toBeUndefined();
+    expect(readAgentOutput("bounded-attempt-9")).toMatchObject({
+      status: "running",
+    });
+  });
+
+  it("rejects unknown attempt bindings and malformed cursors", async () => {
+    const server = createRunnerServer({ port: 0, host: "127.0.0.1" });
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string")
+      throw new Error("runner test address unavailable");
+    const origin = `http://127.0.0.1:${address.port}`;
+    await expect(
+      fetch(`${origin}/agent-output?attemptId=unknown-attempt`).then(
+        (response) => response.status,
+      ),
+    ).resolves.toBe(404);
+    await expect(
+      fetch(`${origin}/agent-output?attemptId=unknown-attempt&cursor=01`).then(
+        (response) => response.status,
+      ),
+    ).resolves.toBe(400);
+    await expect(
+      fetch(
+        `${origin}/agent-output?attemptId=unknown-attempt&cursor=%205`,
+      ).then((response) => response.status),
+    ).resolves.toBe(400);
+    await expect(
+      fetch(`${origin}/agent-output-v2?attemptId=unknown-attempt`).then(
+        (response) => response.status,
+      ),
+    ).resolves.toBe(404);
+    await new Promise((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve(undefined))),
+    );
+  });
 });
 
 describe("trusted agent output boundary", () => {

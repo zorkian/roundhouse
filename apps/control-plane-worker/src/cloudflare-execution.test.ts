@@ -13,6 +13,8 @@ import { describe, expect, it } from "vitest";
 import {
   CloudflareRepositoryExecutionBackend,
   CloudflareTrustedImplementationBackend,
+  isValidAgentOutputTail,
+  readAgentOutput,
   type EvidenceBucketPort,
   type ExecutionContainerPort,
 } from "./cloudflare-execution.js";
@@ -43,6 +45,158 @@ describe("repository execution request", () => {
         attemptId: `attempt-${"x".repeat(200)}`,
       }),
     ).toThrow();
+  });
+});
+
+describe("agent output adapter", () => {
+  const outputRequest = { attemptId: "run-example-prepare-1", cursor: 4 };
+  const tail = {
+    schemaVersion: 1 as const,
+    attemptId: outputRequest.attemptId,
+    status: "running" as const,
+    nextCursor: 6,
+    truncated: false,
+    lines: [
+      {
+        cursor: 5,
+        stream: "stdout" as const,
+        text: "first",
+        occurredAt: "2026-07-15T00:00:00.000Z",
+      },
+      {
+        cursor: 6,
+        stream: "stderr" as const,
+        text: "second",
+        occurredAt: "2026-07-15T00:00:01.000Z",
+      },
+    ],
+  };
+
+  it("requires strictly increasing line cursors", () => {
+    expect(isValidAgentOutputTail(tail, outputRequest)).toBe(true);
+    expect(
+      isValidAgentOutputTail(
+        { ...tail, lines: [tail.lines[0]!, tail.lines[0]!] },
+        outputRequest,
+      ),
+    ).toBe(false);
+  });
+
+  it("requires the next cursor to equal the last returned line", () => {
+    expect(
+      isValidAgentOutputTail({ ...tail, nextCursor: 7 }, outputRequest),
+    ).toBe(false);
+  });
+
+  it("rejects empty output lines at the trusted boundary", () => {
+    expect(
+      isValidAgentOutputTail(
+        { ...tail, lines: [{ ...tail.lines[0]!, text: "" }] },
+        outputRequest,
+      ),
+    ).toBe(false);
+  });
+
+  it("bounds timestamps returned by the trusted container", () => {
+    expect(
+      isValidAgentOutputTail(
+        {
+          ...tail,
+          lines: [{ ...tail.lines[0]!, occurredAt: "x".repeat(31) }],
+        },
+        outputRequest,
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects non-timestamp content from the trusted container", () => {
+    expect(
+      isValidAgentOutputTail(
+        {
+          ...tail,
+          lines: [{ ...tail.lines[0]!, occurredAt: "not-a-timestamp" }],
+        },
+        outputRequest,
+      ),
+    ).toBe(false);
+  });
+
+  it("passes the exact attempt and cursor to the named Container", async () => {
+    let name = "";
+    let input: unknown;
+    const outputTail = await readAgentOutput(
+      {
+        getByName: (value) => {
+          name = value;
+          return {
+            runJob: async () => result(),
+            readAgentOutput: async (request) => {
+              input = request;
+              return {
+                schemaVersion: 1,
+                attemptId: request.attemptId,
+                status: "running",
+                nextCursor: 8,
+                truncated: false,
+                lines: [],
+              };
+            },
+            destroy: async () => undefined,
+          };
+        },
+      },
+      { attemptId: "run_live-prepare-1", cursor: 7 },
+    );
+    expect(name).toBe("run_live-prepare-1");
+    expect(input).toEqual({ attemptId: "run_live-prepare-1", cursor: 7 });
+    expect(outputTail).toMatchObject({ status: "running", nextCursor: 8 });
+  });
+
+  it("returns a stable unavailable state when the Container cannot be read", async () => {
+    await expect(
+      readAgentOutput(
+        {
+          getByName: () => ({
+            runJob: async () => result(),
+            readAgentOutput: async () => {
+              throw new Error("stopped");
+            },
+            destroy: async () => undefined,
+          }),
+        },
+        { attemptId: "run_stopped-prepare-1", cursor: 4 },
+      ),
+    ).resolves.toMatchObject({
+      attemptId: "run_stopped-prepare-1",
+      status: "unavailable",
+      nextCursor: 4,
+      lines: [],
+    });
+  });
+
+  it("returns unavailable when a Container violates the output contract", async () => {
+    await expect(
+      readAgentOutput(
+        {
+          getByName: () => ({
+            runJob: async () => result(),
+            readAgentOutput: async () => ({
+              schemaVersion: 1,
+              attemptId: "wrong-attempt",
+              status: "running",
+              nextCursor: 4,
+              truncated: false,
+              lines: [],
+            }),
+            destroy: async () => undefined,
+          }),
+        },
+        { attemptId: "run_bound-prepare-1", cursor: 4 },
+      ),
+    ).resolves.toMatchObject({
+      attemptId: "run_bound-prepare-1",
+      status: "unavailable",
+    });
   });
 });
 

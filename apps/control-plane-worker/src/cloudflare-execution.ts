@@ -44,12 +44,89 @@ export type ExecutionContainerPort = {
     ok: true;
     releaseCommit: string;
   }>;
+  readAgentOutput?(request: AgentOutputRequest): Promise<AgentOutputTail>;
   destroy(): Promise<void>;
 };
+
+export type AgentOutputRequest = {
+  attemptId: string;
+  cursor?: number;
+};
+
+export type AgentOutputLine = {
+  cursor: number;
+  stream: "stdout" | "stderr" | "system";
+  text: string;
+  occurredAt: string;
+};
+
+export type AgentOutputTail = {
+  schemaVersion: 1;
+  attemptId: string;
+  status: "running" | "completed" | "failed" | "unavailable";
+  nextCursor: number;
+  truncated: boolean;
+  lines: AgentOutputLine[];
+};
+
+export function isValidAgentOutputTail(
+  value: Partial<AgentOutputTail>,
+  input: AgentOutputRequest,
+): value is AgentOutputTail {
+  return (
+    value.schemaVersion === 1 &&
+    value.attemptId === input.attemptId &&
+    ["running", "completed", "failed", "unavailable"].includes(
+      value.status ?? "",
+    ) &&
+    Number.isSafeInteger(value.nextCursor) &&
+    (value.nextCursor ?? -1) >= (input.cursor ?? 0) &&
+    typeof value.truncated === "boolean" &&
+    Array.isArray(value.lines) &&
+    value.lines.length <= 100 &&
+    (value.lines.length === 0 ||
+      value.nextCursor === value.lines.at(-1)!.cursor) &&
+    value.lines.every(
+      (line, index, lines) =>
+        Number.isSafeInteger(line.cursor) &&
+        line.cursor > (input.cursor ?? 0) &&
+        (index === 0 || line.cursor > lines[index - 1]!.cursor) &&
+        ["stdout", "stderr", "system"].includes(line.stream) &&
+        typeof line.text === "string" &&
+        line.text.length > 0 &&
+        line.text.length <= 2_000 &&
+        typeof line.occurredAt === "string" &&
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(line.occurredAt),
+    )
+  );
+}
 
 export type ExecutionContainerNamespacePort = {
   getByName(name: string): ExecutionContainerPort;
 };
+
+export async function readAgentOutput(
+  containers: ExecutionContainerNamespacePort | undefined,
+  request: AgentOutputRequest,
+): Promise<AgentOutputTail> {
+  const unavailable = (): AgentOutputTail => ({
+    schemaVersion: 1,
+    attemptId: request.attemptId,
+    status: "unavailable",
+    nextCursor: request.cursor ?? 0,
+    truncated: false,
+    lines: [],
+  });
+  if (!containers) return unavailable();
+  const container = containers.getByName(request.attemptId);
+  if (!container.readAgentOutput) return unavailable();
+  try {
+    const value = await container.readAgentOutput(request);
+    return isValidAgentOutputTail(value, request) ? value : unavailable();
+  } catch {
+    return unavailable();
+  }
+}
 
 export type EvidenceObject = {
   text(): Promise<string>;
