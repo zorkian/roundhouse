@@ -363,13 +363,14 @@ export async function runRecoveryCycle(
             attempt.classification === "container_interrupted",
         ).length
       : 0;
+    const normalAttempts = stageAttempts - deployInterruptionAttempts;
     if (
       run.state === "failed" &&
       latest &&
       ((latest.retryable &&
         (latest.classification === "container_interrupted"
           ? deployInterruptionAttempts
-          : stageAttempts) >=
+          : normalAttempts) >=
           (latest.classification === "container_interrupted"
             ? maxDeployInterruptionAttempts
             : maxStageAttempts)) ||
@@ -384,10 +385,11 @@ export async function runRecoveryCycle(
         detail: {
           revision: run.revision,
           stage: latest.stage,
-          attempts:
-            latest.classification === "container_interrupted"
+          attempts: latest.retryable
+            ? latest.classification === "container_interrupted"
               ? deployInterruptionAttempts
-              : stageAttempts,
+              : normalAttempts
+            : stageAttempts,
           limit: latest.retryable
             ? latest.classification === "container_interrupted"
               ? maxDeployInterruptionAttempts

@@ -450,6 +450,57 @@ describe("cloud operator persistence", () => {
     ).rejects.toThrow("not eligible");
   });
 
+  it("does not count deploy interruptions toward normal retry exhaustion", async () => {
+    const env = await runtime();
+    const jobs = new D1JobStore(env.DB);
+    const start = new Date("2026-07-12T00:00:00Z");
+    await jobs.submit("run_deploy_churn", task, start);
+    const claim = await jobs.claim(
+      "run_deploy_churn",
+      "worker",
+      start,
+      1_000,
+      1,
+    );
+    await jobs.startAttempt("run_deploy_churn", claim!.token, "prepare", start);
+    const failed = await jobs.failAttempt(
+      "run_deploy_churn",
+      claim!.token,
+      "prepare",
+      { retryable: true, classification: "transient", error: "retry me" },
+      true,
+      start,
+    );
+    const latest = failed.attempts.at(-1)!;
+    const interrupted = {
+      ...latest,
+      classification: "container_interrupted" as const,
+      error: "deployment interrupted the container",
+    };
+    const deployChurnFailure = {
+      ...failed,
+      attempts: [
+        { ...interrupted, attemptId: "deploy-interruption-1", number: 1 },
+        { ...interrupted, attemptId: "deploy-interruption-2", number: 2 },
+        { ...latest, attemptId: "normal-failure-1", number: 3 },
+      ],
+    };
+    await env.DB.prepare(
+      "UPDATE self_development_runs SET payload = ? WHERE run_id = 'run_deploy_churn'",
+    )
+      .bind(JSON.stringify(deployChurnFailure))
+      .run();
+
+    await runRecoveryCycle(env, new Date(start.getTime() + 1));
+
+    const alert = await env.DB.prepare(
+      "SELECT kind FROM operational_alerts WHERE alert_key = ?",
+    )
+      .bind(`retries_exhausted:run_deploy_churn:${failed.revision}`)
+      .first<{ kind: string }>();
+    expect(alert).toBeNull();
+  });
+
   it("deduplicates alerts and keeps retention destructive work empty", async () => {
     const env = await runtime();
     const now = new Date("2026-07-12T00:00:00Z");
