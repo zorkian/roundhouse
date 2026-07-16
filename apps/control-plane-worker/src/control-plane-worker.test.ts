@@ -56,6 +56,7 @@ import {
 let instance: Miniflare;
 let database: D1Database;
 const resetTables = [
+  "github_automatic_merges",
   "trusted_review_workflows",
   "trusted_execution_workflows",
   "execution_attempt_phases",
@@ -311,7 +312,11 @@ beforeAll(async () => {
     new URL("../migrations/0008_independent_review.sql", import.meta.url),
     "utf8",
   );
-  for (const statement of `${d1JobStoreMigration}\n${controlPlaneSubmissionMigration}\n${cloudOperationsMigration}\n${githubPocMigration}\n${githubNativeOperatorMigration}\n${githubPlanningMigration}\n${independentReviewMigration}\n${githubReviewCheckMigration}\n${githubCiMigration}\n${executionProgressMigration}\n${trustedExecutionWorkflowMigration}`
+  const automaticMergeMigration = await readFile(
+    new URL("../migrations/0015_github_automatic_merge.sql", import.meta.url),
+    "utf8",
+  );
+  for (const statement of `${d1JobStoreMigration}\n${controlPlaneSubmissionMigration}\n${cloudOperationsMigration}\n${githubPocMigration}\n${githubNativeOperatorMigration}\n${githubPlanningMigration}\n${independentReviewMigration}\n${githubReviewCheckMigration}\n${githubCiMigration}\n${automaticMergeMigration}\n${executionProgressMigration}\n${trustedExecutionWorkflowMigration}`
     .split(";")
     .map((value) => value.trim())
     .filter(Boolean))

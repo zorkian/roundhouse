@@ -538,6 +538,121 @@ describe("GitHub App gateway", () => {
     ).resolves.toMatchObject({ ready: true, number: 7 });
   });
 
+  it("merges and reconciles only the exact reviewed pull request head", async () => {
+    const baseSha = "a".repeat(40);
+    const headSha = "b".repeat(40);
+    const mergeSha = "c".repeat(40);
+    const mergedAt = "2026-07-15T01:02:03Z";
+    let merged = false;
+    let mergeRequests = 0;
+    const fetcher: typeof fetch = async (input, init) => {
+      const url = new URL(String(input));
+      const method = init?.method ?? "GET";
+      if (url.pathname.endsWith("/access_tokens"))
+        return json({
+          token: "installation-token",
+          expires_at: "2026-07-12T02:00:00Z",
+        });
+      if (url.pathname.endsWith("/pulls/7/merge") && method === "PUT") {
+        mergeRequests += 1;
+        expect(JSON.parse(String(init?.body))).toEqual({
+          sha: headSha,
+          merge_method: "merge",
+        });
+        merged = true;
+        return json({ sha: mergeSha, merged: true, message: "merged" });
+      }
+      if (url.pathname.endsWith("/pulls/7") && method === "GET")
+        return json({
+          number: 7,
+          html_url: "https://github.com/zorkian/roundhouse/pull/7",
+          state: merged ? "closed" : "open",
+          draft: false,
+          merged,
+          merge_commit_sha: merged ? mergeSha : null,
+          merged_at: merged ? mergedAt : null,
+          base: {
+            sha: merged ? mergeSha : baseSha,
+            repo: { full_name: "zorkian/roundhouse" },
+          },
+          head: {
+            sha: headSha,
+            repo: { full_name: "zorkian/roundhouse" },
+          },
+        });
+      return json({}, 404);
+    };
+    const gateway = new GitHubAppGateway(
+      { appId: "1", installationId: "2", privateKey },
+      fetcher,
+    );
+    await expect(
+      gateway.mergePullRequest({
+        repositoryFullName: "zorkian/roundhouse",
+        pullRequestNumber: 7,
+        expectedBaseSha: baseSha,
+        expectedHeadSha: headSha,
+      }),
+    ).resolves.toEqual({
+      number: 7,
+      url: "https://github.com/zorkian/roundhouse/pull/7",
+      headSha,
+      mergeCommitSha: mergeSha,
+      mergedAt,
+      alreadyMerged: false,
+    });
+    await expect(
+      gateway.mergePullRequest({
+        repositoryFullName: "zorkian/roundhouse",
+        pullRequestNumber: 7,
+        expectedBaseSha: baseSha,
+        expectedHeadSha: headSha,
+      }),
+    ).resolves.toMatchObject({ mergeCommitSha: mergeSha, alreadyMerged: true });
+    expect(mergeRequests).toBe(1);
+  });
+
+  it("fails closed when the pull request head changes before merge", async () => {
+    const fetcher: typeof fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/access_tokens"))
+        return json({
+          token: "installation-token",
+          expires_at: "2026-07-12T02:00:00Z",
+        });
+      if (url.pathname.endsWith("/pulls/7"))
+        return json({
+          number: 7,
+          html_url: "https://github.com/zorkian/roundhouse/pull/7",
+          state: "open",
+          draft: false,
+          merged: false,
+          merge_commit_sha: null,
+          base: {
+            sha: "a".repeat(40),
+            repo: { full_name: "zorkian/roundhouse" },
+          },
+          head: {
+            sha: "d".repeat(40),
+            repo: { full_name: "zorkian/roundhouse" },
+          },
+        });
+      return json({}, 404);
+    };
+    const gateway = new GitHubAppGateway(
+      { appId: "1", installationId: "2", privateKey },
+      fetcher,
+    );
+    await expect(
+      gateway.mergePullRequest({
+        repositoryFullName: "zorkian/roundhouse",
+        pullRequestNumber: 7,
+        expectedBaseSha: "a".repeat(40),
+        expectedHeadSha: "b".repeat(40),
+      }),
+    ).rejects.toMatchObject({ code: "stale_head" });
+  });
+
   it("rejects a rolling status comment returned for another issue", async () => {
     const fetcher: typeof fetch = async (input) => {
       const url = new URL(String(input));
