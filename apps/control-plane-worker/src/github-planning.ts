@@ -211,6 +211,7 @@ export async function reservePlanningJob(
     issueNumber: number;
     actorId: string;
     command: PlanningJobCommand;
+    restartCompleted?: boolean;
     now: Date;
   },
 ): Promise<{ job: DurablePlanningJob; created: boolean }> {
@@ -220,7 +221,11 @@ export async function reservePlanningJob(
   )
     .bind(input.requestKey)
     .first<{ job_id: string; status: DurablePlanningJob["status"] }>();
-  if (retained && !["failed", "timed_out"].includes(retained.status))
+  if (
+    retained &&
+    !["failed", "timed_out"].includes(retained.status) &&
+    !(input.restartCompleted && retained.status === "completed")
+  )
     return { job: (await planningJob(env, retained.job_id))!, created: false };
   const prior = retained ? await planningJob(env, retained.job_id) : undefined;
   const generation = prior ? prior.generation + 1 : 1;
@@ -246,7 +251,10 @@ export async function reservePlanningJob(
       ? {
           priorJobId: prior.jobId,
           priorFailureReason:
-            prior.failureReason?.slice(0, 1_000) ?? "unspecified failure",
+            prior.failureReason?.slice(0, 1_000) ??
+            (prior.status === "completed"
+              ? "completed without durable plan or run projection"
+              : "unspecified failure"),
         }
       : {}),
   });
@@ -256,7 +264,7 @@ export async function reservePlanningJob(
   const results = prior
     ? await env.DB.batch([
         env.DB.prepare(
-          "UPDATE github_planning_jobs SET request_key = ? WHERE job_id = ? AND request_key = ? AND status IN ('failed', 'timed_out')",
+          "UPDATE github_planning_jobs SET request_key = ? WHERE job_id = ? AND request_key = ? AND status IN ('failed', 'timed_out', 'completed')",
         ).bind(
           `${input.requestKey}:generation:${prior.generation}`,
           prior.jobId,

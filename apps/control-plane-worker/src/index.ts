@@ -77,6 +77,7 @@ import {
   finishPlanningJob,
   materializePlan,
   PlanCommandRejectionError,
+  planningJobForIssue,
   readIssuePlan,
   readPlanById,
   recoverablePlanningJobs,
@@ -203,6 +204,8 @@ const manualFallbackSchema = z.object({
 // reclaimable promptly without allowing a long-running healthy agent to overlap.
 const trustedImplementationLeaseMs = 5 * 60_000;
 const trustedImplementationHeartbeatMs = 60_000;
+const githubPlanningBudgetMs = 5 * 60_000;
+const githubPlanningLeaseMs = githubPlanningBudgetMs + 60_000;
 
 function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), { status, headers: jsonHeaders });
@@ -455,7 +458,7 @@ async function planGitHubIssue(
           issueNumber,
           subject: snapshot.title,
           instructions: plannedInstructions,
-          timeoutMs: 15 * 60_000,
+          timeoutMs: githubPlanningBudgetMs,
           maxOutputBytes: 256 * 1024,
         })
       : undefined;
@@ -783,6 +786,60 @@ async function enqueuePlanningStartedComment(
       `Workflow: ${identity.origin}/repositories/${repositoryFullName}/issues/${issueNumber}`,
     ].join("\n\n"),
     repositoryFullName,
+  );
+}
+
+export function planningStatusComment(
+  job: DurablePlanningJob,
+  identity: ReturnType<typeof runtimeIdentity>,
+  now = new Date(),
+): string {
+  const elapsedSeconds = Math.max(
+    0,
+    Math.floor((now.getTime() - Date.parse(job.createdAt)) / 1_000),
+  );
+  const stage =
+    job.status === "queued"
+      ? "waiting for a planner"
+      : job.status === "running"
+        ? "planning the issue"
+        : job.status === "retrying"
+          ? "waiting to retry planning"
+          : job.status === "completed"
+            ? "finalizing the planning result"
+            : "planning stopped";
+  const lines = [
+    "## ⏳ Roundhouse planning status",
+    `Planning job \`${job.jobId}\` is **${job.status}** (attempt ${job.attemptCount}, ${elapsedSeconds}s elapsed).`,
+    `Current stage: ${stage}.`,
+  ];
+  if (["queued", "running", "retrying"].includes(job.status))
+    lines.push("No action is needed while Roundhouse continues planning.");
+  else {
+    if (job.failureReason)
+      lines.push(
+        `Failure: \`${safePlanningFailureSummary(job.failureReason)}\``,
+      );
+    lines.push(
+      `Next action: \`${githubCommand(identity, job.command.kind === "start" ? "start" : "replan")}\``,
+    );
+  }
+  return lines.join("\n\n");
+}
+
+async function enqueuePlanningStatusComment(
+  env: ControlPlaneEnv,
+  repositoryFullName: string,
+  issueNumber: number,
+  job: DurablePlanningJob,
+): Promise<void> {
+  const identity = runtimeIdentity(env);
+  await enqueueProgressComment(
+    env,
+    repositoryFullName,
+    issueNumber,
+    job.jobId,
+    `${progressMarker(identity, issueNumber, job.jobId)}\n\n${planningStatusComment(job, identity)}`,
   );
 }
 
@@ -2698,6 +2755,7 @@ async function scheduleGitHubPlanning(
     issueNumber,
     actorId: `github:${actor}`,
     command,
+    restartCompleted: command.kind === "start" && !current,
     now: new Date(),
   });
   if (reservation.created) {
@@ -2750,7 +2808,7 @@ async function commandRejectionComment(
     ].join("\n\n");
   return [
     `Roundhouse rejected \`${githubCommand(identity, command.kind)}\` because the referenced plan or run is no longer current.`,
-    `Next action: \`${githubCommand(identity, "status")}\``,
+    `Next action: \`${githubCommand(identity, command.kind === "status" && !command.runId ? "start" : "status")}\``,
   ].join("\n\n");
 }
 
@@ -2832,7 +2890,7 @@ async function consumePlanningMessage(
       repositoryFullName: runtimeIdentity(env).repositoryFullName,
     },
     new Date(),
-    20 * 60_000,
+    githubPlanningLeaseMs,
   );
   if (!claim) {
     message.ack();
@@ -2996,8 +3054,33 @@ async function executeGitHubCommand(
     runId = await materializeGitHubPlan(env, issueNumber, command, actorId);
   } else if (command.kind === "status" && !(await issueRun(env, issueNumber))) {
     const plan = await readIssuePlan(env, issueNumber);
-    if (!plan)
-      throw new HttpError(409, "Issue does not have a Roundhouse plan");
+    if (!plan) {
+      const planning = await planningJobForIssue(
+        env,
+        runtimeIdentity(env).environment,
+        repositoryFullName,
+        issueNumber,
+      );
+      if (!planning)
+        throw new HttpError(409, "Issue does not have Roundhouse work");
+      if (command.runId && command.runId !== planning.jobId)
+        throw new HttpError(
+          409,
+          "Command planning job does not match this issue",
+        );
+      await enqueuePlanningStatusComment(
+        env,
+        repositoryFullName,
+        issueNumber,
+        planning,
+      );
+      return {
+        kind: "plan",
+        planId: planning.jobId,
+        state: planning.status,
+        revision: planning.attemptCount,
+      };
+    }
     if (command.runId && command.runId !== plan.plan.planId)
       throw new HttpError(409, "Command plan does not match this issue");
     await enqueuePlanComment(env, issueNumber, plan);
