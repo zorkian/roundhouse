@@ -21,17 +21,18 @@ and can walk away. Roundhouse:
 
 1. qualifies the request and asks only questions that materially affect the
    work;
-2. reproduces reported behavior when reproduction is applicable;
-3. proposes a repository-aware plan and assesses its risk;
-4. implements the change in an isolated workspace;
-5. formats, builds, tests, and repairs the result;
-6. obtains an independent adversarial review and addresses actionable
+2. selects the repository profile that applies to the authenticated actor;
+3. reproduces reported behavior when reproduction is applicable;
+4. proposes a repository-aware plan and assesses its risk;
+5. implements the change in an isolated workspace;
+6. formats, builds, tests, and repairs the result;
+7. obtains an independent adversarial review and addresses actionable
    findings;
-7. observes repository CI on the exact proposed commit; and
-8. presents a reviewable pull request with a concise risk analysis and an
+8. observes repository CI on the exact proposed commit; and
+9. presents a reviewable pull request with a concise risk analysis and an
    explicit recommendation; and
-9. merges the exact reviewed and passing head automatically when the configured
-   risk policy permits it.
+10. merges the exact reviewed and passing head automatically when the configured
+    risk policy permits it.
 
 The maintainer should not need to understand Roundhouse plans, runs, attempts,
 leases, evidence hashes, queues, or recovery machinery to make ordinary
@@ -92,12 +93,64 @@ authenticated actor and repository policy, never from prose alone.
 Current exact commands containing internal IDs, revisions, and hashes are
 implementation scaffolding and do not satisfy this V1 interaction contract.
 
+## Repository profiles and actor policy
+
+An enrolled repository can define multiple named profiles and select one from
+the authenticated GitHub actor and repository role. The selected profile is
+visible on every plan and pull request in maintainer language.
+
+A profile can govern at least:
+
+- who may start work and which issue or pull-request actions they may take;
+- allowed and protected paths or semantic change categories;
+- allowed validation, database-development, and migration-authoring commands;
+- resource, network, model, time, and retry limits;
+- which risk levels the actor may approve or merge;
+- whether automatic merge is permitted at each risk level; and
+- whether the actor may change repository profile and risk policy.
+
+The intended common shape is:
+
+- **Repository administrator:** may change Roundhouse profiles and repository
+  risk policy and may authorize any repository-scoped risk level, subject to
+  Roundhouse's non-overridable global boundaries and the GitHub App's actual
+  permissions.
+- **Trusted committer:** cannot change profiles, but may be allowed to author
+  database and migration code, approve plans, and merge low- or medium-risk
+  changes. Repository policy may prohibit this profile from authorizing
+  high-risk work.
+- **Public contributor:** may start Roundhouse, but works inside a narrow
+  change envelope such as visual-only paths. Even a low-risk result stops at a
+  reviewed pull request until an authorized committer or administrator approves
+  merge.
+
+Repository risk policy supplies repository-specific signals in addition to
+Roundhouse's baseline risk analysis. For example, a repository can declare
+authorization, migration, billing, cryptography, or particular non-obvious
+modules high risk. Risk classification examines both deterministic signals and
+the semantic plan or diff, explains which rules matched, and chooses the more
+restrictive result when uncertain. Repository content cannot silently lower a
+non-overridable Roundhouse boundary.
+
+Profile selection and version are bound to the plan and implementation. A
+profile edit cannot retroactively broaden active work. Every consequential
+action is authorized against the actor taking that action: a trusted committer
+may approve merge of a public contributor's reviewed pull request without
+granting the contributor committer authority. Any expansion of implementation
+scope requires an explicit adoption or new revision under an authorized
+profile.
+
+Changing profiles, actor mappings, or risk policy is itself high risk. It
+requires an administrator-authorized plan and final approval of the exact
+reviewed policy change; a profile cannot authorize its own silent escalation.
+
 ## Definitions of success
 
 ### Autonomous progress
 
-A clear low-risk issue requires no human action between the initial start and
-successful merge. Roundhouse may pause only when:
+A clear low-risk issue started under a profile that permits low-risk automatic
+merge requires no human action between the initial start and successful merge.
+Roundhouse may pause only when:
 
 - missing information materially changes the likely implementation;
 - repository policy requires approval before a risky or protected change;
@@ -174,16 +227,16 @@ that are closed or whose proposed implementation is no longer appropriate.
 They inform the journeys and priorities; they are not frozen specifications
 that must be implemented literally.
 
-| Observed issues                                                                                                                                                                                                                      | Product signal                                                                                                                | First goal affected |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- | ------------------- |
-| [#61](https://github.com/zorkian/roundhouse/issues/61)                                                                                                                                                                               | Risk-aware automatic merge, prompt acknowledgement, and one clear next action                                                 | Goals 1-3           |
-| [#66](https://github.com/zorkian/roundhouse/issues/66), [#134](https://github.com/zorkian/roundhouse/issues/134)                                                                                                                     | Live execution visibility and truthful planning state must be obvious without drilling through internal records               | Goal 1              |
-| [#136](https://github.com/zorkian/roundhouse/issues/136)                                                                                                                                                                             | GitHub issue lifecycle is authoritative; stale internal artifacts must not create false attention                             | Goal 1              |
-| [#82](https://github.com/zorkian/roundhouse/issues/82), [#80](https://github.com/zorkian/roundhouse/issues/80), [#79](https://github.com/zorkian/roundhouse/issues/79)                                                               | Reproduction, complete review packages, correct CI/review semantics, and automatic remediation are core product behavior      | Goals 1 and 3       |
-| [#33](https://github.com/zorkian/roundhouse/issues/33), [#65](https://github.com/zorkian/roundhouse/issues/65), [#74](https://github.com/zorkian/roundhouse/issues/74), [#126](https://github.com/zorkian/roundhouse/issues/126)     | Qualification, replanning, and rejected commands must support natural recovery rather than silence or a new issue             | Goal 2              |
-| [#36](https://github.com/zorkian/roundhouse/issues/36), [#92](https://github.com/zorkian/roundhouse/issues/92), [#110](https://github.com/zorkian/roundhouse/issues/110), [#113](https://github.com/zorkian/roundhouse/issues/113)   | Retries and manual fallbacks must preserve intent, remain independently reviewed, and avoid brittle structural contracts      | Goal 3              |
-| [#83](https://github.com/zorkian/roundhouse/issues/83), [#107](https://github.com/zorkian/roundhouse/issues/107), [#120](https://github.com/zorkian/roundhouse/issues/120), [#128](https://github.com/zorkian/roundhouse/issues/128) | Latency, paid attempts, deterministic retries, and operator effort are acceptance metrics, not internal trivia                | All goals           |
-| [#133](https://github.com/zorkian/roundhouse/issues/133), [#135](https://github.com/zorkian/roundhouse/issues/135)                                                                                                                   | Repository onboarding and profile evolution must not require editing Roundhouse internals or escaping self-development policy | Goal 4              |
+| Observed issues                                                                                                                                                                                                                      | Product signal                                                                                                                               | First goal affected |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
+| [#61](https://github.com/zorkian/roundhouse/issues/61)                                                                                                                                                                               | Risk-aware automatic merge, prompt acknowledgement, and one clear next action                                                                | Goals 1-3           |
+| [#66](https://github.com/zorkian/roundhouse/issues/66), [#134](https://github.com/zorkian/roundhouse/issues/134)                                                                                                                     | Live execution visibility and truthful planning state must be obvious without drilling through internal records                              | Goal 1              |
+| [#136](https://github.com/zorkian/roundhouse/issues/136)                                                                                                                                                                             | GitHub issue lifecycle is authoritative; stale internal artifacts must not create false attention                                            | Goal 1              |
+| [#82](https://github.com/zorkian/roundhouse/issues/82), [#80](https://github.com/zorkian/roundhouse/issues/80), [#79](https://github.com/zorkian/roundhouse/issues/79)                                                               | Reproduction, complete review packages, correct CI/review semantics, and automatic remediation are core product behavior                     | Goals 1 and 3       |
+| [#33](https://github.com/zorkian/roundhouse/issues/33), [#65](https://github.com/zorkian/roundhouse/issues/65), [#74](https://github.com/zorkian/roundhouse/issues/74), [#126](https://github.com/zorkian/roundhouse/issues/126)     | Qualification, replanning, and rejected commands must support natural recovery rather than silence or a new issue                            | Goal 2              |
+| [#36](https://github.com/zorkian/roundhouse/issues/36), [#92](https://github.com/zorkian/roundhouse/issues/92), [#110](https://github.com/zorkian/roundhouse/issues/110), [#113](https://github.com/zorkian/roundhouse/issues/113)   | Retries and manual fallbacks must preserve intent, remain independently reviewed, and avoid brittle structural contracts                     | Goal 3              |
+| [#83](https://github.com/zorkian/roundhouse/issues/83), [#107](https://github.com/zorkian/roundhouse/issues/107), [#120](https://github.com/zorkian/roundhouse/issues/120), [#128](https://github.com/zorkian/roundhouse/issues/128) | Latency, paid attempts, deterministic retries, and operator effort are acceptance metrics, not internal trivia                               | All goals           |
+| [#133](https://github.com/zorkian/roundhouse/issues/133), [#135](https://github.com/zorkian/roundhouse/issues/135)                                                                                                                   | Repository onboarding and multiple actor-specific profiles must not require editing Roundhouse internals or escaping self-development policy | Goal 4              |
 
 New maintainer-filed issues are reviewed during each goal. A newly observed
 problem is mapped to the earliest affected goal and severity before more outer-
@@ -272,7 +325,8 @@ package, followed by exact-head merge.
 
 Goal 1 deliberately does not require clarification, free-form questions,
 medium/high-risk approval, automatic repair of seeded failures, fault-injected
-recovery, or external repository enrollment.
+recovery, multiple actor profiles, or external repository enrollment. It assumes
+the existing Roundhouse administrator profile.
 
 **Exit gate:**
 
@@ -350,7 +404,8 @@ does not need routine babysitting when the happy path bends.
       published work.
 - [ ] A high-risk or protected-path request cannot proceed without the required
       plan approval; after exact-head review it requires a final approval bound
-      to the findings and change summary before merge.
+      to the findings and change summary from an actor whose profile may
+      authorize that risk before merge.
 - [ ] Stale approval, changed head, failed review, failing CI, or merge conflict
       fails closed with one exact next action.
 - [ ] Prompt injection cannot grant authority, credentials, scope, network
@@ -367,20 +422,28 @@ enroll a public repository and receive the same fast, low-babysitting
 experience."
 
 Goal 4 removes Roundhouse-specific assumptions, completes the external pilot,
-and applies the full release scorecard. It is the V1 acceptance gate, not a new
-feature tier after V1.
+proves actor-specific repository profiles, and applies the full release
+scorecard. It is the V1 acceptance gate, not a new feature tier after V1.
 
 **Exit gate:**
 
 - [ ] A non-Roundhouse public repository is enrolled without source edits,
       direct database work, Queue manipulation, or manual Cloudflare resource
       changes.
+- [ ] The repository configures administrator, trusted-committer, and public-
+      contributor profiles, including repository-specific high-risk rules.
+- [ ] An administrator changes the profile policy through an authorized,
+      reviewed path; neither other profile can change it.
+- [ ] A trusted committer can author migration code and merge permitted low- or
+      medium-risk work but cannot authorize repository-defined high-risk work.
+- [ ] A public contributor can start a constrained issue-to-PR journey but
+      cannot expand its change envelope or cause automatic merge.
 - [ ] Its maintainer completes the required live clear-bug, clarification,
       question-only, review-remediation, and CI-repair scenarios.
 - [ ] The external runs meet the same autonomy, speed, safety, review, risk,
       and recommendation criteria as the Roundhouse runs, ending at the
       repository's configured merge boundary.
-- [ ] The complete AC-01 through AC-15 evidence report and release scorecard
+- [ ] The complete AC-01 through AC-16 evidence report and release scorecard
       pass at one candidate commit.
 - [ ] The external maintainer explicitly accepts that the product saves more
       time than it consumes.
@@ -391,6 +454,10 @@ The goals prioritize product journeys, not security regressions. These
 requirements apply from Goal 1 and cannot be deferred to a later circle:
 
 - authenticate and authorize state-changing or resource-spending actions;
+- select and bind the actor's repository profile before planning or spending
+  work;
+- authorize each later action against the actor taking that action without
+  silently expanding the implementation profile;
 - keep GitHub, Cloudflare, and control-plane credentials out of
   repository execution;
 - constrain execution time, attempts, output, storage, network, and model use;
@@ -422,6 +489,7 @@ first required slice and when the full criterion becomes mandatory.
 | AC-13 Decision package              | Clear low-risk path                                 | Goal 1                  |
 | AC-14 Stop safely                   | Hard resource limits apply from Goal 1              | Goal 3                  |
 | AC-15 Risk-aware merge              | Low-risk automatic merge                            | Goal 3                  |
+| AC-16 Actor-specific profiles       | Existing administrator profile is assumed           | Goal 4                  |
 
 ### Goal progress record
 
@@ -510,11 +578,13 @@ increment; checking the complete AC item is reserved for full V1 acceptance.
 
 - [ ] Every plan receives a low, medium, or high risk assessment with concrete
       reasons and identified blast radius.
-- [ ] Low-risk work requires no approval and proceeds autonomously through
-      implementation, exact-head validation, independent review, repository
-      CI, and merge.
+- [ ] Low-risk work proceeds autonomously through implementation, exact-head
+      validation, independent review, repository CI, and merge when the selected
+      profile permits automatic low-risk merge; otherwise it stops at the
+      reviewed pull request for an authorized actor.
 - [ ] Medium-risk work requires exactly one revision-bound plan approval and
-      then proceeds autonomously through the same implementation and merge path.
+      then proceeds autonomously through the same implementation and merge path
+      only when the selected profile permits medium-risk merge.
 - [ ] High-risk or protected work requires a revision-bound plan approval
       before implementation and a final approval bound to the reviewed exact
       head, findings, change summary, and residual risk before merge.
@@ -642,12 +712,13 @@ increment; checking the complete AC item is reserved for full V1 acceptance.
 ### AC-15: Merge according to risk
 
 - [ ] Low-risk work automatically merges the exact passing and reviewed head
-      and confirms that the pull request is closed as merged.
+      and confirms that the pull request is closed as merged when the selected
+      actor profile permits it.
 - [ ] Medium-risk work follows the same automatic merge path after exactly one
-      valid plan approval.
+      valid plan approval when the selected actor profile permits it.
 - [ ] High-risk work requires both a valid plan approval and a final approval
       bound to the reviewed exact head, findings, final change summary, and
-      residual risk before merge.
+      residual risk from an actor whose profile may authorize high-risk merge.
 - [ ] Failed, incomplete, or stale review, validation, or CI cannot result in
       merge.
 - [ ] Merge verifies the intended repository, base, and exact head; handles
@@ -655,6 +726,34 @@ increment; checking the complete AC item is reserved for full V1 acceptance.
 - [ ] Final status reports the merge commit and closed pull request.
 - [ ] Repository-owned build, release, deployment, rollout, and migration
       execution remain outside Roundhouse's V1 workflow.
+
+### AC-16: Apply actor-specific repository profiles
+
+- [ ] A repository can define multiple named, versioned profiles and map
+      authenticated actors or GitHub repository roles to them, with one explicit
+      default for otherwise-unmatched actors.
+- [ ] The applicable profile and its material restrictions are visible before
+      Roundhouse spends implementation work.
+- [ ] An administrator profile can change profiles and repository-specific risk
+      policy through an authorized, reviewed change; profiles without that
+      capability cannot do so.
+- [ ] A trusted-committer profile can be allowed to author database and migration
+      code and approve or merge configured low- and medium-risk work while being
+      prohibited from authorizing high-risk work.
+- [ ] A public-contributor profile can start work within a narrow configured
+      envelope and reach a reviewed pull request, but cannot expand scope or
+      automatically merge even low-risk work.
+- [ ] A separately authorized committer or administrator can approve merge of a
+      public contributor's exact reviewed head under their own authority without
+      transferring that authority to the contributor.
+- [ ] Repository-defined risk rules can elevate paths and semantic change
+      categories, including non-obvious repository-specific concerns, and the
+      final risk explanation identifies the matched rules.
+- [ ] A plan and run retain their bound profile version. Profile changes do not
+      retroactively broaden active work, and a newly restrictive policy is
+      rechecked before merge.
+- [ ] No repository profile can override Roundhouse's global resource,
+      credential, publication, or repository-isolation boundaries.
 
 ## Acceptance scenario set by goal
 
@@ -698,7 +797,14 @@ be repeated on a distinct issue.
 
 Goal 4 reruns at least five scenarios live against a non-Roundhouse public
 repository: a clear bug, clarification, question-only interaction, review
-remediation, and CI repair.
+remediation, and CI repair. It also runs these profile scenarios:
+
+16. repository administrator changes profile or risk policy through an
+    authorized reviewed change;
+17. trusted committer authors migration code and merges permitted medium-risk
+    work but is denied a high-risk authorization; and
+18. public contributor reaches a constrained reviewed pull request that remains
+    unmerged until a trusted committer or administrator approves the exact head.
 
 Across all goals, at least ten distinct scenarios must use real or historically
 replayed issues. Fault injection may supplement but not replace live evidence
@@ -719,7 +825,7 @@ Acceptance defects use these severities:
 
 V1 acceptance requires all of the following:
 
-- [ ] Every AC-01 through AC-15 journey has live or replay evidence at the
+- [ ] Every AC-01 through AC-16 journey has live or replay evidence at the
       candidate commit.
 - [ ] One external public repository is enrolled and completes the five
       required live scenarios.
@@ -741,6 +847,9 @@ V1 acceptance requires all of the following:
       repository CI pass for the exact merged head.
 - [ ] Every automatic merge is recorded with the exact commit and closed pull
       request.
+- [ ] Administrator, trusted-committer, and public-contributor profile journeys
+      each demonstrate allowed behavior and denial of at least one prohibited
+      action.
 - [ ] Median and p95 end-to-end time, model tokens, estimated cost, human
       interventions, implementation attempts, review cycles, and failure category
       are reported.
@@ -755,7 +864,9 @@ The acceptance report records, for every scenario:
 - start, first-status, plan, pull-request, review-complete, CI-complete,
   recommendation, and merge-complete timestamps;
 - qualification and reproduction outcome;
-- risk level, required approvals, and actual human interventions;
+- initiating actor, acting approvers, selected profile and version, risk level,
+  matched repository risk rules, required approvals, and actual human
+  interventions;
 - implementation, validation, review, and CI attempt counts;
 - token and available cost measurements;
 - final pull-request, exact-head commit, and merge commit;
@@ -771,10 +882,17 @@ record may support the evidence but cannot replace the end-to-end journey.
 Roundhouse is currently a dogfood POC and does not pass this checklist. Known
 unmet or undemonstrated criteria include the complete risk-tiered automatic
 merge workflow, contextual natural-language interaction without copied IDs or
-hashes, command discovery and malformed-command guidance, external repository
-enrollment, external pilot evidence, bounded terminal handling of repeated
-review findings, truthful issue/dashboard lifecycle projection, and a complete
-journey-level acceptance report.
+hashes, multiple actor-specific repository profiles, repository-defined risk
+rules, role-aware action authorization, command discovery and malformed-command
+guidance, external repository enrollment, external pilot evidence, bounded
+terminal handling of repeated review findings, truthful issue/dashboard
+lifecycle projection, and a complete journey-level acceptance report.
+
+The current profile schema describes one repository's runtime, validation,
+network, protected paths, and artifacts. It does not define multiple actor
+profiles or merge authority, and current GitHub authorization paths still assume
+one hard-coded maintainer. AC-16 is therefore new product work rather than
+acceptance evidence for an existing capability.
 
 Progress should be reported against AC identifiers rather than a general claim
 that V1 is complete. Any newly discovered maintainer-facing gap must be linked
