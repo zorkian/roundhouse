@@ -718,9 +718,10 @@ export class GitHubAppGateway {
           comparison.total_commits !== comparison.commits.length ||
           comparison.commits.at(-1)?.sha !== pull.base.sha ||
           !interveningFiles ||
+          interveningFiles.length === 0 ||
           interveningFiles.length >= 100 ||
-          new Set(interveningFiles.map((file) => file.filename.toLowerCase()))
-            .size !== interveningFiles.length ||
+          new Set(interveningFiles.map((file) => file.filename)).size !==
+            interveningFiles.length ||
           interveningFiles.some((file) =>
             approvedPaths.has(file.filename.toLowerCase()),
           )

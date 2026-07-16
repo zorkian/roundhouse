@@ -702,7 +702,7 @@ describe("GitHub App gateway", () => {
           base_commit: { sha: originalBaseSha },
           merge_base_commit: { sha: originalBaseSha },
           commits: [{ sha: advancedBaseSha }],
-          files: [{ filename: "Makefile" }, { filename: "README.md" }],
+          files: [{ filename: "Makefile" }, { filename: "makefile" }],
         });
       if (url.pathname.endsWith("/pulls/7") && method === "GET")
         return json({
@@ -770,6 +770,66 @@ describe("GitHub App gateway", () => {
           merge_base_commit: { sha: originalBaseSha },
           commits: [{ sha: advancedBaseSha }],
           files: [{ filename: "Packages/Domain/src/ids.ts" }],
+        });
+      if (url.pathname.endsWith("/pulls/7"))
+        return json({
+          number: 7,
+          html_url: "https://github.com/zorkian/roundhouse/pull/7",
+          state: "open",
+          draft: false,
+          merged: false,
+          merge_commit_sha: null,
+          merged_at: null,
+          base: {
+            sha: advancedBaseSha,
+            repo: { full_name: "zorkian/roundhouse" },
+          },
+          head: {
+            sha: headSha,
+            repo: { full_name: "zorkian/roundhouse" },
+          },
+        });
+      return json({}, 404);
+    };
+    const gateway = new GitHubAppGateway(
+      { appId: "1", installationId: "2", privateKey },
+      fetcher,
+    );
+    await expect(
+      gateway.mergePullRequest({
+        repositoryFullName: "zorkian/roundhouse",
+        pullRequestNumber: 7,
+        expectedBaseSha: originalBaseSha,
+        expectedHeadSha: headSha,
+        approvedPaths: ["packages/domain/src/ids.ts"],
+      }),
+    ).rejects.toMatchObject({ code: "stale_base" });
+  });
+
+  it("rejects base advancement with an empty comparison file list", async () => {
+    const originalBaseSha = "a".repeat(40);
+    const advancedBaseSha = "d".repeat(40);
+    const headSha = "b".repeat(40);
+    const fetcher: typeof fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/access_tokens"))
+        return json({
+          token: "installation-token",
+          expires_at: "2026-07-12T02:00:00Z",
+        });
+      if (
+        url.pathname.endsWith(
+          `/compare/${originalBaseSha}...${advancedBaseSha}`,
+        )
+      )
+        return json({
+          status: "ahead",
+          ahead_by: 1,
+          total_commits: 1,
+          base_commit: { sha: originalBaseSha },
+          merge_base_commit: { sha: originalBaseSha },
+          commits: [{ sha: advancedBaseSha }],
+          files: [],
         });
       if (url.pathname.endsWith("/pulls/7"))
         return json({
