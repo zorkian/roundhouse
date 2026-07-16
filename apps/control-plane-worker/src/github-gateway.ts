@@ -29,6 +29,21 @@ type GatewayConfig = {
 
 type GitHubResponse<T> = { status: number; value: T };
 
+export type GitHubIssueState = {
+  repositoryFullName: string;
+  issueNumber: number;
+  state: "open" | "closed";
+  updatedAt: string;
+  closedAt?: string;
+};
+
+export type GitHubIssueStateReference = {
+  schemaVersion: 1;
+  owner: string;
+  repository: string;
+  number: number;
+};
+
 export class GitHubAppGatewayError extends Error {
   constructor(
     readonly code: string,
@@ -302,6 +317,58 @@ export class GitHubAppGateway {
       throw new GitHubAppGatewayError(
         "invalid_response",
         "GitHub issue response was invalid",
+      );
+    }
+  }
+
+  async fetchIssueState(
+    reference: GitHubIssueStateReference,
+  ): Promise<GitHubIssueState> {
+    const repositoryFullName = `${reference.owner}/${reference.repository}`;
+    if (
+      repositoryFullName !== this.repositoryFullName ||
+      !Number.isSafeInteger(reference.number) ||
+      reference.number < 1
+    )
+      throw new GitHubAppGatewayError(
+        "invalid_request",
+        "GitHub issue state request was invalid",
+      );
+    const issue = (
+      await this.api<{
+        number: number;
+        html_url: string;
+        state: string;
+        updated_at: string;
+        closed_at: string | null;
+        pull_request?: unknown;
+      }>(
+        "GET",
+        `/repos/${reference.owner}/${reference.repository}/issues/${reference.number}`,
+      )
+    ).value;
+    try {
+      if (
+        issue.number !== reference.number ||
+        issue.html_url !==
+          `https://github.com/${repositoryFullName}/issues/${reference.number}` ||
+        !["open", "closed"].includes(issue.state) ||
+        issue.pull_request !== undefined
+      )
+        throw new Error("invalid issue state");
+      return {
+        repositoryFullName,
+        issueNumber: issue.number,
+        state: issue.state as "open" | "closed",
+        updatedAt: new Date(issue.updated_at).toISOString(),
+        ...(issue.closed_at
+          ? { closedAt: new Date(issue.closed_at).toISOString() }
+          : {}),
+      };
+    } catch {
+      throw new GitHubAppGatewayError(
+        "invalid_response",
+        "GitHub issue state response was invalid",
       );
     }
   }

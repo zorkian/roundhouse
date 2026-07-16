@@ -663,6 +663,8 @@ describe("local control-plane Worker", () => {
               "- `apps/control-plane-worker/src/github-gateway.ts`",
               "- `apps/control-plane-worker/src/github-gateway.test.ts`",
             ].join("\n"),
+            state: "open",
+            closed_at: null,
             updated_at: "2026-07-12T00:00:00Z",
           }),
         );
@@ -949,6 +951,13 @@ describe("local control-plane Worker", () => {
     await expect(dashboard.json()).resolves.toMatchObject({
       plans: [{ status: "materialized", runId: implementationResult.runId }],
       runs: [{ runId: implementationResult.runId }],
+      issueStates: [
+        {
+          repositoryFullName: "zorkian/roundhouse",
+          issueNumber: 17,
+          state: "open",
+        },
+      ],
     });
     const replayedUiApproval = await handler.fetch!(
       request(`/v1/plans/${plan!.plan.planId}/approve`, {
