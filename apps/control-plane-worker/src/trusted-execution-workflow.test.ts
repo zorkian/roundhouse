@@ -175,6 +175,92 @@ describe("trusted execution Workflow dispatch", () => {
       { expected_revision: 2, status: "dispatched" },
     ]);
   });
+
+  it("dispatches finalization recovery for an awaiting-publication run", async () => {
+    const created = new Set<string>();
+    const env = environment(created);
+    const recoveryDelivery = {
+      ...delivery,
+      deliveryId: "recovery_run_trusted_workflow_6",
+      expectedRevision: 6,
+    };
+    await database
+      .prepare(
+        "UPDATE self_development_runs SET revision = 6, state = 'awaiting_publication' WHERE run_id = ?",
+      )
+      .bind(delivery.runId)
+      .run();
+
+    await consumeTrustedExecutionDelivery(
+      {
+        body: recoveryDelivery,
+        ack: () => undefined,
+        retry: () => undefined,
+      },
+      env,
+    );
+
+    expect(created.size).toBe(1);
+    await expect(
+      database
+        .prepare(
+          "SELECT delivery_id, expected_revision, status, started_at FROM trusted_execution_workflows WHERE run_id = ?",
+        )
+        .bind(delivery.runId)
+        .first(),
+    ).resolves.toEqual({
+      delivery_id: recoveryDelivery.deliveryId,
+      expected_revision: recoveryDelivery.expectedRevision,
+      status: "dispatched",
+      started_at: null,
+    });
+  });
+
+  it("completes a duplicate same-revision delivery without starting another workflow", async () => {
+    const created = new Set<string>();
+    const env = environment(created);
+    const duplicateDelivery = {
+      ...delivery,
+      deliveryId: "duplicate_delivery_trusted_workflow_1",
+    };
+
+    await consumeTrustedExecutionDelivery(
+      { body: delivery, ack: () => undefined, retry: () => undefined },
+      env,
+    );
+    await consumeTrustedExecutionDelivery(
+      {
+        body: duplicateDelivery,
+        ack: () => undefined,
+        retry: () => undefined,
+      },
+      env,
+    );
+
+    expect(created.size).toBe(1);
+    const rows = await database
+      .prepare(
+        "SELECT delivery_id, status, started_at FROM trusted_execution_workflows WHERE run_id = ? ORDER BY delivery_id",
+      )
+      .bind(delivery.runId)
+      .all<{
+        delivery_id: string;
+        status: string;
+        started_at: string | null;
+      }>();
+    expect(rows.results).toEqual([
+      {
+        delivery_id: "delivery_trusted_workflow_1",
+        status: "dispatched",
+        started_at: null,
+      },
+      {
+        delivery_id: "duplicate_delivery_trusted_workflow_1",
+        status: "completed",
+        started_at: null,
+      },
+    ]);
+  });
 });
 
 describe("trusted review Workflow dispatch", () => {
