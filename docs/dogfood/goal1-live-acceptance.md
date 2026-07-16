@@ -33,6 +33,9 @@ Use UTC timestamps with seconds and link the maintainer-visible evidence. Keep
 excluded GitHub-hosted runner queue time visible rather than subtracting it
 silently. Record `0` when there were no human interventions.
 
+Repaired or stalled runs are useful diagnostic evidence, but they do not count
+toward the final clean set of three consecutive Goal 1 runs.
+
 Goal 1 product acceptance evidence ends when the pull request is merged and the
 originating issue is closed. Development deployment evidence may be recorded
 separately for Roundhouse's own engineering workflow, but it is not part of the
