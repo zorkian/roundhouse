@@ -134,7 +134,7 @@ export async function dispatchTrustedExecutionWorkflow(
        WHERE EXISTS (
          SELECT 1 FROM self_development_runs
           WHERE run_id = ? AND revision = ?
-            AND state NOT IN ('completed', 'cancelled', 'failed', 'awaiting_approval', 'awaiting_publication')
+            AND state NOT IN ('completed', 'cancelled', 'failed')
        ) AND NOT EXISTS (
          SELECT 1 FROM trusted_execution_workflows
           WHERE run_id = ? AND expected_revision = ?
