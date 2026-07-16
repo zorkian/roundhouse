@@ -2483,6 +2483,13 @@ async function finalizeIndependentReviewProjection(
           issueNumber: completed.request.issueNumber,
           headSha: completed.request.headCommit,
         };
+  await enqueueReviewComment(env, completed);
+  await flushGitHubOutputs(env).catch((error) =>
+    console.warn("Independent review GitHub status delivery deferred", {
+      reviewId: completed.request.reviewId,
+      reason: redactedReason(error),
+    }),
+  );
   const mergeDisposition = candidate
     ? await attemptEligibleAutomaticMerge(env, candidate)
     : "not_eligible";
