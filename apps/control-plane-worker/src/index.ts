@@ -2133,36 +2133,16 @@ async function attemptEligibleAutomaticMerge(
     ))
   )
     return "waiting";
-  const approvedPaths = (await new D1JobStore(env.DB).read(identity.runId))
-    .implementation?.changedFiles;
-  if (!approvedPaths || approvedPaths.length === 0) {
-    const failure = automaticMergeFailure(
-      new GitHubAppGatewayError(
-        "internal_failure",
-        "Roundhouse could not load the approved implementation paths for automatic merge",
-        false,
-      ),
-    );
-    await githubGateway(env)
-      .updatePullRequestPackage({
-        repositoryFullName: identity.repositoryFullName,
-        pullRequestNumber: identity.pullRequestNumber,
-        expectedHeadSha: identity.headSha,
-        sections: {
-          action: `## Next action\n\n${failure.nextAction}`,
-        },
-      })
-      .catch(() => undefined);
-    await enqueueComment(
-      env,
-      `automatic-merge-missing-approved-paths:${identity.repositoryFullName}:${identity.pullRequestNumber}:${identity.headSha}`,
-      identity.issueNumber,
-      `Roundhouse did not automatically merge exact head \`${identity.headSha}\` because it could not load the approved implementation paths. **Next action:** ${failure.nextAction}`,
-      identity.repositoryFullName,
-    );
-    await flushGitHubOutputs(env).catch(() => undefined);
-    return "manual_required";
-  }
+  const approvedPaths = await new D1JobStore(env.DB)
+    .read(identity.runId)
+    .then((job) => job.implementation?.changedFiles)
+    .catch((error) => {
+      console.warn("Automatic merge approved-path lookup deferred", {
+        runId: identity.runId,
+        reason: redactedReason(error),
+      });
+      return undefined;
+    });
   const reservation = await claimAutomaticMerge(env, identity);
   if (reservation.kind === "merged") {
     if (!reservation.projectionComplete) {

@@ -694,6 +694,11 @@ export class GitHubAppGateway {
             approvedPath.toLowerCase(),
           ),
         );
+        if (approvedPaths.size === 0)
+          throw new GitHubAppGatewayError(
+            "internal_failure",
+            "Roundhouse could not load the approved implementation paths for automatic merge",
+          );
         const comparison = (
           await this.api<{
             status: string;
@@ -710,7 +715,6 @@ export class GitHubAppGateway {
         ).value;
         const interveningFiles = comparison.files;
         if (
-          approvedPaths.size === 0 ||
           comparison.status !== "ahead" ||
           comparison.base_commit.sha !== input.expectedBaseSha ||
           comparison.merge_base_commit.sha !== input.expectedBaseSha ||
