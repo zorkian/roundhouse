@@ -13,4 +13,17 @@ describe("IDs", () => {
     expect(idSchema("run").parse(first)).toBe(first);
     expect(second > first).toBe(true);
   });
+
+  it("accepts lowercase ULIDs and returns their canonical representation", () => {
+    const uppercase = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+    expect(idSchema("run").parse(uppercase.toLowerCase())).toBe(uppercase);
+  });
+
+  it.each(["01ARZ3NDEKTSV4RRFFQ69G5FAI", "01ARZ3NDEKTSV4RRFFQ69G5FAO"])(
+    "rejects ULIDs containing ambiguous characters: %s",
+    (value) => {
+      expect(idSchema("run").safeParse(value).success).toBe(false);
+    },
+  );
 });
