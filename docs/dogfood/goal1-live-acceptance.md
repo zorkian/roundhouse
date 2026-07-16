@@ -10,7 +10,8 @@ only provides a compact evidence record.
 
 ## Prerequisites
 
-- Record the Goal 1 candidate commit: `<full commit SHA>`.
+- Record the exact development candidate commit active when the three Goal 1
+  starts are issued: `<full commit SHA>`.
 - Use the Roundhouse development App (`/rhd` or `/roundhouse-dev`) and
   development resources for an enrolled repository with its reviewed
   administrator profile configured to permit low-risk automatic merge.
@@ -22,6 +23,9 @@ only provides a compact evidence record.
   type for the third journey.
 - Run all three starts against the same candidate commit. After each start, no
   human acts until Roundhouse confirms the merge.
+- Record subsequent merges during the three-run sequence separately as each
+  journey's merge commit; they do not change the candidate commit for that
+  evidence batch.
 
 ## Evidence record
 
