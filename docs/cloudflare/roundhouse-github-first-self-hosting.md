@@ -23,6 +23,10 @@ pull request, review cycles, exact reviewed heads, finding counts, and retained
 evidence links. Detailed plan, run, revision-history, review, and evidence
 pages remain available for diagnosis. Successful CI observations stay quiet;
 they do not create issue comments merely because a check was observed.
+During implementation and independent review attempts, the run and review
+details cursor-poll a bounded live agent-output tail. The tail is an operator
+aid, not authoritative evidence; retained results and classifications remain
+the durable record.
 
 Independent review is projected as one comment per review cycle on the issue
 and generated pull request. The comment starts as “review in progress,” then is
@@ -49,6 +53,28 @@ The HTTP boundary rejects unenrolled repositories, and new work must not add
 another issue-number-only dependency. A multi-tenant milestone will migrate
 those older tables behind repository and installation identities before a
 second repository is enrolled.
+
+## Intent and enforcement
+
+Trusted repository policy is the hard boundary for every patch: allowed and
+denied paths, protected basenames, file-count and patch-size limits, and the
+other reviewed profile constraints cannot be widened by issue text or a plan.
+The approved issue objective and acceptance criteria define intent. Likely
+paths are advisory predictions, not a second allowlist.
+
+An implementation may retain a material but policy-permitted topology
+difference when that is necessary to satisfy the approved intent. Roundhouse
+makes the difference reviewable through the exact changed-file inventory and
+implementation summary. Deterministic validation evaluates the patch contract,
+independent review evaluates the exact published head, repository CI evaluates
+that same head, and a human retains the final merge decision.
+
+Operators should keep failure classes separate: deterministic contract or
+repository-policy rejection, transient infrastructure interruption, mechanical
+format/test/typecheck validation, semantic independent-review findings, and
+repository CI failure. Retry is appropriate for transient infrastructure;
+the other classes require correcting or explicitly reviewing their respective
+input or result.
 
 ## Recovery semantics
 
@@ -154,12 +180,16 @@ than a reason to withhold these bounded changes.
 - only the public `zorkian/roundhouse` installation is enrolled;
 - plan and issue-run persistence still has a single-repository adapter beneath
   the repository-qualified boundary;
-- the UI polls every five seconds and does not stream Container output;
+- live agent output is a bounded, cursor-polled tail for active implementation
+  and review attempts, rather than an unbounded stream or durable evidence;
 - marker reconciliation is bounded to one GitHub API page of up to 100 issue
   comments; normal updates use the retained exact GitHub comment ID, while
   unusually noisy issues may require a later paginated recovery improvement;
 - the Codex and Claude subscription credentials remain narrow development
   exceptions rather than the production credential architecture;
 - pilot pull requests require a human merge decision;
+- production promotion remains human-only; multi-repository enrollment, private
+  repositories, automatic merge, and production credential brokerage remain
+  out of scope;
 - reliability hardening beyond the fundamental security and publication
   invariants is intentionally deferred in favor of reaching a useful V1.

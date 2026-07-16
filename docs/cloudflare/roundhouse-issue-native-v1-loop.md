@@ -29,7 +29,10 @@ and produces a repository-policy-qualified plan before it can create a run.
    proposal by the verified maintainer proceeds directly toward a draft PR.
 5. Follow the run link. The page polls every five seconds and displays durable
    state, revision, attempts, classifications, evidence objects, patch identity,
-   and publication state. Cancel and retry use the exact displayed revision.
+   and publication state. During implementation and independent review
+   attempts, it also cursor-polls a bounded live agent-output tail, without
+   making that transient tail authoritative evidence. Cancel and retry use the
+   exact displayed revision.
 6. At `awaiting_approval`, independently review the patch and evidence. Existing
    `/rh approve` and `/rh publish` commands retain their exact base, patch,
    evidence-set, revision, actor, and verified-publication bindings.
@@ -81,6 +84,16 @@ immutable in R2 and hash-bound into D1. Publication uses the GitHub App in the
 Worker, never in the Container, and can create only the approved commit from the
 approved patch on the verified base.
 
+Repository policy and approved intent have different roles. Trusted repository
+policy is the hard execution boundary; issue objectives, acceptance criteria,
+and likely paths describe the approved intent, with likely paths remaining
+advisory. A policy-permitted implementation may therefore retain material
+topology differences from the predicted paths. Roundhouse records those
+differences in the exact changed-file inventory and implementation summary.
+Deterministic validation then checks the resulting patch and contract,
+independent review evaluates the exact published head, repository CI evaluates
+that same head, and a human makes the final merge decision.
+
 ## Operations and recovery
 
 The dashboard lists the fifty most recently updated plans and runs. JSON remains
@@ -93,11 +106,18 @@ An explicit retry of a failed trusted implementation does not begin again with
 only error text. The Worker retrieves the exact immutable failed evidence from
 R2, verifies its binding, and supplies the complete prior patch and changed-file
 inventory to the new attempt. The Container applies that patch to the exact base
-before invoking the agent. The approved path set is an upper bound: every final
-changed path must be approved, but the implementation need not change every path
-predicted by planning. A retry may revise or revert prior edits when they are no
-longer needed. Retry lineage, whether all prior paths remain, and the prior patch
+before invoking the agent. Every final changed path must satisfy trusted
+repository policy, but the implementation need not change every path predicted
+by planning. A retry may revise or revert prior edits when they are no longer
+needed. Retry lineage, whether all prior paths remain, and the prior patch
 SHA-256 are retained in the new evidence.
+
+Operators should distinguish deterministic contract or repository-policy
+failures from transient infrastructure failures, mechanical validation failures,
+semantic independent-review findings, and repository CI failures. Each class
+has a different remedy: change an out-of-contract patch or plan, retry recoverable
+infrastructure, repair formatting/tests/typechecking, address or disposition a
+review finding, or diagnose the repository check on the exact head.
 
 When a run needs implementation approval, Roundhouse creates one idempotent
 timeline notification in addition to updating the rolling status comment. The
@@ -126,6 +146,9 @@ retain the additive tables, R2 evidence, runs, issues, and pull requests.
 - Destructive retention and cleanup remain disabled.
 - Reliability hardening beyond demonstrated restart, replay, leases, and exact
   bindings is deferred so V1 functionality can be evaluated first.
+- Merge and production promotion remain human-only. Automatic merge, automatic
+  production promotion, multi-repository enrollment, private repositories, and
+  production credential brokerage remain out of scope.
 
 ## Demonstration record
 
