@@ -667,6 +667,70 @@ describe("GitHub App gateway", () => {
     expect(mergeRequests).toBe(1);
   });
 
+  it("allows an exact reviewed head to merge after the target base advances", async () => {
+    const originalBaseSha = "a".repeat(40);
+    const advancedBaseSha = "d".repeat(40);
+    const headSha = "b".repeat(40);
+    const mergeSha = "c".repeat(40);
+    const mergedAt = "2026-07-15T01:02:03Z";
+    let merged = false;
+    const fetcher: typeof fetch = async (input, init) => {
+      const url = new URL(String(input));
+      const method = init?.method ?? "GET";
+      if (url.pathname.endsWith("/access_tokens"))
+        return json({
+          token: "installation-token",
+          expires_at: "2026-07-12T02:00:00Z",
+        });
+      if (url.pathname.endsWith("/pulls/7/merge") && method === "PUT") {
+        expect(JSON.parse(String(init?.body))).toEqual({
+          sha: headSha,
+          merge_method: "merge",
+        });
+        merged = true;
+        return json({ sha: mergeSha, merged: true, message: "merged" });
+      }
+      if (url.pathname.endsWith("/pulls/7") && method === "GET")
+        return json({
+          number: 7,
+          html_url: "https://github.com/zorkian/roundhouse/pull/7",
+          state: merged ? "closed" : "open",
+          draft: false,
+          merged,
+          merge_commit_sha: merged ? mergeSha : null,
+          merged_at: merged ? mergedAt : null,
+          base: {
+            sha: merged ? mergeSha : advancedBaseSha,
+            repo: { full_name: "zorkian/roundhouse" },
+          },
+          head: {
+            sha: headSha,
+            repo: { full_name: "zorkian/roundhouse" },
+          },
+        });
+      return json({}, 404);
+    };
+    const gateway = new GitHubAppGateway(
+      { appId: "1", installationId: "2", privateKey },
+      fetcher,
+    );
+    await expect(
+      gateway.mergePullRequest({
+        repositoryFullName: "zorkian/roundhouse",
+        pullRequestNumber: 7,
+        expectedBaseSha: originalBaseSha,
+        expectedHeadSha: headSha,
+      }),
+    ).resolves.toEqual({
+      number: 7,
+      url: "https://github.com/zorkian/roundhouse/pull/7",
+      headSha,
+      mergeCommitSha: mergeSha,
+      mergedAt,
+      alreadyMerged: false,
+    });
+  });
+
   it("fails closed when the pull request head changes before merge", async () => {
     const fetcher: typeof fetch = async (input) => {
       const url = new URL(String(input));
