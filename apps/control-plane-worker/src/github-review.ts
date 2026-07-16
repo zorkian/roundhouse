@@ -296,12 +296,20 @@ export async function markReviewDispatched(
 export async function recoverableReviewDeliveries(
   env: ControlPlaneEnv,
   now: Date,
+  deliveryClaimMs = 20 * 60_000,
   limit = 20,
 ): Promise<ReviewDelivery[]> {
+  const deliveryClaimCutoff = new Date(
+    now.getTime() - Math.max(1_000, deliveryClaimMs),
+  ).toISOString();
   const rows = await env.DB.prepare(
-    "SELECT review_id, revision FROM independent_reviews WHERE (status = 'pending' AND dispatch_state = 'pending') OR (status = 'running' AND lease_expires_at <= ?) ORDER BY updated_at LIMIT ?",
+    "SELECT review_id, revision FROM independent_reviews WHERE (status = 'pending' AND (dispatch_state = 'pending' OR (dispatch_state = 'sent' AND updated_at <= ?))) OR (status = 'running' AND lease_expires_at <= ?) ORDER BY updated_at LIMIT ?",
   )
-    .bind(now.toISOString(), Math.max(1, Math.min(limit, 100)))
+    .bind(
+      deliveryClaimCutoff,
+      now.toISOString(),
+      Math.max(1, Math.min(limit, 100)),
+    )
     .all<{ review_id: string; revision: number }>();
   return rows.results.map((value) =>
     reviewDeliverySchema.parse({
@@ -311,6 +319,163 @@ export async function recoverableReviewDeliveries(
       deliveryId: `review_delivery_${value.review_id}_${value.revision}`,
     }),
   );
+}
+
+export async function reconcileStaleIndependentReviews(
+  env: ControlPlaneEnv,
+  now: Date,
+  graceMs = 5 * 60_000,
+  deliveryClaimMs = 20 * 60_000,
+  limit = 20,
+): Promise<{
+  deliveries: ReviewDelivery[];
+  terminalReviews: DurableIndependentReview[];
+}> {
+  const nowMs = now.getTime();
+  const deliveryClaimCutoff = new Date(
+    nowMs - Math.max(1_000, deliveryClaimMs),
+  ).toISOString();
+  const rows = await env.DB.prepare(
+    "SELECT review_id, request_hash, revision, status, attempt_count, lease_expires_at, dispatch_state, payload FROM independent_reviews WHERE (status = 'pending' AND dispatch_state = 'sent' AND updated_at <= ?) OR (status = 'running' AND json_extract(payload, '$.lease.acquiredAt') IS NOT NULL AND (unixepoch(json_extract(payload, '$.lease.acquiredAt')) IS NULL OR ((CAST(unixepoch(json_extract(payload, '$.lease.acquiredAt')) AS INTEGER) * 1000) + max(1000, CAST(json_extract(payload, '$.request.timeoutMs') AS INTEGER)) + ?) <= ?)) ORDER BY updated_at LIMIT ?",
+  )
+    .bind(
+      deliveryClaimCutoff,
+      Math.max(0, graceMs),
+      nowMs,
+      Math.max(1, Math.min(limit, 100)),
+    )
+    .all<ReviewRow>();
+  const deliveries: ReviewDelivery[] = [];
+  const terminalReviews: DurableIndependentReview[] = [];
+  for (const currentRow of rows.results) {
+    const current = record(currentRow);
+    if (current.status === "pending" && currentRow.dispatch_state === "sent") {
+      const updatedAt = Date.parse(current.updatedAt);
+      if (!Number.isFinite(updatedAt)) continue;
+      const staleAfter = updatedAt + Math.max(1_000, deliveryClaimMs);
+      if (now.getTime() < staleAfter) continue;
+      const timestamp = now.toISOString();
+      const next = durableIndependentReviewSchema.parse({
+        ...current,
+        revision: current.revision + 1,
+        retryable: true,
+        failureClassification: "review_delivery_stalled",
+        failureReason:
+          "Independent review was dispatched but was not claimed before its request timeout",
+        updatedAt: timestamp,
+        events: [
+          ...current.events,
+          {
+            sequence: current.events.length + 1,
+            type: "review.retry_scheduled",
+            occurredAt: timestamp,
+            detail: {
+              classification: "review_delivery_stalled",
+              attemptCount: current.attemptCount,
+            },
+          },
+        ],
+      });
+      if (await writeCas(env, currentRow, next, "pending")) {
+        await insertEvents(env, next);
+        deliveries.push(
+          reviewDeliverySchema.parse({
+            schemaVersion: 1,
+            kind: "independent_review",
+            reviewId: next.request.reviewId,
+            deliveryId: `review_delivery_${next.request.reviewId}_${next.revision}`,
+          }),
+        );
+      }
+      continue;
+    }
+    if (!current.lease) continue;
+    if (currentRow.dispatch_state !== "sent") {
+      console.warn("Running independent review has unexpected dispatch state", {
+        reviewId: current.request.reviewId,
+        dispatchState: currentRow.dispatch_state,
+      });
+      continue;
+    }
+    const acquiredAt = Date.parse(current.lease.acquiredAt);
+    if (!Number.isFinite(acquiredAt)) {
+      const timestamp = now.toISOString();
+      const { lease: _lease, ...withoutLease } = current;
+      const next = durableIndependentReviewSchema.parse({
+        ...withoutLease,
+        revision: current.revision + 1,
+        status: "failed",
+        retryable: false,
+        failureClassification: "review_invalid_lease",
+        failureReason:
+          "Independent review has an invalid lease timestamp and cannot be safely reclaimed",
+        updatedAt: timestamp,
+        events: [
+          ...current.events,
+          {
+            sequence: current.events.length + 1,
+            type: "review.failed",
+            occurredAt: timestamp,
+            detail: {
+              classification: "review_invalid_lease",
+              attemptCount: current.attemptCount,
+            },
+          },
+        ],
+      });
+      if (await writeCas(env, currentRow, next, "sent")) {
+        await insertEvents(env, next);
+        terminalReviews.push(next);
+      }
+      continue;
+    }
+    const staleAfter =
+      acquiredAt + Math.max(1_000, current.request.timeoutMs) + graceMs;
+    if (now.getTime() < staleAfter) continue;
+    const timestamp = now.toISOString();
+    const retryable = current.attemptCount < maximumAttempts;
+    const { lease: _lease, ...withoutLease } = current;
+    const next = durableIndependentReviewSchema.parse({
+      ...withoutLease,
+      revision: current.revision + 1,
+      status: retryable ? "pending" : "failed",
+      retryable,
+      failureClassification: retryable
+        ? "review_stalled"
+        : "review_stalled_exhausted",
+      failureReason:
+        "Independent review exceeded its request timeout without reaching a terminal state",
+      updatedAt: timestamp,
+      events: [
+        ...current.events,
+        {
+          sequence: current.events.length + 1,
+          type: retryable ? "review.retry_scheduled" : "review.failed",
+          occurredAt: timestamp,
+          detail: {
+            classification: retryable
+              ? "review_stalled"
+              : "review_stalled_exhausted",
+            attemptCount: current.attemptCount,
+          },
+        },
+      ],
+    });
+    if (await writeCas(env, currentRow, next, retryable ? "pending" : "sent")) {
+      await insertEvents(env, next);
+      if (retryable)
+        deliveries.push(
+          reviewDeliverySchema.parse({
+            schemaVersion: 1,
+            kind: "independent_review",
+            reviewId: next.request.reviewId,
+            deliveryId: `review_delivery_${next.request.reviewId}_${next.revision}`,
+          }),
+        );
+      else terminalReviews.push(next);
+    }
+  }
+  return { deliveries, terminalReviews };
 }
 
 export async function claimIndependentReview(

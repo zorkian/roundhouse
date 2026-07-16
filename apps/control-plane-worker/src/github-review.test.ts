@@ -23,6 +23,7 @@ import {
   readIndependentReview,
   readReviewByRemediationRun,
   recordReviewRemediation,
+  reconcileStaleIndependentReviews,
   recoverableReviewDeliveries,
   reserveIndependentReview,
 } from "./github-review.js";
@@ -285,6 +286,165 @@ describe("durable independent review coordination", () => {
       first?.review.activeAttemptId,
     );
     expect(reclaimed?.token).not.toBe(first?.token);
+  });
+
+  it("requeues a running review that exceeds its request timeout", async () => {
+    const env = await runtime();
+    const input = await request();
+    await reserveIndependentReview(
+      env,
+      input,
+      new Date("2026-07-12T00:00:00Z"),
+    );
+    await claimIndependentReview(
+      env,
+      input.reviewId,
+      "workflow-a",
+      new Date("2026-07-12T00:00:01Z"),
+      4 * 60 * 60_000,
+    );
+
+    await expect(
+      reconcileStaleIndependentReviews(env, new Date("2026-07-12T00:05:00Z")),
+    ).resolves.toEqual({ deliveries: [], terminalReviews: [] });
+    const result = await reconcileStaleIndependentReviews(
+      env,
+      new Date("2026-07-12T00:06:02Z"),
+    );
+
+    expect(result.deliveries).toEqual([
+      {
+        schemaVersion: 1,
+        kind: "independent_review",
+        reviewId: input.reviewId,
+        deliveryId: expect.stringContaining(input.reviewId),
+      },
+    ]);
+    expect(result.terminalReviews).toEqual([]);
+    await markReviewDispatched(env, input.reviewId);
+    await expect(
+      recoverableReviewDeliveries(env, new Date("2026-07-12T00:06:02Z")),
+    ).resolves.toEqual([]);
+    const retained = await readIndependentReview(env, input.reviewId);
+    expect(retained).toMatchObject({
+      status: "pending",
+      retryable: true,
+      failureClassification: "review_stalled",
+      attemptCount: 1,
+    });
+    expect(retained?.lease).toBeUndefined();
+  });
+
+  it("requeues a pending review whose dispatched delivery was never claimed", async () => {
+    const env = await runtime();
+    const input = await request();
+    await reserveIndependentReview(
+      env,
+      input,
+      new Date("2026-07-12T00:00:00Z"),
+    );
+    await markReviewDispatched(env, input.reviewId);
+
+    await expect(
+      reconcileStaleIndependentReviews(env, new Date("2026-07-12T00:05:00Z")),
+    ).resolves.toEqual({ deliveries: [], terminalReviews: [] });
+    await expect(
+      recoverableReviewDeliveries(env, new Date("2026-07-12T00:20:01Z")),
+    ).resolves.toEqual([
+      {
+        schemaVersion: 1,
+        kind: "independent_review",
+        reviewId: input.reviewId,
+        deliveryId: expect.stringContaining(input.reviewId),
+      },
+    ]);
+    const result = await reconcileStaleIndependentReviews(
+      env,
+      new Date("2026-07-12T00:20:01Z"),
+    );
+
+    expect(result.deliveries).toEqual([
+      {
+        schemaVersion: 1,
+        kind: "independent_review",
+        reviewId: input.reviewId,
+        deliveryId: expect.stringContaining(input.reviewId),
+      },
+    ]);
+    expect(result.terminalReviews).toEqual([]);
+    await markReviewDispatched(env, input.reviewId);
+    await expect(
+      recoverableReviewDeliveries(env, new Date("2026-07-12T00:20:01Z")),
+    ).resolves.toEqual([]);
+    await expect(
+      readIndependentReview(env, input.reviewId),
+    ).resolves.toMatchObject({
+      status: "pending",
+      retryable: true,
+      failureClassification: "review_delivery_stalled",
+      attemptCount: 0,
+    });
+  });
+
+  it("fails a stale running review after bounded review attempts are exhausted", async () => {
+    const env = await runtime();
+    const input = await request();
+    await reserveIndependentReview(
+      env,
+      input,
+      new Date("2026-07-12T00:00:00Z"),
+    );
+
+    for (let attempt = 1; attempt < 3; attempt += 1) {
+      const claim = await claimIndependentReview(
+        env,
+        input.reviewId,
+        `workflow-${attempt}`,
+        new Date(`2026-07-12T00:0${attempt}:00Z`),
+        1_000,
+      );
+      await failIndependentReview(
+        env,
+        input.reviewId,
+        claim!.token,
+        {
+          attemptId: claim!.review.activeAttemptId!,
+          retryable: true,
+          classification: "review_infrastructure_interrupted",
+          reason: "simulated retryable review failure",
+        },
+        new Date(`2026-07-12T00:0${attempt}:01Z`),
+      );
+    }
+
+    await claimIndependentReview(
+      env,
+      input.reviewId,
+      "workflow-3",
+      new Date("2026-07-12T00:03:00Z"),
+      4 * 60 * 60_000,
+    );
+    const result = await reconcileStaleIndependentReviews(
+      env,
+      new Date("2026-07-12T00:09:01Z"),
+    );
+
+    expect(result.deliveries).toEqual([]);
+    expect(result.terminalReviews).toHaveLength(1);
+    expect(result.terminalReviews[0]).toMatchObject({
+      status: "failed",
+      retryable: false,
+      failureClassification: "review_stalled_exhausted",
+      attemptCount: 3,
+    });
+    await expect(
+      readIndependentReview(env, input.reviewId),
+    ).resolves.toMatchObject({
+      status: "failed",
+      retryable: false,
+      failureClassification: "review_stalled_exhausted",
+      attemptCount: 3,
+    });
   });
 
   it("fails durably after the bounded same-attempt reclaim budget", async () => {
