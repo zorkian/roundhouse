@@ -680,10 +680,10 @@ export class GitHubAppGateway {
           "stale_head",
           "GitHub pull request head changed before merge",
         );
-      if (!pull.merged && pull.base.sha !== input.expectedBaseSha)
+      if (!pull.merged && !/^[a-f0-9]{40}$/.test(pull.base.sha))
         throw new GitHubAppGatewayError(
-          "stale_base",
-          "GitHub pull request base changed before merge",
+          "invalid_response",
+          "GitHub pull request base was invalid before merge",
         );
     };
     const reconciled = (pull: Awaited<ReturnType<typeof read>>) => {
