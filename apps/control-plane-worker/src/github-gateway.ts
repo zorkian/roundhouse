@@ -698,6 +698,7 @@ export class GitHubAppGateway {
           throw new GitHubAppGatewayError(
             "internal_failure",
             "Roundhouse could not load the approved implementation paths for automatic merge",
+            true,
           );
         const comparison = (
           await this.api<{
@@ -720,6 +721,7 @@ export class GitHubAppGateway {
           comparison.merge_base_commit.sha !== input.expectedBaseSha ||
           comparison.ahead_by !== comparison.total_commits ||
           comparison.total_commits !== comparison.commits.length ||
+          comparison.commits.length >= 100 ||
           comparison.commits.at(-1)?.sha !== pull.base.sha ||
           !interveningFiles ||
           interveningFiles.length === 0 ||

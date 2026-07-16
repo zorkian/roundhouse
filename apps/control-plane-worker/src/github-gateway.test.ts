@@ -848,7 +848,7 @@ describe("GitHub App gateway", () => {
         expectedBaseSha: originalBaseSha,
         expectedHeadSha: headSha,
       }),
-    ).rejects.toMatchObject({ code: "internal_failure", retryable: false });
+    ).rejects.toMatchObject({ code: "internal_failure", retryable: true });
   });
 
   it("rejects base advancement with an empty comparison file list", async () => {
