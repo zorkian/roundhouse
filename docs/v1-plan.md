@@ -5,6 +5,8 @@ Audience: Maintainers and implementers
 Initial deployment: Single-tenant, internal, Cloudflare-first  
 Initial targets: Roundhouse itself for controlled dogfooding, followed by one heterogeneous legacy monorepo, primarily Perl with Rust and JavaScript components
 
+For maintainer-facing V1 acceptance, [the V1 maintainer acceptance checklist](v1-maintainer-acceptance.md) is normative. This plan remains historical and planning context.
+
 ## 1. Product definition
 
 Roundhouse is a GitHub-native software-development orchestration system. It converts raw GitHub issues into qualified, evidence-backed work, coordinates coding agents through planning, implementation, validation, and review, and creates draft pull requests under configurable safety and human-approval policies.
