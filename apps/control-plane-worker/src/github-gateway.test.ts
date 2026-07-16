@@ -690,6 +690,20 @@ describe("GitHub App gateway", () => {
         merged = true;
         return json({ sha: mergeSha, merged: true, message: "merged" });
       }
+      if (
+        url.pathname.endsWith(
+          `/compare/${originalBaseSha}...${advancedBaseSha}`,
+        )
+      )
+        return json({
+          status: "ahead",
+          ahead_by: 1,
+          total_commits: 1,
+          base_commit: { sha: originalBaseSha },
+          merge_base_commit: { sha: originalBaseSha },
+          commits: [{ sha: advancedBaseSha }],
+          files: [{ filename: "Makefile" }, { filename: "makefile" }],
+        });
       if (url.pathname.endsWith("/pulls/7") && method === "GET")
         return json({
           number: 7,
@@ -720,6 +734,7 @@ describe("GitHub App gateway", () => {
         pullRequestNumber: 7,
         expectedBaseSha: originalBaseSha,
         expectedHeadSha: headSha,
+        approvedPaths: ["packages/domain/src/ids.ts"],
       }),
     ).resolves.toEqual({
       number: 7,
@@ -729,6 +744,198 @@ describe("GitHub App gateway", () => {
       mergedAt,
       alreadyMerged: false,
     });
+  });
+
+  it("rejects base advancement that overlaps approved implementation paths", async () => {
+    const originalBaseSha = "a".repeat(40);
+    const advancedBaseSha = "d".repeat(40);
+    const headSha = "b".repeat(40);
+    const fetcher: typeof fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/access_tokens"))
+        return json({
+          token: "installation-token",
+          expires_at: "2026-07-12T02:00:00Z",
+        });
+      if (
+        url.pathname.endsWith(
+          `/compare/${originalBaseSha}...${advancedBaseSha}`,
+        )
+      )
+        return json({
+          status: "ahead",
+          ahead_by: 1,
+          total_commits: 1,
+          base_commit: { sha: originalBaseSha },
+          merge_base_commit: { sha: originalBaseSha },
+          commits: [{ sha: advancedBaseSha }],
+          files: [{ filename: "Packages/Domain/src/ids.ts" }],
+        });
+      if (url.pathname.endsWith("/pulls/7"))
+        return json({
+          number: 7,
+          html_url: "https://github.com/zorkian/roundhouse/pull/7",
+          state: "open",
+          draft: false,
+          merged: false,
+          merge_commit_sha: null,
+          merged_at: null,
+          base: {
+            sha: advancedBaseSha,
+            repo: { full_name: "zorkian/roundhouse" },
+          },
+          head: {
+            sha: headSha,
+            repo: { full_name: "zorkian/roundhouse" },
+          },
+        });
+      return json({}, 404);
+    };
+    const gateway = new GitHubAppGateway(
+      { appId: "1", installationId: "2", privateKey },
+      fetcher,
+    );
+    await expect(
+      gateway.mergePullRequest({
+        repositoryFullName: "zorkian/roundhouse",
+        pullRequestNumber: 7,
+        expectedBaseSha: originalBaseSha,
+        expectedHeadSha: headSha,
+        approvedPaths: ["packages/domain/src/ids.ts"],
+      }),
+    ).rejects.toMatchObject({ code: "stale_base" });
+  });
+
+  it("preserves the original merge error when recovery comparison fails", async () => {
+    const originalBaseSha = "a".repeat(40);
+    const advancedBaseSha = "d".repeat(40);
+    const headSha = "b".repeat(40);
+    let pullReads = 0;
+    let mergeRequests = 0;
+    const fetcher: typeof fetch = async (input, init) => {
+      const url = new URL(String(input));
+      const method = init?.method ?? "GET";
+      if (url.pathname.endsWith("/access_tokens"))
+        return json({
+          token: "installation-token",
+          expires_at: "2026-07-12T02:00:00Z",
+        });
+      if (url.pathname.endsWith("/pulls/7/merge") && method === "PUT") {
+        mergeRequests += 1;
+        return json({ message: "merge unavailable" }, 500);
+      }
+      if (
+        url.pathname.endsWith(
+          `/compare/${originalBaseSha}...${advancedBaseSha}`,
+        )
+      )
+        return json({ message: "comparison unavailable" }, 502);
+      if (url.pathname.endsWith("/pulls/7")) {
+        pullReads += 1;
+        return json({
+          number: 7,
+          html_url: "https://github.com/zorkian/roundhouse/pull/7",
+          state: "open",
+          draft: false,
+          merged: false,
+          merge_commit_sha: null,
+          merged_at: null,
+          base: {
+            sha: pullReads === 1 ? originalBaseSha : advancedBaseSha,
+            repo: { full_name: "zorkian/roundhouse" },
+          },
+          head: {
+            sha: headSha,
+            repo: { full_name: "zorkian/roundhouse" },
+          },
+        });
+      }
+      return json({}, 404);
+    };
+    const gateway = new GitHubAppGateway(
+      { appId: "1", installationId: "2", privateKey },
+      fetcher,
+    );
+    await expect(
+      gateway.mergePullRequest({
+        repositoryFullName: "zorkian/roundhouse",
+        pullRequestNumber: 7,
+        expectedBaseSha: originalBaseSha,
+        expectedHeadSha: headSha,
+        approvedPaths: ["packages/domain/src/ids.ts"],
+      }),
+    ).rejects.toMatchObject({ code: "api_status_500" });
+    expect(mergeRequests).toBe(1);
+  });
+
+  it("surfaces nonretryable recovery rejection after a failed merge attempt", async () => {
+    const originalBaseSha = "a".repeat(40);
+    const advancedBaseSha = "d".repeat(40);
+    const headSha = "b".repeat(40);
+    let pullReads = 0;
+    let mergeRequests = 0;
+    const fetcher: typeof fetch = async (input, init) => {
+      const url = new URL(String(input));
+      const method = init?.method ?? "GET";
+      if (url.pathname.endsWith("/access_tokens"))
+        return json({
+          token: "installation-token",
+          expires_at: "2026-07-12T02:00:00Z",
+        });
+      if (url.pathname.endsWith("/pulls/7/merge") && method === "PUT") {
+        mergeRequests += 1;
+        return json({ message: "merge unavailable" }, 500);
+      }
+      if (
+        url.pathname.endsWith(
+          `/compare/${originalBaseSha}...${advancedBaseSha}`,
+        )
+      )
+        return json({
+          status: "ahead",
+          ahead_by: 1,
+          total_commits: 1,
+          base_commit: { sha: originalBaseSha },
+          merge_base_commit: { sha: originalBaseSha },
+          commits: [{ sha: advancedBaseSha }],
+          files: [{ filename: "packages/domain/src/ids.ts" }],
+        });
+      if (url.pathname.endsWith("/pulls/7")) {
+        pullReads += 1;
+        return json({
+          number: 7,
+          html_url: "https://github.com/zorkian/roundhouse/pull/7",
+          state: "open",
+          draft: false,
+          merged: false,
+          merge_commit_sha: null,
+          merged_at: null,
+          base: {
+            sha: pullReads === 1 ? originalBaseSha : advancedBaseSha,
+            repo: { full_name: "zorkian/roundhouse" },
+          },
+          head: {
+            sha: headSha,
+            repo: { full_name: "zorkian/roundhouse" },
+          },
+        });
+      }
+      return json({}, 404);
+    };
+    const gateway = new GitHubAppGateway(
+      { appId: "1", installationId: "2", privateKey },
+      fetcher,
+    );
+    await expect(
+      gateway.mergePullRequest({
+        repositoryFullName: "zorkian/roundhouse",
+        pullRequestNumber: 7,
+        expectedBaseSha: originalBaseSha,
+        expectedHeadSha: headSha,
+        approvedPaths: ["packages/domain/src/ids.ts"],
+      }),
+    ).rejects.toMatchObject({ code: "stale_base" });
+    expect(mergeRequests).toBe(1);
   });
 
   it("fails closed when the pull request head changes before merge", async () => {

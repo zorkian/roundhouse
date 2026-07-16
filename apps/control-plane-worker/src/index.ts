@@ -2115,6 +2115,11 @@ async function attemptEligibleAutomaticMerge(
     ))
   )
     return "waiting";
+  const approvedPaths =
+    recoveryStatus === "merged"
+      ? undefined
+      : (await new D1JobStore(env.DB).read(identity.runId)).implementation
+          ?.changedFiles;
   const reservation = await claimAutomaticMerge(env, identity);
   if (reservation.kind === "merged") {
     if (!reservation.projectionComplete) {
@@ -2166,11 +2171,18 @@ async function attemptEligibleAutomaticMerge(
       await flushGitHubOutputs(env).catch(() => undefined);
       return "manual_required";
     }
+    if (recoveryStatus !== "merged" && !approvedPaths)
+      throw new GitHubAppGatewayError(
+        "internal_failure",
+        "Roundhouse could not load the approved implementation paths for automatic merge",
+        true,
+      );
     const merged = await gateway.mergePullRequest({
       repositoryFullName: identity.repositoryFullName,
       pullRequestNumber: identity.pullRequestNumber,
       expectedBaseSha: identity.baseSha,
       expectedHeadSha: identity.headSha,
+      approvedPaths,
     });
     mergeCommitSha = merged.mergeCommitSha;
     mergedAt = merged.mergedAt;
