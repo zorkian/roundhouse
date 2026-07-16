@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import {
+  qualifiedPlanSchema,
   selfDevelopmentRunSchema,
   type SelfDevelopmentRun,
 } from "@roundhouse/self-development/cloudflare";
@@ -376,6 +377,86 @@ export async function runRecoveryCycle(
         now,
       });
       alertsRecorded += 1;
+    }
+    const planning = run.task.planning;
+    const implementationEvidence = run.implementation
+      ? run.evidence.find(
+          (evidence) =>
+            evidence.evidenceId === run.implementation?.evidenceId &&
+            evidence.objectKey === run.implementation.objectKey &&
+            evidence.approvalEligible !== false,
+        )
+      : undefined;
+    if (
+      ["awaiting_approval", "awaiting_publication"].includes(run.state) &&
+      planning &&
+      implementationEvidence
+    ) {
+      const plan = await env.DB.prepare(
+        "SELECT status, plan_sha256, plan_json, approved_by FROM github_issue_plans WHERE plan_id = ? AND run_id = ?",
+      )
+        .bind(planning.planId, run.runId)
+        .first<{
+          status: string;
+          plan_sha256: string;
+          plan_json: string;
+          approved_by: string | null;
+        }>();
+      let lowRiskPlan = false;
+      let invalidPlan = false;
+      try {
+        const detail = qualifiedPlanSchema.safeParse(
+          JSON.parse(plan?.plan_json ?? "null"),
+        );
+        invalidPlan = !detail.success;
+        if (detail.success) {
+          lowRiskPlan =
+            plan?.status === "materialized" &&
+            plan.plan_sha256 === planning.planSha256 &&
+            plan.approved_by === planning.approvedBy &&
+            detail.data.planId === planning.planId &&
+            detail.data.planSha256 === planning.planSha256 &&
+            detail.data.risk === "low";
+        }
+      } catch {
+        invalidPlan = true;
+      }
+      if (plan && invalidPlan) {
+        await recordAlert(env, {
+          key: `invalid_recovery_plan:${run.runId}:${run.revision}`,
+          kind: "invalid_recovery_plan",
+          severity: "warning",
+          runId: run.runId,
+          detail: { revision: run.revision, planId: planning.planId },
+          now,
+        });
+        alertsRecorded += 1;
+      }
+      if (lowRiskPlan) {
+        const activeWorkflow = await env.DB.prepare(
+          "SELECT workflow_instance_id FROM trusted_execution_workflows WHERE run_id = ? AND status IN ('pending', 'dispatched', 'running') ORDER BY created_at DESC LIMIT 1",
+        )
+          .bind(run.runId)
+          .first<{ workflow_instance_id: string }>();
+        if (!activeWorkflow) {
+          await env.RUN_QUEUE.send({
+            schemaVersion: 1,
+            runId: run.runId,
+            deliveryId: `recovery_${run.runId}_${run.revision}`,
+            expectedRevision: run.revision,
+          });
+          await recordAlert(env, {
+            key: `low_risk_auto_publication_requeued:${run.runId}:${run.revision}`,
+            kind: "low_risk_auto_publication_requeued",
+            severity: "warning",
+            runId: run.runId,
+            detail: { revision: run.revision, state: run.state },
+            now,
+          });
+          requeuedRuns += 1;
+          alertsRecorded += 1;
+        }
+      }
     }
     if (
       ["awaiting_approval", "awaiting_publication", "completed"].includes(

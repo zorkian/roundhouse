@@ -10,6 +10,7 @@ import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import type { ControlPlaneEnv } from "./environment.js";
+import { githubPlanningMigration } from "./github-planning.js";
 import {
   cloudOperationsMigration,
   idempotentMutation,
@@ -47,6 +48,7 @@ beforeAll(async () => {
   sharedDb = await instance.getD1Database("DB");
   for (const statement of `${d1JobStoreMigration}
     ${cloudOperationsMigration}
+    ${githubPlanningMigration}
     ${trustedExecutionWorkflowMigration}
     CREATE TABLE control_plane_submissions(idempotency_key TEXT PRIMARY KEY, request_hash TEXT, run_id TEXT, delivery_id TEXT, delivery_state TEXT, created_at TEXT, delivered_at TEXT);
     CREATE TABLE execution_evidence(evidence_id TEXT PRIMARY KEY);`
@@ -84,6 +86,7 @@ beforeEach(async () => {
     "control_plane_submissions",
     "execution_evidence",
     "trusted_execution_workflows",
+    "github_issue_plans",
     "self_development_runs",
   ])
     await sharedDb.prepare(`DELETE FROM ${table}`).run();
@@ -206,6 +209,159 @@ describe("cloud operator persistence", () => {
 
     expect(cycle.requeuedRuns).toBe(0);
     expect(env.queued).toEqual([]);
+  });
+
+  it("recovers only stranded auto-publication runs bound to an approved low-risk plan", async () => {
+    const env = await runtime();
+    const jobs = new D1JobStore(env.DB);
+    const start = new Date("2026-07-12T00:00:00Z");
+    const planId = `plan_${"a".repeat(40)}`;
+    const planSha256 = "b".repeat(64);
+    const approvedBy = "github:zorkian";
+    const plannedTask = {
+      ...task,
+      taskId: "task_low_risk_recovery",
+      planning: {
+        planId,
+        planSha256,
+        profileId: "roundhouse-self-development-v1" as const,
+        profileVersion: 1 as const,
+        issueContentSha256: "c".repeat(64),
+        exactPathsSha256: "d".repeat(64),
+        approvedBy,
+        approvedAt: start.toISOString(),
+      },
+    };
+    await jobs.submit("run_low_risk_recovery", plannedTask, start);
+    await jobs.submit(
+      "run_manual_approval",
+      { ...task, taskId: "task_manual_approval" },
+      start,
+    );
+    for (const runId of ["run_low_risk_recovery", "run_manual_approval"]) {
+      const run = await jobs.read(runId);
+      const evidence = {
+        schemaVersion: 1 as const,
+        evidenceId: `evidence_${runId}`,
+        attemptId: `attempt_${runId}`,
+        objectKey: `runs/${runId}/evidence.json`,
+        sha256: "e".repeat(64),
+        size: 1,
+        mediaType: "application/json" as const,
+        approvalEligible: true,
+        createdAt: start.toISOString(),
+      };
+      const stranded = {
+        ...run,
+        state: "awaiting_approval" as const,
+        evidence: [evidence],
+        implementation: {
+          patchSha256: "f".repeat(64),
+          patchBytes: 1,
+          changedFiles: ["docs/operations.md"],
+          evidenceId: evidence.evidenceId,
+          objectKey: evidence.objectKey,
+        },
+      };
+      await env.DB.prepare(
+        "UPDATE self_development_runs SET state = ?, payload = ? WHERE run_id = ?",
+      )
+        .bind(stranded.state, JSON.stringify(stranded), runId)
+        .run();
+    }
+    await env.DB.prepare(
+      `INSERT INTO github_issue_plans(plan_id, issue_number, revision, status, plan_sha256, plan_json, evidence_object_key, evidence_sha256, evidence_size, approved_by, approved_at, run_id, created_at, updated_at)
+       VALUES (?, 171, 3, 'materialized', ?, ?, 'plans/171.json', ?, 1, ?, ?, 'run_low_risk_recovery', ?, ?)`,
+    )
+      .bind(
+        planId,
+        planSha256,
+        JSON.stringify({
+          schemaVersion: 1,
+          planId,
+          revision: 1,
+          status: "proposed",
+          profileId: "roundhouse-self-development-v1",
+          profileVersion: 1,
+          issueNumber: 171,
+          issueContentSha256: "c".repeat(64),
+          subject: "Recover a stranded run",
+          instructionsSha256: "2".repeat(64),
+          baseCommit: "a".repeat(40),
+          exactPaths: ["docs/operations.md"],
+          validationLevel: "full",
+          risk: "low",
+          acceptanceCriteria: [],
+          planningEvidence: [],
+          limits: {
+            maxPatchBytes: 1024,
+            maxFiles: 1,
+            agentTimeoutSeconds: 60,
+            modelRequestLimit: 1,
+            automaticAttemptLimit: 3,
+            operatorAttemptLimit: 10,
+          },
+          createdAt: start.toISOString(),
+          planSha256,
+        }),
+        "1".repeat(64),
+        approvedBy,
+        start.toISOString(),
+        start.toISOString(),
+        start.toISOString(),
+      )
+      .run();
+
+    const cycle = await runRecoveryCycle(
+      env,
+      new Date(start.getTime() + 60_000),
+    );
+
+    expect(cycle).toMatchObject({ requeuedRuns: 1, alertsRecorded: 1 });
+    expect(env.queued).toEqual([
+      {
+        schemaVersion: 1,
+        runId: "run_low_risk_recovery",
+        deliveryId: "recovery_run_low_risk_recovery_1",
+        expectedRevision: 1,
+      },
+    ]);
+    const alert = await env.DB.prepare(
+      "SELECT kind, severity, detail_json FROM operational_alerts WHERE run_id = 'run_low_risk_recovery'",
+    ).first<{ kind: string; severity: string; detail_json: string }>();
+    expect(alert).toMatchObject({
+      kind: "low_risk_auto_publication_requeued",
+      severity: "warning",
+    });
+    expect(JSON.parse(alert!.detail_json)).toEqual({
+      revision: 1,
+      state: "awaiting_approval",
+    });
+
+    await env.DB.prepare(
+      "UPDATE github_issue_plans SET plan_json = ? WHERE plan_id = ?",
+    )
+      .bind(JSON.stringify({ status: "proposed", risk: "low" }), planId)
+      .run();
+    const malformedCycle = await runRecoveryCycle(
+      env,
+      new Date(start.getTime() + 120_000),
+    );
+    expect(malformedCycle.requeuedRuns).toBe(0);
+    expect(env.queued).toHaveLength(1);
+    const malformedAlert = await env.DB.prepare(
+      "SELECT kind, severity, detail_json FROM operational_alerts WHERE alert_key = ?",
+    )
+      .bind("invalid_recovery_plan:run_low_risk_recovery:1")
+      .first<{ kind: string; severity: string; detail_json: string }>();
+    expect(malformedAlert).toMatchObject({
+      kind: "invalid_recovery_plan",
+      severity: "warning",
+    });
+    expect(JSON.parse(malformedAlert!.detail_json)).toEqual({
+      revision: 1,
+      planId,
+    });
   });
 
   it("allows an exact operator retry for a validation failure without making it automatic", async () => {
