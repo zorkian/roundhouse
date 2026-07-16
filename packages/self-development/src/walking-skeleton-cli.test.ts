@@ -3,7 +3,18 @@
 
 import { describe, expect, it } from "vitest";
 
-import { parseTimeoutMs } from "./walking-skeleton-cli.js";
+import {
+  parseTimeoutMs,
+  runWalkingSkeletonCli,
+} from "./walking-skeleton-cli.js";
+
+describe("runWalkingSkeletonCli", () => {
+  it("rejects duplicate options", async () => {
+    await expect(
+      runWalkingSkeletonCli(["status", "--root", "first", "--root", "second"]),
+    ).rejects.toThrow("Duplicate option: --root");
+  });
+});
 
 describe("parseTimeoutMs", () => {
   it("uses the bounded default", () => {
