@@ -88,7 +88,8 @@ export function planValidation(
   const formatPaths = request.changedFiles
     .filter((change) => change.status !== "deleted")
     .map((change) => change.path)
-    .filter((path) => matchesAny(path, quick.format.include));
+    .filter((path) => matchesAny(path, quick.format.include))
+    .sort();
   const commands: PlannedValidationCommand[] = [];
   if (profile.validation.license)
     commands.push({ name: "license", command: profile.validation.license });

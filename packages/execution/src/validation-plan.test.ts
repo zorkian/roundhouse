@@ -56,6 +56,27 @@ describe("planValidation", () => {
     ]);
   });
 
+  it("sorts quick formatter paths", () => {
+    const plan = planValidation(profile, {
+      baseCommit: "a".repeat(40),
+      level: "quick",
+      changedFiles: [
+        { path: "src/zeta.ts", status: "modified" },
+        { path: "src/alpha.ts", status: "modified" },
+        { path: "docs/readme.md", status: "modified" },
+      ],
+    });
+
+    expect(plan.commands[1]?.command.args).toEqual([
+      "exec",
+      "prettier",
+      "--check",
+      "docs/readme.md",
+      "src/alpha.ts",
+      "src/zeta.ts",
+    ]);
+  });
+
   it("escalates global configuration changes to full validation", () => {
     const plan = planValidation(profile, {
       baseCommit: "a".repeat(40),
