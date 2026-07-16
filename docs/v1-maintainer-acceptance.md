@@ -29,7 +29,9 @@ and can walk away. Roundhouse:
    findings;
 7. observes repository CI on the exact proposed commit; and
 8. presents a reviewable pull request with a concise risk analysis and an
-   explicit recommendation.
+   explicit recommendation; and
+9. merges and verifies the repository's development delivery automatically
+   when the configured risk policy permits it.
 
 The maintainer should not need to understand Roundhouse plans, runs, attempts,
 leases, evidence hashes, queues, or recovery machinery to make ordinary
@@ -44,10 +46,19 @@ with a reviewed execution profile. Repository content, issue text, comments,
 test output, and model output are untrusted. The coding and review agents do
 not receive GitHub, deployment, Cloudflare, or control-plane credentials.
 
-V1 opens a pull request but does not merge it. A maintainer makes the final
-merge decision through GitHub. Automatic merge, automatic deployment of
-generated changes, private repositories, arbitrary unreviewed repositories,
-and customer-grade multi-tenancy are not required for acceptance.
+For Roundhouse self-development, acceptance includes risk-aware merge and
+delivery to the existing development environment. Low-risk work can merge and
+deploy automatically after exact-head validation, CI, and independent review.
+Medium-risk work pauses once for plan approval, then follows the same automatic
+delivery path. High-risk work pauses for plan approval and again for an exact-
+head final approval after review findings and the final change summary are
+available.
+
+Production promotion remains a separate human-protected action and is never
+automatic. Private repositories, arbitrary unreviewed repositories, and
+customer-grade multi-tenancy are not required for acceptance. An enrolled
+external repository may configure a more conservative merge boundary, but
+Roundhouse development uses the risk-aware delivery model above.
 
 Those boundaries must not be used to excuse avoidable operator work before the
 merge decision.
@@ -57,7 +68,7 @@ merge decision.
 ### Autonomous progress
 
 A clear low-risk issue requires no human action between the initial start and
-the merge-ready recommendation. Roundhouse may pause only when:
+successful development deployment. Roundhouse may pause only when:
 
 - missing information materially changes the likely implementation;
 - repository policy requires approval before a risky or protected change;
@@ -80,16 +91,17 @@ does not conceal a product decision that only a maintainer can make. An issue
 does not become "unclear" merely because Roundhouse failed to inspect the
 repository or ask a useful question.
 
-| Measure                                                              | V1 target                                                                            |
-| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| Durable acknowledgement of a start command                           | p95 at or below 5 seconds                                                            |
-| First useful GitHub status                                           | p95 at or below 10 seconds                                                           |
-| Qualification and initial plan for a clear issue                     | p50 at or below 2 minutes; p95 at or below 5 minutes                                 |
-| Clear low-risk issue to draft pull request                           | p50 at or below 30 minutes; p95 at or below 60 minutes                               |
-| Silence while Roundhouse is actively working                         | never more than 2 minutes without visible current-stage or live-progress information |
-| Recovery from a transient interruption                               | resumes within 10 minutes without maintainer action                                  |
-| Human interventions before final merge review, clear low-risk issues | zero                                                                                 |
-| Human interventions before final merge review, medium-risk issues    | at most one plan approval                                                            |
+| Measure                                                                 | V1 target                                                                            |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Durable acknowledgement of a start command                              | p95 at or below 5 seconds                                                            |
+| First useful GitHub status                                              | p95 at or below 10 seconds                                                           |
+| Qualification and initial plan for a clear issue                        | p50 at or below 2 minutes; p95 at or below 5 minutes                                 |
+| Clear low-risk issue to draft pull request                              | p50 at or below 30 minutes; p95 at or below 60 minutes                               |
+| Clear low-risk issue to successful development delivery                 | p50 at or below 45 minutes; p95 at or below 90 minutes                               |
+| Silence while Roundhouse is actively working                            | never more than 2 minutes without visible current-stage or live-progress information |
+| Recovery from a transient interruption                                  | resumes within 10 minutes without maintainer action                                  |
+| Human interventions through development delivery, clear low-risk issues | zero                                                                                 |
+| Human interventions through development delivery, medium-risk issues    | exactly one plan approval                                                            |
 
 End-to-end pull-request timing excludes time spent waiting in an unrelated
 GitHub-hosted runner queue, but includes Roundhouse planning, execution,
@@ -102,9 +114,12 @@ measurement.
 Roundhouse does not describe a change as ready merely because an agent stopped
 or tests passed. The final recommendation is one of:
 
-- **Ready for human merge review** -- validation and CI pass on the exact
-  head, independent review has no unresolved blocking findings, and known
+- **Deliver automatically** -- the exact head passes validation, CI, and
+  independent review; policy permits automatic development delivery; and known
   residual risks are stated.
+- **Awaiting final high-risk approval** -- the exact head passes validation,
+  CI, and independent review, but policy requires a maintainer to review the
+  findings, final change summary, and residual risk before delivery.
 - **Needs changes** -- Roundhouse found actionable defects and has either
   exhausted its bounded repair loop or needs permission to expand scope.
 - **Needs maintainer judgment** -- the evidence supports more than one
@@ -122,6 +137,28 @@ green on the same release candidate.
 The active product goal should be tracked explicitly. Work that only benefits
 a later goal should not displace a broken earlier journey unless it is a
 necessary foundation for that journey.
+
+### User-filed issues as product research
+
+Issues filed by the maintainer are evidence of real friction, including issues
+that are closed or whose proposed implementation is no longer appropriate.
+They inform the journeys and priorities; they are not frozen specifications
+that must be implemented literally.
+
+| Observed issues                                                                                                                                                                                                                      | Product signal                                                                                                                | First goal affected |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- | ------------------- |
+| [#61](https://github.com/zorkian/roundhouse/issues/61)                                                                                                                                                                               | Risk-aware automatic merge and development delivery, prompt acknowledgement, and one clear next action                        | Goals 1-3           |
+| [#66](https://github.com/zorkian/roundhouse/issues/66), [#134](https://github.com/zorkian/roundhouse/issues/134)                                                                                                                     | Live execution visibility and truthful planning state must be obvious without drilling through internal records               | Goal 1              |
+| [#136](https://github.com/zorkian/roundhouse/issues/136)                                                                                                                                                                             | GitHub issue lifecycle is authoritative; stale internal artifacts must not create false attention                             | Goal 1              |
+| [#82](https://github.com/zorkian/roundhouse/issues/82), [#80](https://github.com/zorkian/roundhouse/issues/80), [#79](https://github.com/zorkian/roundhouse/issues/79)                                                               | Reproduction, complete review packages, correct CI/review semantics, and automatic remediation are core product behavior      | Goals 1 and 3       |
+| [#33](https://github.com/zorkian/roundhouse/issues/33), [#65](https://github.com/zorkian/roundhouse/issues/65), [#74](https://github.com/zorkian/roundhouse/issues/74), [#126](https://github.com/zorkian/roundhouse/issues/126)     | Qualification, replanning, and rejected commands must support natural recovery rather than silence or a new issue             | Goal 2              |
+| [#36](https://github.com/zorkian/roundhouse/issues/36), [#92](https://github.com/zorkian/roundhouse/issues/92), [#110](https://github.com/zorkian/roundhouse/issues/110), [#113](https://github.com/zorkian/roundhouse/issues/113)   | Retries and manual fallbacks must preserve intent, remain independently reviewed, and avoid brittle structural contracts      | Goal 3              |
+| [#83](https://github.com/zorkian/roundhouse/issues/83), [#107](https://github.com/zorkian/roundhouse/issues/107), [#120](https://github.com/zorkian/roundhouse/issues/120), [#128](https://github.com/zorkian/roundhouse/issues/128) | Latency, paid attempts, deterministic retries, and operator effort are acceptance metrics, not internal trivia                | All goals           |
+| [#133](https://github.com/zorkian/roundhouse/issues/133), [#135](https://github.com/zorkian/roundhouse/issues/135)                                                                                                                   | Repository onboarding and profile evolution must not require editing Roundhouse internals or escaping self-development policy | Goal 4              |
+
+New maintainer-filed issues are reviewed during each goal. A newly observed
+problem is mapped to the earliest affected goal and severity before more outer-
+circle work is prioritized.
 
 ### Goal authorization and execution autonomy
 
@@ -189,17 +226,17 @@ maintainer's product judgment that the finished journeys feel good enough to
 expand to the next circle; it is not a per-change approval gate and does not
 interrupt autonomous execution within the current goal.
 
-### Goal 1: Delegate one clear low-risk issue
+### Goal 1: Deliver one clear low-risk issue to development
 
 **Maintainer outcome:** "I start Roundhouse on a clear issue, walk away, and
-come back to a tested, independently reviewed pull request with a useful risk
-analysis and recommendation."
+come back to a tested, independently reviewed fix that is merged and running in
+development with a useful risk analysis and recommendation."
 
 This is the smallest complete product loop. It includes the clear happy-path
 parts of qualification, successful bug reproduction, low-risk planning,
 implementation, formatting and validation, passing repository CI, one
 independent adversarial review, visible progress, and the final decision
-package.
+package, followed by exact-head merge and verified development delivery.
 
 Goal 1 deliberately does not require clarification, free-form questions,
 medium/high-risk approval, automatic repair of seeded failures, fault-injected
@@ -208,14 +245,19 @@ recovery, or external repository enrollment.
 **Exit gate:**
 
 - [ ] Three consecutive live clear low-risk issues at one candidate commit
-      reach a supported final recommendation.
+      reach a supported final recommendation, merge, and successful development
+      delivery.
 - [ ] At least one is a reproduced bug with a passing post-change regression
       and at least one is a small maintenance change.
-- [ ] No human acts between the initial start and final merge review.
+- [ ] No human acts between the initial start and confirmed development
+      delivery.
 - [ ] Start, progress, plan, pull-request, review, and recommendation timing
       meet the speed targets.
-- [ ] Each exact pull-request head passes repository CI and independent review.
-- [ ] The final package states residual risk and exactly one recommendation.
+- [ ] Each exact pull-request head passes repository CI and independent review
+      before automatic merge.
+- [ ] The final package states residual risk and the automatic-delivery
+      recommendation before merge, then reports the merge commit and successful
+      development check.
 - [ ] No severity-1 or severity-2 Goal 1 defect remains.
 - [ ] A maintainer reviews the three journeys and explicitly accepts that this
       basic delegation loop feels fast, clear, and worth using.
@@ -240,8 +282,9 @@ into code changes.
       recommendation.
 - [ ] One plan or run question receives an evidence-backed answer without any
       workflow mutation or implementation spend.
-- [ ] One medium-risk issue requires at most one plan approval and then
-      progresses autonomously to its recommendation.
+- [ ] One medium-risk issue requires exactly one plan approval and then
+      progresses autonomously through recommendation, merge, and successful
+      development delivery.
 - [ ] One PR question is answered without code changes, and one in-scope change
       request produces a new validated and reviewed exact head.
 - [ ] Help is discoverable and malformed commands receive actionable guidance.
@@ -277,7 +320,10 @@ does not need routine babysitting when the happy path bends.
       scenarios recover within the recovery target without duplicate paid or
       published work.
 - [ ] A high-risk or protected-path request cannot proceed without the required
-      approval, and stale approval fails closed with one exact next action.
+      plan approval; after exact-head review it requires a final approval bound
+      to the findings and change summary before merge and development delivery.
+- [ ] Stale approval, changed head, failed review, failing CI, merge conflict,
+      or failed development deployment fails closed with one exact next action.
 - [ ] Prompt injection cannot grant authority, credentials, scope, network
       access, publication, or merge capability.
 - [ ] Cancellation and exhausted limits stop new work promptly and preserve a
@@ -303,8 +349,9 @@ feature tier after V1.
 - [ ] Its maintainer completes the required live clear-bug, clarification,
       question-only, review-remediation, and CI-repair scenarios.
 - [ ] The external runs meet the same autonomy, speed, safety, review, risk,
-      and recommendation criteria as the Roundhouse runs.
-- [ ] The complete AC-01 through AC-14 evidence report and release scorecard
+      and recommendation criteria as the Roundhouse runs, with delivery ending
+      at the repository's configured merge and development boundary.
+- [ ] The complete AC-01 through AC-15 evidence report and release scorecard
       pass at one candidate commit.
 - [ ] The external maintainer explicitly accepts that the product saves more
       time than it consumes.
@@ -321,7 +368,9 @@ requirements apply from Goal 1 and cannot be deferred to a later circle:
 - prevent replay from duplicating paid work or GitHub writes;
 - bind publication, CI, and review to the intended repository and exact head;
 - publish only to constrained branches and pull requests; and
-- retain human review and merge as the final authority.
+- merge only an exact reviewed and passing head under the configured risk
+  policy, while retaining human authority to stop work and human-only
+  production promotion.
 
 ### Criterion-to-goal map
 
@@ -344,15 +393,16 @@ first required slice and when the full criterion becomes mandatory.
 | AC-12 Understandable progress       | Clear low-risk path                                 | Goal 1                  |
 | AC-13 Decision package              | Clear low-risk path                                 | Goal 1                  |
 | AC-14 Stop safely                   | Hard resource limits apply from Goal 1              | Goal 3                  |
+| AC-15 Development delivery          | Low-risk automatic merge and deployment             | Goal 3                  |
 
 ### Goal progress record
 
-| Goal                                        | Status       | Candidate commit | Acceptance evidence | Goal acceptance |
-| ------------------------------------------- | ------------ | ---------------- | ------------------- | --------------- |
-| Goal 1: Delegate one clear low-risk issue   | Not accepted | --               | --                  | --              |
-| Goal 2: Understand and steer ordinary work  | Not accepted | --               | --                  | --              |
-| Goal 3: Self-correct and stop safely        | Not accepted | --               | --                  | --              |
-| Goal 4: Prove the V1 on an external project | Not accepted | --               | --                  | --              |
+| Goal                                           | Status       | Candidate commit | Acceptance evidence | Goal acceptance |
+| ---------------------------------------------- | ------------ | ---------------- | ------------------- | --------------- |
+| Goal 1: Deliver one clear issue to development | Not accepted | --               | --                  | --              |
+| Goal 2: Understand and steer ordinary work     | Not accepted | --               | --                  | --              |
+| Goal 3: Self-correct and stop safely           | Not accepted | --               | --                  | --              |
+| Goal 4: Prove the V1 on an external project    | Not accepted | --               | --                  | --              |
 
 ## Maintainer acceptance journeys
 
@@ -381,7 +431,7 @@ increment; checking the complete AC item is reserved for full V1 acceptance.
       planning continues asynchronously.
 - [ ] Duplicate webhook delivery or a repeated start cannot create duplicate
       plans, paid work, branches, pull requests, reviews, or comments.
-- [ ] A clear low-risk issue reaches a merge-ready recommendation without
+- [ ] A clear low-risk issue reaches successful development delivery without
       another maintainer command.
 
 ### AC-03: Qualify the issue
@@ -432,14 +482,18 @@ increment; checking the complete AC item is reserved for full V1 acceptance.
 
 - [ ] Every plan receives a low, medium, or high risk assessment with concrete
       reasons and identified blast radius.
-- [ ] Low-risk work proceeds to a pull request without pre-publication human
-      approval.
-- [ ] Medium-risk work requires at most one revision-bound plan approval and
-      then proceeds autonomously to its final recommendation.
-- [ ] High-risk or protected work cannot implement before the required
-      approval, and the approval surface clearly presents the elevated risk.
+- [ ] Low-risk work requires no approval and proceeds autonomously through
+      implementation, exact-head validation, independent review, repository
+      CI, merge, and verified development delivery.
+- [ ] Medium-risk work requires exactly one revision-bound plan approval and
+      then proceeds autonomously through the same implementation and delivery
+      path.
+- [ ] High-risk or protected work requires a revision-bound plan approval
+      before implementation and a final approval bound to the reviewed exact
+      head, findings, change summary, and residual risk before merge.
 - [ ] Stale approval, changed scope, changed base, or newly protected paths
       invalidate approval and explain the new decision required.
+- [ ] Failed, incomplete, or stale validation, review, or CI prevents merge.
 - [ ] Issue prose, repository text, test output, or review prose cannot grant
       authority or additional capabilities.
 
@@ -522,7 +576,7 @@ increment; checking the complete AC item is reserved for full V1 acceptance.
 - [ ] Internal hashes and identifiers do not dominate maintainer-facing labels
       or explanations.
 
-### AC-13: Present a merge-ready decision package
+### AC-13: Present a delivery decision package
 
 - [ ] The pull request identifies the source issue and describes the behavior
       change rather than merely listing files.
@@ -533,10 +587,13 @@ increment; checking the complete AC item is reserved for full V1 acceptance.
 - [ ] The risk analysis covers blast radius, protected or sensitive areas,
       migration/dependency/configuration effects, rollback considerations, test
       gaps, and confidence.
-- [ ] The recommendation is exactly one of the four documented outcomes and is
+- [ ] The recommendation is exactly one of the documented outcomes and is
       supported by the current exact-head evidence.
-- [ ] If ready, the only required human action is to review and merge or reject
-      the GitHub pull request.
+- [ ] Before delivery, the package states whether policy permits automatic
+      delivery or requires final high-risk approval and gives the one exact
+      action, if any.
+- [ ] After delivery, the final package reports the merge commit and successful
+      development deployment or check.
 
 ### AC-14: Stop safely
 
@@ -548,6 +605,24 @@ increment; checking the complete AC item is reserved for full V1 acceptance.
 - [ ] Time, attempt, output, and model-usage limits stop cleanly and explain
       whether bounded continuation is possible.
 
+### AC-15: Deliver to development according to risk
+
+- [ ] Low-risk work automatically merges the exact passing and reviewed head
+      and verifies the configured development deployment or check.
+- [ ] Medium-risk work follows the same automatic delivery path after exactly
+      one valid plan approval.
+- [ ] High-risk work requires both a valid plan approval and a final approval
+      bound to the reviewed exact head, findings, final change summary, and
+      residual risk before merge and development delivery.
+- [ ] Failed, incomplete, or stale review, validation, or CI cannot result in
+      merge.
+- [ ] Delivery verifies the intended repository, base, and exact head; handles
+      an already-merged commit idempotently; and stops on a merge conflict.
+- [ ] Final status reports the merge commit and development deployment or
+      check. A failed development delivery is incomplete and states one exact
+      next action.
+- [ ] Roundhouse never automatically promotes or deploys to production.
+
 ## Acceptance scenario set by goal
 
 The scenario set expands with the goals. A later goal reruns representative
@@ -556,8 +631,10 @@ loop.
 
 ### Goal 1 scenarios
 
-1. clear reproducible low-risk bug; and
-2. small low-risk maintenance or formatting change.
+1. clear reproducible low-risk bug automatically delivered successfully to
+   development; and
+2. small low-risk maintenance or formatting change automatically delivered
+   successfully to development.
 
 At least three consecutive live runs are required, so one scenario type must
 be repeated on a distinct issue.
@@ -566,7 +643,8 @@ be repeated on a distinct issue.
 
 3. unclear bug requiring one clarification round;
 4. feature request converted into testable acceptance criteria;
-5. medium-risk change requiring one plan approval;
+5. medium-risk change requiring exactly one plan approval and then automatic
+   successful development delivery;
 6. maintainer question requiring explanation but no code change; and
 7. in-scope PR change request followed by a new validated and reviewed head.
 
@@ -574,7 +652,8 @@ be repeated on a distinct issue.
 
 8. intermittent or non-reproducible report;
 9. already-fixed or duplicate issue;
-10. high-risk migration or protected-path request;
+10. high-risk migration or protected-path request requiring plan approval,
+    exact-head final approval, and successful development delivery;
 11. seeded implementation defect caught and remediated through independent
     review;
 12. genuine CI failure repaired automatically;
@@ -608,12 +687,15 @@ Acceptance defects use these severities:
 
 V1 acceptance requires all of the following:
 
-- [ ] Every AC-01 through AC-14 journey has live or replay evidence at the
+- [ ] Every AC-01 through AC-15 journey has live or replay evidence at the
       candidate commit.
 - [ ] One external public repository is enrolled and completes the five
       required live scenarios.
-- [ ] At least 90% of clear eligible low-risk scenarios reach a pull request
-      without pre-merge human intervention.
+- [ ] At least 90% of clear eligible low-risk scenarios reach successful
+      development delivery without human intervention.
+- [ ] Every eligible medium-risk acceptance scenario requires exactly one plan
+      approval and no other human intervention through successful development
+      delivery.
 - [ ] At least 80% of eligible implementation scenarios reach a supported final
       recommendation; correct qualification stops do not count as failures.
 - [ ] All start acknowledgements and progress visibility meet their targets.
@@ -624,6 +706,10 @@ V1 acceptance requires all of the following:
 - [ ] No recommendation says ready while current CI is failing, review has an
       unresolved blocking finding, or required reproduction/regression evidence is
       contradicted.
+- [ ] No automatic merge occurs unless validation, independent review, and
+      repository CI pass for the exact delivered head.
+- [ ] Every automatic development merge and delivery is recorded, and no
+      production promotion or deployment occurs as part of acceptance.
 - [ ] Median and p95 end-to-end time, model tokens, estimated cost, human
       interventions, implementation attempts, review cycles, and failure category
       are reported.
@@ -635,14 +721,15 @@ The acceptance report records, for every scenario:
 
 - repository and issue URL;
 - Roundhouse release commit and environment;
-- start, first-status, plan, pull-request, review-complete, CI-complete, and
-  final-recommendation timestamps;
+- start, first-status, plan, pull-request, review-complete, CI-complete,
+  recommendation, merge, and development-delivery-complete timestamps;
 - qualification and reproduction outcome;
-- risk level and human interventions;
+- risk level, required approvals, and actual human interventions;
 - implementation, validation, review, and CI attempt counts;
 - token and available cost measurements;
-- final pull-request and exact-head commit;
-- recommendation and eventual maintainer disposition; and
+- final pull-request, exact-head commit, and merge commit;
+- recommendation, development deployment or check result, and eventual
+  maintainer disposition; and
 - any failed criterion with a linked issue.
 
 A criterion is **passed** only when the evidence directly demonstrates the
@@ -652,10 +739,12 @@ record may support the evidence but cannot replace the end-to-end journey.
 ## Current baseline
 
 Roundhouse is currently a dogfood POC and does not pass this checklist. Known
-unmet or undemonstrated criteria include natural-language questions, command
+unmet or undemonstrated criteria include the complete risk-tiered automatic
+merge and development-delivery workflow, natural-language questions, command
 discovery and malformed-command guidance, external repository enrollment,
 external pilot evidence, bounded terminal handling of repeated review
-findings, and a complete journey-level acceptance report.
+findings, truthful issue/dashboard lifecycle projection, and a complete
+journey-level acceptance report.
 
 Progress should be reported against AC identifiers rather than a general claim
 that V1 is complete. Any newly discovered maintainer-facing gap must be linked
