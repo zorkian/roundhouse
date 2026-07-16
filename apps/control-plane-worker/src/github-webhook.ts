@@ -229,7 +229,12 @@ export function parseGitHubCommand(
   const line = firstLine?.trim();
   if (!line) return null;
   const parts = line.split(/\s+/);
-  if (!commandPrefixes.includes(parts[0] ?? "")) return null;
+  const prefix = parts[0]?.toLowerCase();
+  if (
+    !prefix ||
+    !commandPrefixes.some((candidate) => candidate.toLowerCase() === prefix)
+  )
+    return null;
   if (parts[1] === "start" && parts.length === 2) return { kind: "start" };
   if (parts[1] === "status" && parts.length <= 3) {
     if (parts[2] && !runId.test(parts[2])) return null;
