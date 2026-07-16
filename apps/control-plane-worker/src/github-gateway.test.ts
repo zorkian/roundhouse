@@ -334,6 +334,8 @@ describe("GitHub App gateway", () => {
           html_url: "https://github.com/zorkian/roundhouse/issues/7",
           title: "Dogfood task",
           body: "Change the bounded dogfood document.",
+          state: "closed",
+          closed_at: "2026-07-12T00:25:00Z",
           updated_at: "2026-07-12T00:30:00Z",
         });
       return json({}, 404);
@@ -355,6 +357,59 @@ describe("GitHub App gateway", () => {
       title: "Dogfood task",
       fetchedAt: "2026-07-12T01:00:00.000Z",
     });
+    await expect(
+      gateway.fetchIssueState({
+        schemaVersion: 1,
+        owner: "zorkian",
+        repository: "roundhouse",
+        number: 7,
+      }),
+    ).resolves.toEqual({
+      repositoryFullName: "zorkian/roundhouse",
+      issueNumber: 7,
+      state: "closed",
+      updatedAt: "2026-07-12T00:30:00.000Z",
+      closedAt: "2026-07-12T00:25:00.000Z",
+    });
+  });
+
+  it("rejects mismatched repositories and pull requests as issue state", async () => {
+    const fetcher: typeof fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/access_tokens"))
+        return json({
+          token: "installation-token",
+          expires_at: "2026-07-12T02:00:00Z",
+        });
+      return json({
+        number: 7,
+        html_url: "https://github.com/zorkian/roundhouse/issues/7",
+        state: "open",
+        updated_at: "2026-07-12T00:30:00Z",
+        closed_at: null,
+        pull_request: {},
+      });
+    };
+    const gateway = new GitHubAppGateway(
+      { appId: "1", installationId: "2", privateKey },
+      fetcher,
+    );
+    await expect(
+      gateway.fetchIssueState({
+        schemaVersion: 1,
+        owner: "other",
+        repository: "roundhouse",
+        number: 7,
+      }),
+    ).rejects.toMatchObject({ code: "invalid_request" });
+    await expect(
+      gateway.fetchIssueState({
+        schemaVersion: 1,
+        owner: "zorkian",
+        repository: "roundhouse",
+        number: 7,
+      }),
+    ).rejects.toMatchObject({ code: "invalid_response" });
   });
 
   it("posts an ordinary comment to the explicit repository and issue", async () => {

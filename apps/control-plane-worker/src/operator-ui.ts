@@ -22,6 +22,11 @@ import { readPullRequestLifecycle } from "./github-lifecycle.js";
 import { readTrustedReviewWorkflows } from "./trusted-execution-workflow.js";
 import { runtimeIdentity } from "./runtime-config.js";
 import { reliabilitySummary } from "./reliability-metrics.js";
+import type {
+  GitHubAppGateway,
+  GitHubIssueState,
+  GitHubIssueStateReference,
+} from "./github-gateway.js";
 
 function responseHeaders(nonce: string): HeadersInit {
   return {
@@ -66,9 +71,9 @@ function rows(values){return values.map(([k,v])=>'<div class="row"><span class="
 function card(title,body){return '<section class="card"><h2>'+esc(title)+'</h2>'+body+'</section>'}
 function repositoryFromUrl(value){try{const url=new URL(String(value||''));if(url.protocol!=='https:'||url.hostname!=='github.com')return undefined;let path=url.pathname;if(path.endsWith('.git'))path=path.slice(0,-4);const parts=path.split('/').filter(Boolean);return parts.length===2?parts[0]+'/'+parts[1]:undefined}catch{return undefined}}
 function runRepository(r){return r.source?.owner&&r.source?.repository?r.source.owner+'/'+r.source.repository:repositoryFromUrl(r.publication?.remoteUrl)}
-function dashboardIssues(v){const planning=v.planning||[];const plans=v.plans||[];const runs=v.runs||[];const reviews=v.reviews||[];const issues=new Map;const ensure=(repository,number,url)=>{const key=repository+'#'+number;if(!issues.has(key))issues.set(key,{repositoryFullName:repository,issueNumber:number,issueUrl:url||'https://github.com/'+repository+'/issues/'+number});return issues.get(key)};const subject=(item,value,at)=>{if(value&&(!item.subjectAt||Date.parse(at||'')>=Date.parse(item.subjectAt||''))){item.subject=value;item.subjectAt=at}};for(const job of planning){const item=ensure(job.repositoryFullName,job.issueNumber);if(!item.planning||Date.parse(job.updatedAt||'')>=Date.parse(item.planning.updatedAt||''))item.planning=job}for(const p of plans){const matchedRun=runs.find(r=>r.runId===p.runId||r.planning?.planId===p.plan.planId);const matchedReview=reviews.find(r=>r.request?.issueNumber===p.plan.issueNumber);const repository=runRepository(matchedRun||{})||repositoryFromUrl(matchedReview?.request?.repositoryUrl)||'zorkian/roundhouse';const item=ensure(repository,p.plan.issueNumber);item.plan=p;subject(item,p.plan.subject,p.plan.createdAt)}for(const r of runs){const plan=plans.find(p=>p.runId===r.runId||p.plan.planId===r.planning?.planId);const number=r.source?.issueNumber||plan?.plan.issueNumber;if(!number)continue;const repository=runRepository(r)||'zorkian/roundhouse';const item=ensure(repository,number,r.source?.issueUrl);if(!item.run||Date.parse(r.updatedAt||'')>=Date.parse(item.run.updatedAt||''))item.run=r;subject(item,r.subject,r.updatedAt)}for(const review of reviews){const repository=repositoryFromUrl(review.request?.repositoryUrl)||'zorkian/roundhouse';const number=review.request?.issueNumber;if(!number)continue;const item=ensure(repository,number,review.request.issueUrl);if(!item.review||Date.parse(review.updatedAt||'')>=Date.parse(item.review.updatedAt||''))item.review=review;subject(item,review.request.subject,review.updatedAt)}return [...issues.values()]}
-function issueState(i){const planning=i.planning;if(planning&&(!i.plan||Date.parse(planning.updatedAt||'')>Date.parse(i.plan.plan.createdAt||''))){const states={failed:['Planning failed','failed','attention'],timed_out:['Planning timed out','failed','attention']};const state=states[planning.status]||['Planning','','active'];return {label:state[0],tone:state[1],bucket:state[2],kind:'planning',at:planning.updatedAt}}const artifacts=[i.plan&&{kind:'plan',value:i.plan,at:i.plan.plan.createdAt},i.run&&{kind:'run',value:i.run,at:i.run.updatedAt},i.review&&{kind:'review',value:i.review,at:i.review.updatedAt}].filter(Boolean).sort((a,b)=>(Date.parse(b.at)||0)-(Date.parse(a.at)||0));const current=artifacts[0];if(!current)return {label:'Waiting to start',tone:'muted',bucket:'active',at:''};if(current.kind==='review'){const states={pending:['Review queued','', 'active'],running:['Independent review','', 'active'],completed:['Ready for human review','awaiting_approval','attention'],failed:['Review failed','failed','attention'],remediation_pending:['Fixing review findings','', 'active'],remediated:['Remediation complete','state','finished']};const state=states[current.value.status]||[current.value.status,'','active'];return {label:state[0],tone:state[1],bucket:state[2],kind:'review',at:current.at}}if(current.kind==='run'){const states={created:['Starting','', 'active'],workspace_ready:['Workspace ready','', 'active'],implementing:['Implementing','', 'active'],validating:['Validating','', 'active'],awaiting_approval:['Approval needed','awaiting_approval','attention'],awaiting_publication:['Preparing publication','', 'active'],approved:['Approved','', 'active'],committed:['Publishing','', 'active'],pushed:['Publishing','', 'active'],completed:['Completed','state','finished'],failed:['Implementation failed','failed','attention'],cancelled:['Cancelled','cancelled','finished']};const state=states[current.value.state]||[current.value.state,'','active'];return {label:state[0],tone:state[1],bucket:state[2],kind:'run',at:current.at}}const states={proposed:['Plan ready','proposed','attention'],approved:['Approved to start','', 'active'],materialized:['Starting','', 'active'],needs_clarification:['Clarification needed','awaiting_approval','attention'],already_satisfied:['Already satisfied','state','finished'],duplicate:['Duplicate','muted','finished'],rejected:['Rejected','rejected','finished']};const state=states[current.value.status]||[current.value.status,'','active'];return {label:state[0],tone:state[1],bucket:state[2],kind:'plan',at:current.at}}
-function issueAction(i,state){const workflow='/repositories/'+i.repositoryFullName.split('/').map(encodeURIComponent).join('/')+'/issues/'+encodeURIComponent(i.issueNumber);if(state.kind==='review'){const r=i.review;if(r.status==='completed'&&r.request.pullRequestUrl)return ext(r.request.pullRequestUrl,'Review pull request #'+r.request.pullRequestNumber);if(r.status==='failed')return '<a href="/reviews/'+encodeURIComponent(r.request.reviewId)+'">Inspect review failure</a>';if(['pending','running'].includes(r.status))return '<a href="/reviews/'+encodeURIComponent(r.request.reviewId)+'">Follow review</a>';return '<a href="'+workflow+'">Follow remediation</a>'}if(state.kind==='run'){const r=i.run;if(r.state==='awaiting_approval')return '<a href="'+workflow+'">Review and approve</a>';if(r.state==='failed')return '<a href="/runs/'+encodeURIComponent(r.runId)+'">Inspect failed run</a>';if(r.publication?.pullRequestUrl&&r.state==='completed')return ext(r.publication.pullRequestUrl,'View pull request');if(!['completed','cancelled'].includes(r.state))return '<a href="/runs/'+encodeURIComponent(r.runId)+'">Follow live run</a>';return '<a href="'+workflow+'">View workflow</a>'}if(state.kind==='plan'){const p=i.plan;if(p.status==='needs_clarification')return ext(i.issueUrl,'Answer questions on issue');if(p.status==='proposed')return '<a href="/plans/'+encodeURIComponent(p.plan.planId)+'">Review plan</a>';if(p.status==='rejected')return '<a href="/plans/'+encodeURIComponent(p.plan.planId)+'">Inspect rejection</a>'}return '<a href="'+workflow+'">View workflow</a>'}
+function dashboardIssues(v){const planning=v.planning||[];const plans=v.plans||[];const runs=v.runs||[];const reviews=v.reviews||[];const issues=new Map;const ensure=(repository,number,url)=>{const key=repository+'#'+number;if(!issues.has(key))issues.set(key,{repositoryFullName:repository,issueNumber:number,issueUrl:url||'https://github.com/'+repository+'/issues/'+number});return issues.get(key)};const subject=(item,value,at)=>{if(value&&(!item.subjectAt||Date.parse(at||'')>=Date.parse(item.subjectAt||''))){item.subject=value;item.subjectAt=at}};for(const job of planning){const item=ensure(job.repositoryFullName,job.issueNumber);if(!item.planning||Date.parse(job.updatedAt||'')>=Date.parse(item.planning.updatedAt||''))item.planning=job}for(const p of plans){const matchedRun=runs.find(r=>r.runId===p.runId||r.planning?.planId===p.plan.planId);const matchedReview=reviews.find(r=>r.request?.issueNumber===p.plan.issueNumber);const repository=runRepository(matchedRun||{})||repositoryFromUrl(matchedReview?.request?.repositoryUrl)||'zorkian/roundhouse';const item=ensure(repository,p.plan.issueNumber);item.plan=p;subject(item,p.plan.subject,p.plan.createdAt)}for(const r of runs){const plan=plans.find(p=>p.runId===r.runId||p.plan.planId===r.planning?.planId);const number=r.source?.issueNumber||plan?.plan.issueNumber;if(!number)continue;const repository=runRepository(r)||'zorkian/roundhouse';const item=ensure(repository,number,r.source?.issueUrl);if(!item.run||Date.parse(r.updatedAt||'')>=Date.parse(item.run.updatedAt||''))item.run=r;subject(item,r.subject,r.updatedAt)}for(const review of reviews){const repository=repositoryFromUrl(review.request?.repositoryUrl)||'zorkian/roundhouse';const number=review.request?.issueNumber;if(!number)continue;const item=ensure(repository,number,review.request.issueUrl);if(!item.review||Date.parse(review.updatedAt||'')>=Date.parse(item.review.updatedAt||''))item.review=review;subject(item,review.request.subject,review.updatedAt)}for(const state of v.issueStates||[]){const item=issues.get(state.repositoryFullName+'#'+state.issueNumber);if(item)item.issueState=state}return [...issues.values()]}
+function issueState(i){if(i.issueState?.state==='closed')return {label:'Closed on GitHub',tone:'muted',bucket:'finished',kind:'closed',at:i.issueState.closedAt||i.issueState.updatedAt};const planning=i.planning;if(planning&&(!i.plan||Date.parse(planning.updatedAt||'')>Date.parse(i.plan.plan.createdAt||''))){const states={failed:['Planning failed','failed','attention'],timed_out:['Planning timed out','failed','attention']};const state=states[planning.status]||['Planning','','active'];return {label:state[0],tone:state[1],bucket:state[2],kind:'planning',at:planning.updatedAt}}const artifacts=[i.plan&&{kind:'plan',value:i.plan,at:i.plan.plan.createdAt},i.run&&{kind:'run',value:i.run,at:i.run.updatedAt},i.review&&{kind:'review',value:i.review,at:i.review.updatedAt}].filter(Boolean).sort((a,b)=>(Date.parse(b.at)||0)-(Date.parse(a.at)||0));const current=artifacts[0];if(!current)return {label:'Waiting to start',tone:'muted',bucket:'active',at:''};if(current.kind==='review'){const states={pending:['Review queued','', 'active'],running:['Independent review','', 'active'],completed:['Ready for human review','awaiting_approval','attention'],failed:['Review failed','failed','attention'],remediation_pending:['Fixing review findings','', 'active'],remediated:['Remediation complete','state','finished']};const state=states[current.value.status]||[current.value.status,'','active'];return {label:state[0],tone:state[1],bucket:state[2],kind:'review',at:current.at}}if(current.kind==='run'){const states={created:['Starting','', 'active'],workspace_ready:['Workspace ready','', 'active'],implementing:['Implementing','', 'active'],validating:['Validating','', 'active'],awaiting_approval:['Approval needed','awaiting_approval','attention'],awaiting_publication:['Preparing publication','', 'active'],approved:['Approved','', 'active'],committed:['Publishing','', 'active'],pushed:['Publishing','', 'active'],completed:['Completed','state','finished'],failed:['Implementation failed','failed','attention'],cancelled:['Cancelled','cancelled','finished']};const state=states[current.value.state]||[current.value.state,'','active'];return {label:state[0],tone:state[1],bucket:state[2],kind:'run',at:current.at}}const states={proposed:['Plan ready','proposed','attention'],approved:['Approved to start','', 'active'],materialized:['Starting','', 'active'],needs_clarification:['Clarification needed','awaiting_approval','attention'],already_satisfied:['Already satisfied','state','finished'],duplicate:['Duplicate','muted','finished'],rejected:['Rejected','rejected','finished']};const state=states[current.value.status]||[current.value.status,'','active'];return {label:state[0],tone:state[1],bucket:state[2],kind:'plan',at:current.at}}
+function issueAction(i,state){const workflow='/repositories/'+i.repositoryFullName.split('/').map(encodeURIComponent).join('/')+'/issues/'+encodeURIComponent(i.issueNumber);if(state.kind==='closed')return '<a href="'+workflow+'">View retained workflow</a>';if(state.kind==='review'){const r=i.review;if(r.status==='completed'&&r.request.pullRequestUrl)return ext(r.request.pullRequestUrl,'Review pull request #'+r.request.pullRequestNumber);if(r.status==='failed')return '<a href="/reviews/'+encodeURIComponent(r.request.reviewId)+'">Inspect review failure</a>';if(['pending','running'].includes(r.status))return '<a href="/reviews/'+encodeURIComponent(r.request.reviewId)+'">Follow review</a>';return '<a href="'+workflow+'">Follow remediation</a>'}if(state.kind==='run'){const r=i.run;if(r.state==='awaiting_approval')return '<a href="'+workflow+'">Review and approve</a>';if(r.state==='failed')return '<a href="/runs/'+encodeURIComponent(r.runId)+'">Inspect failed run</a>';if(r.publication?.pullRequestUrl&&r.state==='completed')return ext(r.publication.pullRequestUrl,'View pull request');if(!['completed','cancelled'].includes(r.state))return '<a href="/runs/'+encodeURIComponent(r.runId)+'">Follow live run</a>';return '<a href="'+workflow+'">View workflow</a>'}if(state.kind==='plan'){const p=i.plan;if(p.status==='needs_clarification')return ext(i.issueUrl,'Answer questions on issue');if(p.status==='proposed')return '<a href="/plans/'+encodeURIComponent(p.plan.planId)+'">Review plan</a>';if(p.status==='rejected')return '<a href="/plans/'+encodeURIComponent(p.plan.planId)+'">Inspect rejection</a>'}return '<a href="'+workflow+'">View workflow</a>'}
 function issueRows(items){return '<div class="issue-list">'+items.map(i=>{const state=issueState(i);const workflow='/repositories/'+i.repositoryFullName.split('/').map(encodeURIComponent).join('/')+'/issues/'+encodeURIComponent(i.issueNumber);return '<article class="issue-row"><div><div class="issue-repository">'+esc(i.repositoryFullName)+' · '+ext(i.issueUrl,'#'+i.issueNumber)+'</div><a class="issue-title" href="'+workflow+'">'+esc(i.subject||'GitHub issue #'+i.issueNumber)+'</a></div><div class="issue-state '+esc(state.tone)+'">'+esc(state.label)+'</div><div class="issue-action">'+issueAction(i,state)+'</div></article>'}).join('')+'</div>'}
 function issueCard(title,items){return '<section class="card"><h2>'+esc(title)+' <span class="issue-count">('+items.length+')</span></h2>'+(items.length?issueRows(items):'<span class="muted">No issue workflows here.</span>')+'</section>'}
 function metricDuration(value){return value?.status==='available'?Math.round(value.milliseconds/1000)+'s':'unavailable'}
@@ -181,14 +186,100 @@ export async function issueInspection(
   };
 }
 
+type DashboardIssueArtifacts = {
+  planning: Array<{ repositoryFullName: string; issueNumber: number }>;
+  plans: Array<{ plan: { issueNumber: number } }>;
+  runs: Array<{
+    source?: { owner?: string; repository?: string; issueNumber?: number };
+  }>;
+  reviews: Array<{
+    request: { repositoryUrl?: string; issueNumber?: number };
+  }>;
+};
+
+function githubRepositoryFromUrl(
+  value: string | undefined,
+): string | undefined {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.hostname !== "github.com")
+      return undefined;
+    const parts = url.pathname
+      .replace(/\.git$/, "")
+      .split("/")
+      .filter(Boolean);
+    return parts.length === 2 ? `${parts[0]}/${parts[1]}` : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function dashboardIssueReferences(
+  artifacts: DashboardIssueArtifacts,
+  defaultRepositoryFullName: string,
+): GitHubIssueStateReference[] {
+  const references = new Map<string, GitHubIssueStateReference>();
+  const add = (repositoryFullName: string, issueNumber: number): void => {
+    const [owner, repository, extra] = repositoryFullName.split("/");
+    if (
+      !owner ||
+      !repository ||
+      extra !== undefined ||
+      !Number.isSafeInteger(issueNumber) ||
+      issueNumber < 1
+    )
+      return;
+    references.set(`${repositoryFullName}#${issueNumber}`, {
+      schemaVersion: 1,
+      owner,
+      repository,
+      number: issueNumber,
+    });
+  };
+  for (const job of artifacts.planning)
+    add(job.repositoryFullName, job.issueNumber);
+  for (const plan of artifacts.plans)
+    add(defaultRepositoryFullName, plan.plan.issueNumber);
+  for (const run of artifacts.runs) {
+    const source = run.source;
+    if (source?.owner && source.repository && source.issueNumber)
+      add(`${source.owner}/${source.repository}`, source.issueNumber);
+  }
+  for (const review of artifacts.reviews) {
+    const repositoryFullName = githubRepositoryFromUrl(
+      review.request.repositoryUrl,
+    );
+    if (repositoryFullName && review.request.issueNumber)
+      add(repositoryFullName, review.request.issueNumber);
+  }
+  return [...references.values()];
+}
+
 export async function dashboard(
   env: ControlPlaneEnv,
+  issueStateGateway: Pick<GitHubAppGateway, "fetchIssueState">,
 ): Promise<Record<string, unknown>> {
   const rows = await env.DB.prepare(
     "SELECT run_id FROM self_development_runs ORDER BY updated_at DESC LIMIT 50",
   ).all<{ run_id: string }>();
   const jobs = new D1JobStore(env.DB);
   const identity = runtimeIdentity(env);
+  const planning = await listPlanningJobs(env, {
+    roundhouseEnvironment: identity.environment,
+    repositoryFullName: identity.repositoryFullName,
+  });
+  const plans = await listIssuePlans(env, 50);
+  const reviews = await listIndependentReviews(env, 50);
+  const runs = await Promise.all(
+    rows.results.map(async ({ run_id }) => inspectRun(await jobs.read(run_id))),
+  );
+  const issueStates: GitHubIssueState[] = await Promise.all(
+    dashboardIssueReferences(
+      { planning, plans, reviews, runs },
+      identity.repositoryFullName,
+    ).map((reference) => issueStateGateway.fetchIssueState(reference)),
+  );
   return {
     schemaVersion: 1,
     reliability: await reliabilitySummary(
@@ -196,17 +287,11 @@ export async function dashboard(
       identity.environment,
       identity.repositoryFullName,
     ),
-    planning: await listPlanningJobs(env, {
-      roundhouseEnvironment: identity.environment,
-      repositoryFullName: identity.repositoryFullName,
-    }),
-    plans: await listIssuePlans(env, 50),
-    reviews: await listIndependentReviews(env, 50),
-    runs: await Promise.all(
-      rows.results.map(async ({ run_id }) =>
-        inspectRun(await jobs.read(run_id)),
-      ),
-    ),
+    planning,
+    plans,
+    reviews,
+    runs,
+    issueStates,
   };
 }
 

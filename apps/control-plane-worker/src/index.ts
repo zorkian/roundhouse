@@ -3872,7 +3872,7 @@ async function route(
     if (page) return page;
   }
   if (request.method === "GET" && url.pathname === "/v1/dashboard")
-    return json(await dashboard(env));
+    return json(await dashboard(env, githubGateway(env)));
   const issueMatch =
     /^\/v1\/repositories\/([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+)\/issues\/([1-9][0-9]*)$/.exec(
       url.pathname,

@@ -3,11 +3,52 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { operatorPage } from "./operator-ui.js";
+import { dashboardIssueReferences, operatorPage } from "./operator-ui.js";
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("operator UI", () => {
+  it("deduplicates dashboard issue state lookups across workflow artifacts", () => {
+    expect(
+      dashboardIssueReferences(
+        {
+          planning: [
+            {
+              repositoryFullName: "zorkian/roundhouse",
+              issueNumber: 65,
+            },
+          ],
+          plans: [{ plan: { issueNumber: 65 } }],
+          runs: [
+            {
+              source: {
+                owner: "zorkian",
+                repository: "roundhouse",
+                issueNumber: 65,
+              },
+            },
+          ],
+          reviews: [
+            {
+              request: {
+                repositoryUrl: "https://github.com/zorkian/roundhouse.git",
+                issueNumber: 65,
+              },
+            },
+          ],
+        },
+        "zorkian/roundhouse",
+      ),
+    ).toEqual([
+      {
+        schemaVersion: 1,
+        owner: "zorkian",
+        repository: "roundhouse",
+        number: 65,
+      },
+    ]);
+  });
+
   it("renders the environment-specific start command", async () => {
     const response = operatorPage(
       "/repositories/zorkian/roundhouse/issues/24",
@@ -761,6 +802,15 @@ describe("operator UI", () => {
               },
             },
           ],
+          issueStates: [
+            {
+              repositoryFullName: "zorkian/roundhouse",
+              issueNumber: 65,
+              state: "closed",
+              updatedAt: "2026-07-14T22:00:00.000Z",
+              closedAt: "2026-07-14T22:00:00.000Z",
+            },
+          ],
         }),
       ),
     );
@@ -774,7 +824,7 @@ describe("operator UI", () => {
     expect(app.innerHTML).toContain("#133");
     expect(app.innerHTML).toContain("Planning");
     expect(app.innerHTML).toContain("Implementing");
-    expect(app.innerHTML).toContain("Clarification needed");
+    expect(app.innerHTML).toContain("Closed on GitHub");
     expect(app.innerHTML).toContain("Ready for human review");
     expect(app.innerHTML).toContain("Review pull request #70");
     expect(app.innerHTML).toContain("Needs attention");
@@ -788,6 +838,13 @@ describe("operator UI", () => {
     expect(app.innerHTML).not.toContain("<h2>Independent reviews</h2>");
     expect(app.innerHTML).not.toContain(`>plan_${"b".repeat(40)}<`);
     expect(app.innerHTML).not.toContain(">run_ui_contract<");
+    const needsAttention = app.innerHTML.slice(
+      app.innerHTML.indexOf("Needs attention"),
+      app.innerHTML.indexOf("In progress"),
+    );
+    const finished = app.innerHTML.slice(app.innerHTML.indexOf("Finished"));
+    expect(needsAttention).not.toContain("Clarify production rollout");
+    expect(finished).toContain("Clarify production rollout");
   });
 
   it("links retained failed-validation diagnostics without making them approval eligible", async () => {
