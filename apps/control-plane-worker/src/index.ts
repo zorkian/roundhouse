@@ -2144,6 +2144,12 @@ async function attemptEligibleAutomaticMerge(
     });
     return "automatic";
   }
+  if (!approvedPaths || approvedPaths.length === 0) {
+    console.warn("Automatic merge approved paths unavailable; retrying later", {
+      runId: identity.runId,
+    });
+    return "automatic";
+  }
   const reservation = await claimAutomaticMerge(env, identity);
   if (reservation.kind === "merged") {
     if (!reservation.projectionComplete) {

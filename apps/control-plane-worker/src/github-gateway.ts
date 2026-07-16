@@ -723,7 +723,7 @@ export class GitHubAppGateway {
           comparison.commits.at(-1)?.sha !== pull.base.sha ||
           !interveningFiles ||
           interveningFiles.length === 0 ||
-          interveningFiles.length >= 100 ||
+          interveningFiles.length >= 300 ||
           new Set(interveningFiles.map((file) => file.filename)).size !==
             interveningFiles.length ||
           interveningFiles.some((file) =>
@@ -789,7 +789,10 @@ export class GitHubAppGateway {
       const afterFailure = await read().catch(() => undefined);
       const recovered = afterFailure
         ? await reconciled(afterFailure).catch((error) => {
-            if (error instanceof GitHubAppGatewayError && !error.retryable)
+            if (
+              error instanceof GitHubAppGatewayError &&
+              (error.code === "stale_base" || error.code === "stale_head")
+            )
               throw error;
             return undefined;
           })
