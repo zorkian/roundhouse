@@ -213,7 +213,9 @@ describe("operator UI", () => {
           reviews: [
             {
               status: "completed",
-              attemptCount: 1,
+              attemptCount: 2,
+              activeAttemptId:
+                "review_45406706e161b9dbdebd8485dea2f19bf7995bb4-attempt-2",
               request: {
                 reviewId: "review_45406706e161b9dbdebd8485dea2f19bf7995bb4",
                 attemptId:
@@ -280,8 +282,11 @@ describe("operator UI", () => {
     expect(app.innerHTML).toContain(
       "/v1/runs/run_live/agent-output/run_live-prepare-1",
     );
-    expect(app.innerHTML).toContain(
+    expect(app.innerHTML).not.toContain(
       "/v1/reviews/review_45406706e161b9dbdebd8485dea2f19bf7995bb4/agent-output/review_45406706e161b9dbdebd8485dea2f19bf7995bb4-attempt-1",
+    );
+    expect(app.innerHTML).toContain(
+      "/v1/reviews/review_45406706e161b9dbdebd8485dea2f19bf7995bb4/agent-output/review_45406706e161b9dbdebd8485dea2f19bf7995bb4-attempt-2",
     );
     expect(app.innerHTML).toContain("durable execution");
     expect(app.innerHTML).toContain(`trusted-${"a".repeat(64)}`);
@@ -301,7 +306,7 @@ describe("operator UI", () => {
     );
     expect(app.innerHTML).not.toContain("<h2>Attempts</h2>");
     expect(app.innerHTML).not.toContain("<h2>Evidence</h2>");
-    expect(app.innerHTML.match(/class="event-row"/g)).toHaveLength(4);
+    expect(app.innerHTML.match(/class="event-row"/g)).toHaveLength(5);
   });
 
   it("appends cursor-only output without duplicates and stops at terminal state", async () => {

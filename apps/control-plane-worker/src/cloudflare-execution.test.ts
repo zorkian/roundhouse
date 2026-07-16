@@ -88,6 +88,15 @@ describe("agent output adapter", () => {
     ).toBe(false);
   });
 
+  it("rejects empty output lines at the trusted boundary", () => {
+    expect(
+      isValidAgentOutputTail(
+        { ...tail, lines: [{ ...tail.lines[0]!, text: "" }] },
+        outputRequest,
+      ),
+    ).toBe(false);
+  });
+
   it("bounds timestamps returned by the trusted container", () => {
     expect(
       isValidAgentOutputTail(

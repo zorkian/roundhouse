@@ -93,6 +93,7 @@ export function isValidAgentOutputTail(
         (index === 0 || line.cursor > lines[index - 1]!.cursor) &&
         ["stdout", "stderr", "system"].includes(line.stream) &&
         typeof line.text === "string" &&
+        line.text.length > 0 &&
         line.text.length <= 2_000 &&
         typeof line.occurredAt === "string" &&
         /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(line.occurredAt),

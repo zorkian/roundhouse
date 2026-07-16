@@ -253,6 +253,7 @@ function agentOutputCapture(attemptId, secrets) {
   startAgentOutput(attemptId);
   const buffers = { stdout: "", stderr: "" };
   const write = (stream, chunk) => {
+    if (stream !== "stdout" && stream !== "stderr") return;
     const value = buffers[stream] + chunk.toString("utf8");
     const parts = value.split(/\r?\n/);
     buffers[stream] = parts.pop() ?? "";
