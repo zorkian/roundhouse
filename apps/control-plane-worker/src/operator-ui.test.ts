@@ -492,6 +492,7 @@ describe("operator UI", () => {
             workflows: [],
           });
         outputRequests += 1;
+        if (outputRequests > 1) throw new Error("temporary gateway failure");
         return Response.json({
           schemaVersion: 1,
           attemptId,
