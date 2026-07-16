@@ -560,9 +560,12 @@ describe("local control-plane Worker", () => {
     expect(first.request.evidence).toEqual([]);
     expect(queued.messages).toHaveLength(1);
     const comments = await env.DB.prepare(
-      "SELECT issue_number FROM github_comment_outbox",
-    ).all<{ issue_number: number }>();
-    expect(comments.results.map((row) => row.issue_number)).toEqual([23]);
+      "SELECT issue_number, body FROM github_comment_outbox ORDER BY comment_key",
+    ).all<{ issue_number: number; body: string }>();
+    expect(comments.results.map((row) => row.issue_number)).toEqual([23, 23]);
+    expect(comments.results.map((row) => row.body).join("\n")).toContain(
+      "already has a retained independent review",
+    );
   });
 
   it("reserves and dispatches a new advisory review after the head changes", async () => {
