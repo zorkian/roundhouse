@@ -2133,16 +2133,17 @@ async function attemptEligibleAutomaticMerge(
     ))
   )
     return "waiting";
-  const approvedPaths = await new D1JobStore(env.DB)
-    .read(identity.runId)
-    .then((job) => job.implementation?.changedFiles)
-    .catch((error) => {
-      console.warn("Automatic merge approved-path lookup deferred", {
-        runId: identity.runId,
-        reason: redactedReason(error),
-      });
-      return undefined;
+  let approvedPaths: string[] | undefined;
+  try {
+    approvedPaths = (await new D1JobStore(env.DB).read(identity.runId))
+      .implementation?.changedFiles;
+  } catch (error) {
+    console.warn("Automatic merge approved-path lookup deferred", {
+      runId: identity.runId,
+      reason: redactedReason(error),
     });
+    return "automatic";
+  }
   const reservation = await claimAutomaticMerge(env, identity);
   if (reservation.kind === "merged") {
     if (!reservation.projectionComplete) {
