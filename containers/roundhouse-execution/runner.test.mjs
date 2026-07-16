@@ -13,6 +13,7 @@ import {
 } from "../../packages/self-development/src/trusted-loop.ts";
 
 import {
+  agentOutputCapture,
   appendAgentOutput,
   assertCompleteAgentOutput,
   boundedAgentFailure,
@@ -301,6 +302,20 @@ describe("execution runner observability", () => {
     expect(JSON.stringify(output)).not.toContain(secret);
     expect(JSON.stringify(output)).not.toContain("ghp_1234567890abcdefghijkl");
     expect(JSON.stringify(output)).toContain("[redacted]");
+  });
+
+  it("bounds partial lines and preserves split UTF-8 characters", () => {
+    const attemptId = "run_chunked_output-prepare-1";
+    const capture = agentOutputCapture(attemptId, []);
+    capture.write("stdout", Buffer.from([0xe2, 0x82]));
+    capture.write("stdout", Buffer.from([0xac, 0x0a]));
+    capture.write("stderr", Buffer.from("x".repeat(10_000)));
+    capture.write("unexpected", Buffer.from("ignored"));
+    capture.flush();
+    const output = readAgentOutput(attemptId);
+    expect(output.lines.map((line) => line.text)).toContain("€");
+    expect(output.lines.at(-1)?.text).toBe("x".repeat(2_000));
+    expect(JSON.stringify(output)).not.toContain("ignored");
   });
 
   it("keeps a terminal tail pollable until every cursor page is drained", () => {

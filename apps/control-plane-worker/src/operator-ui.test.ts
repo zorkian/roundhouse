@@ -382,7 +382,7 @@ describe("operator UI", () => {
             attemptId,
             status: "running",
             nextCursor: 1,
-            truncated: false,
+            truncated: true,
             lines: [
               {
                 cursor: 1,
@@ -422,6 +422,7 @@ describe("operator UI", () => {
     );
     expect(outputElement.textContent.match(/first line/g)).toHaveLength(1);
     expect(statusElement.textContent).toContain("polling stopped");
+    expect(statusElement.textContent).toContain("earlier output omitted");
     await interval();
     expect(outputRequests).toBe(2);
   });

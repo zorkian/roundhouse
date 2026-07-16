@@ -82,9 +82,9 @@ describe("agent output adapter", () => {
     ).toBe(false);
   });
 
-  it("requires the next cursor to cover every returned line", () => {
+  it("requires the next cursor to equal the last returned line", () => {
     expect(
-      isValidAgentOutputTail({ ...tail, nextCursor: 5 }, outputRequest),
+      isValidAgentOutputTail({ ...tail, nextCursor: 7 }, outputRequest),
     ).toBe(false);
   });
 

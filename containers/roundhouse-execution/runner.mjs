@@ -7,6 +7,7 @@ import { createServer } from "node:http";
 import { connect } from "node:net";
 import { chmod, lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { StringDecoder } from "node:string_decoder";
 
 const workspace = "/home/runner/workspace";
 const repositoryUrl = "https://github.com/zorkian/roundhouse.git";
@@ -249,23 +250,31 @@ export function readAgentOutput(attemptId, cursor) {
   };
 }
 
-function agentOutputCapture(attemptId, secrets) {
+export function agentOutputCapture(attemptId, secrets) {
   startAgentOutput(attemptId);
   const buffers = { stdout: "", stderr: "" };
+  const decoders = {
+    stdout: new StringDecoder("utf8"),
+    stderr: new StringDecoder("utf8"),
+  };
   const write = (stream, chunk) => {
     if (stream !== "stdout" && stream !== "stderr") return;
-    const value = buffers[stream] + chunk.toString("utf8");
+    const value = buffers[stream] + decoders[stream].write(chunk);
     const parts = value.split(/\r?\n/);
-    buffers[stream] = parts.pop() ?? "";
+    buffers[stream] = (parts.pop() ?? "").slice(-2_000);
     for (const line of parts)
       appendAgentOutput(attemptId, stream, line, secrets);
   };
   const flush = () => {
-    for (const stream of ["stdout", "stderr"])
+    for (const stream of ["stdout", "stderr"]) {
+      buffers[stream] = (buffers[stream] + decoders[stream].end()).slice(
+        -2_000,
+      );
       if (buffers[stream]) {
         appendAgentOutput(attemptId, stream, buffers[stream], secrets);
         buffers[stream] = "";
       }
+    }
   };
   return { write, flush };
 }
