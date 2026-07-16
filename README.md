@@ -10,7 +10,9 @@ reviewable draft pull request. It qualifies untrusted issue text against
 repository policy, runs a bounded coding agent in an isolated container,
 validates the result, publishes it through a credentialed control plane, and
 asks Claude to review the exact pull-request head. GitHub remains the place
-where a human reviews and merges or rejects the change.
+where changes merge: eligible low-risk development work may merge automatically
+after exact-head validation, repository CI, and independent review all pass;
+other work waits for a human decision.
 
 V1 is defined by the
 [maintainer acceptance checklist](docs/v1-maintainer-acceptance.md), which is
@@ -36,9 +38,11 @@ do not by themselves establish V1 acceptance.
    GitHub App. Higher-risk work can require approval before publication.
 5. Claude independently reviews the exact published head. Roundhouse reports
    findings and may run a bounded remediation pass before marking the pull
-   request ready for human review.
-6. A human reviews the diff, checks, and Claude findings, then merges or rejects
-   the pull request. Roundhouse has no merge command or merge authority.
+   request ready.
+6. Eligible low-risk development work merges automatically only when exact-head
+   validation, repository CI, and independent review all pass. Medium- or
+   high-risk work, and work that is not eligible under repository policy,
+   pauses at the configured human boundary for a merge or rejection decision.
 
 Use `/rhd` (or `/roundhouse-dev`) only for the development deployment. Use
 `/rh` (or `/roundhouse`) only for production. Each deployment ignores the
@@ -46,11 +50,13 @@ other command family and keeps its plans, runs, branches, and comments separate.
 Follow-up commands include the correct prefix and required identifiers; copy
 the exact command Roundhouse posts rather than constructing one by hand.
 
-After a human merge to `main`, the `Release development` GitHub workflow runs
-checks, builds the release once, and deploys that commit to development.
-Production is not updated by the merge. `Promote production` reuses the exact
-successful development artifacts and is a separate action protected by the
-`roundhouse-production` GitHub environment and human approval.
+After a merge to `main`, the repository's `Release development` GitHub workflow
+runs checks, builds the release once, and deploys that commit to development.
+This CI/CD reaction is repository-owned; deployment is outside Roundhouse's
+product responsibility. Production is not updated by the merge. `Promote
+production` reuses the exact successful development artifacts and is a separate
+action protected by the `roundhouse-production` GitHub environment and human
+approval.
 
 ## Local development
 
@@ -85,8 +91,8 @@ pnpm test -- apps/control-plane-worker/src/control-plane-worker.test.ts
 - Cloudflare Containers provide disposable, resource-bounded repository
   checkout, Codex implementation, validation, and independent Claude review.
 - The GitHub App publishes constrained branches, comments, checks, and draft
-  pull requests. Branch protection and the human merge decision remain outside
-  Roundhouse.
+  pull requests, and can merge eligible low-risk development work at its exact
+  validated head. Branch protection and repository policy remain authoritative.
 
 Start with [ADR 0008](docs/decisions/0008-lean-open-source-poc-security-boundary.md)
 for the V1 security boundary, the
@@ -100,14 +106,19 @@ and [the two-environment release design](docs/development/two-environment-releas
 
 - The current system is a single-tenant dogfood POC for explicitly enrolled public
   repositories, not a general multi-repository or private-source service.
-- Roundhouse creates draft pull requests but cannot merge, modify a protected
-  default branch directly, or deploy generated changes.
+- Roundhouse's automatic merge authority is limited to eligible low-risk
+  development work at the exact validated head after validation, repository CI,
+  and independent review pass. Medium- and high-risk or policy-ineligible work
+  requires a decision at the configured human boundary.
+- Roundhouse does not deploy generated changes. Repository CI/CD may react to a
+  merge, but deployment remains outside Roundhouse's product responsibility.
 - Codex and Claude credentials are narrow development exceptions inside the
   trusted container boundary, not a production credential-broker architecture.
 - The operator UI polls rather than streams, and recovery after interruption
   can take several minutes.
-- Automated validation and Claude review are advisory; a human must evaluate
-  every generated change and decide whether to merge it.
+- Validation and independent review gate automatic merge for eligible work;
+  passing them does not make medium- or high-risk or policy-ineligible work
+  eligible for automatic merge.
 - Production promotion is never automatic and requires a separate protected
   approval after a successful development release.
 
