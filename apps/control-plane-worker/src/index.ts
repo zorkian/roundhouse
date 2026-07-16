@@ -2755,6 +2755,7 @@ async function scheduleGitHubPlanning(
     issueNumber,
     actorId: `github:${actor}`,
     command,
+    restartCompleted: command.kind === "start" && !current,
     now: new Date(),
   });
   if (reservation.created) {

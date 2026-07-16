@@ -239,6 +239,22 @@ describe("durable issue planning", () => {
         created: false,
         job: { jobId: retry.job.jobId, generation: 2, status: "completed" },
       });
+
+      const missingProjectionRestart = await reservePlanningJob(env, {
+        ...input,
+        restartCompleted: true,
+        now: new Date("2026-07-15T00:05:00Z"),
+      });
+      expect(missingProjectionRestart).toMatchObject({
+        created: true,
+        job: {
+          generation: 3,
+          status: "queued",
+          priorJobId: retry.job.jobId,
+          priorFailureReason:
+            "completed without durable plan or run projection",
+        },
+      });
     },
   );
 
