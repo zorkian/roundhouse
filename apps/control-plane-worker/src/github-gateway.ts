@@ -630,6 +630,7 @@ export class GitHubAppGateway {
     pullRequestNumber: number;
     expectedBaseSha: string;
     expectedHeadSha: string;
+    approvedPaths?: string[];
   }): Promise<{
     number: number;
     url: string;
@@ -664,7 +665,9 @@ export class GitHubAppGateway {
           head: { sha: string; repo: { full_name: string } };
         }>("GET", path)
       ).value;
-    const validate = (pull: Awaited<ReturnType<typeof read>>): void => {
+    const validate = async (
+      pull: Awaited<ReturnType<typeof read>>,
+    ): Promise<void> => {
       if (
         pull.number !== input.pullRequestNumber ||
         pull.html_url !== expectedUrl ||
@@ -685,9 +688,58 @@ export class GitHubAppGateway {
           "invalid_response",
           "GitHub pull request base was invalid before merge",
         );
+      if (!pull.merged && pull.base.sha !== input.expectedBaseSha) {
+        const approvedPaths = new Set(
+          (input.approvedPaths ?? []).map((approvedPath) =>
+            approvedPath.toLowerCase(),
+          ),
+        );
+        if (approvedPaths.size === 0)
+          throw new GitHubAppGatewayError(
+            "internal_failure",
+            "Roundhouse could not load the approved implementation paths for automatic merge",
+            true,
+          );
+        const comparison = (
+          await this.api<{
+            status: string;
+            ahead_by: number;
+            total_commits: number;
+            base_commit: { sha: string };
+            merge_base_commit: { sha: string };
+            commits: Array<{ sha: string }>;
+            files?: Array<{ filename: string }>;
+          }>(
+            "GET",
+            `${repositoryPath(input.repositoryFullName)}/compare/${input.expectedBaseSha}...${pull.base.sha}?per_page=100&page=1`,
+          )
+        ).value;
+        const interveningFiles = comparison.files;
+        if (
+          comparison.status !== "ahead" ||
+          comparison.base_commit.sha !== input.expectedBaseSha ||
+          comparison.merge_base_commit.sha !== input.expectedBaseSha ||
+          comparison.ahead_by !== comparison.total_commits ||
+          comparison.total_commits !== comparison.commits.length ||
+          comparison.commits.length >= 100 ||
+          comparison.commits.at(-1)?.sha !== pull.base.sha ||
+          !interveningFiles ||
+          interveningFiles.length === 0 ||
+          interveningFiles.length >= 100 ||
+          new Set(interveningFiles.map((file) => file.filename)).size !==
+            interveningFiles.length ||
+          interveningFiles.some((file) =>
+            approvedPaths.has(file.filename.toLowerCase()),
+          )
+        )
+          throw new GitHubAppGatewayError(
+            "stale_base",
+            "GitHub pull request base changed before merge",
+          );
+      }
     };
-    const reconciled = (pull: Awaited<ReturnType<typeof read>>) => {
-      validate(pull);
+    const reconciled = async (pull: Awaited<ReturnType<typeof read>>) => {
+      await validate(pull);
       if (!pull.merged || !/^[a-f0-9]{40}$/.test(pull.merge_commit_sha ?? ""))
         return undefined;
       if (
@@ -708,8 +760,7 @@ export class GitHubAppGateway {
       };
     };
     const before = await read();
-    validate(before);
-    const existing = reconciled(before);
+    const existing = await reconciled(before);
     if (existing) return existing;
     if (before.state !== "open")
       throw new GitHubAppGatewayError(
@@ -738,12 +789,21 @@ export class GitHubAppGateway {
       requestedSha = response.sha;
     } catch (error) {
       const afterFailure = await read().catch(() => undefined);
-      const recovered = afterFailure ? reconciled(afterFailure) : undefined;
+      const recovered = afterFailure
+        ? await reconciled(afterFailure).catch((error) => {
+            if (
+              error instanceof GitHubAppGatewayError &&
+              (error.code === "stale_base" || error.code === "stale_head")
+            )
+              throw error;
+            return undefined;
+          })
+        : undefined;
       if (recovered) return recovered;
       throw error;
     }
     const after = await read();
-    const completed = reconciled(after);
+    const completed = await reconciled(after);
     if (!completed || completed.mergeCommitSha !== requestedSha)
       throw new GitHubAppGatewayError(
         "ambiguous_merge",

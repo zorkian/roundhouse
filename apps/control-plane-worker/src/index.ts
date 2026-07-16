@@ -2133,6 +2133,23 @@ async function attemptEligibleAutomaticMerge(
     ))
   )
     return "waiting";
+  let approvedPaths: string[] | undefined;
+  try {
+    approvedPaths = (await new D1JobStore(env.DB).read(identity.runId))
+      .implementation?.changedFiles;
+  } catch (error) {
+    console.warn("Automatic merge approved-path lookup deferred", {
+      runId: identity.runId,
+      reason: redactedReason(error),
+    });
+    return "automatic";
+  }
+  if (!approvedPaths || approvedPaths.length === 0) {
+    console.warn("Automatic merge approved paths unavailable; retrying later", {
+      runId: identity.runId,
+    });
+    return "automatic";
+  }
   const reservation = await claimAutomaticMerge(env, identity);
   if (reservation.kind === "merged") {
     if (!reservation.projectionComplete) {
@@ -2189,6 +2206,7 @@ async function attemptEligibleAutomaticMerge(
       pullRequestNumber: identity.pullRequestNumber,
       expectedBaseSha: identity.baseSha,
       expectedHeadSha: identity.headSha,
+      approvedPaths,
     });
     mergeCommitSha = merged.mergeCommitSha;
     mergedAt = merged.mergedAt;
