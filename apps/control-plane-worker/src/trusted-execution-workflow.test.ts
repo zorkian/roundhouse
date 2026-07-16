@@ -73,11 +73,23 @@ beforeAll(async () => {
     .map((value) => value.trim())
     .filter(Boolean))
     await database.prepare(statement).run();
+  await database
+    .prepare(
+      "CREATE TABLE IF NOT EXISTS self_development_runs (run_id TEXT PRIMARY KEY, revision INTEGER NOT NULL, state TEXT NOT NULL)",
+    )
+    .run();
 });
 
 beforeEach(async () => {
   await database.prepare("DELETE FROM trusted_execution_workflows").run();
   await database.prepare("DELETE FROM trusted_review_workflows").run();
+  await database.prepare("DELETE FROM self_development_runs").run();
+  await database
+    .prepare(
+      "INSERT INTO self_development_runs(run_id, revision, state) VALUES (?, ?, 'created')",
+    )
+    .bind(delivery.runId, delivery.expectedRevision)
+    .run();
 });
 
 afterAll(async () => {
@@ -127,6 +139,40 @@ describe("trusted execution Workflow dispatch", () => {
         expected_revision: delivery.expectedRevision,
         status: "dispatched",
       },
+    ]);
+  });
+
+  it("completes a scheduled delivery that loses revision ownership to an operator retry", async () => {
+    const created = new Set<string>();
+    const env = environment(created);
+    const operatorDelivery = {
+      ...delivery,
+      deliveryId: "operator_retry_run_trusted_workflow_2",
+      expectedRevision: 2,
+    };
+    await database
+      .prepare("UPDATE self_development_runs SET revision = 2 WHERE run_id = ?")
+      .bind(delivery.runId)
+      .run();
+
+    await consumeTrustedExecutionDelivery(
+      { body: operatorDelivery, ack: () => undefined, retry: () => undefined },
+      env,
+    );
+    await consumeTrustedExecutionDelivery(
+      { body: delivery, ack: () => undefined, retry: () => undefined },
+      env,
+    );
+
+    expect(created.size).toBe(1);
+    const rows = await database
+      .prepare(
+        "SELECT expected_revision, status FROM trusted_execution_workflows ORDER BY expected_revision",
+      )
+      .all<{ expected_revision: number; status: string }>();
+    expect(rows.results).toEqual([
+      { expected_revision: 1, status: "completed" },
+      { expected_revision: 2, status: "dispatched" },
     ]);
   });
 });

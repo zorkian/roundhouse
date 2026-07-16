@@ -127,10 +127,19 @@ export async function dispatchTrustedExecutionWorkflow(
   if (!binding) throw new Error("Trusted execution Workflow is not configured");
   const instanceId = await trustedExecutionWorkflowId(delivery);
   const now = new Date().toISOString();
-  await env.DB.prepare(
+  const reservation = await env.DB.prepare(
     `INSERT OR IGNORE INTO trusted_execution_workflows(
        workflow_instance_id, run_id, delivery_id, expected_revision, status, created_at
-     ) VALUES (?, ?, ?, ?, 'pending', ?)`,
+     ) SELECT ?, ?, ?, ?, 'pending', ?
+       WHERE EXISTS (
+         SELECT 1 FROM self_development_runs
+          WHERE run_id = ? AND revision = ?
+            AND state NOT IN ('completed', 'cancelled', 'failed', 'awaiting_approval', 'awaiting_publication')
+       ) AND NOT EXISTS (
+         SELECT 1 FROM trusted_execution_workflows
+          WHERE run_id = ? AND expected_revision = ?
+            AND status IN ('pending', 'dispatched', 'running')
+       )`,
   )
     .bind(
       instanceId,
@@ -138,16 +147,36 @@ export async function dispatchTrustedExecutionWorkflow(
       delivery.deliveryId,
       delivery.expectedRevision,
       now,
+      delivery.runId,
+      delivery.expectedRevision,
+      delivery.runId,
+      delivery.expectedRevision,
     )
     .run();
+  if ((reservation.meta.changes ?? 0) === 0)
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO trusted_execution_workflows(
+         workflow_instance_id, run_id, delivery_id, expected_revision, status, created_at, completed_at
+       ) VALUES (?, ?, ?, ?, 'completed', ?, ?)`,
+    )
+      .bind(
+        instanceId,
+        delivery.runId,
+        delivery.deliveryId,
+        delivery.expectedRevision,
+        now,
+        now,
+      )
+      .run();
   const reserved = await env.DB.prepare(
-    "SELECT run_id, delivery_id, expected_revision FROM trusted_execution_workflows WHERE workflow_instance_id = ?",
+    "SELECT run_id, delivery_id, expected_revision, status FROM trusted_execution_workflows WHERE workflow_instance_id = ?",
   )
     .bind(instanceId)
     .first<{
       run_id: string;
       delivery_id: string;
       expected_revision: number;
+      status: "pending" | "dispatched" | "running" | "completed" | "failed";
     }>();
   if (
     !reserved ||
@@ -156,6 +185,7 @@ export async function dispatchTrustedExecutionWorkflow(
     reserved.expected_revision !== delivery.expectedRevision
   )
     throw new Error("Trusted execution Workflow identity conflict");
+  if (reserved.status === "completed") return instanceId;
   await binding.createBatch([{ id: instanceId, params: delivery }]);
   await env.DB.prepare(
     "UPDATE trusted_execution_workflows SET status = 'dispatched' WHERE workflow_instance_id = ? AND status = 'pending'",
@@ -325,7 +355,7 @@ export async function runTrustedExecutionWorkflow(
     await step.do(
       "execute trusted repository attempt",
       {
-        retries: { limit: 2, delay: "6 minutes", backoff: "constant" },
+        retries: { limit: 5, delay: "10 minutes", backoff: "constant" },
         timeout: "3 hours",
       },
       async () => {
