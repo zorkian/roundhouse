@@ -717,6 +717,15 @@ describe("operator UI", () => {
               },
             },
           ],
+          planning: [
+            {
+              jobId: "planning_job_active",
+              repositoryFullName: "zorkian/roundhouse",
+              issueNumber: 133,
+              status: "running",
+              updatedAt: "2026-07-14T22:00:00.000Z",
+            },
+          ],
           runs: [
             {
               schemaVersion: 1,
@@ -762,6 +771,8 @@ describe("operator UI", () => {
     );
     expect(app.innerHTML).toContain("zorkian/roundhouse");
     expect(app.innerHTML).toContain("#66");
+    expect(app.innerHTML).toContain("#133");
+    expect(app.innerHTML).toContain("Planning");
     expect(app.innerHTML).toContain("Implementing");
     expect(app.innerHTML).toContain("Clarification needed");
     expect(app.innerHTML).toContain("Ready for human review");

@@ -17,6 +17,7 @@ import {
   finishPlanningJob,
   githubPlanningMigration,
   listIssuePlans,
+  listPlanningJobs,
   materializePlan,
   readIssuePlan,
   recordPlanningDecision,
@@ -77,6 +78,58 @@ async function proposed(issueNumber = 22) {
 }
 
 describe("durable issue planning", () => {
+  it("lists only active planning jobs for the dashboard repository", async () => {
+    const env = await runtime();
+    const input = {
+      requestKey: "c".repeat(64),
+      jobId: `planning_job_${"c".repeat(40)}`,
+      roundhouseEnvironment: "development" as const,
+      repositoryFullName: "zorkian/roundhouse",
+      issueNumber: 133,
+      actorId: "github:zorkian",
+      command: { kind: "start" as const },
+      now: new Date("2026-07-16T00:00:00Z"),
+    };
+    const { job } = await reservePlanningJob(env, input);
+
+    expect(
+      await listPlanningJobs(env, {
+        roundhouseEnvironment: "development",
+        repositoryFullName: "zorkian/roundhouse",
+      }),
+    ).toEqual([job]);
+    expect(
+      await listPlanningJobs(env, {
+        roundhouseEnvironment: "production",
+        repositoryFullName: "zorkian/roundhouse",
+      }),
+    ).toEqual([]);
+
+    const claimed = await claimPlanningJob(
+      env,
+      job.jobId,
+      {
+        roundhouseEnvironment: "development",
+        repositoryFullName: "zorkian/roundhouse",
+      },
+      new Date("2026-07-16T00:00:01Z"),
+      5 * 60_000,
+    );
+    await finishPlanningJob(
+      env,
+      job.jobId,
+      claimed!.claimId,
+      {},
+      new Date("2026-07-16T00:00:02Z"),
+    );
+    expect(
+      await listPlanningJobs(env, {
+        roundhouseEnvironment: "development",
+        repositoryFullName: "zorkian/roundhouse",
+      }),
+    ).toEqual([]);
+  });
+
   it("reclaims interrupted planning after the five-minute lease without overlapping healthy work", async () => {
     const env = await runtime();
     const now = new Date("2026-07-16T05:03:01Z");
