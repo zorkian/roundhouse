@@ -297,6 +297,14 @@ describe("operator UI", () => {
               updatedAt: "2026-07-14T00:00:05.000Z",
             },
             {
+              attemptId: "run_live-attempt-3",
+              phase: "validation.invalid-completion",
+              status: "completed",
+              startedAt: "2026-07-14T00:00:00.000Z",
+              completedAt: "invalid",
+              updatedAt: "invalid",
+            },
+            {
               attemptId:
                 "review_45406706e161b9dbdebd8485dea2f19bf7995bb4-attempt-1",
               phase: "agent.review",
@@ -335,6 +343,10 @@ describe("operator UI", () => {
     expect(app.innerHTML).toContain("lease_expired");
     expect(app.innerHTML).toContain("Worker lease expired during execution");
     expect(app.innerHTML).toContain("5s");
+    expect(app.innerHTML).toContain(
+      '<span class="event-phase">validation.invalid-completion</span><strong class="event-attempt">attempt #3</strong><span class="event-status completed">completed</span><span class="event-time">—</span>',
+    );
+    expect(app.innerHTML).not.toContain("NaNs");
     expect(app.innerHTML).not.toContain(
       '<strong class="event-attempt">run_live-prepare-1',
     );
@@ -347,7 +359,7 @@ describe("operator UI", () => {
     );
     expect(app.innerHTML).not.toContain("<h2>Attempts</h2>");
     expect(app.innerHTML).not.toContain("<h2>Evidence</h2>");
-    expect(app.innerHTML.match(/class="event-row"/g)).toHaveLength(5);
+    expect(app.innerHTML.match(/class="event-row"/g)).toHaveLength(6);
   });
 
   it("appends cursor-only output without duplicates and stops at terminal state", async () => {
