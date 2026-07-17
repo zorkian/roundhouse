@@ -651,7 +651,11 @@ export function pullRequestFeedback(
       payload.data.comment.body,
       commandPrefixes,
     );
-    if (!command || command.headCommit !== payload.data.pull_request.head.sha)
+    if (
+      !command ||
+      (command.headCommit !== undefined &&
+        command.headCommit !== payload.data.pull_request.head.sha)
+    )
       return null;
     return {
       repositoryFullName: payload.data.repository.full_name,
@@ -659,6 +663,7 @@ export function pullRequestFeedback(
       actor: payload.data.comment.user.login,
       sourceId: `pull_request_review_comment:${payload.data.comment.id}`,
       sourceUrl: payload.data.comment.html_url,
+      headCommit: payload.data.pull_request.head.sha,
       ...command,
     };
   }

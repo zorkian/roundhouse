@@ -3172,17 +3172,14 @@ async function executeGitHubCommand(
       "runId" in command ? command.runId : undefined,
     );
     const jobs = new D1JobStore(env.DB);
+    const resolvedRun = await jobs.read(runId);
     if (command.kind === "cancel")
-      await cancelRun(
-        runId,
-        command.revision ?? (await jobs.read(runId)).revision,
-        env,
-      );
+      await cancelRun(runId, command.revision ?? resolvedRun.revision, env);
     else if (command.kind === "retry") {
       const run = await retryFailedRun(
         env,
         runId,
-        command.revision ?? (await jobs.read(runId)).revision,
+        command.revision ?? resolvedRun.revision,
         new Date(),
       );
       await env.RUN_QUEUE.send({
@@ -3192,7 +3189,7 @@ async function executeGitHubCommand(
         expectedRevision: run.revision,
       });
     } else if (command.kind === "approve") {
-      let run = await jobs.read(runId);
+      let run = resolvedRun;
       if (!run.implementation)
         throw new HttpError(409, "Run does not have a current implementation");
       const evidence = run.evidence

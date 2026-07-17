@@ -498,6 +498,10 @@ describe("GitHub-native operator webhook", () => {
           },
         },
       });
+    expect(value("/rh revise\nFix it.")).toMatchObject({
+      headCommit,
+      feedback: "Fix it.",
+    });
     expect(
       value(`/rh revise run_source 18 ${"b".repeat(40)}\nFix it.`),
     ).toBeNull();
