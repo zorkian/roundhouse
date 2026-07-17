@@ -337,7 +337,7 @@ export function extractExactPaths(instructions: string): string[] {
   if (marker < 0) return [];
   const paths: string[] = [];
   for (const line of lines.slice(marker + 1)) {
-    const match = /^\s*-\s+(?:`([^`]+)`|(\S+))\s*$/.exec(line);
+    const match = /^\s*[-*]\s+(?:`([^`]+)`|(\S+))\s*$/.exec(line);
     if (!match) {
       if (line.trim() === "") continue;
       break;
