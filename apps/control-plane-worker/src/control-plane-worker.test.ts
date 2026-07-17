@@ -24,6 +24,7 @@ import {
   independentReviewCheckOutcome,
   planningStatusComment,
   reservePullRequestReview,
+  runForIssueCommand,
   safePlanningFailureSummary,
 } from "./index.js";
 import { runtimeIdentity } from "./runtime-config.js";
@@ -173,6 +174,25 @@ describe("GitHub command acknowledgements", () => {
         },
       ),
     ).toContain("No action needed; the run is cancelled");
+    const remediationReceipt = acceptedGitHubCommandComment(
+      development,
+      { kind: "approve" },
+      {
+        kind: "run",
+        runId: "run_remediation",
+        state: "completed",
+        revision: 12,
+        headCommit: "e".repeat(40),
+        pullRequestUrl: "https://github.com/zorkian/roundhouse/pull/238",
+      },
+    );
+    expect(remediationReceipt).toContain("Run `run_remediation`");
+    expect(remediationReceipt).toContain(
+      `Exact pull-request head: \`${"e".repeat(40)}\``,
+    );
+    expect(remediationReceipt).toContain(
+      "https://github.com/zorkian/roundhouse/pull/238",
+    );
   });
 });
 
@@ -714,6 +734,58 @@ describe("local control-plane Worker", () => {
     );
     expect(child.status).toBe(404);
     expect(await child.text()).toBe("");
+  });
+
+  it("prefers an awaiting review-remediation run for an unqualified approval", async () => {
+    const { env } = await runtime();
+    const sourceRunId = "run_completed_source";
+    const remediationRunId = "run_pending_remediation";
+    const now = "2026-07-17T00:00:00.000Z";
+    await env.DB.prepare(
+      "INSERT INTO github_issue_runs(issue_number, run_id, created_at, updated_at) VALUES (31, ?, ?, ?)",
+    )
+      .bind(sourceRunId, now, now)
+      .run();
+    await env.DB.prepare(
+      "INSERT INTO self_development_runs(run_id, revision, state, updated_at, payload) VALUES (?, 12, 'completed', ?, '{}'), (?, 5, 'awaiting_approval', ?, '{}')",
+    )
+      .bind(sourceRunId, now, remediationRunId, now)
+      .run();
+    await env.DB.prepare(
+      `INSERT INTO independent_reviews(
+         review_id, run_id, cycle, head_commit, request_hash, revision, status,
+         attempt_count, lease_expires_at, dispatch_state, payload, created_at, updated_at
+       ) VALUES (?, ?, 1, ?, ?, 4, 'remediated', 1, NULL, 'sent', ?, ?, ?)`,
+    )
+      .bind(
+        "review_pending_remediation",
+        sourceRunId,
+        "a".repeat(40),
+        "b".repeat(64),
+        JSON.stringify({
+          remediationRunId,
+          request: {
+            repositoryUrl: "https://github.com/zorkian/roundhouse.git",
+            issueNumber: 31,
+          },
+        }),
+        now,
+        now,
+      )
+      .run();
+
+    await expect(
+      runForIssueCommand(env, "zorkian/roundhouse", 31, undefined, true),
+    ).resolves.toBe(remediationRunId);
+    await expect(
+      runForIssueCommand(env, "zorkian/roundhouse", 31, remediationRunId, true),
+    ).resolves.toBe(remediationRunId);
+    await expect(
+      runForIssueCommand(env, "zorkian/roundhouse", 31, sourceRunId, true),
+    ).resolves.toBe(sourceRunId);
+    await expect(
+      runForIssueCommand(env, "zorkian/roundhouse", 31, "run_unrelated", true),
+    ).rejects.toThrow("Command run does not match this issue");
   });
 
   it("accepts one signed GitHub command and makes duplicate delivery harmless", async () => {

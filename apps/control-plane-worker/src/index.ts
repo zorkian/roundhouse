@@ -142,6 +142,7 @@ import {
 import {
   claimIndependentReview,
   completeIndependentReview,
+  awaitingIssueReviewRemediationRun,
   failIndependentReview,
   isIssueRemediationRun,
   listIssueReviews,
@@ -627,7 +628,14 @@ function githubCommand(
 type AcceptedGitHubCommandResult =
   | { kind: "planning"; jobId: string; state: string; revision: number }
   | { kind: "plan"; planId: string; state: string; revision: number }
-  | { kind: "run"; runId: string; state: string; revision: number }
+  | {
+      kind: "run";
+      runId: string;
+      state: string;
+      revision: number;
+      headCommit?: string;
+      pullRequestUrl?: string;
+    }
   | { kind: "manual_review"; reviewId: string; status: string };
 
 export function acceptedGitHubCommandComment(
@@ -641,7 +649,14 @@ export function acceptedGitHubCommandComment(
       : result.kind === "plan"
         ? `Plan \`${result.planId}\` is \`${result.state}\` at revision \`${result.revision}\`.`
         : result.kind === "run"
-          ? `Run \`${result.runId}\` is \`${result.state}\` at revision \`${result.revision}\`.`
+          ? [
+              `Run \`${result.runId}\` is \`${result.state}\` at revision \`${result.revision}\`.`,
+              ...(result.headCommit
+                ? [
+                    `Exact pull-request head: \`${result.headCommit}\`${result.pullRequestUrl ? ` (${result.pullRequestUrl})` : ""}.`,
+                  ]
+                : []),
+            ].join("\n\n")
           : `Independent review \`${result.reviewId}\` is \`${result.status}\`.`;
   const nextAction =
     result.kind === "planning"
@@ -2871,15 +2886,27 @@ async function consumeReviewMessage(
   return true;
 }
 
-async function runForIssueCommand(
+export async function runForIssueCommand(
   env: ControlPlaneEnv,
   repositoryFullName: string,
   issueNumber: number,
   requested?: string,
+  preferAwaitingRemediation = false,
 ): Promise<string> {
   const bound = await issueRun(env, issueNumber);
   if (!bound) throw new HttpError(409, "Issue does not have a Roundhouse run");
-  if (!requested || requested === bound) return bound;
+  if (!requested) {
+    if (preferAwaitingRemediation) {
+      const remediation = await awaitingIssueReviewRemediationRun(env, {
+        repositoryFullName,
+        issueNumber,
+        sourceRunId: bound,
+      });
+      if (remediation) return remediation;
+    }
+    return bound;
+  }
+  if (requested === bound) return bound;
   if (
     await isIssueRemediationRun(env, {
       repositoryFullName,
@@ -3167,7 +3194,15 @@ async function executeGitHubCommand(
   actor: string,
   command: GitHubCommand,
 ): Promise<
-  ({ kind: "plan"; planId: string } | { kind: "run"; runId: string }) & {
+  (
+    | { kind: "plan"; planId: string }
+    | {
+        kind: "run";
+        runId: string;
+        headCommit?: string;
+        pullRequestUrl?: string;
+      }
+  ) & {
     state: string;
     revision: number;
   }
@@ -3312,6 +3347,7 @@ async function executeGitHubCommand(
       repositoryFullName,
       issueNumber,
       "runId" in command ? command.runId : undefined,
+      command.kind === "approve",
     );
     const jobs = new D1JobStore(env.DB);
     const resolvedRun = await jobs.read(runId);
@@ -3394,6 +3430,8 @@ async function executeGitHubCommand(
     runId,
     state: current.state,
     revision: current.revision,
+    headCommit: current.publication?.commit,
+    pullRequestUrl: current.publication?.pullRequestUrl,
   };
 }
 
