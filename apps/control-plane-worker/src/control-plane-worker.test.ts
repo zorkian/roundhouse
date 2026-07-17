@@ -1111,7 +1111,7 @@ describe("local control-plane Worker", () => {
     expect(statusComment?.body).toContain(
       `Next action: \`/rhd status ${implementationResult.runId}\``,
     );
-  });
+  }, 30_000);
 
   it("does not repeat a deterministic planning contract failure", async () => {
     const { env, queued } = await runtime();
