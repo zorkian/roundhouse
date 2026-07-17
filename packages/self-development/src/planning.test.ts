@@ -10,6 +10,7 @@ import {
   qualifiedPlanSchema,
   qualifyAndPlan,
   rejectedQualificationSchema,
+  repositoryRisk,
   selfDevelopmentPathPolicyForProfile,
 } from "./planning.js";
 
@@ -26,6 +27,16 @@ const input = {
 };
 
 describe("issue qualification and planning", () => {
+  it("classifies actual paths independently of planning predictions", () => {
+    expect(repositoryRisk(["packages/domain/src/a.ts"])).toBe("low");
+    expect(repositoryRisk(["apps/control-plane-worker/src/index.ts"])).toBe(
+      "medium",
+    );
+    expect(repositoryRisk(["packages/domain/src/a.ts", "docs/guide.md"])).toBe(
+      "medium",
+    );
+  });
+
   it("extracts only the literal exact-scope section", () => {
     expect(
       extractExactPaths(
@@ -159,6 +170,22 @@ describe("issue qualification and planning", () => {
     expect(raised).toMatchObject({ status: "proposed", risk: "high" });
   });
 
+  it("uses quick validation only for ordinary low-risk plans", async () => {
+    await expect(
+      qualifyAndPlan(
+        {
+          ...input,
+          requestedPaths: ["docs/operator-guide.md"],
+          suggestedRisk: "low",
+        },
+        new Date("2026-07-12T00:00:00Z"),
+      ),
+    ).resolves.toMatchObject({ risk: "low", validationLevel: "quick" });
+    await expect(
+      qualifyAndPlan(input, new Date("2026-07-12T00:00:00Z")),
+    ).resolves.toMatchObject({ risk: "medium", validationLevel: "full" });
+  });
+
   it("enrolls only the exact repository README path", async () => {
     await expect(
       qualifyAndPlan(
@@ -241,6 +268,17 @@ describe("issue qualification and planning", () => {
         approvedAt: "2026-07-12T00:00:00.000Z",
       }),
     ).toMatchObject({ profileVersion: 1 });
+    expect(
+      planningBindingSchema.parse({
+        planId: `plan_${"a".repeat(40)}`,
+        planSha256: "b".repeat(64),
+        profileId: "roundhouse-self-development-v1",
+        profileVersion: 3,
+        issueContentSha256: "c".repeat(64),
+        approvedBy: "github:zorkian",
+        approvedAt: "2026-07-12T00:00:00.000Z",
+      }),
+    ).not.toHaveProperty("exactPathsSha256");
   });
 
   it("distinguishes non-implementation qualification outcomes", async () => {
