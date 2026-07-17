@@ -652,7 +652,7 @@ export function acceptedGitHubCommandComment(
           : "Next action: Review the planning failure before starting again."
       : result.kind === "plan"
         ? result.state === "needs_clarification"
-          ? "Next action: Answer the plan's clarification questions."
+          ? `Next action: Answer the plan's clarification questions using \`${githubCommand(identity, "clarify")}\`.`
           : ["proposed", "approved"].includes(result.state)
             ? `Next action: Review the plan, then issue \`${githubCommand(identity, "implement")}\` if it looks right.`
             : "Next action: No action needed while Roundhouse implements the plan."

@@ -125,6 +125,18 @@ describe("GitHub command acknowledgements", () => {
         { kind: "plan", planId: "plan_ready", state: "proposed", revision: 2 },
       ),
     ).toContain("then issue `/rhd implement` if it looks right");
+    expect(
+      acceptedGitHubCommandComment(
+        development,
+        { kind: "clarify", answers: "1. Example" },
+        {
+          kind: "plan",
+          planId: "plan_clarify",
+          state: "needs_clarification",
+          revision: 3,
+        },
+      ),
+    ).toContain("questions using `/rhd clarify`");
   });
 });
 
