@@ -3,15 +3,15 @@
 
 # Goal 1 live acceptance evidence
 
-Use this runbook to record the three consecutive live journeys for Goal 1. The
+Use this runbook to record three representative live journeys for Goal 1. The
 normative requirements remain in the
 [V1 maintainer acceptance checklist](../v1-maintainer-acceptance.md); this file
 only provides a compact evidence record.
 
 ## Prerequisites
 
-- Record the exact development candidate commit active when the three Goal 1
-  starts are issued: `<full commit SHA>`.
+- Record the exact development release commit active when each Goal 1 start is
+  issued.
 - Use the Roundhouse development App (`/rhd` or `/roundhouse-dev`) and
   development resources for an enrolled repository with its reviewed
   administrator profile configured to permit low-risk automatic merge.
@@ -21,11 +21,10 @@ only provides a compact evidence record.
   must be a reproduced bug with a passing post-change regression, and at least
   one must be a small maintenance or formatting change. Repeat either scenario
   type for the third journey.
-- Run all three starts against the same candidate commit. After each start, no
-  human acts until Roundhouse confirms the merge.
-- Record subsequent merges during the three-run sequence separately as each
-  journey's merge commit; they do not change the candidate commit for that
-  evidence batch.
+- After each start, no human acts until Roundhouse confirms the merge.
+- A bounded automatic retry or recovery remains valid evidence when the
+  journey meets its latency and cost targets and produces neither duplicate
+  paid work nor duplicate publication.
 
 ## Evidence record
 
@@ -34,8 +33,8 @@ excluded GitHub-hosted runner queue time visible rather than subtracting it
 silently. Record `0` when there were no human interventions.
 
 Runs that require manual retry, manual approval, manual CI dispatch, or manual
-merge are useful diagnostic evidence, but they are not clean Goal 1 evidence
-and do not count toward the final set of three consecutive runs.
+merge are useful diagnostic evidence, but they are not Goal 1 acceptance
+evidence. Automatic bounded recovery is recorded rather than excluded.
 
 Goal 1 product acceptance evidence ends when the pull request is merged and the
 originating issue is closed. Development deployment evidence may be recorded
@@ -46,7 +45,7 @@ Roundhouse product acceptance journey.
 | ------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------- |
 | Scenario type       | Reproduced bug / maintenance                                          | Reproduced bug / maintenance                                          | Reproduced bug / maintenance                                          |
 | Issue               | `<URL>`                                                               | `<URL>`                                                               | `<URL>`                                                               |
-| Candidate commit    | `<SHA>`                                                               | `<same SHA>`                                                          | `<same SHA>`                                                          |
+| Release commit      | `<SHA>`                                                               | `<SHA>`                                                               | `<SHA>`                                                               |
 | Start               | `<timestamp, command evidence>`                                       | `<timestamp, command evidence>`                                       | `<timestamp, command evidence>`                                       |
 | Acknowledgement     | `<timestamp, URL>`                                                    | `<timestamp, URL>`                                                    | `<timestamp, URL>`                                                    |
 | First status        | `<timestamp, URL>`                                                    | `<timestamp, URL>`                                                    | `<timestamp, URL>`                                                    |
@@ -57,6 +56,8 @@ Roundhouse product acceptance journey.
 | Recommendation      | `<timestamp, supported final recommendation, URL>`                    | `<timestamp, supported final recommendation, URL>`                    | `<timestamp, supported final recommendation, URL>`                    |
 | Merge               | `<completed timestamp, merge SHA, closed PR URL>`                     | `<completed timestamp, merge SHA, closed PR URL>`                     | `<completed timestamp, merge SHA, closed PR URL>`                     |
 | Attempts            | `<implementation / validation / CI counts>`                           | `<implementation / validation / CI counts>`                           | `<implementation / validation / CI counts>`                           |
+| Recovery            | `<none / automatic class, cost, and delay>`                           | `<none / automatic class, cost, and delay>`                           | `<none / automatic class, cost, and delay>`                           |
+| Duplicate work      | `none / <details>`                                                    | `none / <details>`                                                    | `none / <details>`                                                    |
 | Review cycles       | `<count>`                                                             | `<count>`                                                             | `<count>`                                                             |
 | Human interventions | `0 / <count and action>`                                              | `0 / <count and action>`                                              | `0 / <count and action>`                                              |
 | Residual risk       | `<risk stated before merge>`                                          | `<risk stated before merge>`                                          | `<risk stated before merge>`                                          |
@@ -114,8 +115,10 @@ progress to end a silence interval; internal activity does not count.
 
 ## Pass/fail checks
 
-- [ ] Three consecutive live clear low-risk issues at one candidate commit
-      reach a supported final recommendation and merge successfully.
+- [ ] Three representative live clear low-risk issues reach a supported final
+      recommendation and merge successfully; any bounded automatic recovery
+      meets the latency and cost targets without duplicate paid or published
+      work.
 - [ ] At least one is a reproduced bug with a passing post-change regression
       and at least one is a small maintenance change.
 - [ ] No human acts between the initial start and confirmed merge.

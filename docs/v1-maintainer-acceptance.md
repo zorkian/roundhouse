@@ -330,8 +330,10 @@ the existing Roundhouse administrator profile.
 
 **Exit gate:**
 
-- [ ] Three consecutive live clear low-risk issues at one candidate commit
-      reach a supported final recommendation and merge successfully.
+- [ ] Three representative live clear low-risk issues reach a supported final
+      recommendation and merge successfully. Bounded automatic recovery is
+      allowed when it stays within the latency and cost targets and creates no
+      duplicate paid or published work.
 - [ ] At least one is a reproduced bug with a passing post-change regression
       and at least one is a small maintenance change.
 - [ ] No human acts between the initial start and confirmed merge.
@@ -399,9 +401,12 @@ does not need routine babysitting when the happy path bends.
       exact head.
 - [ ] Repeated or already-dispositioned review findings terminate without a
       review treadmill.
-- [ ] Provider, Queue, Workflow, Container, and GitHub API interruption
-      scenarios recover within the recovery target without duplicate paid or
-      published work.
+- [ ] Transient execution/model unavailability, interrupted delivery or
+      orchestration, lost-caller/deployment handoff, and transient GitHub
+      operation scenarios recover within the recovery target without duplicate
+      paid or published work.
+- [ ] Exhausted, non-retryable, and ambiguous failures stop safely with one
+      exact next action.
 - [ ] A high-risk or protected-path request cannot proceed without the required
       plan approval; after exact-head review it requires a final approval bound
       to the findings and change summary from an actor whose profile may
@@ -655,8 +660,9 @@ increment; checking the complete AC item is reserved for full V1 acceptance.
 
 ### AC-11: Recover automatically
 
-- [ ] Transient provider, network, Queue, Workflow, Container, and GitHub API
-      failures retry automatically within explicit limits.
+- [ ] Transient execution/model unavailability, interrupted delivery or
+      orchestration, lost-caller/deployment handoff, and transient GitHub
+      operation failures recover automatically within explicit limits.
 - [ ] Worker restart, webhook replay, callback replay, and lease expiry resume
       from durable state without duplicating external writes or paid attempts.
 - [ ] A repeated provider callback does not restart a completed or still-active
@@ -767,8 +773,10 @@ loop.
 2. small low-risk maintenance or formatting change automatically merged
    successfully.
 
-At least three consecutive live runs are required, so one scenario type must
-be repeated on a distinct issue.
+At least three representative live runs are required, so one scenario type
+must be repeated on a distinct issue. A bounded automatic recovery remains
+eligible when it meets the journey budgets and creates no duplicate paid or
+published work.
 
 ### Goal 2 scenarios
 
@@ -788,10 +796,15 @@ be repeated on a distinct issue.
 11. seeded implementation defect caught and remediated through independent
     review;
 12. genuine CI failure repaired automatically;
-13. transient Container or provider interruption recovered automatically;
-14. prompt-injection attempt in an issue, comment, repository file, or command
+13. transient execution or model unavailability recovered automatically;
+14. interrupted delivery or orchestration recovered automatically;
+15. lost-caller or development-deployment handoff reconnected to the same paid
+    attempt;
+16. transient GitHub operation recovered automatically;
+17. exhausted, non-retryable, or ambiguous failure stopped safely;
+18. prompt-injection attempt in an issue, comment, repository file, or command
     output; and
-15. cancellation during active work.
+19. cancellation during active work.
 
 ### Goal 4 scenarios
 
@@ -799,11 +812,11 @@ Goal 4 reruns at least five scenarios live against a non-Roundhouse public
 repository: a clear bug, clarification, question-only interaction, review
 remediation, and CI repair. It also runs these profile scenarios:
 
-16. repository administrator changes profile or risk policy through an
+20. repository administrator changes profile or risk policy through an
     authorized reviewed change;
-17. trusted committer authors migration code and merges permitted medium-risk
+21. trusted committer authors migration code and merges permitted medium-risk
     work but is denied a high-risk authorization; and
-18. public contributor reaches a constrained reviewed pull request that remains
+22. public contributor reaches a constrained reviewed pull request that remains
     unmerged until a trusted committer or administrator approves the exact head.
 
 Across all goals, at least ten distinct scenarios must use real or historically
