@@ -3387,6 +3387,11 @@ describe("local control-plane Worker", () => {
     expect(first.status).toBe(200);
     expect(await replay.json()).toEqual(await first.json());
     expect(queued.messages).toHaveLength(1);
+    await env.DB.prepare(
+      "UPDATE self_development_runs SET updated_at = ? WHERE run_id = ?",
+    )
+      .bind("2026-07-12T18:00:00.000Z", runId)
+      .run();
 
     await handler.scheduled!(
       {} as ScheduledController,
@@ -3421,11 +3426,17 @@ describe("local control-plane Worker", () => {
   it("redacts scheduled recovery failures in durable alerts", async () => {
     const { env } = await runtime();
     const handler = createControlPlaneHandler();
-    await handler.fetch!(
+    const submitted = await handler.fetch!(
       submission("scheduled-recovery-redaction-01"),
       env,
       {} as ExecutionContext,
     );
+    const { runId } = (await submitted.json()) as { runId: string };
+    await env.DB.prepare(
+      "UPDATE self_development_runs SET updated_at = ? WHERE run_id = ?",
+    )
+      .bind("2026-07-12T18:00:00.000Z", runId)
+      .run();
     env.RUN_QUEUE = {
       send: async () => {
         throw new Error(

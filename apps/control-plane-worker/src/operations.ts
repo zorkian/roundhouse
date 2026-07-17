@@ -172,6 +172,9 @@ const maxStageAttempts = 3;
 const maxDeployInterruptionAttempts = 6;
 const maxOperatorStageAttempts = 10;
 const operatorRetryableClassifications = new Set(["validation_failed"]);
+// Give an accepted delivery time to acquire the authoritative D1 lease. This
+// grace is based only on the run record; Workflow status remains telemetry.
+const leaseLessRecoveryGraceMs = 5 * 60_000;
 
 function recoveryDeliveryId(
   runId: string,
@@ -295,8 +298,13 @@ export async function runRecoveryCycle(
     deliveredRunIds.add(row.run_id);
   }
   const rows = await env.DB.prepare(
-    "SELECT run_id, revision, payload FROM self_development_runs WHERE state NOT IN ('completed', 'cancelled', 'failed', 'awaiting_approval', 'awaiting_publication') ORDER BY updated_at ASC LIMIT 100",
-  ).all<{ run_id: string; revision: number; payload: string }>();
+    "SELECT run_id, revision, updated_at, payload FROM self_development_runs WHERE state NOT IN ('completed', 'cancelled', 'failed', 'awaiting_approval', 'awaiting_publication') ORDER BY updated_at ASC LIMIT 100",
+  ).all<{
+    run_id: string;
+    revision: number;
+    updated_at: string;
+    payload: string;
+  }>();
   for (const row of rows.results) {
     if (deliveredRunIds.has(row.run_id)) continue;
     let run: SelfDevelopmentRun;
@@ -314,26 +322,15 @@ export async function runRecoveryCycle(
       alertsRecorded += 1;
       continue;
     }
-    const activeWorkflow = await env.DB.prepare(
-      "SELECT workflow_instance_id FROM trusted_execution_workflows WHERE run_id = ? AND status IN ('pending', 'dispatched', 'running') ORDER BY created_at DESC LIMIT 1",
-    )
-      .bind(run.runId)
-      .first<{ workflow_instance_id: string }>();
     const leaseExpired = Boolean(
       run.lease && new Date(run.lease.expiresAt) <= now,
     );
     if (run.lease && !leaseExpired) continue;
-    // A Workflow row protects the short pre-claim window, but it cannot prove
-    // liveness after the execution lease that it acquired has expired. Mark
-    // that stale owner terminal before dispatching a fresh recovery Workflow.
-    if (activeWorkflow && !leaseExpired) continue;
-    if (activeWorkflow) {
-      await env.DB.prepare(
-        "UPDATE trusted_execution_workflows SET status = 'failed', completed_at = COALESCE(completed_at, ?) WHERE workflow_instance_id = ? AND status IN ('pending', 'dispatched', 'running')",
-      )
-        .bind(now.toISOString(), activeWorkflow.workflow_instance_id)
-        .run();
-    }
+    if (
+      !run.lease &&
+      Date.parse(row.updated_at) > now.getTime() - leaseLessRecoveryGraceMs
+    )
+      continue;
     const recoveryKind = run.lease
       ? "expired_lease_requeued"
       : "lease_less_run_requeued";
@@ -355,8 +352,13 @@ export async function runRecoveryCycle(
     alertsRecorded += 1;
   }
   const monitored = await env.DB.prepare(
-    "SELECT run_id, revision, payload FROM self_development_runs WHERE state IN ('failed', 'awaiting_approval', 'awaiting_publication', 'completed') ORDER BY updated_at ASC LIMIT 100",
-  ).all<{ run_id: string; revision: number; payload: string }>();
+    "SELECT run_id, revision, updated_at, payload FROM self_development_runs WHERE state IN ('failed', 'awaiting_approval', 'awaiting_publication', 'completed') ORDER BY updated_at ASC LIMIT 100",
+  ).all<{
+    run_id: string;
+    revision: number;
+    updated_at: string;
+    payload: string;
+  }>();
   for (const row of monitored.results) {
     let run: SelfDevelopmentRun;
     try {
@@ -476,30 +478,26 @@ export async function runRecoveryCycle(
         });
         alertsRecorded += 1;
       }
-      if (lowRiskPlan) {
-        const activeWorkflow = await env.DB.prepare(
-          "SELECT workflow_instance_id FROM trusted_execution_workflows WHERE run_id = ? AND status IN ('pending', 'dispatched', 'running') ORDER BY created_at DESC LIMIT 1",
-        )
-          .bind(run.runId)
-          .first<{ workflow_instance_id: string }>();
-        if (!activeWorkflow) {
-          await env.RUN_QUEUE.send({
-            schemaVersion: 1,
-            runId: run.runId,
-            deliveryId: recoveryDeliveryId(run.runId, run.revision, now),
-            expectedRevision: run.revision,
-          });
-          await recordAlert(env, {
-            key: `low_risk_auto_publication_requeued:${run.runId}:${run.revision}`,
-            kind: "low_risk_auto_publication_requeued",
-            severity: "warning",
-            runId: run.runId,
-            detail: { revision: run.revision, state: run.state },
-            now,
-          });
-          requeuedRuns += 1;
-          alertsRecorded += 1;
-        }
+      if (
+        lowRiskPlan &&
+        Date.parse(row.updated_at) <= now.getTime() - leaseLessRecoveryGraceMs
+      ) {
+        await env.RUN_QUEUE.send({
+          schemaVersion: 1,
+          runId: run.runId,
+          deliveryId: recoveryDeliveryId(run.runId, run.revision, now),
+          expectedRevision: run.revision,
+        });
+        await recordAlert(env, {
+          key: `low_risk_auto_publication_requeued:${run.runId}:${run.revision}`,
+          kind: "low_risk_auto_publication_requeued",
+          severity: "warning",
+          runId: run.runId,
+          detail: { revision: run.revision, state: run.state },
+          now,
+        });
+        requeuedRuns += 1;
+        alertsRecorded += 1;
       }
     }
     if (

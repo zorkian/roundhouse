@@ -181,11 +181,11 @@ describe("cloud operator persistence", () => {
       env,
       new Date(start.getTime() + 1_001),
     );
-    expect(cycle).toMatchObject({ requeuedRuns: 2, alertsRecorded: 3 });
-    expect(env.queued).toHaveLength(2);
+    expect(cycle).toMatchObject({ requeuedRuns: 1, alertsRecorded: 2 });
+    expect(env.queued).toHaveLength(1);
   });
 
-  it("does not requeue a lease-less run owned by an active Workflow", async () => {
+  it("recovers a lease-less run without treating Workflow telemetry as ownership", async () => {
     const env = await runtime();
     const jobs = new D1JobStore(env.DB);
     const start = new Date("2026-07-12T00:00:00Z");
@@ -204,14 +204,28 @@ describe("cloud operator persistence", () => {
 
     const cycle = await runRecoveryCycle(
       env,
-      new Date(start.getTime() + 60_000),
+      new Date(start.getTime() + 5 * 60_000 + 1),
     );
 
-    expect(cycle.requeuedRuns).toBe(0);
-    expect(env.queued).toEqual([]);
+    expect(cycle.requeuedRuns).toBe(1);
+    expect(env.queued).toEqual([
+      {
+        schemaVersion: 1,
+        runId: "run_workflow_owned",
+        deliveryId: "recovery_run_workflow_owned_1_20260712T000500001Z",
+        expectedRevision: 1,
+      },
+    ]);
+    await expect(
+      env.DB.prepare(
+        "SELECT status FROM trusted_execution_workflows WHERE run_id = ?",
+      )
+        .bind("run_workflow_owned")
+        .first(),
+    ).resolves.toEqual({ status: "running" });
   });
 
-  it("requeues an expired lease even when its Workflow still looks active", async () => {
+  it("requeues an expired lease without rewriting Workflow telemetry", async () => {
     const env = await runtime();
     const jobs = new D1JobStore(env.DB);
     const start = new Date("2026-07-12T00:00:00Z");
@@ -252,10 +266,7 @@ describe("cloud operator persistence", () => {
     )
       .bind(workflowInstanceId)
       .first<{ status: string; completed_at: string | null }>();
-    expect(staleWorkflow).toEqual({
-      status: "failed",
-      completed_at: recoveredAt.toISOString(),
-    });
+    expect(staleWorkflow).toEqual({ status: "running", completed_at: null });
   });
 
   it("recovers only stranded auto-publication runs bound to an approved low-risk plan", async () => {
@@ -361,7 +372,7 @@ describe("cloud operator persistence", () => {
 
     const cycle = await runRecoveryCycle(
       env,
-      new Date(start.getTime() + 60_000),
+      new Date(start.getTime() + 5 * 60_000 + 1),
     );
 
     expect(cycle).toMatchObject({ requeuedRuns: 1, alertsRecorded: 1 });
@@ -369,7 +380,7 @@ describe("cloud operator persistence", () => {
       {
         schemaVersion: 1,
         runId: "run_low_risk_recovery",
-        deliveryId: "recovery_run_low_risk_recovery_1_20260712T000100000Z",
+        deliveryId: "recovery_run_low_risk_recovery_1_20260712T000500001Z",
         expectedRevision: 1,
       },
     ]);
@@ -386,23 +397,22 @@ describe("cloud operator persistence", () => {
     });
 
     await env.DB.prepare(
-      "INSERT INTO trusted_execution_workflows(workflow_instance_id, run_id, delivery_id, expected_revision, status, created_at, started_at, completed_at) VALUES (?, ?, ?, ?, 'failed', ?, ?, ?)",
+      "INSERT INTO trusted_execution_workflows(workflow_instance_id, run_id, delivery_id, expected_revision, status, created_at, started_at) VALUES (?, ?, ?, ?, 'running', ?, ?)",
     )
       .bind(
         `trusted-${"1".repeat(64)}`,
         "run_low_risk_recovery",
-        "recovery_run_low_risk_recovery_1_20260712T000100000Z",
+        "recovery_run_low_risk_recovery_1_20260712T000500001Z",
         1,
-        new Date(start.getTime() + 60_000).toISOString(),
-        new Date(start.getTime() + 60_001).toISOString(),
-        new Date(start.getTime() + 60_500).toISOString(),
+        new Date(start.getTime() + 5 * 60_000 + 1).toISOString(),
+        new Date(start.getTime() + 5 * 60_000 + 2).toISOString(),
       )
       .run();
     env.queued.length = 0;
 
     const retryCycle = await runRecoveryCycle(
       env,
-      new Date(start.getTime() + 180_000),
+      new Date(start.getTime() + 10 * 60_000),
     );
 
     expect(retryCycle).toMatchObject({ requeuedRuns: 1, alertsRecorded: 1 });
@@ -410,7 +420,7 @@ describe("cloud operator persistence", () => {
       {
         schemaVersion: 1,
         runId: "run_low_risk_recovery",
-        deliveryId: "recovery_run_low_risk_recovery_1_20260712T000300000Z",
+        deliveryId: "recovery_run_low_risk_recovery_1_20260712T001000000Z",
         expectedRevision: 1,
       },
     ]);
@@ -422,7 +432,7 @@ describe("cloud operator persistence", () => {
       .run();
     const malformedCycle = await runRecoveryCycle(
       env,
-      new Date(start.getTime() + 240_000),
+      new Date(start.getTime() + 11 * 60_000),
     );
     expect(malformedCycle.requeuedRuns).toBe(0);
     expect(env.queued).toHaveLength(1);

@@ -135,10 +135,6 @@ export async function dispatchTrustedExecutionWorkflow(
          SELECT 1 FROM self_development_runs
           WHERE run_id = ? AND revision = ?
             AND state NOT IN ('completed', 'cancelled', 'failed')
-       ) AND NOT EXISTS (
-         SELECT 1 FROM trusted_execution_workflows
-          WHERE run_id = ? AND expected_revision = ?
-            AND status IN ('pending', 'dispatched', 'running')
        )`,
   )
     .bind(
@@ -147,8 +143,6 @@ export async function dispatchTrustedExecutionWorkflow(
       delivery.deliveryId,
       delivery.expectedRevision,
       now,
-      delivery.runId,
-      delivery.expectedRevision,
       delivery.runId,
       delivery.expectedRevision,
     )

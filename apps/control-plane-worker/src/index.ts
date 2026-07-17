@@ -1239,8 +1239,6 @@ export async function executeTrustedExecutionWorkflow(
       );
       if (processed) return workflowResult(processed);
       const current = await jobs.read(delivery.runId);
-      if (current.lease && Date.parse(current.lease.expiresAt) > Date.now())
-        throw new Error("Trusted execution run still has a valid lease");
       return workflowResult(current);
     },
     async (delivery) => finalizeRunDelivery(env, delivery),

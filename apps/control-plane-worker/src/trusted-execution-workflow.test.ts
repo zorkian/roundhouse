@@ -216,7 +216,7 @@ describe("trusted execution Workflow dispatch", () => {
     });
   });
 
-  it("completes a duplicate same-revision delivery without starting another workflow", async () => {
+  it("dispatches same-revision transport independently of Workflow telemetry", async () => {
     const created = new Set<string>();
     const env = environment(created);
     const duplicateDelivery = {
@@ -237,7 +237,7 @@ describe("trusted execution Workflow dispatch", () => {
       env,
     );
 
-    expect(created.size).toBe(1);
+    expect(created.size).toBe(2);
     const rows = await database
       .prepare(
         "SELECT delivery_id, status, started_at FROM trusted_execution_workflows WHERE run_id = ? ORDER BY delivery_id",
@@ -256,7 +256,7 @@ describe("trusted execution Workflow dispatch", () => {
       },
       {
         delivery_id: "duplicate_delivery_trusted_workflow_1",
-        status: "completed",
+        status: "dispatched",
         started_at: null,
       },
     ]);
