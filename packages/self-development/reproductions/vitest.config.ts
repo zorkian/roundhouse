@@ -4,7 +4,6 @@
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
-  cacheDir: "/tmp/roundhouse-vitest-reproductions",
   resolve: {
     alias: {
       "@roundhouse/repository-profile/contracts": new URL(
