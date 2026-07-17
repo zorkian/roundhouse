@@ -56,6 +56,24 @@ describe("planValidation", () => {
     ]);
   });
 
+  it("omits the quick formatter when no changed paths are eligible", () => {
+    const plan = planValidation(profile, {
+      baseCommit: "a".repeat(40),
+      level: "quick",
+      changedFiles: [
+        { path: "removed.ts", status: "deleted" },
+        { path: "image.png", status: "modified" },
+      ],
+    });
+
+    expect(plan.effectiveLevel).toBe("quick");
+    expect(plan.commands.map((command) => command.name)).toEqual([
+      "license",
+      "compile",
+      "targeted",
+    ]);
+  });
+
   it("sorts quick formatter paths", () => {
     const plan = planValidation(profile, {
       baseCommit: "a".repeat(40),
