@@ -99,13 +99,17 @@ export class DispatchingStageExecutor implements JobStageExecutor {
     const attempt = run.attempts.at(-1);
     if (!attempt || attempt.stage !== stage || attempt.status !== "running")
       throw new Error("Execution dispatch requires a running stage attempt");
-    const priorFailure = run.attempts.findLast(
-      (value) =>
-        value.stage === stage &&
-        value.status === "failed" &&
-        value.classification === "validation_failed" &&
-        value.attemptId !== attempt.attemptId,
-    );
+    const previousAttempt = run.attempts.at(-2);
+    const priorFailure =
+      previousAttempt?.classification === "implementation_binding_mismatch"
+        ? undefined
+        : run.attempts.findLast(
+            (value) =>
+              value.stage === stage &&
+              value.status === "failed" &&
+              value.classification === "validation_failed" &&
+              value.attemptId !== attempt.attemptId,
+          );
     return this.dispatcher.dispatch({
       schemaVersion: 1,
       runId: run.runId,

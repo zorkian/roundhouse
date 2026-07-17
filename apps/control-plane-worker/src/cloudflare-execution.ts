@@ -220,6 +220,7 @@ async function validateTrustedResult(
   const publicationManifest = result.publicationManifest;
   const retryLineage = result.retryLineage;
   const regression = result.regressionEvidence;
+  const mismatchedBindings: string[] = [];
   const regressionBindingValid = regression
     ? request.planning !== undefined &&
       regression.repositoryUrl === request.repositoryUrl &&
@@ -292,30 +293,46 @@ async function validateTrustedResult(
         );
     }
   }
+  if (result.runId !== request.runId) mismatchedBindings.push("run_identity");
+  if (result.attemptId !== request.attemptId)
+    mismatchedBindings.push("attempt_identity");
   if (
-    result.runId !== request.runId ||
-    result.attemptId !== request.attemptId ||
     result.baseCommit !== request.baseCommit ||
-    result.checkoutCommit !== request.baseCommit ||
+    result.checkoutCommit !== request.baseCommit
+  )
+    mismatchedBindings.push("base_commit");
+  if (
     result.patchSha256 !== patchHash ||
-    result.patchBytes !== patchBytes.byteLength ||
+    result.patchBytes !== patchBytes.byteLength
+  )
+    mismatchedBindings.push("patch_content");
+  if (
     result.patchBytes > request.maxPatchBytes ||
+    publicationBytes > request.maxPatchBytes
+  )
+    mismatchedBindings.push("patch_size_limit");
+  if (
     (result.validationOutcome === "failed") !== validationFailed ||
     (result.validationOutcome === "failed" &&
-      result.publicationManifest !== undefined) ||
-    !manifestBindingValid ||
-    !retryBindingValid ||
-    !regressionBindingValid ||
-    publicationBytes > request.maxPatchBytes ||
-    result.changedFiles.length > request.maxChangedFiles ||
+      result.publicationManifest !== undefined)
+  )
+    mismatchedBindings.push("validation_outcome");
+  if (!manifestBindingValid) mismatchedBindings.push("publication_manifest");
+  if (!retryBindingValid) mismatchedBindings.push("retry_lineage");
+  if (!regressionBindingValid) mismatchedBindings.push("regression_evidence");
+  if (result.changedFiles.length > request.maxChangedFiles)
+    mismatchedBindings.push("changed_file_limit");
+  if (
     !result.changedFiles.every((path) =>
       request.pathPolicy
         ? repositoryPathAllowed(request.pathPolicy, path)
         : request.allowedPaths.includes(path),
     )
   )
+    mismatchedBindings.push("changed_paths");
+  if (mismatchedBindings.length > 0)
     throw new StageFailure(
-      "Trusted implementation result did not match its immutable request",
+      `Trusted implementation result did not match its immutable request (bindings: ${mismatchedBindings.join(", ")})`,
       "implementation_binding_mismatch",
       false,
     );
@@ -351,25 +368,73 @@ export class CloudflareTrustedImplementationBackend implements TrustedImplementa
     let boundRequest = request;
     let priorCandidate: TrustedImplementationResult | undefined;
     if (request.retryFromAttemptId) {
-      const priorRequest = trustedImplementationRequestSchema.parse({
-        ...request,
-        attemptId: request.retryFromAttemptId,
-        retryFromAttemptId: undefined,
-        retryCandidate: undefined,
-      });
-      const priorObject = await this.evidence.get(
-        trustedEvidenceKey(priorRequest),
-      );
-      if (!priorObject)
-        throw new StageFailure(
-          "Prior retry candidate evidence is unavailable",
-          "evidence_unavailable",
-          false,
+      const loading = new Set<string>();
+      const loadPrior = async (
+        attemptId: string,
+      ): Promise<TrustedImplementationResult> => {
+        if (loading.has(attemptId) || loading.size >= 10)
+          throw new StageFailure(
+            "Prior retry candidate lineage was cyclic or too deep",
+            "implementation_binding_mismatch",
+            false,
+          );
+        loading.add(attemptId);
+        const priorRequest = trustedImplementationRequestSchema.parse({
+          ...request,
+          attemptId,
+          retryFromAttemptId: undefined,
+          retryCandidate: undefined,
+        });
+        const priorObject = await this.evidence.get(
+          trustedEvidenceKey(priorRequest),
         );
-      const prior = await parseTrustedEvidence(
-        priorRequest,
-        await priorObject.text(),
-      );
+        if (!priorObject)
+          throw new StageFailure(
+            "Prior retry candidate evidence is unavailable",
+            "evidence_unavailable",
+            false,
+          );
+        const text = await priorObject.text();
+        let value: unknown;
+        try {
+          value = JSON.parse(text);
+        } catch {
+          throw new StageFailure(
+            "Prior retry candidate evidence is not valid JSON",
+            "implementation_binding_mismatch",
+            false,
+          );
+        }
+        const decoded = trustedImplementationResultSchema.safeParse(value);
+        if (!decoded.success)
+          throw new StageFailure(
+            "Prior retry candidate failed schema validation",
+            "implementation_binding_mismatch",
+            false,
+          );
+        const predecessor = decoded.data.retryLineage
+          ? await loadPrior(decoded.data.retryLineage.priorAttemptId)
+          : undefined;
+        const boundPriorRequest = trustedImplementationRequestSchema.parse({
+          ...priorRequest,
+          retryFromAttemptId: predecessor?.attemptId,
+          retryCandidate: predecessor
+            ? {
+                attemptId: predecessor.attemptId,
+                patch: predecessor.patch,
+                patchSha256: predecessor.patchSha256,
+                changedFiles: predecessor.changedFiles,
+              }
+            : undefined,
+        });
+        const prior = await validateTrustedResult(
+          boundPriorRequest,
+          decoded.data,
+        );
+        loading.delete(attemptId);
+        return prior;
+      };
+      const prior = await loadPrior(request.retryFromAttemptId);
       if (prior.validationOutcome !== "failed")
         throw new StageFailure(
           "Retry predecessor is not a failed candidate",

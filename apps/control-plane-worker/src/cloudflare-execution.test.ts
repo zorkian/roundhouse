@@ -667,6 +667,78 @@ describe("CloudflareTrustedImplementationBackend", () => {
     expect(evidence.objects.size).toBe(2);
   });
 
+  it("verifies three consecutive validation attempts with retained lineage", async () => {
+    const evidence = new MemoryEvidence();
+    const first = {
+      ...trustedResult(),
+      validationOutcome: "failed" as const,
+      validation: [
+        {
+          ...trustedResult().validation[0],
+          exitCode: 1,
+          stderr: "stale comment-count assertion",
+        },
+      ],
+    };
+    const second = {
+      ...first,
+      attemptId: "run_trusted_container_contract-prepare-2",
+      retryLineage: {
+        priorAttemptId: first.attemptId,
+        priorPatchSha256: first.patchSha256,
+        priorChangedFiles: first.changedFiles,
+        retainedAllPriorPaths: true,
+      },
+      validation: [
+        {
+          ...first.validation[0],
+          stderr: "second test-selection assumption",
+        },
+      ],
+    };
+    for (const candidate of [first, second])
+      evidence.objects.set(
+        `runs/${trustedRequest.runId}/attempts/${candidate.attemptId}/trusted-implementation.json`,
+        new TextEncoder().encode(JSON.stringify(candidate)),
+      );
+    const thirdRequest: TrustedImplementationRequest = {
+      ...trustedRequest,
+      attemptId: "run_trusted_container_contract-prepare-3",
+      attemptNumber: 3,
+      retryFromAttemptId: second.attemptId,
+      retryContext: "second test-selection assumption",
+    };
+    let received: TrustedImplementationRequest | undefined;
+    const backend = new CloudflareTrustedImplementationBackend(
+      {
+        getByName: () => ({
+          runJob: async () => result(),
+          runTrustedJob: async (request) => {
+            received = request;
+            return {
+              ...trustedResult(),
+              attemptId: thirdRequest.attemptId,
+              retryLineage: {
+                priorAttemptId: second.attemptId,
+                priorPatchSha256: second.patchSha256,
+                priorChangedFiles: second.changedFiles,
+                retainedAllPriorPaths: true,
+              },
+            };
+          },
+          destroy: async () => undefined,
+        }),
+      },
+      evidence,
+      "unused",
+    );
+
+    await expect(backend.execute(thirdRequest)).resolves.toMatchObject({
+      state: "awaiting_approval",
+    });
+    expect(received?.retryCandidate?.attemptId).toBe(second.attemptId);
+  });
+
   it("rejects results exceeding request-scoped limits", async () => {
     const backend = new CloudflareTrustedImplementationBackend(
       {

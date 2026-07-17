@@ -172,6 +172,9 @@ export class ResumableCoordinator {
           attempt.classification === deployInterruptionClassification,
       ).length;
       const normalAttempts = stageAttempts.length - deployInterruptions;
+      const matchingFailures = stageAttempts.filter(
+        (attempt) => attempt.classification === failure.classification,
+      ).length;
       const repairLimit = automaticRepairLimit(stage, failure.classification);
       const automaticRepair = repairLimit > 0;
       const terminal =
@@ -179,7 +182,7 @@ export class ResumableCoordinator {
         (failure.classification === deployInterruptionClassification
           ? deployInterruptions + 1 >=
             (this.options.maxDeployInterruptionsPerStage ?? 6)
-          : normalAttempts >=
+          : (automaticRepair ? matchingFailures + 1 : normalAttempts) >=
             (automaticRepair
               ? Math.min(
                   repairLimit,
