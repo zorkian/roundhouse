@@ -3190,8 +3190,12 @@ async function executeGitHubCommand(
       });
     } else if (command.kind === "approve") {
       let run = resolvedRun;
-      if (!run.implementation)
-        throw new HttpError(409, "Run does not have a current implementation");
+      // Contextual approval is intentionally bound to the single candidate
+      // visible at processing time. awaiting_approval is an exclusive state:
+      // retry requires failed, and execution cannot replace the implementation
+      // while this compare-and-swap candidate is awaiting a decision.
+      if (run.state !== "awaiting_approval" || !run.implementation)
+        throw new HttpError(409, "Run does not have an approvable candidate");
       const evidence = run.evidence
         .filter((value) => value.approvalEligible !== false)
         .map(({ evidenceId, objectKey, sha256, size }) => ({
