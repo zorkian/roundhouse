@@ -139,6 +139,47 @@ describe("independent review contracts", () => {
     ).resolves.toEqual([]);
   });
 
+  it("normalizes distinct findings independently of model output order", async () => {
+    const reviewId = `review_${"b".repeat(40)}`;
+    const headCommit = "c".repeat(40);
+    const modelFindings = [
+      {
+        severity: "high",
+        path: "packages/domain/src/ids.ts",
+        line: 24,
+        title: "Reject malformed identity",
+        rationale: "The new predicate accepts malformed values.",
+        recommendation: "Validate the complete branded identity syntax.",
+      },
+      {
+        severity: "medium",
+        path: "packages/self-development/src/review.ts",
+        line: 343,
+        title: "Preserve deterministic evidence",
+        rationale: "Model output order must not affect normalized evidence.",
+        recommendation: "Sort normalized findings by their stable identity.",
+      },
+    ];
+
+    const forward = await normalizeReviewFindings(
+      reviewId,
+      headCommit,
+      modelFindings,
+      10,
+    );
+    const reverse = await normalizeReviewFindings(
+      reviewId,
+      headCommit,
+      [...modelFindings].reverse(),
+      10,
+    );
+    const findingIds = forward.map((finding) => finding.findingId);
+
+    expect(findingIds).toEqual([...findingIds].sort());
+    expect(reverse.map((finding) => finding.findingId)).toEqual(findingIds);
+    expect(reverse).toEqual(forward);
+  });
+
   it("accepts only substantive findings inside the approved path set", async () => {
     const findings = await normalizeReviewFindings(
       `review_${"b".repeat(40)}`,
