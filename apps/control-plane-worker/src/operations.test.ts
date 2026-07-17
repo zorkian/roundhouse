@@ -211,6 +211,53 @@ describe("cloud operator persistence", () => {
     expect(env.queued).toEqual([]);
   });
 
+  it("requeues an expired lease even when its Workflow still looks active", async () => {
+    const env = await runtime();
+    const jobs = new D1JobStore(env.DB);
+    const start = new Date("2026-07-12T00:00:00Z");
+    const workflowInstanceId = `trusted-${"b".repeat(64)}`;
+    await jobs.submit(
+      "run_expired_workflow",
+      { ...task, taskId: "task_expired_workflow" },
+      start,
+    );
+    await jobs.claim("run_expired_workflow", "worker", start, 1_000, 1);
+    await env.DB.prepare(
+      "INSERT INTO trusted_execution_workflows(workflow_instance_id, run_id, delivery_id, expected_revision, status, created_at, started_at) VALUES (?, ?, ?, ?, 'running', ?, ?)",
+    )
+      .bind(
+        workflowInstanceId,
+        "run_expired_workflow",
+        "delivery_expired_workflow",
+        2,
+        start.toISOString(),
+        start.toISOString(),
+      )
+      .run();
+
+    const recoveredAt = new Date(start.getTime() + 1_001);
+    const cycle = await runRecoveryCycle(env, recoveredAt);
+
+    expect(cycle).toMatchObject({ requeuedRuns: 1, alertsRecorded: 1 });
+    expect(env.queued).toEqual([
+      {
+        schemaVersion: 1,
+        runId: "run_expired_workflow",
+        deliveryId: "recovery_run_expired_workflow_2_20260712T000001001Z",
+        expectedRevision: 2,
+      },
+    ]);
+    const staleWorkflow = await env.DB.prepare(
+      "SELECT status, completed_at FROM trusted_execution_workflows WHERE workflow_instance_id = ?",
+    )
+      .bind(workflowInstanceId)
+      .first<{ status: string; completed_at: string | null }>();
+    expect(staleWorkflow).toEqual({
+      status: "failed",
+      completed_at: recoveredAt.toISOString(),
+    });
+  });
+
   it("recovers only stranded auto-publication runs bound to an approved low-risk plan", async () => {
     const env = await runtime();
     const jobs = new D1JobStore(env.DB);
