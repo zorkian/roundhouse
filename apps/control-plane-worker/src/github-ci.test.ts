@@ -10,7 +10,9 @@ import {
   exactHeadIsReady,
   githubCiMigration,
   isRoundhouseReviewCheck,
+  readCiRemediation,
   recordCiOutcome,
+  recordCiRecovery,
   reserveCiRecovery,
   resolveCiRecoveriesForHead,
 } from "./github-ci.js";
@@ -118,6 +120,29 @@ describe("GitHub CI coordination", () => {
         },
       ],
     });
+  });
+
+  it("retains the exact remediation authority binding", async () => {
+    await expect(reserveCiRecovery(env, observation)).resolves.toBe("reserved");
+    await recordCiRecovery(env, observation, {
+      disposition: "remediation_started",
+      classification: "actionable",
+      evidenceSha256: "b".repeat(64),
+      remediationRunId: "run_ci_remediation",
+    });
+    await expect(readCiRemediation(env, observation)).resolves.toMatchObject({
+      repositoryFullName: observation.repositoryFullName,
+      pullRequestNumber: observation.pullRequestNumber,
+      headSha: observation.headSha,
+      checkRunId: observation.checkRunId,
+      disposition: "remediation_started",
+      attemptCount: 1,
+      evidenceSha256: "b".repeat(64),
+      remediationRunId: "run_ci_remediation",
+    });
+    await expect(
+      readCiRemediation(env, { ...observation, checkRunId: 999 }),
+    ).resolves.toBeNull();
   });
 
   it("keeps review and CI separate when calculating exact-head readiness", async () => {

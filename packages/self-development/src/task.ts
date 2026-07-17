@@ -27,14 +27,29 @@ export const selfDevelopmentTaskSchema = z.object({
   pathPolicy: repositoryPathPolicySchema.optional(),
   planning: planningBindingSchema.optional(),
   continuation: z
-    .object({
-      kind: z.enum(["independent_review", "repository_ci"]),
-      sourceRunId: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/),
-      sourceRevision: z.number().int().positive(),
-      sourceHeadCommit: z.string().regex(/^[a-f0-9]{40}$/),
-      evidenceId: z.string().min(1).max(500),
-      evidenceSha256: z.string().regex(/^[a-f0-9]{64}$/),
-    })
+    .discriminatedUnion("kind", [
+      z.object({
+        kind: z.literal("independent_review"),
+        sourceRunId: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/),
+        sourceRevision: z.number().int().positive(),
+        sourceHeadCommit: z.string().regex(/^[a-f0-9]{40}$/),
+        evidenceId: z.string().regex(/^review_[a-f0-9]{40}$/),
+        evidenceSha256: z.string().regex(/^[a-f0-9]{64}$/),
+        acceptedFindingIds: z
+          .array(z.string().regex(/^finding_[a-f0-9]{40}$/))
+          .min(1)
+          .max(50),
+      }),
+      z.object({
+        kind: z.literal("repository_ci"),
+        sourceRunId: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/),
+        sourceRevision: z.number().int().positive(),
+        sourceHeadCommit: z.string().regex(/^[a-f0-9]{40}$/),
+        evidenceId: z.string().regex(/^check_run:[1-9][0-9]*$/),
+        evidenceSha256: z.string().regex(/^[a-f0-9]{64}$/),
+        checkRunId: z.number().int().positive(),
+      }),
+    ])
     .optional(),
   bugReproduction: bugReproductionPlanSchema.optional(),
   source: z
