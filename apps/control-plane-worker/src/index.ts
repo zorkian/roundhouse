@@ -4176,7 +4176,6 @@ async function publishEligibleContinuationRun(
   const sameTaskAuthority =
     source.task.repositoryPath === run.task.repositoryPath &&
     source.task.validationLevel === run.task.validationLevel &&
-    same(source.task.allowedPaths, run.task.allowedPaths) &&
     same(source.task.pathPolicy, run.task.pathPolicy) &&
     same(source.task.planning, run.task.planning) &&
     same(source.task.bugReproduction, run.task.bugReproduction) &&
@@ -4196,6 +4195,13 @@ async function publishEligibleContinuationRun(
         review.request.runId === source.runId &&
         review.request.headCommit === continuation.sourceHeadCommit &&
         review.request.cycle === 1 &&
+        review.request.repositoryUrl === source.task.publication.remoteUrl &&
+        review.request.branch === source.task.publication.branch &&
+        review.request.patchSha256 === source.implementation?.patchSha256 &&
+        same(
+          review.request.allowedPaths,
+          source.implementation?.changedFiles,
+        ) &&
         review.execution?.evidence.sha256 === continuation.evidenceSha256 &&
         same(accepted, [...continuation.acceptedFindingIds].sort()),
       );
@@ -4214,8 +4220,10 @@ async function publishEligibleContinuationRun(
     });
     return Boolean(
       remediation &&
+      continuation.evidenceId === `check_run:${continuation.checkRunId}` &&
       remediation.disposition === "remediation_started" &&
       remediation.attemptCount === 1 &&
+      remediation.classification === "actionable" &&
       remediation.evidenceSha256 === continuation.evidenceSha256 &&
       remediation.remediationRunId === run.runId,
     );
@@ -4229,11 +4237,10 @@ async function publishEligibleContinuationRun(
     source.task.planning?.planId !== run.task.planning.planId ||
     source.task.planning.planSha256 !== run.task.planning.planSha256 ||
     !sameTaskAuthority ||
-    run.implementation.changedFiles.some(
-      (path) =>
-        !source.task.allowedPaths.includes(path) ||
-        (source.task.pathPolicy &&
-          !repositoryPathAllowed(source.task.pathPolicy, path)),
+    run.implementation.changedFiles.some((path) =>
+      source.task.pathPolicy
+        ? !repositoryPathAllowed(source.task.pathPolicy, path)
+        : !source.task.allowedPaths.includes(path),
     ) ||
     !plan ||
     plan.status !== "materialized" ||

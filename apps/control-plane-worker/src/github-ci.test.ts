@@ -137,6 +137,7 @@ describe("GitHub CI coordination", () => {
       checkRunId: observation.checkRunId,
       disposition: "remediation_started",
       attemptCount: 1,
+      classification: "actionable",
       evidenceSha256: "b".repeat(64),
       remediationRunId: "run_ci_remediation",
     });

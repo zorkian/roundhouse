@@ -50,6 +50,7 @@ export type CiRemediation = {
     | "manual_required"
     | "resolved";
   attemptCount: number;
+  classification?: string;
   evidenceSha256?: string;
   remediationRunId?: string;
 };
@@ -62,7 +63,7 @@ export async function readCiRemediation(
   >,
 ): Promise<CiRemediation | null> {
   const value = await env.DB.prepare(
-    "SELECT repository_full_name, pull_request_number, head_sha, check_run_id, disposition, attempt_count, evidence_sha256, remediation_run_id FROM github_ci_remediations WHERE repository_full_name = ? AND pull_request_number = ? AND head_sha = ? AND check_run_id = ?",
+    "SELECT repository_full_name, pull_request_number, head_sha, check_run_id, disposition, attempt_count, classification, evidence_sha256, remediation_run_id FROM github_ci_remediations WHERE repository_full_name = ? AND pull_request_number = ? AND head_sha = ? AND check_run_id = ?",
   )
     .bind(
       input.repositoryFullName,
@@ -77,6 +78,7 @@ export async function readCiRemediation(
       check_run_id: number;
       disposition: CiRemediation["disposition"];
       attempt_count: number;
+      classification: string | null;
       evidence_sha256: string | null;
       remediation_run_id: string | null;
     }>();
@@ -88,6 +90,9 @@ export async function readCiRemediation(
         checkRunId: value.check_run_id,
         disposition: value.disposition,
         attemptCount: value.attempt_count,
+        ...(value.classification
+          ? { classification: value.classification }
+          : {}),
         ...(value.evidence_sha256
           ? { evidenceSha256: value.evidence_sha256 }
           : {}),
