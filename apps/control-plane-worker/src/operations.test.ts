@@ -85,6 +85,7 @@ beforeEach(async () => {
     "recovery_cycles",
     "control_plane_submissions",
     "execution_evidence",
+    "trusted_run_finalizations",
     "trusted_execution_workflows",
     "github_issue_plans",
     "self_development_runs",
@@ -223,6 +224,14 @@ describe("cloud operator persistence", () => {
         .bind("run_workflow_owned")
         .first(),
     ).resolves.toEqual({ status: "running" });
+    await runRecoveryCycle(env, new Date(start.getTime() + 10 * 60_000 + 2));
+    await runRecoveryCycle(env, new Date(start.getTime() + 15 * 60_000 + 3));
+    const capped = await runRecoveryCycle(
+      env,
+      new Date(start.getTime() + 20 * 60_000 + 4),
+    );
+    expect(capped.requeuedRuns).toBe(0);
+    expect(env.queued).toHaveLength(3);
   });
 
   it("requeues an expired lease without rewriting Workflow telemetry", async () => {

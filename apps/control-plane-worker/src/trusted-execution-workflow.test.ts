@@ -7,6 +7,8 @@ import type { IndependentReviewExecution } from "@roundhouse/self-development/cl
 
 import type { ControlPlaneEnv } from "./environment.js";
 import {
+  claimTrustedRunFinalization,
+  completeTrustedRunFinalization,
   consumeTrustedReviewDelivery,
   consumeTrustedExecutionDelivery,
   runTrustedReviewWorkflow,
@@ -81,6 +83,7 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
+  await database.prepare("DELETE FROM trusted_run_finalizations").run();
   await database.prepare("DELETE FROM trusted_execution_workflows").run();
   await database.prepare("DELETE FROM trusted_review_workflows").run();
   await database.prepare("DELETE FROM self_development_runs").run();
@@ -97,6 +100,45 @@ afterAll(async () => {
 });
 
 describe("trusted execution Workflow dispatch", () => {
+  it("claims one exact-revision finalization and permits expired-claim recovery", async () => {
+    const env = environment(new Set());
+    const started = new Date("2026-07-17T00:00:00.000Z");
+    const first = await claimTrustedRunFinalization(
+      env,
+      delivery.runId,
+      7,
+      started,
+      1_000,
+    );
+    expect(first).toMatch(/^finalize_/);
+    await expect(
+      claimTrustedRunFinalization(env, delivery.runId, 7, started, 1_000),
+    ).resolves.toBeNull();
+    const recovered = await claimTrustedRunFinalization(
+      env,
+      delivery.runId,
+      7,
+      new Date(started.getTime() + 1_001),
+      1_000,
+    );
+    expect(recovered).toMatch(/^finalize_/);
+    await completeTrustedRunFinalization(
+      env,
+      delivery.runId,
+      7,
+      recovered!,
+      new Date(started.getTime() + 1_002),
+    );
+    await expect(
+      claimTrustedRunFinalization(
+        env,
+        delivery.runId,
+        7,
+        new Date(started.getTime() + 3_000),
+      ),
+    ).resolves.toBeNull();
+  });
+
   it("derives a bounded deterministic identity from the exact delivery", async () => {
     const first = await trustedExecutionWorkflowId(delivery);
     expect(first).toMatch(/^trusted-[a-f0-9]{64}$/);

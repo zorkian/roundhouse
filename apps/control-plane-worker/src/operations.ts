@@ -177,22 +177,45 @@ const operatorRetryableClassifications = new Set(["validation_failed"]);
 const leaseLessRecoveryGraceMs = 5 * 60_000;
 const maximumRecoveryDispatchesPerRevision = 3;
 
-async function recoveryDispatchAllowed(
+async function claimRecoveryDispatch(
   env: ControlPlaneEnv,
-  key: string,
-  now: Date,
+  input: {
+    key: string;
+    kind: string;
+    runId: string;
+    detail: Record<string, unknown>;
+    now: Date;
+  },
 ): Promise<boolean> {
-  const prior = await env.DB.prepare(
-    "SELECT occurrences, last_seen_at FROM operational_alerts WHERE alert_key = ?",
+  const occurredAt = input.now.toISOString();
+  const claimed = await env.DB.prepare(
+    `INSERT INTO operational_alerts(
+       alert_key, kind, severity, run_id, detail_json,
+       first_seen_at, last_seen_at, occurrences
+     ) VALUES (?, ?, 'warning', ?, ?, ?, ?, 1)
+     ON CONFLICT(alert_key) DO UPDATE SET
+       kind = excluded.kind,
+       severity = excluded.severity,
+       run_id = excluded.run_id,
+       detail_json = excluded.detail_json,
+       last_seen_at = excluded.last_seen_at,
+       occurrences = operational_alerts.occurrences + 1,
+       resolved_at = NULL
+     WHERE operational_alerts.occurrences < ?
+       AND operational_alerts.last_seen_at <= ?`,
   )
-    .bind(key)
-    .first<{ occurrences: number; last_seen_at: string }>();
-  return (
-    !prior ||
-    (prior.occurrences < maximumRecoveryDispatchesPerRevision &&
-      Date.parse(prior.last_seen_at) <=
-        now.getTime() - leaseLessRecoveryGraceMs)
-  );
+    .bind(
+      input.key,
+      input.kind,
+      input.runId,
+      JSON.stringify(input.detail),
+      occurredAt,
+      occurredAt,
+      maximumRecoveryDispatchesPerRevision,
+      new Date(input.now.getTime() - leaseLessRecoveryGraceMs).toISOString(),
+    )
+    .run();
+  return (claimed.meta.changes ?? 0) === 1;
 }
 
 function recoveryDeliveryId(
@@ -353,19 +376,22 @@ export async function runRecoveryCycle(
     const recoveryKind = run.lease
       ? "expired_lease_requeued"
       : "lease_less_run_requeued";
+    const recoveryKey = `${recoveryKind}:${run.runId}:${run.revision}`;
+    if (
+      !(await claimRecoveryDispatch(env, {
+        key: recoveryKey,
+        kind: recoveryKind,
+        runId: run.runId,
+        detail: { revision: run.revision, hadLease: Boolean(run.lease) },
+        now,
+      }))
+    )
+      continue;
     await env.RUN_QUEUE.send({
       schemaVersion: 1,
       runId: run.runId,
       deliveryId: recoveryDeliveryId(run.runId, run.revision, now),
       expectedRevision: run.revision,
-    });
-    await recordAlert(env, {
-      key: `${recoveryKind}:${run.runId}:${run.revision}`,
-      kind: recoveryKind,
-      severity: "warning",
-      runId: run.runId,
-      detail: { revision: run.revision, hadLease: Boolean(run.lease) },
-      now,
     });
     requeuedRuns += 1;
     alertsRecorded += 1;
@@ -502,20 +528,21 @@ export async function runRecoveryCycle(
         Date.parse(row.updated_at) <= now.getTime() - leaseLessRecoveryGraceMs
       ) {
         const recoveryKey = `low_risk_auto_publication_requeued:${run.runId}:${run.revision}`;
-        if (!(await recoveryDispatchAllowed(env, recoveryKey, now))) continue;
+        if (
+          !(await claimRecoveryDispatch(env, {
+            key: recoveryKey,
+            kind: "low_risk_auto_publication_requeued",
+            runId: run.runId,
+            detail: { revision: run.revision, state: run.state },
+            now,
+          }))
+        )
+          continue;
         await env.RUN_QUEUE.send({
           schemaVersion: 1,
           runId: run.runId,
           deliveryId: recoveryDeliveryId(run.runId, run.revision, now),
           expectedRevision: run.revision,
-        });
-        await recordAlert(env, {
-          key: recoveryKey,
-          kind: "low_risk_auto_publication_requeued",
-          severity: "warning",
-          runId: run.runId,
-          detail: { revision: run.revision, state: run.state },
-          now,
         });
         requeuedRuns += 1;
         alertsRecorded += 1;

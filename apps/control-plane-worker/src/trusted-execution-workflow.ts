@@ -39,9 +39,85 @@ CREATE TABLE IF NOT EXISTS trusted_review_workflows (
 );
 CREATE INDEX IF NOT EXISTS trusted_review_workflows_review
   ON trusted_review_workflows(review_id, created_at);
+
+CREATE TABLE IF NOT EXISTS trusted_run_finalizations (
+  run_id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  claim_id TEXT,
+  claim_expires_at TEXT,
+  completed_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (run_id, revision)
+);
 `;
 
 export type TrustedWorkflowPayload = RunDelivery | ReviewDelivery;
+
+export async function claimTrustedRunFinalization(
+  env: ControlPlaneEnv,
+  runId: string,
+  revision: number,
+  now = new Date(),
+  leaseMs = 5 * 60_000,
+): Promise<string | null> {
+  const claimId = `finalize_${crypto.randomUUID()}`;
+  const occurredAt = now.toISOString();
+  await env.DB.prepare(
+    "INSERT OR IGNORE INTO trusted_run_finalizations(run_id, revision, created_at, updated_at) VALUES (?, ?, ?, ?)",
+  )
+    .bind(runId, revision, occurredAt, occurredAt)
+    .run();
+  const claimed = await env.DB.prepare(
+    `UPDATE trusted_run_finalizations
+        SET claim_id = ?, claim_expires_at = ?, updated_at = ?
+      WHERE run_id = ? AND revision = ? AND completed_at IS NULL
+        AND (claim_id IS NULL OR claim_expires_at <= ?)`,
+  )
+    .bind(
+      claimId,
+      new Date(now.getTime() + leaseMs).toISOString(),
+      occurredAt,
+      runId,
+      revision,
+      occurredAt,
+    )
+    .run();
+  return (claimed.meta.changes ?? 0) === 1 ? claimId : null;
+}
+
+export async function completeTrustedRunFinalization(
+  env: ControlPlaneEnv,
+  runId: string,
+  revision: number,
+  claimId: string,
+  now = new Date(),
+): Promise<void> {
+  const completed = await env.DB.prepare(
+    `UPDATE trusted_run_finalizations
+        SET completed_at = ?, claim_expires_at = NULL, updated_at = ?
+      WHERE run_id = ? AND revision = ? AND claim_id = ? AND completed_at IS NULL`,
+  )
+    .bind(now.toISOString(), now.toISOString(), runId, revision, claimId)
+    .run();
+  if ((completed.meta.changes ?? 0) !== 1)
+    throw new Error("Trusted run finalization claim was lost");
+}
+
+export async function releaseTrustedRunFinalization(
+  env: ControlPlaneEnv,
+  runId: string,
+  revision: number,
+  claimId: string,
+): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE trusted_run_finalizations
+        SET claim_id = NULL, claim_expires_at = NULL, updated_at = ?
+      WHERE run_id = ? AND revision = ? AND claim_id = ? AND completed_at IS NULL`,
+  )
+    .bind(new Date().toISOString(), runId, revision, claimId)
+    .run();
+}
 
 export type TrustedExecutionWorkflowBindingPort = {
   createBatch(

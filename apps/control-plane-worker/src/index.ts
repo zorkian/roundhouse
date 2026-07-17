@@ -157,9 +157,12 @@ import {
 } from "./github-review.js";
 import { DeterministicLocalDispatcher } from "./local-dispatch.js";
 import {
+  claimTrustedRunFinalization,
+  completeTrustedRunFinalization,
   consumeTrustedReviewDelivery,
   consumeTrustedExecutionDelivery,
   readTrustedExecutionWorkflows,
+  releaseTrustedRunFinalization,
   runTrustedReviewWorkflow,
   runTrustedExecutionWorkflow,
   trustedReviewWorkflowId,
@@ -1192,29 +1195,56 @@ async function finalizeRunDelivery(
   // retries, publication, and GitHub status side effects.
   if (run.lease && Date.parse(run.lease.expiresAt) > Date.now())
     return workflowResult(run);
-  const latest = run.attempts.at(-1);
-  if (run.state !== "failed" && latest?.status === "failed" && latest.retryable)
-    await env.RUN_QUEUE.send({
-      schemaVersion: 1,
-      runId: run.runId,
-      deliveryId: `retry_${run.runId}_${run.revision}`,
-      expectedRevision: run.revision,
-    });
-  run = await publishEligibleLowRiskRun(env, run);
-  if (run.task.source?.kind === "github_issue") {
-    await enqueueRunComment(env, run.task.source.issueNumber, run.runId);
-    await enqueueRunFailureComment(env, run.task.source.issueNumber, run);
-    await enqueueRunActionComment(env, run.task.source.issueNumber, run);
-    try {
-      await flushGitHubOutputs(env);
-    } catch (error) {
-      console.warn("GitHub Queue status delivery deferred", {
+  const finalizationRevision = run.revision;
+  const claimId = await claimTrustedRunFinalization(
+    env,
+    run.runId,
+    finalizationRevision,
+  );
+  if (!claimId) return workflowResult(run);
+  try {
+    const latest = run.attempts.at(-1);
+    if (
+      run.state !== "failed" &&
+      latest?.status === "failed" &&
+      latest.retryable
+    )
+      await env.RUN_QUEUE.send({
+        schemaVersion: 1,
         runId: run.runId,
-        reason: redactedReason(error),
+        deliveryId: `retry_${run.runId}_${run.revision}`,
+        expectedRevision: run.revision,
       });
+    run = await publishEligibleLowRiskRun(env, run);
+    if (run.task.source?.kind === "github_issue") {
+      await enqueueRunComment(env, run.task.source.issueNumber, run.runId);
+      await enqueueRunFailureComment(env, run.task.source.issueNumber, run);
+      await enqueueRunActionComment(env, run.task.source.issueNumber, run);
+      try {
+        await flushGitHubOutputs(env);
+      } catch (error) {
+        console.warn("GitHub Queue status delivery deferred", {
+          runId: run.runId,
+          reason: redactedReason(error),
+        });
+      }
     }
+    await completeTrustedRunFinalization(
+      env,
+      delivery.runId,
+      finalizationRevision,
+      claimId,
+    );
+    return workflowResult(run);
+  } catch (error) {
+    await releaseTrustedRunFinalization(
+      env,
+      delivery.runId,
+      finalizationRevision,
+      claimId,
+    );
+    throw error;
   }
-  return workflowResult(run);
 }
 
 export async function executeTrustedExecutionWorkflow(

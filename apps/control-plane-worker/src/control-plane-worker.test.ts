@@ -58,6 +58,7 @@ let instance: Miniflare;
 let database: D1Database;
 const resetTables = [
   "github_automatic_merges",
+  "trusted_run_finalizations",
   "trusted_review_workflows",
   "trusted_execution_workflows",
   "execution_attempt_phases",
