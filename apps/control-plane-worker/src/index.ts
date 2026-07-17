@@ -1218,6 +1218,11 @@ async function finalizeRunDelivery(
       return workflowResult(authoritative);
     }
     run = authoritative;
+    // These projections are intentionally replay-safe: retry delivery uses a
+    // deterministic identity, publication is revision-CAS-bound, and GitHub
+    // output is persisted through idempotent outbox keys. Complete the claim
+    // only after projecting so an interruption retries missing work instead
+    // of permanently recording an incomplete finalization.
     const latest = run.attempts.at(-1);
     if (
       run.state !== "failed" &&
@@ -1252,12 +1257,20 @@ async function finalizeRunDelivery(
     );
     return workflowResult(run);
   } catch (error) {
-    await releaseTrustedRunFinalization(
-      env,
-      delivery.runId,
-      finalizationRevision,
-      claimId,
-    );
+    try {
+      await releaseTrustedRunFinalization(
+        env,
+        delivery.runId,
+        finalizationRevision,
+        claimId,
+      );
+    } catch (releaseError) {
+      console.warn("Trusted run finalization release failed", {
+        runId: delivery.runId,
+        revision: finalizationRevision,
+        reason: redactedReason(releaseError),
+      });
+    }
     throw error;
   }
 }
