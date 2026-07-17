@@ -1997,6 +1997,8 @@ async function validateImplementation(value) {
       ),
     );
     const targetedArgs = targetedTestArgs(trusted.changedFiles);
+    if (effectiveValidationLevel === "quick" && !targetedArgs)
+      throw new Error("targeted_test_args_missing");
     validation.push(
       await validationCommand(
         "test",
