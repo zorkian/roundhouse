@@ -103,9 +103,9 @@ describe("GitHub command acknowledgements", () => {
       acceptedGitHubCommandComment(
         development,
         { kind: "retry" },
-        { kind: "run", runId: "run_retry", state: "created", revision: 4 },
+        { kind: "run", runId: "run_retry", state: "failed", revision: 4 },
       ),
-    ).toContain("Roundhouse accepted `/rhd retry`");
+    ).toContain("before issuing `/rhd retry`");
     expect(
       acceptedGitHubCommandComment(
         production,
@@ -113,11 +113,18 @@ describe("GitHub command acknowledgements", () => {
         {
           kind: "run",
           runId: "run_approve",
-          state: "completed",
+          state: "awaiting_approval",
           revision: 7,
         },
       ),
-    ).toContain("Roundhouse accepted `/rh approve`");
+    ).toContain("then issue `/rh approve` if it looks right");
+    expect(
+      acceptedGitHubCommandComment(
+        development,
+        { kind: "start" },
+        { kind: "plan", planId: "plan_ready", state: "proposed", revision: 2 },
+      ),
+    ).toContain("then issue `/rhd implement` if it looks right");
   });
 });
 
@@ -883,7 +890,7 @@ describe("local control-plane Worker", () => {
       "Roundhouse accepted `/rhd start`",
     );
     expect(postedIssue17Comments.at(-1)).toContain(
-      "Next action: No action needed.",
+      "Next action: No action needed while Roundhouse prepares the plan.",
     );
     expect(await readIssuePlan(env, 17)).toBeNull();
     await expect(

@@ -643,10 +643,32 @@ export function acceptedGitHubCommandComment(
         : result.kind === "run"
           ? `Run \`${result.runId}\` is \`${result.state}\` at revision \`${result.revision}\`.`
           : `Independent review \`${result.reviewId}\` is \`${result.status}\`.`;
+  const nextAction =
+    result.kind === "planning"
+      ? ["queued", "running", "retrying"].includes(result.state)
+        ? "Next action: No action needed while Roundhouse prepares the plan."
+        : result.state === "completed"
+          ? "Next action: Review the latest plan or run comment."
+          : "Next action: Review the planning failure before starting again."
+      : result.kind === "plan"
+        ? result.state === "needs_clarification"
+          ? "Next action: Answer the plan's clarification questions."
+          : ["proposed", "approved"].includes(result.state)
+            ? `Next action: Review the plan, then issue \`${githubCommand(identity, "implement")}\` if it looks right.`
+            : "Next action: No action needed while Roundhouse implements the plan."
+        : result.kind === "run"
+          ? result.state === "awaiting_approval"
+            ? `Next action: Review the candidate, then issue \`${githubCommand(identity, "approve")}\` if it looks right.`
+            : result.state === "failed"
+              ? `Next action: Review the failure diagnostics before issuing \`${githubCommand(identity, "retry")}\`.`
+              : "Next action: No action needed while Roundhouse continues the run."
+          : ["completed", "failed"].includes(result.status)
+            ? "Next action: Review the independent review result."
+            : "Next action: No action needed while independent review runs.";
   return [
     `## ✅ Roundhouse accepted \`${githubCommand(identity, command.kind)}\``,
     target,
-    "Next action: No action needed.",
+    nextAction,
   ].join("\n\n");
 }
 
