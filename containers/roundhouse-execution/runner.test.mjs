@@ -1,7 +1,7 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   parseRepositoryProfile,
@@ -46,6 +46,7 @@ import {
   secretStrings,
   skippedValidation,
   startAgentOutput,
+  terminateCommandProcessTree,
   trustedValidationEvidenceNames,
   validRepositoryPath,
   validRepositoryPathPolicy,
@@ -114,6 +115,29 @@ describe("execution runner command", () => {
       });
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not throw when neither a process group nor its child can be signalled", () => {
+    const signal = vi.spyOn(process, "kill").mockImplementation(() => {
+      throw Object.assign(new Error("not permitted"), { code: "EPERM" });
+    });
+    try {
+      expect(
+        terminateCommandProcessTree(
+          {
+            pid: 123,
+            kill: () => {
+              throw Object.assign(new Error("not permitted"), {
+                code: "EPERM",
+              });
+            },
+          },
+          "SIGKILL",
+        ),
+      ).toBe(false);
+    } finally {
+      signal.mockRestore();
     }
   });
 });

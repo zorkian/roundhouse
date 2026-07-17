@@ -133,16 +133,18 @@ export const planningOutputSchema = JSON.stringify({
   additionalProperties: false,
 });
 
-function terminateCommandProcessTree(child, signal) {
+export function terminateCommandProcessTree(child, signal) {
   if (child.pid && process.platform !== "win32") {
     try {
       process.kill(-child.pid, signal);
       return true;
-    } catch (error) {
-      if (error?.code !== "ESRCH") throw error;
-    }
+    } catch {}
   }
-  return child.kill(signal);
+  try {
+    return child.kill(signal);
+  } catch {
+    return false;
+  }
 }
 
 function json(response, status, value) {
@@ -2458,10 +2460,13 @@ export function drainRunner(
     }),
   );
   const hardStop = setTimeout(async () => {
-    for (const child of activeChildren)
-      terminateCommandProcessTree(child, "SIGTERM");
-    await scrub();
-    exit(1);
+    try {
+      for (const child of activeChildren)
+        terminateCommandProcessTree(child, "SIGTERM");
+    } finally {
+      await scrub();
+      exit(1);
+    }
   }, hardTimeoutMs);
   hardStop.unref?.();
   server.close(async () => {
