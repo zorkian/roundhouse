@@ -137,6 +137,42 @@ describe("GitHub command acknowledgements", () => {
         },
       ),
     ).toContain("questions using `/rhd clarify`");
+    expect(
+      acceptedGitHubCommandComment(
+        development,
+        { kind: "replan" },
+        {
+          kind: "plan",
+          planId: "plan_rejected",
+          state: "rejected",
+          revision: 4,
+        },
+      ),
+    ).toContain("then issue `/rhd replan`");
+    expect(
+      acceptedGitHubCommandComment(
+        development,
+        { kind: "start" },
+        {
+          kind: "planning",
+          jobId: "planning_failed",
+          state: "failed",
+          revision: 1,
+        },
+      ),
+    ).toContain("then issue `/rhd start` to start again");
+    expect(
+      acceptedGitHubCommandComment(
+        production,
+        { kind: "cancel" },
+        {
+          kind: "run",
+          runId: "run_cancelled",
+          state: "cancelled",
+          revision: 8,
+        },
+      ),
+    ).toContain("No action needed; the run is cancelled");
   });
 });
 

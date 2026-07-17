@@ -649,19 +649,27 @@ export function acceptedGitHubCommandComment(
         ? "Next action: No action needed while Roundhouse prepares the plan."
         : result.state === "completed"
           ? "Next action: Review the latest plan or run comment."
-          : "Next action: Review the planning failure before starting again."
+          : `Next action: Review the planning failure, then issue \`${githubCommand(identity, "start")}\` to start again.`
       : result.kind === "plan"
         ? result.state === "needs_clarification"
           ? `Next action: Answer the plan's clarification questions using \`${githubCommand(identity, "clarify")}\`.`
-          : ["proposed", "approved"].includes(result.state)
-            ? `Next action: Review the plan, then issue \`${githubCommand(identity, "implement")}\` if it looks right.`
-            : "Next action: No action needed while Roundhouse implements the plan."
+          : result.state === "rejected"
+            ? `Next action: Review why the plan was rejected, update the issue if needed, then issue \`${githubCommand(identity, "replan")}\`.`
+            : ["proposed", "approved"].includes(result.state)
+              ? `Next action: Review the plan, then issue \`${githubCommand(identity, "implement")}\` if it looks right.`
+              : result.state === "materialized"
+                ? "Next action: No action needed while Roundhouse implements the plan."
+                : "Next action: Review the latest plan comment."
         : result.kind === "run"
           ? result.state === "awaiting_approval"
             ? `Next action: Review the candidate, then issue \`${githubCommand(identity, "approve")}\` if it looks right.`
             : result.state === "failed"
               ? `Next action: Review the failure diagnostics before issuing \`${githubCommand(identity, "retry")}\`.`
-              : "Next action: No action needed while Roundhouse continues the run."
+              : result.state === "completed"
+                ? "Next action: Review the pull request and independent review when available."
+                : result.state === "cancelled"
+                  ? "Next action: No action needed; the run is cancelled."
+                  : "Next action: No action needed while Roundhouse continues the run."
           : ["completed", "failed"].includes(result.status)
             ? "Next action: Review the independent review result."
             : "Next action: No action needed while independent review runs.";
