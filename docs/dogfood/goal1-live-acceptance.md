@@ -48,6 +48,7 @@ Roundhouse product acceptance journey.
 | Issue               | `<URL>`                                                               | `<URL>`                                                               | `<URL>`                                                               |
 | Candidate commit    | `<SHA>`                                                               | `<same SHA>`                                                          | `<same SHA>`                                                          |
 | Start               | `<timestamp, command evidence>`                                       | `<timestamp, command evidence>`                                       | `<timestamp, command evidence>`                                       |
+| Acknowledgement     | `<timestamp, URL>`                                                    | `<timestamp, URL>`                                                    | `<timestamp, URL>`                                                    |
 | First status        | `<timestamp, URL>`                                                    | `<timestamp, URL>`                                                    | `<timestamp, URL>`                                                    |
 | Plan                | `<timestamp, URL>`                                                    | `<timestamp, URL>`                                                    | `<timestamp, URL>`                                                    |
 | Pull request        | `<timestamp, URL, exact head SHA>`                                    | `<timestamp, URL, exact head SHA>`                                    | `<timestamp, URL, exact head SHA>`                                    |
@@ -59,6 +60,7 @@ Roundhouse product acceptance journey.
 | Review cycles       | `<count>`                                                             | `<count>`                                                             | `<count>`                                                             |
 | Human interventions | `0 / <count and action>`                                              | `0 / <count and action>`                                              | `0 / <count and action>`                                              |
 | Residual risk       | `<risk stated before merge>`                                          | `<risk stated before merge>`                                          | `<risk stated before merge>`                                          |
+| Progress timestamps | `<ordered timestamps and URLs>`                                       | `<ordered timestamps and URLs>`                                       | `<ordered timestamps and URLs>`                                       |
 
 For a reproduced bug, attach the pre-change reproduction command, input,
 expected and observed behavior, environment, repeatability, and confidence,
@@ -81,6 +83,34 @@ GitHub-hosted runner queue, but includes Roundhouse planning, execution,
 validation, review, remediation, publication, and its own retry delays.
 Excluded time must still be shown separately rather than disappearing from the
 measurement.
+
+## Timing calculations
+
+Use the maintainer-visible GitHub timestamp of the initial start comment as
+`start`. Use the first durable, maintainer-visible GitHub acknowledgement as
+`ack`, and the first status that identifies the current stage or reports useful
+progress as `status`. Calculate acknowledgement as `ack - start` and first
+useful status as `status - start`.
+
+Use the timestamp of the first maintainer-visible plan as `plan`, the draft pull
+request's creation timestamp as `draft`, and the successful merge timestamp as
+`merge`. Calculate the three end-to-end durations as `plan - start`,
+`draft - start`, and `merge - start`; do not reset the clock at an intermediate
+event.
+
+Record each interval spent waiting in an unrelated GitHub-hosted runner queue,
+including its visible start, end, workflow URL, and duration. Report the raw
+draft-pull-request and merge durations first. When applying a target that
+excludes that queue time, also report the adjusted duration as
+`raw duration - documented unrelated queue duration`; never alter or omit the
+raw duration. Do not exclude Roundhouse work, its own retry delays, or other
+waiting time.
+
+For the active-work silence check, order every maintainer-visible progress
+timestamp from `start` through `merge` and calculate each consecutive
+difference. While Roundhouse is actively working, every interval must be at or
+below two minutes. A status must identify the current stage or provide live
+progress to end a silence interval; internal activity does not count.
 
 ## Pass/fail checks
 
