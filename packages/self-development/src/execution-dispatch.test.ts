@@ -73,9 +73,17 @@ describe("DispatchingStageExecutor retry diagnostics", () => {
       },
       attempts: [
         {
-          attemptId: "run_binding_reconstruction-prepare-1",
+          attemptId: "run_binding_reconstruction-prepare-0",
           stage: "prepare",
           number: 1,
+          status: "failed",
+          classification: "validation_failed",
+          error: "retained validation candidate",
+        },
+        {
+          attemptId: "run_binding_reconstruction-prepare-1",
+          stage: "prepare",
+          number: 2,
           status: "failed",
           classification: "implementation_binding_mismatch",
           error: "untrusted mismatched candidate",
@@ -83,7 +91,7 @@ describe("DispatchingStageExecutor retry diagnostics", () => {
         {
           attemptId: "run_binding_reconstruction-prepare-2",
           stage: "prepare",
-          number: 2,
+          number: 3,
           status: "running",
         },
       ],
