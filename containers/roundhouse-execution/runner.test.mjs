@@ -85,6 +85,37 @@ describe("execution runner command", () => {
       command("node", [], { input: "x".repeat(768 * 1024 + 1) }),
     ).rejects.toThrow("command_stdin_too_large");
   });
+
+  it("terminates the complete command process tree at the configured timeout", async () => {
+    const root = await mkdtemp(join(tmpdir(), "roundhouse-timeout-"));
+    const marker = join(root, "descendant-survived");
+    const descendant = [
+      "const { writeFileSync } = require('node:fs');",
+      `setTimeout(() => writeFileSync(${JSON.stringify(marker)}, 'alive'), 500);`,
+      "setInterval(() => undefined, 1_000);",
+    ].join("\n");
+    const parent = [
+      "const { spawn } = require('node:child_process');",
+      `spawn(process.execPath, ['-e', ${JSON.stringify(descendant)}], { stdio: 'ignore' });`,
+      "setInterval(() => undefined, 1_000);",
+    ].join("\n");
+
+    try {
+      const started = Date.now();
+      const result = await command("node", ["-e", parent], {
+        cwd: process.cwd(),
+        timeoutMs: 100,
+      });
+      expect(result.timedOut).toBe(true);
+      expect(Date.now() - started).toBeLessThan(1_000);
+      await new Promise((resolve) => setTimeout(resolve, 650));
+      await expect(readFile(marker, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("candidate formatter boundary", () => {
