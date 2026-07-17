@@ -103,13 +103,13 @@ An authorized reviewer can request a bounded follow-up from a pull-request
 review, review comment, or pull-request conversation comment:
 
 ```text
-/rh revise RUN_ID REVISION EXACT_HEAD_SHA
+/rh revise
 
 Describe the requested change here.
 ```
 
 Roundhouse accepts this only from `zorkian`, only for the exact published pull
-request, current run revision, and current head commit. Feedback is untrusted
+request and its single current run and head. Feedback is untrusted
 input and cannot widen allowed paths, validation, credentials, network access,
 approval, or publication authority. The new patch follows the ordinary exact
 evidence and human approval path.

@@ -173,6 +173,21 @@ describe("GitHub-native operator webhook", () => {
 
   it("parses only exact bounded commands", () => {
     expect(parseGitHubCommand("/rh start")).toEqual({ kind: "start" });
+    expect(parseGitHubCommand("/rh status")).toEqual({ kind: "status" });
+    expect(parseGitHubCommand("/rh implement")).toEqual({
+      kind: "implement",
+    });
+    expect(parseGitHubCommand("/rh retry")).toEqual({ kind: "retry" });
+    expect(parseGitHubCommand("/rh cancel")).toEqual({ kind: "cancel" });
+    expect(parseGitHubCommand("/rh approve")).toEqual({ kind: "approve" });
+    expect(parseGitHubCommand("/rh review")).toEqual({ kind: "review-pr" });
+    expect(parseGitHubCommand("/rh review-pr")).toEqual({
+      kind: "review-pr",
+    });
+    expect(parseGitHubCommand("/rh clarify\n1. The issue page.")).toEqual({
+      kind: "clarify",
+      answers: "1. The issue page.",
+    });
     expect(parseGitHubCommand("/rh status run_123")).toEqual({
       kind: "status",
       runId: "run_123",
@@ -353,6 +368,24 @@ describe("GitHub-native operator webhook", () => {
       command: { kind: "review-pr", headCommit },
     });
     expect(
+      manualReviewCommand(
+        {
+          ...webhook,
+          payload: {
+            ...webhook.payload,
+            comment: {
+              ...webhook.payload.comment,
+              body: "/rhd review",
+            },
+          },
+        },
+        ["/rhd", "/roundhouse-dev"],
+      ),
+    ).toMatchObject({
+      pullRequestNumber: 92,
+      command: { kind: "review-pr" },
+    });
+    expect(
       manualReviewCommand({
         ...webhook,
         payload: {
@@ -396,6 +429,34 @@ describe("GitHub-native operator webhook", () => {
         "https://github.com/zorkian/roundhouse/pull/31#pullrequestreview-9001",
       runId: "run_source",
       revision: 18,
+      headCommit,
+      feedback: "Please fix the dashboard link.",
+    });
+  });
+
+  it("accepts contextual pull-request feedback without internal bindings", () => {
+    const headCommit = "a".repeat(40);
+    expect(
+      pullRequestFeedback({
+        deliveryId: "12345678-abcd-4321-abcd-1234567890ab",
+        eventName: "pull_request_review",
+        payloadSha256: "b".repeat(64),
+        payload: {
+          installation: { id: 146147681 },
+          repository: { full_name: "zorkian/roundhouse" },
+          action: "submitted",
+          pull_request: { number: 31, head: { sha: headCommit } },
+          review: {
+            id: 9001,
+            body: "/rh revise\n\nPlease fix the dashboard link.",
+            html_url:
+              "https://github.com/zorkian/roundhouse/pull/31#pullrequestreview-9001",
+            user: { login: "zorkian" },
+          },
+        },
+      }),
+    ).toMatchObject({
+      pullRequestNumber: 31,
       headCommit,
       feedback: "Please fix the dashboard link.",
     });

@@ -896,7 +896,7 @@ describe("local control-plane Worker", () => {
 
     const implementation = await handler.fetch!(
       await webhook(
-        `/rhd implement ${plan!.plan.planId} 1 ${plan!.plan.planSha256}`,
+        "/rhd implement",
         43,
         "99999999-abcd-4321-abcd-1234567890ab",
       ),
@@ -980,7 +980,7 @@ describe("local control-plane Worker", () => {
     );
     expect(replayedUiApproval.status).toBe(409);
     await expect(replayedUiApproval.json()).resolves.toMatchObject({
-      error: { message: "Existing plan approval actor does not match" },
+      error: { message: "Command plan does not match this issue" },
     });
     expect(queued.messages).toHaveLength(1);
 
@@ -1106,11 +1106,9 @@ describe("local control-plane Worker", () => {
       ignored: true,
     });
     expect(statusComment?.body).toContain(
-      "Roundhouse rejected the stale `/rhd implement` binding.",
+      "Roundhouse could not apply `/rhd implement` to the current work.",
     );
-    expect(statusComment?.body).toContain(
-      `Next action: \`/rhd status ${implementationResult.runId}\``,
-    );
+    expect(statusComment?.body).toContain("Next action: `/rhd status`");
   }, 30_000);
 
   it("does not repeat a deterministic planning contract failure", async () => {
@@ -3145,10 +3143,11 @@ describe("local control-plane Worker", () => {
     expect(failureComment?.body).toContain(
       "Failure classification: `unexpected`",
     );
-    expect(failureComment?.body).toContain(`/rhd retry ${runId}`);
+    expect(failureComment?.body).toContain("/rhd retry\n");
+    expect(failureComment?.body).not.toContain(`/rhd retry ${runId}`);
   });
 
-  it("emits revision-bound retries and stops at the attempt limit", async () => {
+  it("emits contextual retries and stops at the attempt limit", async () => {
     const { env, queued } = await runtime();
     const handler = createControlPlaneHandler();
     const submitted = await handler.fetch!(

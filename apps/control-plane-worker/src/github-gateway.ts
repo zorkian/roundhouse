@@ -816,7 +816,7 @@ export class GitHubAppGateway {
   async manualReviewPullRequest(input: {
     repositoryFullName: string;
     pullRequestNumber: number;
-    expectedHeadSha: string;
+    expectedHeadSha?: string;
     expectedBaseSha?: string;
     approvedPaths?: string[];
   }): Promise<{
@@ -844,7 +844,9 @@ export class GitHubAppGateway {
       pull.html_url !== expectedUrl ||
       pull.base.repo.full_name !== input.repositoryFullName ||
       pull.head.repo.full_name !== input.repositoryFullName ||
-      pull.head.sha !== input.expectedHeadSha ||
+      !/^[a-f0-9]{40}$/.test(pull.head.sha) ||
+      (input.expectedHeadSha !== undefined &&
+        pull.head.sha !== input.expectedHeadSha) ||
       !/^[a-f0-9]{40}$/.test(pull.base.sha) ||
       (input.expectedBaseSha !== undefined &&
         !/^[a-f0-9]{40}$/.test(input.expectedBaseSha)) ||

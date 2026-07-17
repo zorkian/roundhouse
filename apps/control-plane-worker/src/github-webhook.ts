@@ -162,9 +162,9 @@ export type GitHubCommand =
   | { kind: "start" }
   | {
       kind: "clarify";
-      planId: string;
-      revision: number;
-      planSha256: string;
+      planId?: string;
+      revision?: number;
+      planSha256?: string;
       answers: string;
     }
   | {
@@ -176,26 +176,26 @@ export type GitHubCommand =
   | { kind: "status"; runId?: string }
   | {
       kind: "implement";
-      planId: string;
-      revision: number;
-      planSha256: string;
+      planId?: string;
+      revision?: number;
+      planSha256?: string;
     }
-  | { kind: "cancel"; runId: string; revision: number }
-  | { kind: "retry"; runId: string; revision: number }
+  | { kind: "cancel"; runId?: string; revision?: number }
+  | { kind: "retry"; runId?: string; revision?: number }
   | {
       kind: "review";
       runId: string;
       revision: number;
       headCommit: string;
     }
-  | { kind: "review-pr"; headCommit: string }
+  | { kind: "review-pr"; headCommit?: string }
   | {
       kind: "approve";
-      runId: string;
-      revision: number;
-      baseCommit: string;
-      patchSha256: string;
-      evidenceSetSha256: string;
+      runId?: string;
+      revision?: number;
+      baseCommit?: string;
+      patchSha256?: string;
+      evidenceSetSha256?: string;
     };
 
 export type GitHubPullRequestFeedback = {
@@ -204,9 +204,9 @@ export type GitHubPullRequestFeedback = {
   actor: string;
   sourceId: string;
   sourceUrl?: string;
-  runId: string;
-  revision: number;
-  headCommit: string;
+  runId?: string;
+  revision?: number;
+  headCommit?: string;
   feedback: string;
 };
 
@@ -240,6 +240,11 @@ export function parseGitHubCommand(
     if (parts[2] && !runId.test(parts[2])) return null;
     return { kind: "status", runId: parts[2] };
   }
+  if (parts[1] === "clarify" && parts.length === 2) {
+    const answers = remainingLines.join("\n").trim();
+    if (answers.length < 1 || answers.length > 10_000) return null;
+    return { kind: "clarify", answers };
+  }
   const revision = parseRevision(parts[3]);
   if (
     parts[1] === "clarify" &&
@@ -272,6 +277,8 @@ export function parseGitHubCommand(
       planSha256: parts[4]!,
     };
   if (parts[1] === "replan" && parts.length === 2) return { kind: "replan" };
+  if (parts[1] === "implement" && parts.length === 2)
+    return { kind: "implement" };
   if (
     parts[1] === "implement" &&
     parts.length === 5 &&
@@ -285,6 +292,10 @@ export function parseGitHubCommand(
       revision,
       planSha256: parts[4]!,
     };
+  if (["cancel", "retry"].includes(parts[1] ?? "") && parts.length === 2)
+    return { kind: parts[1] as "cancel" | "retry" };
+  if (["review", "review-pr"].includes(parts[1] ?? "") && parts.length === 2)
+    return { kind: "review-pr" };
   if (
     ["cancel", "retry"].includes(parts[1] ?? "") &&
     parts.length === 4 &&
@@ -296,6 +307,7 @@ export function parseGitHubCommand(
       runId: parts[2]!,
       revision,
     };
+  if (parts[1] === "approve" && parts.length === 2) return { kind: "approve" };
   if (
     parts[1] === "review-pr" &&
     parts.length === 3 &&
@@ -344,8 +356,16 @@ function parsePullRequestFeedbackBody(
 > | null {
   const [line, ...feedbackLines] = body.trim().split(/\r?\n/);
   const parts = line?.trim().split(/\s+/) ?? [];
-  const revision = parseRevision(parts[3]);
   const feedback = feedbackLines.join("\n").trim();
+  if (
+    parts.length === 2 &&
+    commandPrefixes.includes(parts[0] ?? "") &&
+    parts[1] === "revise" &&
+    feedback.length >= 1 &&
+    feedback.length <= 10_000
+  )
+    return { feedback };
+  const revision = parseRevision(parts[3]);
   if (
     parts.length !== 5 ||
     !commandPrefixes.includes(parts[0] ?? "") ||
@@ -608,7 +628,11 @@ export function pullRequestFeedback(
       payload.data.review.body ?? "",
       commandPrefixes,
     );
-    if (!command || command.headCommit !== payload.data.pull_request.head.sha)
+    if (
+      !command ||
+      (command.headCommit !== undefined &&
+        command.headCommit !== payload.data.pull_request.head.sha)
+    )
       return null;
     return {
       repositoryFullName: payload.data.repository.full_name,
@@ -616,6 +640,7 @@ export function pullRequestFeedback(
       actor: payload.data.review.user.login,
       sourceId: `pull_request_review:${payload.data.review.id}`,
       sourceUrl: payload.data.review.html_url,
+      headCommit: payload.data.pull_request.head.sha,
       ...command,
     };
   }
