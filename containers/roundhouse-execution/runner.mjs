@@ -1978,9 +1978,8 @@ async function validateImplementation(value) {
       validationDeadlineAt,
     ),
   );
-  const codeChanged = trusted.changedFiles.some((path) =>
-    /\.(?:cjs|js|jsx|mjs|ts|tsx)$/.test(path),
-  );
+  const targetedArgs = targetedTestArgs(trusted.changedFiles);
+  const codeChanged = targetedArgs !== null;
   const effectiveValidationLevel =
     request.validationLevel === "full" ||
     actualPathsRequireFullValidation(trusted.changedFiles)
@@ -1996,9 +1995,6 @@ async function validateImplementation(value) {
         validationDeadlineAt,
       ),
     );
-    const targetedArgs = targetedTestArgs(trusted.changedFiles);
-    if (effectiveValidationLevel === "quick" && !targetedArgs)
-      throw new Error("targeted_test_args_missing");
     validation.push(
       await validationCommand(
         "test",
