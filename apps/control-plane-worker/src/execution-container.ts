@@ -23,6 +23,7 @@ import {
 
 import type { ControlPlaneEnv } from "./environment.js";
 import { AttemptSingleFlight } from "./attempt-single-flight.js";
+import { durableAttemptResult } from "./durable-attempt-result.js";
 import {
   allowedCheckoutHosts,
   isCheckoutRequestAllowed,
@@ -42,6 +43,67 @@ const allModelHosts = [...modelHosts, ...reviewModelHosts];
 const maximumModelRequestsPerAttempt = 256;
 
 type ObservableRequest = { runId?: string; attemptId: string };
+
+function validateRepositoryResult(
+  request: RepositoryExecutionRequest,
+  value: unknown,
+): RepositoryExecutionResult {
+  const result = repositoryExecutionResultSchema.parse(value);
+  if (
+    result.runId !== request.runId ||
+    result.attemptId !== request.attemptId ||
+    result.baseCommit !== request.baseCommit ||
+    result.checkoutCommit !== request.baseCommit
+  )
+    throw new Error("Durable repository result binding mismatch");
+  return result;
+}
+
+function validateTrustedResult(
+  request: TrustedImplementationRequest,
+  value: unknown,
+): TrustedImplementationResult {
+  const result = trustedImplementationResultSchema.parse(value);
+  if (
+    result.runId !== request.runId ||
+    result.attemptId !== request.attemptId ||
+    result.baseCommit !== request.baseCommit ||
+    result.checkoutCommit !== request.baseCommit
+  )
+    throw new Error("Durable trusted result binding mismatch");
+  return result;
+}
+
+function validatePlanningResult(
+  request: PlanningAgentRequest,
+  value: unknown,
+): PlanningAgentResult {
+  const result = planningAgentResultSchema.parse(value);
+  if (
+    result.attemptId !== request.attemptId ||
+    result.baseCommit !== request.baseCommit
+  )
+    throw new Error("Durable planning result binding mismatch");
+  return result;
+}
+
+function validateReviewResult(
+  request: IndependentReviewRequest,
+  value: unknown,
+): IndependentReviewResult {
+  const result = independentReviewResultSchema.parse(value);
+  if (
+    result.reviewId !== request.reviewId ||
+    result.attemptId !== request.attemptId ||
+    result.cycle !== request.cycle ||
+    result.runId !== request.runId ||
+    result.baseCommit !== request.baseCommit ||
+    result.headCommit !== request.headCommit ||
+    result.patchSha256 !== request.patchSha256
+  )
+    throw new Error("Durable review result binding mismatch");
+  return result;
+}
 
 function boundedReason(error: unknown): string {
   return (error instanceof Error ? `${error.name}: ${error.message}` : "Error")
@@ -130,7 +192,15 @@ async function auditedModelTransport(
 }
 
 export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
-  // CloudflareIndependentReviewBackend names this Durable Object by attemptId.
+  // Every backend names this Durable Object by the exact attemptId. Successful
+  // results are also retained in Durable Object storage so a Worker rollout can
+  // reconnect after the Container RPC that produced them has returned.
+  private readonly profileAttempts =
+    new AttemptSingleFlight<RepositoryExecutionResult>();
+  private readonly trustedAttempts =
+    new AttemptSingleFlight<TrustedImplementationResult>();
+  private readonly planningAttempts =
+    new AttemptSingleFlight<PlanningAgentResult>();
   private readonly reviewAttempts =
     new AttemptSingleFlight<IndependentReviewResult>();
 
@@ -325,6 +395,19 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
     input: RepositoryExecutionRequest,
   ): Promise<RepositoryExecutionResult> {
     const request = repositoryExecutionRequestSchema.parse(input);
+    return this.profileAttempts.run(request.attemptId, () =>
+      durableAttemptResult(
+        this.ctx.storage,
+        "attempt-result:profile:v1",
+        (value) => validateRepositoryResult(request, value),
+        () => this.executeJob(request),
+      ),
+    );
+  }
+
+  private async executeJob(
+    request: RepositoryExecutionRequest,
+  ): Promise<RepositoryExecutionResult> {
     const startupStarted = Date.now();
     lifecycle("info", "attempt.started", request, { mode: "profile" });
     try {
@@ -392,6 +475,20 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
     codexAuthJson: string,
   ): Promise<TrustedImplementationResult> {
     const request = trustedImplementationRequestSchema.parse(input);
+    return this.trustedAttempts.run(request.attemptId, () =>
+      durableAttemptResult(
+        this.ctx.storage,
+        "attempt-result:trusted:v1",
+        (value) => validateTrustedResult(request, value),
+        () => this.executeTrustedJob(request, codexAuthJson),
+      ),
+    );
+  }
+
+  private async executeTrustedJob(
+    request: TrustedImplementationRequest,
+    codexAuthJson: string,
+  ): Promise<TrustedImplementationResult> {
     const startupStarted = Date.now();
     lifecycle("info", "attempt.started", request, { mode: "trusted-agent" });
     try {
@@ -497,6 +594,20 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
     codexAuthJson: string,
   ): Promise<PlanningAgentResult> {
     const request = planningAgentRequestSchema.parse(input);
+    return this.planningAttempts.run(request.attemptId, () =>
+      durableAttemptResult(
+        this.ctx.storage,
+        "attempt-result:planning:v1",
+        (value) => validatePlanningResult(request, value),
+        () => this.executePlanningJob(request, codexAuthJson),
+      ),
+    );
+  }
+
+  private async executePlanningJob(
+    request: PlanningAgentRequest,
+    codexAuthJson: string,
+  ): Promise<PlanningAgentResult> {
     lifecycle("info", "attempt.started", request, { mode: "planning-agent" });
     try {
       await this.setAllowedHosts(allowedCheckoutHosts);
@@ -579,7 +690,12 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
   ): Promise<IndependentReviewResult> {
     const request = independentReviewRequestSchema.parse(input);
     return this.reviewAttempts.run(request.attemptId, () =>
-      this.executeReviewJob(request, claudeAuthJson),
+      durableAttemptResult(
+        this.ctx.storage,
+        "attempt-result:review:v1",
+        (value) => validateReviewResult(request, value),
+        () => this.executeReviewJob(request, claudeAuthJson),
+      ),
     );
   }
 

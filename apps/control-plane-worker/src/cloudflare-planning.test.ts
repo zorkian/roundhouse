@@ -139,7 +139,7 @@ describe("Cloudflare planning backend", () => {
     });
   });
 
-  it("destroys the Container after a binding mismatch", async () => {
+  it("does not destroy a Container after a binding mismatch", async () => {
     let destroyed = false;
     const backend = new CloudflarePlanningBackend(
       {
@@ -164,7 +164,7 @@ describe("Cloudflare planning backend", () => {
       "credential",
     );
     await expect(backend.execute(request)).rejects.toThrow();
-    expect(destroyed).toBe(true);
+    expect(destroyed).toBe(false);
   });
 
   it("recovers automatically after a deployment resets the planning object", async () => {
@@ -208,7 +208,7 @@ describe("Cloudflare planning backend", () => {
       status: "proposed",
     });
     expect(invocations).toBe(2);
-    expect(destroyed).toBe(1);
+    expect(destroyed).toBe(0);
     expect(waits).toEqual([250]);
   });
 });

@@ -38,6 +38,7 @@ import {
   promptFor,
   redactKnownSecrets,
   readAgentOutput,
+  retainSuccessfulOperation,
   remainingValidationBudget,
   reproductionInvocation,
   parseClaudeReviewOutput,
@@ -62,6 +63,49 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 describe("execution runner command", () => {
+  it("reconnects concurrent callers to one retained successful operation", async () => {
+    let resolveOperation;
+    let invocations = 0;
+    const operation = () => {
+      invocations += 1;
+      return new Promise((resolve) => {
+        resolveOperation = resolve;
+      });
+    };
+    const first = retainSuccessfulOperation("test:success", operation);
+    const reconnected = retainSuccessfulOperation("test:success", operation);
+
+    expect(invocations).toBe(0);
+    await Promise.resolve();
+    expect(invocations).toBe(1);
+    resolveOperation({ ok: true });
+    await expect(Promise.all([first, reconnected])).resolves.toEqual([
+      { ok: true },
+      { ok: true },
+    ]);
+    await expect(
+      retainSuccessfulOperation("test:success", operation),
+    ).resolves.toEqual({ ok: true });
+    expect(invocations).toBe(1);
+  });
+
+  it("permits a bounded retry after a retained operation fails", async () => {
+    let invocations = 0;
+    const operation = () => {
+      invocations += 1;
+      if (invocations === 1) throw new Error("interrupted");
+      return { ok: true };
+    };
+
+    await expect(
+      retainSuccessfulOperation("test:retry", operation),
+    ).rejects.toThrow("interrupted");
+    await expect(
+      retainSuccessfulOperation("test:retry", operation),
+    ).resolves.toEqual({ ok: true });
+    expect(invocations).toBe(2);
+  });
+
   it("rejects promptly when spawning the executable fails", async () => {
     const started = Date.now();
     await expect(

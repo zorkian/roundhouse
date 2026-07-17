@@ -120,7 +120,6 @@ export class CloudflareIndependentReviewBackend implements IndependentReviewBack
           await container.runReviewJob(request, this.claudeAuthJson),
         );
       } catch (error) {
-        await container.destroy().catch(() => undefined);
         throw new Error(
           `Independent review execution failed: ${boundedReason(error)}`,
         );

@@ -403,21 +403,27 @@ export class CloudflareTrustedImplementationBackend implements TrustedImplementa
           await container.runTrustedJob(boundRequest, this.codexAuthJson),
         );
       } catch (error) {
-        await container.destroy().catch(() => undefined);
-        if (error instanceof StageFailure) throw error;
-        if (error instanceof ZodError)
+        if (error instanceof StageFailure) {
+          await container.destroy().catch(() => undefined);
+          throw error;
+        }
+        if (error instanceof ZodError) {
+          await container.destroy().catch(() => undefined);
           throw new StageFailure(
             "Trusted implementation result failed schema validation",
             "implementation_binding_mismatch",
             false,
           );
+        }
         const reason = boundedInfrastructureReason(error);
-        if (reason.includes("validation_failed"))
+        if (reason.includes("validation_failed")) {
+          await container.destroy().catch(() => undefined);
           throw new StageFailure(
             `Trusted implementation validation failed: ${reason}`,
             "validation_failed",
             false,
           );
+        }
         throw new StageFailure(
           `Trusted Container execution was interrupted: ${reason}`,
           "container_interrupted",
@@ -614,7 +620,6 @@ export class CloudflareRepositoryExecutionBackend implements RepositoryExecution
           reason,
           attemptId: request.attemptId,
         });
-        await container.destroy().catch(() => undefined);
         if (error instanceof StageFailure) throw error;
         throw new StageFailure(
           `Cloudflare Container execution was interrupted: ${reason}`,

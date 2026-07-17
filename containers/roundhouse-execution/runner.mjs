@@ -19,11 +19,31 @@ let prepared;
 let trusted;
 let review;
 let planning;
+const retainedOperations = new Map();
 const activeChildren = new Set();
 const agentOutputByAttempt = new Map();
 let draining = false;
 const codexHome = "/home/runner/.roundhouse-codex";
 const claudeHome = "/home/runner/.roundhouse-claude";
+
+function operationKey(mode, operation, attemptId) {
+  return `${mode}:${operation}:${attemptId}`;
+}
+
+export function retainSuccessfulOperation(key, operation) {
+  const existing = retainedOperations.get(key);
+  if (existing) return existing;
+  const pending = Promise.resolve().then(operation);
+  retainedOperations.set(key, pending);
+  pending.catch(() => {
+    if (retainedOperations.get(key) === pending) retainedOperations.delete(key);
+  });
+  return pending;
+}
+
+function operationRetained(mode, operation, attemptId) {
+  return retainedOperations.has(operationKey(mode, operation, attemptId));
+}
 export const roundhouseFormatterWriteCommand = Object.freeze({
   command: "pnpm",
   args: Object.freeze(["exec", "prettier", "--write"]),
@@ -1091,6 +1111,11 @@ async function installCredential(value) {
     prepared.baseCommit !== request.baseCommit
   )
     throw new Error("checkout_not_prepared");
+  if (operationRetained("trusted", "implement", request.attemptId))
+    return {
+      installed: trusted?.credentialInstalled === true,
+      reconnected: true,
+    };
   if (!validRuntimeCredentialSize(value.authJson))
     throw new Error("invalid_runtime_credential");
   let parsed;
@@ -1124,6 +1149,11 @@ async function installPlanningCredential(value) {
     prepared.baseCommit !== request.baseCommit
   )
     throw new Error("planning_checkout_not_prepared");
+  if (operationRetained("planning", "run", request.attemptId))
+    return {
+      installed: planning?.credentialInstalled === true,
+      reconnected: true,
+    };
   if (!validRuntimeCredentialSize(value.authJson))
     throw new Error("invalid_planning_runtime_credential");
   let parsed;
@@ -1157,6 +1187,12 @@ async function installReviewCredential(value) {
     prepared.checkoutCommit !== request.headCommit
   )
     throw new Error("review_checkout_not_prepared");
+  if (operationRetained("review", "run", request.attemptId))
+    return {
+      installed: review?.credentialInstalled === true,
+      writtenToFilesystem: false,
+      reconnected: true,
+    };
   if (!validRuntimeCredentialSize(value.authJson))
     throw new Error("invalid_review_runtime_credential");
   let parsed;
@@ -2402,8 +2438,17 @@ export function createRunnerServer({ port = 8080, host = "0.0.0.0" } = {}) {
           200,
           await prepare(await body(request), "legacy"),
         );
-      if (request.method === "POST" && request.url === "/execute")
-        return json(response, 200, await execute(await body(request)));
+      if (request.method === "POST" && request.url === "/execute") {
+        const value = await body(request);
+        return json(
+          response,
+          200,
+          await retainSuccessfulOperation(
+            operationKey("legacy", "execute", value.attemptId),
+            () => execute(value),
+          ),
+        );
+      }
       if (request.method === "POST" && request.url === "/trusted/prepare")
         return json(
           response,
@@ -2416,14 +2461,28 @@ export function createRunnerServer({ port = 8080, host = "0.0.0.0" } = {}) {
           200,
           await installCredential(await body(request)),
         );
-      if (request.method === "POST" && request.url === "/trusted/implement")
-        return json(response, 200, await implement(await body(request)));
-      if (request.method === "POST" && request.url === "/trusted/validate")
+      if (request.method === "POST" && request.url === "/trusted/implement") {
+        const value = await body(request);
         return json(
           response,
           200,
-          await validateImplementation(await body(request)),
+          await retainSuccessfulOperation(
+            operationKey("trusted", "implement", value.attemptId),
+            () => implement(value),
+          ),
         );
+      }
+      if (request.method === "POST" && request.url === "/trusted/validate") {
+        const value = await body(request);
+        return json(
+          response,
+          200,
+          await retainSuccessfulOperation(
+            operationKey("trusted", "validate", value.attemptId),
+            () => validateImplementation(value),
+          ),
+        );
+      }
       if (request.method === "POST" && request.url === "/planning/prepare")
         return json(
           response,
@@ -2436,8 +2495,17 @@ export function createRunnerServer({ port = 8080, host = "0.0.0.0" } = {}) {
           200,
           await installPlanningCredential(await body(request)),
         );
-      if (request.method === "POST" && request.url === "/planning/run")
-        return json(response, 200, await runPlanning(await body(request)));
+      if (request.method === "POST" && request.url === "/planning/run") {
+        const value = await body(request);
+        return json(
+          response,
+          200,
+          await retainSuccessfulOperation(
+            operationKey("planning", "run", value.attemptId),
+            () => runPlanning(value),
+          ),
+        );
+      }
       if (request.method === "POST" && request.url === "/review/prepare")
         return json(
           response,
@@ -2450,10 +2518,28 @@ export function createRunnerServer({ port = 8080, host = "0.0.0.0" } = {}) {
           200,
           await installReviewCredential(await body(request)),
         );
-      if (request.method === "POST" && request.url === "/review/run")
-        return json(response, 200, await runReview(await body(request)));
-      if (request.method === "POST" && request.url === "/review/result")
-        return json(response, 200, await finalizeReview(await body(request)));
+      if (request.method === "POST" && request.url === "/review/run") {
+        const value = await body(request);
+        return json(
+          response,
+          200,
+          await retainSuccessfulOperation(
+            operationKey("review", "run", value.attemptId),
+            () => runReview(value),
+          ),
+        );
+      }
+      if (request.method === "POST" && request.url === "/review/result") {
+        const value = await body(request);
+        return json(
+          response,
+          200,
+          await retainSuccessfulOperation(
+            operationKey("review", "result", value.attemptId),
+            () => finalizeReview(value),
+          ),
+        );
+      }
       return json(response, 404, { error: "not_found" });
     } catch (error) {
       return json(response, 400, {

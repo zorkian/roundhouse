@@ -878,7 +878,7 @@ describe("CloudflareRepositoryExecutionBackend", () => {
     });
   });
 
-  it("classifies interruption as retryable and tears down the container", async () => {
+  it("classifies interruption as retryable and preserves the container for reconnection", async () => {
     let destroyed = 0;
     const backend = new CloudflareRepositoryExecutionBackend(
       {
@@ -898,7 +898,7 @@ describe("CloudflareRepositoryExecutionBackend", () => {
       classification: "container_interrupted",
       retryable: true,
     });
-    expect(destroyed).toBe(1);
+    expect(destroyed).toBe(0);
   });
 
   it("retains evidence for a classified nonzero exit", async () => {

@@ -105,7 +105,6 @@ export class CloudflarePlanningBackend {
           throw new Error("Planning result binding does not match request");
         return result;
       } catch (error) {
-        await container.destroy().catch(() => undefined);
         if (
           attempt >= retryDelaysMs.length ||
           !isRetryablePlanningInterruption(error)
