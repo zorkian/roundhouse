@@ -3,8 +3,6 @@
 
 import {
   independentReviewRequestSchema,
-  independentReviewResultSchema,
-  normalizeReviewFindings,
   type IndependentReviewBackend,
   type IndependentReviewExecution,
   type IndependentReviewRequest,
@@ -15,6 +13,7 @@ import type {
   EvidenceBucketPort,
   ExecutionContainerNamespacePort,
 } from "./cloudflare-execution.js";
+import { validateIndependentReviewResult } from "./review-result-validation.js";
 
 const encoder = new TextEncoder();
 
@@ -35,32 +34,6 @@ function boundedReason(error: unknown): string {
     .slice(0, 240);
 }
 
-async function validateResult(
-  request: IndependentReviewRequest,
-  value: unknown,
-): Promise<IndependentReviewResult> {
-  const result = independentReviewResultSchema.parse(value);
-  const normalized = await normalizeReviewFindings(
-    request.reviewId,
-    request.headCommit,
-    result.findings.map(({ findingId: _findingId, ...finding }) => finding),
-    request.maxFindings,
-  );
-  if (
-    result.reviewId !== request.reviewId ||
-    result.attemptId !== request.attemptId ||
-    result.cycle !== request.cycle ||
-    result.runId !== request.runId ||
-    result.baseCommit !== request.baseCommit ||
-    result.headCommit !== request.headCommit ||
-    result.patchSha256 !== request.patchSha256 ||
-    result.outputBytes > request.maxOutputBytes ||
-    JSON.stringify(result.findings) !== JSON.stringify(normalized)
-  )
-    throw new Error("Independent review result binding mismatch");
-  return result;
-}
-
 async function parseEvidence(
   request: IndependentReviewRequest,
   text: string,
@@ -71,7 +44,7 @@ async function parseEvidence(
   } catch {
     throw new Error("Independent review evidence is not valid JSON");
   }
-  return validateResult(request, value);
+  return validateIndependentReviewResult(request, value);
 }
 
 export class CloudflareIndependentReviewBackend implements IndependentReviewBackend {
@@ -115,12 +88,11 @@ export class CloudflareIndependentReviewBackend implements IndependentReviewBack
       if (!container.runReviewJob)
         throw new Error("Independent review Container adapter is unavailable");
       try {
-        result = await validateResult(
+        result = await validateIndependentReviewResult(
           request,
           await container.runReviewJob(request, this.claudeAuthJson),
         );
       } catch (error) {
-        await container.destroy().catch(() => undefined);
         throw new Error(
           `Independent review execution failed: ${boundedReason(error)}`,
         );

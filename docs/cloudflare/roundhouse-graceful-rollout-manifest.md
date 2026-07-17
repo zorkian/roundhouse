@@ -69,10 +69,20 @@ immediate `destroy()`.
 
 Durable Objects remain globally single-owner. A deployment may reset an
 in-memory Durable Object even while old and new Container versions overlap.
-Persisted D1 and R2 state remains authoritative. Implementation runs retain their
-existing bounded durable retry, and planning retries only narrowly classified
-Cloudflare reset, overload, and Container transport interruptions. Binding or
-validation failures are never retried as infrastructure failures.
+Persisted D1 and R2 state remains authoritative. Each attempt's named Container
+Durable Object also retains its schema-validated final result before returning
+it to the calling Worker. While an old Container is still running, its runner
+retains successful paid phase operations and reconnects repeated requests to
+the same in-flight promise. A lost Worker RPC therefore reconnects to the old
+attempt or replays its durable result; it does not destroy the old Container or
+start a second model invocation.
+
+Implementation runs retain their existing bounded durable retry, and planning
+retries only narrowly classified Cloudflare reset, overload, and Container
+transport interruptions. Failed retained operations are released so those
+bounded retries can proceed. Binding or validation failures are never retried
+as infrastructure failures. Explicit cancellation and failed-instance cleanup
+remain the only paths that may destroy a Container immediately.
 
 ## Rollback
 

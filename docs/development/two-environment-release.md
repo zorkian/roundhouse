@@ -83,7 +83,12 @@ protected for the existing 40-minute whole-attempt budget; their normal command
 and lease timeouts remain authoritative. Cloudflare then permits up to 15
 minutes for the runner to drain after `SIGTERM`. The runner refuses new work
 and drains on `SIGTERM`; normal completed attempts stop gracefully, while
-explicit cancellation may still destroy a failed instance immediately. See the
+explicit cancellation may still destroy a failed instance immediately. If
+deployment replaces the Worker or Container Durable Object isolate, the
+replacement reconnects through the stable attempt identity: the old runner
+shares the in-flight paid operation, and a schema-validated completed result is
+replayed from Durable Object storage. A transport interruption does not destroy
+the still-running Container. See the
 [graceful rollout manifest](../cloudflare/roundhouse-graceful-rollout-manifest.md).
 
 Rollback redeploys a previously retained Worker version and image digest. It
