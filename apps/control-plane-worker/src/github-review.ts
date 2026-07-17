@@ -219,6 +219,37 @@ export async function isIssueRemediationRun(
   return row !== null;
 }
 
+export async function awaitingIssueReviewRemediationRun(
+  env: ControlPlaneEnv,
+  input: {
+    repositoryFullName: string;
+    issueNumber: number;
+    sourceRunId: string;
+  },
+): Promise<string | null> {
+  if (!/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(input.repositoryFullName))
+    return null;
+  const row = await env.DB.prepare(
+    `SELECT json_extract(reviews.payload, '$.remediationRunId') AS run_id
+       FROM independent_reviews AS reviews
+       INNER JOIN self_development_runs AS runs
+         ON runs.run_id = json_extract(reviews.payload, '$.remediationRunId')
+      WHERE reviews.run_id = ?
+        AND json_extract(reviews.payload, '$.request.repositoryUrl') = ?
+        AND json_extract(reviews.payload, '$.request.issueNumber') = ?
+        AND runs.state = 'awaiting_approval'
+      ORDER BY reviews.updated_at DESC
+      LIMIT 1`,
+  )
+    .bind(
+      input.sourceRunId,
+      `https://github.com/${input.repositoryFullName}.git`,
+      input.issueNumber,
+    )
+    .first<{ run_id: string }>();
+  return row?.run_id ?? null;
+}
+
 export async function listIndependentReviews(
   env: ControlPlaneEnv,
   limit = 50,
