@@ -605,6 +605,68 @@ describe("CloudflareTrustedImplementationBackend", () => {
     expect(retained).not.toHaveProperty("publicationManifest");
   });
 
+  it("stops after a retained retry makes no candidate or diagnostic progress", async () => {
+    const evidence = new MemoryEvidence();
+    const prior = {
+      ...trustedResult(),
+      validationOutcome: "failed" as const,
+      validation: [
+        {
+          name: "test" as const,
+          command: "pnpm test",
+          exitCode: 1,
+          timedOut: false,
+          durationMs: 12,
+          stdout: "FAIL stale expectation",
+          stderr: "expected true to be false",
+          outputTruncated: false,
+        },
+      ],
+    };
+    evidence.objects.set(
+      `runs/${trustedRequest.runId}/attempts/${trustedRequest.attemptId}/trusted-implementation.json`,
+      new TextEncoder().encode(JSON.stringify(prior)),
+    );
+    const retryRequest = {
+      ...trustedRequest,
+      attemptId: "run_trusted_container_contract-prepare-2",
+      attemptNumber: 2,
+      retryFromAttemptId: trustedRequest.attemptId,
+      retryContext: "expected true to be false",
+    };
+    const repeated = {
+      ...prior,
+      attemptId: retryRequest.attemptId,
+      retryLineage: {
+        priorAttemptId: prior.attemptId,
+        priorPatchSha256: prior.patchSha256,
+        priorChangedFiles: prior.changedFiles,
+        retainedAllPriorPaths: true,
+      },
+    };
+    const backend = new CloudflareTrustedImplementationBackend(
+      {
+        getByName: () => ({
+          runJob: async () => result(),
+          runTrustedJob: async () => repeated,
+          destroy: async () => undefined,
+        }),
+      },
+      evidence,
+      "unused",
+    );
+
+    await expect(backend.execute(retryRequest)).rejects.toMatchObject({
+      classification: "validation_no_progress",
+      retryable: false,
+      message: expect.stringContaining("did not change"),
+      evidence: [
+        expect.objectContaining({ attemptId: retryRequest.attemptId }),
+      ],
+    });
+    expect(evidence.objects.size).toBe(2);
+  });
+
   it("rejects results exceeding request-scoped limits", async () => {
     const backend = new CloudflareTrustedImplementationBackend(
       {

@@ -1301,7 +1301,7 @@ async function finalizeRunDelivery(
     if (
       run.state !== "failed" &&
       latest?.status === "failed" &&
-      latest.retryable
+      (latest.retryable || latest.automaticRepair)
     )
       await env.RUN_QUEUE.send({
         schemaVersion: 1,

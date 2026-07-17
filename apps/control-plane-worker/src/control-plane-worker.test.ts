@@ -3346,6 +3346,49 @@ describe("local control-plane Worker", () => {
     ).toBe(true);
   });
 
+  it("automatically dispatches a trusted validation repair without an operator retry", async () => {
+    const { env, queued } = await runtime();
+    const handler = createControlPlaneHandler();
+    const submitted = await handler.fetch!(
+      submission("automatic-validation-repair-01"),
+      env,
+      {} as ExecutionContext,
+    );
+    const { runId } = (await submitted.json()) as { runId: string };
+    env.EXECUTION_MODE = "validation-repair-local";
+
+    expect(await deliver(handler, env, [queued.messages[0]])).toEqual([
+      "ack:0",
+    ]);
+    const repairing = await new D1JobStore(env.DB).read(runId);
+    expect(repairing.state).toBe("created");
+    expect(repairing.attempts.at(-1)).toMatchObject({
+      stage: "prepare",
+      status: "failed",
+      retryable: false,
+      automaticRepair: true,
+      classification: "validation_failed",
+    });
+    expect(queued.messages).toHaveLength(2);
+    expect(await deliver(handler, env, [queued.messages[0]])).toEqual([
+      "ack:0",
+    ]);
+    expect(queued.messages).toHaveLength(2);
+    expect((await new D1JobStore(env.DB).read(runId)).attempts).toHaveLength(1);
+
+    expect(await deliver(handler, env, [queued.messages[1]])).toEqual([
+      "ack:0",
+    ]);
+    expect(queued.messages).toHaveLength(2);
+    const repaired = await new D1JobStore(env.DB).read(runId);
+    expect(repaired.state).toBe("awaiting_approval");
+    expect(repaired.attempts).toHaveLength(2);
+    expect(repaired.attempts.at(-1)).toMatchObject({
+      stage: "prepare",
+      status: "succeeded",
+    });
+  });
+
   it("authenticates and validates operator recovery and reporting routes", async () => {
     const { env } = await runtime();
     const handler = createControlPlaneHandler();

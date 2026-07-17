@@ -19,6 +19,7 @@ export type JobClaim = {
 
 export type AttemptFailure = {
   retryable: boolean;
+  automaticRepair?: boolean;
   classification: string;
   error: string;
   evidence?: ExecutionEvidence[];

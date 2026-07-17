@@ -24,6 +24,21 @@ export class DeterministicLocalDispatcher implements ExecutionDispatcher {
   constructor(private readonly mode: string) {}
 
   async dispatch(request: ExecutionDispatchRequest): Promise<StageResult> {
+    if (this.mode === "validation-repair-local") {
+      if (request.stage === "prepare" && request.attemptNumber === 1)
+        throw new StageFailure(
+          "test: stale expectation",
+          "validation_failed",
+          false,
+        );
+      return {
+        state: "awaiting_approval",
+        detail: {
+          dispatcher: "validation-repair-local",
+          attemptNumber: request.attemptNumber,
+        },
+      };
+    }
     if (this.mode === "retryable-local")
       throw new StageFailure(
         "Local execution dispatcher is temporarily unavailable",
