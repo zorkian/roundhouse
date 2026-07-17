@@ -9,6 +9,11 @@ final clean acceptance evidence. It does not add or change product requirements.
 - [ ] Deploy the candidate commit to development and record its full SHA.
 - [ ] Start three distinct, eligible low-risk issues from that same candidate
       commit.
+- [ ] Issue all three starts before the first candidate pull request merges.
+- [ ] Verify and record that every materialized plan uses the same full
+      candidate base commit SHA.
+- [ ] Confirm the three planned implementation path sets are disjoint so later
+      exact-head merges can tolerate earlier candidate merges.
 - [ ] Include at least one reproduced bug with a passing regression and at least
       one maintenance change.
 - [ ] For each issue, allow no operator retry, approval, or other intervention
@@ -18,6 +23,8 @@ final clean acceptance evidence. It does not add or change product requirements.
       merge.
 - [ ] Record final merge evidence for every run, including the merge commit and
       closed pull request.
+- [ ] Record the three candidate pull requests' merge order and confirm that no
+      unrelated pull request merged between them.
 - [ ] Exclude any repaired, retried, or otherwise diagnostic run from the clean
       three-run acceptance set.
 
