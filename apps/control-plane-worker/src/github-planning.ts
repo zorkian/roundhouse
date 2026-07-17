@@ -78,9 +78,9 @@ export type PlanningJobCommand =
   | { kind: "start" }
   | {
       kind: "clarify";
-      planId: string;
-      revision: number;
-      planSha256: string;
+      planId?: string;
+      revision?: number;
+      planSha256?: string;
       answers: string;
     }
   | {

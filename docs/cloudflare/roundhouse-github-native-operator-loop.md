@@ -41,26 +41,24 @@ Cloudflare credential.
 Only the first nonempty command line is interpreted. There is no arbitrary
 command or shell escape.
 
-| Command                                                      | Meaning                                                                       |
-| ------------------------------------------------------------ | ----------------------------------------------------------------------------- |
-| `/rh start`                                                  | Start the issue's fixed reviewed Roundhouse task, or report its existing run. |
-| `/rh status [run]`                                           | Report the issue's current durable run.                                       |
-| `/rh cancel <run> <revision>`                                | Cancel only the issue-bound run at the exact revision.                        |
-| `/rh retry <run> <revision>`                                 | Retry only an eligible classified failure at the exact revision.              |
-| `/rh approve <run> <revision> <base> <patch> <evidence-set>` | Approve the exact implementation and publish its draft PR.                    |
+| Command       | Meaning                                                                        |
+| ------------- | ------------------------------------------------------------------------------ |
+| `/rh start`   | Start the issue's fixed reviewed Roundhouse task, or report existing work.     |
+| `/rh status`  | Report the issue's current durable plan or run.                                |
+| `/rh cancel`  | Cancel the issue's single current eligible run.                                |
+| `/rh retry`   | Retry the issue's single current eligible classified failure.                  |
+| `/rh approve` | Approve the issue's current validated implementation and publish its draft PR. |
 
-The Worker generates the approval command so a maintainer can copy it exactly.
+The Worker resolves each command against the repository, issue, authenticated
+actor, and single current durable object. If no eligible object exists or the
+state is ambiguous, it performs no mutation and reports one next action.
 
 Automatic stage retries stop after three attempts. Explicit operator retries
-remain revision-bound and non-automatic, and have a separate hard ceiling of
-ten attempts per stage so development recovery cannot create unbounded model
-usage.
-
-`evidence-set` is the SHA-256 of the canonical ordered set of every retained
-evidence binding (`evidenceId`, `objectKey`, `sha256`, and `size`). Approval is
-therefore bound to the run, revision, base commit, patch SHA-256, and complete
-evidence set. Publication continues through the existing trusted publisher and
-cannot publish another patch.
+remain compare-and-swap protected internally and non-automatic, and have a
+separate hard ceiling of ten attempts per stage so development recovery cannot
+create unbounded model usage. Approval still binds internally to the current
+validated candidate and publication continues through the trusted publisher;
+the maintainer does not copy those internal bindings into the command.
 
 For this milestone, `/rh start` selects a reviewed real-code profile limited to:
 
@@ -89,7 +87,7 @@ human-readable live timeline is intentionally left to the next operator-UI
 milestone without changing the durable run API.
 
 Queue consumers post status after durable stage transitions. Awaiting-approval
-status includes the exact copyable command. Completed publication status
+status includes the contextual copyable command. Completed publication status
 includes the draft PR URL. Check-run and check-suite events are stored by pull
 request and exact head SHA; events for another head never satisfy that head.
 

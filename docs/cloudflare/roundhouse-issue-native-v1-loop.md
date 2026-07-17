@@ -18,24 +18,25 @@ and produces a repository-policy-qualified plan before it can create a run.
    as proposed, needing clarification, already satisfied, duplicate, or
    rejected. Roundhouse stores the issue snapshot, plan JSON, and immutable R2
    plan evidence, then posts a link to the live plan page.
-3. If clarification is needed, answer the targeted questions beneath the exact
-   `/rh clarify PLAN REVISION SHA256` command. After editing an issue, use the
-   displayed `/rh replan PLAN REVISION SHA256` command. Both operations require
-   the current durable revision binding; prior commands cannot replace a plan.
+3. If clarification is needed, answer the targeted questions beneath
+   `/rh clarify`. After editing an issue, use `/rh replan`. Roundhouse resolves
+   both against the single current plan and rejects an ineligible or ambiguous
+   state without mutating it.
 4. For a medium- or high-risk proposal, review the base commit, objective,
    acceptance criteria, likely paths, profile, limits, risk, plan SHA-256, and
-   evidence identity, then approve from the Access-protected plan page or post the exact
-   `/rh implement PLAN REVISION SHA256` command shown by Roundhouse. A low-risk
+   evidence identity, then approve from the Access-protected plan page or post
+   `/rh implement`. A low-risk
    proposal by the verified maintainer proceeds directly toward a draft PR.
 5. Follow the run link. The page polls every five seconds and displays durable
    state, revision, attempts, classifications, evidence objects, patch identity,
    and publication state. During implementation and independent review
    attempts, it also cursor-polls a bounded live agent-output tail, without
-   making that transient tail authoritative evidence. Cancel and retry use the
-   exact displayed revision.
-6. At `awaiting_approval`, independently review the patch and evidence. Existing
-   `/rh approve` and `/rh publish` commands retain their exact base, patch,
-   evidence-set, revision, actor, and verified-publication bindings.
+   making that transient tail authoritative evidence. Cancel and retry resolve
+   the single current eligible run while durable compare-and-swap still rejects
+   stale execution.
+6. At `awaiting_approval`, independently review the patch and evidence. Use
+   `/rh approve`; Roundhouse derives the current base, patch, evidence,
+   revision, actor, and verified-publication bindings internally.
 
 The HTML dashboard is at `https://roundhouse-dev.rm-rf.rip/`. Human pages and
 their JSON APIs remain behind the existing Cloudflare Access application. The
