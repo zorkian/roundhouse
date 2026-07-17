@@ -185,6 +185,19 @@ function trustedValidationFailureReason(
   );
 }
 
+function normalizedValidationFailure(
+  result: TrustedImplementationResult,
+): string {
+  return trustedValidationFailureReason(result)
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\brun_[a-z0-9_-]+\b/gi, "[run]")
+    .replace(/\b[a-f0-9]{40,64}\b/gi, "[hash]")
+    .replace(/\b\d+(?:\.\d+)?(?:ms|s)\b/gi, "[duration]")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
 async function validateTrustedResult(
   request: TrustedImplementationRequest,
   value: unknown,
@@ -336,6 +349,7 @@ export class CloudflareTrustedImplementationBackend implements TrustedImplementa
   async execute(input: TrustedImplementationRequest): Promise<StageResult> {
     const request = trustedImplementationRequestSchema.parse(input);
     let boundRequest = request;
+    let priorCandidate: TrustedImplementationResult | undefined;
     if (request.retryFromAttemptId) {
       const priorRequest = trustedImplementationRequestSchema.parse({
         ...request,
@@ -362,6 +376,7 @@ export class CloudflareTrustedImplementationBackend implements TrustedImplementa
           "implementation_binding_mismatch",
           false,
         );
+      priorCandidate = prior;
       boundRequest = trustedImplementationRequestSchema.parse({
         ...request,
         retryCandidate: {
@@ -488,13 +503,28 @@ export class CloudflareTrustedImplementationBackend implements TrustedImplementa
       approvalEligible: result.validationOutcome === "passed",
       createdAt: result.completedAt,
     };
-    if (result.validationOutcome === "failed")
+    if (result.validationOutcome === "failed") {
+      const noProgress =
+        priorCandidate !== undefined &&
+        result.patchSha256 === priorCandidate.patchSha256 &&
+        [...result.changedFiles].sort().join("\0") ===
+          [...priorCandidate.changedFiles].sort().join("\0") &&
+        normalizedValidationFailure(result) ===
+          normalizedValidationFailure(priorCandidate);
+      if (noProgress)
+        throw new StageFailure(
+          "Automatic repair stopped because the candidate and normalized validation failure did not change",
+          "validation_no_progress",
+          false,
+          [evidence],
+        );
       throw new StageFailure(
         trustedValidationFailureReason(result),
         "validation_failed",
         false,
         [evidence],
       );
+    }
     return {
       state: "awaiting_approval",
       detail: {

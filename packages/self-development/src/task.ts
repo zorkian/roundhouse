@@ -111,6 +111,7 @@ export const runAttemptSchema = z.object({
   startedAt: z.iso.datetime(),
   completedAt: z.iso.datetime().optional(),
   retryable: z.boolean().optional(),
+  automaticRepair: z.boolean().optional(),
   classification: z.string().min(1).optional(),
   error: z.string().min(1).optional(),
 });

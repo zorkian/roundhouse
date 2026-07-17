@@ -358,6 +358,77 @@ describe("V1 pilot reliability metrics", () => {
     );
   });
 
+  it("reports trusted prepare-stage implementation and repair attempts separately", async () => {
+    await db
+      .prepare(
+        "INSERT INTO github_issue_plans VALUES ('plan_trusted_repair', 12, 1, 'materialized', ?, NULL, 'run_trusted_repair', '2026-07-15T01:00:00.000Z', '2026-07-15T01:04:00.000Z')",
+      )
+      .bind("f".repeat(64))
+      .run();
+    await db
+      .prepare(
+        "INSERT INTO self_development_runs VALUES ('run_trusted_repair', 'awaiting_approval', ?)",
+      )
+      .bind(
+        JSON.stringify({
+          state: "awaiting_approval",
+          attempts: [
+            {
+              attemptId: "run_trusted_repair-prepare-1",
+              stage: "prepare",
+              number: 1,
+              status: "failed",
+              retryable: false,
+              automaticRepair: true,
+              classification: "validation_failed",
+              startedAt: "2026-07-15T01:01:00.000Z",
+              completedAt: "2026-07-15T01:02:00.000Z",
+            },
+            {
+              attemptId: "run_trusted_repair-prepare-2",
+              stage: "prepare",
+              number: 2,
+              status: "succeeded",
+              startedAt: "2026-07-15T01:02:00.000Z",
+              completedAt: "2026-07-15T01:04:00.000Z",
+            },
+          ],
+          events: [
+            {
+              state: "awaiting_approval",
+              occurredAt: "2026-07-15T01:04:00.000Z",
+            },
+          ],
+        }),
+      )
+      .run();
+
+    const value = await reliabilitySummary(
+      env(),
+      "development",
+      "zorkian/roundhouse",
+    );
+    const workflow = value.workflows.find(
+      (candidate) => candidate.issueNumber === 12,
+    );
+    expect(workflow).toMatchObject({
+      counts: {
+        implementationAttempts: 2,
+        repairAttempts: 1,
+        retries: 0,
+      },
+      durations: {
+        implementation: { status: "available", milliseconds: 180_000 },
+      },
+      modelPhases: {
+        implementation: {
+          attempts: 2,
+          terminal: { status: "terminal", outcome: "succeeded" },
+        },
+      },
+    });
+  });
+
   it("records one actor-bound manual fallback and reports it", async () => {
     const planSha = await seedCompleted();
     const input = {

@@ -51,4 +51,47 @@ describe("DispatchingStageExecutor retry diagnostics", () => {
     expect(retryContext).toBe("format: packages/example.ts needs formatting");
     expect(retryFromAttemptId).toBe("run_retry_context-prepare-1");
   });
+
+  it("reconstructs a binding mismatch without trusting the mismatched candidate", async () => {
+    let dispatched: { retryContext?: string; retryFromAttemptId?: string } = {};
+    const executor = new DispatchingStageExecutor({
+      dispatch: async (request) => {
+        dispatched = request;
+        return { state: "awaiting_approval" };
+      },
+    });
+    const run = {
+      runId: "run_binding_reconstruction",
+      revision: 8,
+      task: {
+        taskId: "task_binding_reconstruction",
+        subject: "Reconstruct implementation",
+        instructions: "Implement the requested behavior.",
+        allowedPaths: ["packages/example.ts"],
+        baseCommit: "a".repeat(40),
+        validationLevel: "full",
+      },
+      attempts: [
+        {
+          attemptId: "run_binding_reconstruction-prepare-1",
+          stage: "prepare",
+          number: 1,
+          status: "failed",
+          classification: "implementation_binding_mismatch",
+          error: "untrusted mismatched candidate",
+        },
+        {
+          attemptId: "run_binding_reconstruction-prepare-2",
+          stage: "prepare",
+          number: 2,
+          status: "running",
+        },
+      ],
+    } as SelfDevelopmentRun;
+
+    await executor.execute("prepare", run);
+
+    expect(dispatched.retryContext).toBeUndefined();
+    expect(dispatched.retryFromAttemptId).toBeUndefined();
+  });
 });

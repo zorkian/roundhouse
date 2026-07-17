@@ -262,15 +262,31 @@ export async function reliabilitySummary(
     );
     const attempts = Array.isArray(run?.attempts) ? run.attempts : [];
     const events = Array.isArray(run?.events) ? run.events : [];
-    const implementationAttempts = attempts.filter(
+    const explicitImplementationAttempts = attempts.filter(
       (attempt) => attempt.stage === "implement",
     );
+    // Trusted Cloudflare execution performs implementation and validation in
+    // one model-backed `prepare` attempt and advances directly to approval.
+    // Prefer explicit local `implement` attempts when present; otherwise the
+    // prepare lineage is the implementation lineage for reliability output.
+    const implementationAttempts =
+      explicitImplementationAttempts.length > 0
+        ? explicitImplementationAttempts
+        : attempts.filter((attempt) => attempt.stage === "prepare");
+    const repairAttempts = implementationAttempts.filter(
+      (_attempt, index) =>
+        index > 0 && implementationAttempts[index - 1]?.automaticRepair,
+    ).length;
     const attemptsByStage = new Map<string, number>();
     for (const attempt of attempts)
       attemptsByStage.set(
         attempt.stage,
         (attemptsByStage.get(attempt.stage) ?? 0) + 1,
       );
+    const grossRetryAttempts = [...attemptsByStage.values()].reduce(
+      (total, count) => total + Math.max(0, count - 1),
+      0,
+    );
     const awaitingApproval = events.find(
       (event) => event.state === "awaiting_approval",
     )?.occurredAt;
@@ -356,10 +372,9 @@ export async function reliabilitySummary(
             : ({ status: "unavailable" } as const),
       },
       counts: {
-        retries: [...attemptsByStage.values()].reduce(
-          (total, count) => total + Math.max(0, count - 1),
-          0,
-        ),
+        implementationAttempts: implementationAttempts.length,
+        repairAttempts,
+        retries: Math.max(0, grossRetryAttempts - repairAttempts),
         replans,
         remediationCycles: Math.max(
           0,

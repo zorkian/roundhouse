@@ -53,6 +53,19 @@ export type ResumableCoordinatorOptions = {
 };
 
 const deployInterruptionClassification = "container_interrupted";
+const validationRepairClassification = "validation_failed";
+const bindingRepairClassification = "implementation_binding_mismatch";
+
+function automaticRepairLimit(stage: JobStage, classification: string): number {
+  // The local executor separates workspace preparation from implementation,
+  // while the trusted Cloudflare dispatcher performs the complete
+  // implementation and validation job during `prepare`. Both are
+  // model-backed implementation stages and must share the repair policy.
+  if (stage !== "prepare" && stage !== "implement") return 0;
+  if (classification === validationRepairClassification) return 3;
+  if (classification === bindingRepairClassification) return 2;
+  return 0;
+}
 
 export class ResumableCoordinator {
   constructor(
@@ -159,18 +172,27 @@ export class ResumableCoordinator {
           attempt.classification === deployInterruptionClassification,
       ).length;
       const normalAttempts = stageAttempts.length - deployInterruptions;
+      const repairLimit = automaticRepairLimit(stage, failure.classification);
+      const automaticRepair = repairLimit > 0;
       const terminal =
-        !failure.retryable ||
+        (!failure.retryable && !automaticRepair) ||
         (failure.classification === deployInterruptionClassification
           ? deployInterruptions + 1 >=
             (this.options.maxDeployInterruptionsPerStage ?? 6)
-          : normalAttempts >= (this.options.maxAttemptsPerStage ?? 3));
+          : normalAttempts >=
+            (automaticRepair
+              ? Math.min(
+                  repairLimit,
+                  this.options.maxAttemptsPerStage ?? repairLimit,
+                )
+              : (this.options.maxAttemptsPerStage ?? 3)));
       const failed = await this.store.failAttempt(
         started.runId,
         claim.token,
         stage,
         {
           retryable: failure.retryable,
+          automaticRepair: automaticRepair && !terminal,
           classification: failure.classification,
           error: failure.message,
           evidence: failure.evidence,

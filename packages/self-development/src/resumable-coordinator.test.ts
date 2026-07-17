@@ -172,6 +172,75 @@ describe("ResumableCoordinator", () => {
     expect((await bounded.workRun("run_deploy_bound"))?.state).toBe("failed");
   });
 
+  it("automatically repairs trusted validation failures on the model-backed prepare stage", async () => {
+    const root = await mkdtemp(join(tmpdir(), "roundhouse-validation-repair-"));
+    paths.push(root);
+    const store = new FileRunStore(root);
+    const clock = new MutableClock(new Date("2026-07-12T00:00:00Z"));
+    let implementations = 0;
+    const executor: JobStageExecutor = {
+      async execute(stage) {
+        if (stage === "prepare" && implementations++ === 0)
+          throw new StageFailure(
+            "typecheck: stale test expectation",
+            "validation_failed",
+            false,
+          );
+        return { state: "awaiting_approval" };
+      },
+    };
+    const worker = new ResumableCoordinator(store, executor, clock, {
+      workerId: "worker-validation-repair",
+      maxAttemptsPerStage: 3,
+    });
+    await worker.submit("run_validation_repair", task);
+
+    const repairing = await worker.workOnce();
+    expect(repairing?.state).toBe("created");
+    expect(repairing?.attempts.at(-1)).toMatchObject({
+      classification: "validation_failed",
+      retryable: false,
+      automaticRepair: true,
+    });
+    expect((await worker.workOnce())?.state).toBe("awaiting_approval");
+    expect(implementations).toBe(2);
+  });
+
+  it("allows one clean reconstruction for an implementation binding mismatch", async () => {
+    const root = await mkdtemp(join(tmpdir(), "roundhouse-binding-repair-"));
+    paths.push(root);
+    const store = new FileRunStore(root);
+    const clock = new MutableClock(new Date("2026-07-12T00:00:00Z"));
+    const executor: JobStageExecutor = {
+      async execute(stage) {
+        expect(stage).toBe("prepare");
+        throw new StageFailure(
+          "Trusted implementation result did not match its immutable request",
+          "implementation_binding_mismatch",
+          false,
+        );
+      },
+    };
+    const worker = new ResumableCoordinator(store, executor, clock, {
+      workerId: "worker-binding-repair",
+      maxAttemptsPerStage: 3,
+    });
+    await worker.submit("run_binding_repair", task);
+
+    expect((await worker.workOnce())?.state).toBe("created");
+    const exhausted = await worker.workOnce();
+    expect(exhausted?.state).toBe("failed");
+    expect(
+      exhausted?.attempts.filter((attempt) => attempt.stage === "prepare"),
+    ).toHaveLength(2);
+    expect(exhausted?.attempts.at(-1)).toMatchObject({
+      classification: "implementation_binding_mismatch",
+      retryable: false,
+      error:
+        "Trusted implementation result did not match its immutable request",
+    });
+  });
+
   it.each([
     ["prepare", 0],
     ["implement", 1],
