@@ -283,6 +283,10 @@ export async function reliabilitySummary(
         attempt.stage,
         (attemptsByStage.get(attempt.stage) ?? 0) + 1,
       );
+    const grossRetryAttempts = [...attemptsByStage.values()].reduce(
+      (total, count) => total + Math.max(0, count - 1),
+      0,
+    );
     const awaitingApproval = events.find(
       (event) => event.state === "awaiting_approval",
     )?.occurredAt;
@@ -370,10 +374,7 @@ export async function reliabilitySummary(
       counts: {
         implementationAttempts: implementationAttempts.length,
         repairAttempts,
-        retries: [...attemptsByStage.values()].reduce(
-          (total, count) => total + Math.max(0, count - 1),
-          0,
-        ),
+        retries: Math.max(0, grossRetryAttempts - repairAttempts),
         replans,
         remediationCycles: Math.max(
           0,

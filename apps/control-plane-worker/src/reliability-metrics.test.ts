@@ -415,7 +415,7 @@ describe("V1 pilot reliability metrics", () => {
       counts: {
         implementationAttempts: 2,
         repairAttempts: 1,
-        retries: 1,
+        retries: 0,
       },
       durations: {
         implementation: { status: "available", milliseconds: 180_000 },
