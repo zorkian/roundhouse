@@ -341,12 +341,15 @@ export async function runTrustedExecutionWorkflow(
   input: unknown,
   step: TrustedExecutionWorkflowStepPort,
   execute: (delivery: RunDelivery) => Promise<TrustedExecutionWorkflowResult>,
-  finalize: (delivery: RunDelivery) => Promise<TrustedExecutionWorkflowResult>,
+  finalize: (
+    delivery: RunDelivery,
+    execution: TrustedExecutionWorkflowResult,
+  ) => Promise<TrustedExecutionWorkflowResult>,
 ): Promise<TrustedExecutionWorkflowResult> {
   const delivery = runDeliverySchema.parse(input);
   const instanceId = await trustedExecutionWorkflowId(delivery);
   try {
-    await step.do(
+    const execution = await step.do(
       "execute trusted repository attempt",
       {
         retries: { limit: 5, delay: "10 minutes", backoff: "constant" },
@@ -376,7 +379,7 @@ export async function runTrustedExecutionWorkflow(
         timeout: "5 minutes",
       },
       async () => {
-        const result = await finalize(delivery);
+        const result = await finalize(delivery, execution);
         const completed = await env.DB.prepare(
           "UPDATE trusted_execution_workflows SET status = 'completed', completed_at = ? WHERE workflow_instance_id = ? AND run_id = ? AND delivery_id = ? AND expected_revision = ? AND status IN ('running', 'completed')",
         )

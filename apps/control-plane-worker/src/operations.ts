@@ -175,6 +175,25 @@ const operatorRetryableClassifications = new Set(["validation_failed"]);
 // Give an accepted delivery time to acquire the authoritative D1 lease. This
 // grace is based only on the run record; Workflow status remains telemetry.
 const leaseLessRecoveryGraceMs = 5 * 60_000;
+const maximumRecoveryDispatchesPerRevision = 3;
+
+async function recoveryDispatchAllowed(
+  env: ControlPlaneEnv,
+  key: string,
+  now: Date,
+): Promise<boolean> {
+  const prior = await env.DB.prepare(
+    "SELECT occurrences, last_seen_at FROM operational_alerts WHERE alert_key = ?",
+  )
+    .bind(key)
+    .first<{ occurrences: number; last_seen_at: string }>();
+  return (
+    !prior ||
+    (prior.occurrences < maximumRecoveryDispatchesPerRevision &&
+      Date.parse(prior.last_seen_at) <=
+        now.getTime() - leaseLessRecoveryGraceMs)
+  );
+}
 
 function recoveryDeliveryId(
   runId: string,
@@ -482,6 +501,8 @@ export async function runRecoveryCycle(
         lowRiskPlan &&
         Date.parse(row.updated_at) <= now.getTime() - leaseLessRecoveryGraceMs
       ) {
+        const recoveryKey = `low_risk_auto_publication_requeued:${run.runId}:${run.revision}`;
+        if (!(await recoveryDispatchAllowed(env, recoveryKey, now))) continue;
         await env.RUN_QUEUE.send({
           schemaVersion: 1,
           runId: run.runId,
@@ -489,7 +510,7 @@ export async function runRecoveryCycle(
           expectedRevision: run.revision,
         });
         await recordAlert(env, {
-          key: `low_risk_auto_publication_requeued:${run.runId}:${run.revision}`,
+          key: recoveryKey,
           kind: "low_risk_auto_publication_requeued",
           severity: "warning",
           runId: run.runId,

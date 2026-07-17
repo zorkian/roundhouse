@@ -412,7 +412,7 @@ describe("cloud operator persistence", () => {
 
     const retryCycle = await runRecoveryCycle(
       env,
-      new Date(start.getTime() + 10 * 60_000),
+      new Date(start.getTime() + 10 * 60_000 + 1),
     );
 
     expect(retryCycle).toMatchObject({ requeuedRuns: 1, alertsRecorded: 1 });
@@ -420,10 +420,18 @@ describe("cloud operator persistence", () => {
       {
         schemaVersion: 1,
         runId: "run_low_risk_recovery",
-        deliveryId: "recovery_run_low_risk_recovery_1_20260712T001000000Z",
+        deliveryId: "recovery_run_low_risk_recovery_1_20260712T001000001Z",
         expectedRevision: 1,
       },
     ]);
+
+    await runRecoveryCycle(env, new Date(start.getTime() + 15 * 60_000 + 2));
+    const cappedCycle = await runRecoveryCycle(
+      env,
+      new Date(start.getTime() + 20 * 60_000 + 3),
+    );
+    expect(cappedCycle.requeuedRuns).toBe(0);
+    expect(env.queued).toHaveLength(2);
 
     await env.DB.prepare(
       "UPDATE github_issue_plans SET plan_json = ? WHERE plan_id = ?",
@@ -432,10 +440,10 @@ describe("cloud operator persistence", () => {
       .run();
     const malformedCycle = await runRecoveryCycle(
       env,
-      new Date(start.getTime() + 11 * 60_000),
+      new Date(start.getTime() + 21 * 60_000),
     );
     expect(malformedCycle.requeuedRuns).toBe(0);
-    expect(env.queued).toHaveLength(1);
+    expect(env.queued).toHaveLength(2);
     const malformedAlert = await env.DB.prepare(
       "SELECT kind, severity, detail_json FROM operational_alerts WHERE alert_key = ?",
     )

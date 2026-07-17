@@ -1246,7 +1246,12 @@ export async function executeTrustedExecutionWorkflow(
       const current = await jobs.read(delivery.runId);
       return workflowResult(current);
     },
-    async (delivery) => finalizeRunDelivery(env, delivery),
+    async (delivery, execution) => {
+      const current = await jobs.read(delivery.runId);
+      if (current.revision !== execution.revision)
+        return workflowResult(current);
+      return finalizeRunDelivery(env, delivery, current);
+    },
   );
 }
 
