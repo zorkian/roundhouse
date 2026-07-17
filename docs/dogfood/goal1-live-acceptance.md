@@ -3,10 +3,10 @@
 
 # Goal 1 live acceptance evidence
 
-Use this runbook to record three representative live journeys for Goal 1. The
+This document records three representative live journeys for Goal 1. The
 normative requirements remain in the
 [V1 maintainer acceptance checklist](../v1-maintainer-acceptance.md); this file
-only provides a compact evidence record.
+only provides a compact evidence record and does not alter those requirements.
 
 ## Prerequisites
 
@@ -41,31 +41,45 @@ originating issue is closed. Development deployment evidence may be recorded
 separately for Roundhouse's own engineering workflow, but it is not part of the
 Roundhouse product acceptance journey.
 
-| Evidence field      | Journey 1                                                             | Journey 2                                                             | Journey 3                                                             |
-| ------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| Scenario type       | Reproduced bug / maintenance                                          | Reproduced bug / maintenance                                          | Reproduced bug / maintenance                                          |
-| Issue               | `<URL>`                                                               | `<URL>`                                                               | `<URL>`                                                               |
-| Release commit      | `<SHA>`                                                               | `<SHA>`                                                               | `<SHA>`                                                               |
-| Start               | `<timestamp, command evidence>`                                       | `<timestamp, command evidence>`                                       | `<timestamp, command evidence>`                                       |
-| Acknowledgement     | `<timestamp, URL>`                                                    | `<timestamp, URL>`                                                    | `<timestamp, URL>`                                                    |
-| First status        | `<timestamp, URL>`                                                    | `<timestamp, URL>`                                                    | `<timestamp, URL>`                                                    |
-| Plan                | `<timestamp, URL>`                                                    | `<timestamp, URL>`                                                    | `<timestamp, URL>`                                                    |
-| Pull request        | `<timestamp, URL, exact head SHA>`                                    | `<timestamp, URL, exact head SHA>`                                    | `<timestamp, URL, exact head SHA>`                                    |
-| Review              | `<completed timestamp, URL, outcome>`                                 | `<completed timestamp, URL, outcome>`                                 | `<completed timestamp, URL, outcome>`                                 |
-| CI                  | `<completed timestamp, URL, exact-head outcome, excluded queue time>` | `<completed timestamp, URL, exact-head outcome, excluded queue time>` | `<completed timestamp, URL, exact-head outcome, excluded queue time>` |
-| Recommendation      | `<timestamp, supported final recommendation, URL>`                    | `<timestamp, supported final recommendation, URL>`                    | `<timestamp, supported final recommendation, URL>`                    |
-| Merge               | `<completed timestamp, merge SHA, closed PR URL>`                     | `<completed timestamp, merge SHA, closed PR URL>`                     | `<completed timestamp, merge SHA, closed PR URL>`                     |
-| Attempts            | `<implementation / validation / CI counts>`                           | `<implementation / validation / CI counts>`                           | `<implementation / validation / CI counts>`                           |
-| Recovery            | `<none / automatic class, cost, and delay>`                           | `<none / automatic class, cost, and delay>`                           | `<none / automatic class, cost, and delay>`                           |
-| Duplicate work      | `none / <details>`                                                    | `none / <details>`                                                    | `none / <details>`                                                    |
-| Review cycles       | `<count>`                                                             | `<count>`                                                             | `<count>`                                                             |
-| Human interventions | `0 / <count and action>`                                              | `0 / <count and action>`                                              | `0 / <count and action>`                                              |
-| Residual risk       | `<risk stated before merge>`                                          | `<risk stated before merge>`                                          | `<risk stated before merge>`                                          |
-| Progress timestamps | `<ordered timestamps and URLs>`                                       | `<ordered timestamps and URLs>`                                       | `<ordered timestamps and URLs>`                                       |
+All three journeys started from development candidate
+`ec365b4bb43dec2bd838d1e6218b2c65bd11321f`.
 
-For a reproduced bug, attach the pre-change reproduction command, input,
-expected and observed behavior, environment, repeatability, and confidence,
-plus the post-change regression result tied to that reproduction.
+| Evidence field                                   | Journey 1                                                                                                                                | Journey 2                                                                                                                                | Journey 3                                                                                                                                |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Scenario type                                    | Reproduced bug                                                                                                                           | Maintenance                                                                                                                              | Maintenance                                                                                                                              |
+| Issue                                            | [#219](https://github.com/zorkian/roundhouse/issues/219)                                                                                 | [#221](https://github.com/zorkian/roundhouse/issues/221)                                                                                 | [#220](https://github.com/zorkian/roundhouse/issues/220)                                                                                 |
+| Run                                              | `run_d915952a461c5ae3da9e4e64aff7d83a8197380e`                                                                                           | `run_f86ab2519ea337451904d44621a2c6628bad827e`                                                                                           | `run_2fc9e1f7102ac5a646cccc46183434f21f4903db`                                                                                           |
+| Start                                            | `2026-07-17T03:43:30Z`                                                                                                                   | `2026-07-17T03:47:10Z`                                                                                                                   | `2026-07-17T03:47:12Z`                                                                                                                   |
+| Durable acknowledgement and current-stage status | `2026-07-17T03:43:34Z` (4s)                                                                                                              | `2026-07-17T03:47:15Z` (5s)                                                                                                              | `2026-07-17T03:47:15Z` (3s)                                                                                                              |
+| Materialized plan                                | `2026-07-17T03:43:38Z` (8s)                                                                                                              | `2026-07-17T03:47:18Z` (8s)                                                                                                              | `2026-07-17T03:47:25Z` (13s)                                                                                                             |
+| Pull request                                     | [#222](https://github.com/zorkian/roundhouse/pull/222), `2026-07-17T03:58:00Z` (14m30s), head `4a07e6483432f2014af446f958ef4433e3cb1072` | [#223](https://github.com/zorkian/roundhouse/pull/223), `2026-07-17T03:58:53Z` (11m43s), head `b10292fcc1ed6d0bdba29143b4aac538f86bf4bf` | [#224](https://github.com/zorkian/roundhouse/pull/224), `2026-07-17T04:00:22Z` (13m10s), head `e248dc4c1cf4864a51ba23e4f6878f1bfb916419` |
+| Independent review                               | Passed with no substantive findings at `2026-07-17T03:58:49Z`                                                                            | Passed with no substantive findings at `2026-07-17T04:00:01Z`                                                                            | Passed with no substantive findings at `2026-07-17T04:01:15Z`                                                                            |
+| Exact-head CI                                    | Passed at `2026-07-17T03:59:08Z`                                                                                                         | Passed at `2026-07-17T04:00:04Z`                                                                                                         | Passed at `2026-07-17T04:01:27Z`                                                                                                         |
+| Pre-merge package                                | Low risk; stated exact-head evidence, blast radius, rollback, and residual risk; `Recommendation: Merge automatically`                   | Low risk; stated exact-head evidence, blast radius, rollback, and residual risk; `Recommendation: Merge automatically`                   | Low risk; stated exact-head evidence, blast radius, rollback, and residual risk; `Recommendation: Merge automatically`                   |
+| Merge                                            | Automatic at `2026-07-17T03:59:16Z` (15m46s), `8a0c53e7ee7b82116f7954bcfc329186ed1ef279`; closed outcome recorded                        | Automatic at `2026-07-17T04:00:12Z` (13m02s), `616cfe81596a8ceec03173d4c80fb22f634913b3`; closed outcome recorded                        | Automatic at `2026-07-17T04:01:36Z` (14m24s), `276b86f0670f145fda80ed9729acaafb3f7481c7`; closed outcome recorded                        |
+| Attempts and cycles                              | 1 implementation, 1 validation, 1 CI run, 1 review cycle                                                                                 | 1 implementation, 1 validation, 1 CI run, 1 review cycle                                                                                 | 1 implementation, 1 validation, 1 CI run, 1 review cycle                                                                                 |
+| Recovery and duplicate work                      | None; no duplicate work                                                                                                                  | None; no duplicate work                                                                                                                  | None; no duplicate work                                                                                                                  |
+| Human interventions after start                  | 0                                                                                                                                        | 0                                                                                                                                        | 0                                                                                                                                        |
+
+For Journey 1, the pre-change reproduction on the candidate collected one test
+and failed the intended behavioral assertion: `+` bullets returned `[]`. The
+post-change command
+`corepack pnpm exec vitest run --config packages/self-development/reproductions/vitest.config.ts`
+collected and passed one test on final `main` at
+`276b86f0670f145fda80ed9729acaafb3f7481c7`.
+
+## Batch integrity and timing
+
+All starts preceded the first candidate pull-request merge, every materialized
+plan used the candidate above, and the three changed-path sets were pairwise
+disjoint. GitHub merge search from `2026-07-17T03:58:00Z` through
+`2026-07-17T04:02:00Z` returned only #222, #223, and #224, in that order. No
+unrelated pull request merged inside this clean sequence.
+
+Maintainer-visible issue status linked a live page refreshing every five
+seconds during active work, and no additional action was requested. The raw
+end-to-end durations above include all GitHub-hosted runner queue time and meet
+every Goal 1 speed target; no queue-time exclusion is needed.
 
 ## Goal 1 speed targets
 
@@ -115,24 +129,25 @@ progress to end a silence interval; internal activity does not count.
 
 ## Pass/fail checks
 
-- [ ] Three representative live clear low-risk issues reach a supported final
+- [x] Three representative live clear low-risk issues reach a supported final
       recommendation and merge successfully; any bounded automatic recovery
       meets the latency and cost targets without duplicate paid or published
       work.
-- [ ] At least one is a reproduced bug with a passing post-change regression
+- [x] At least one is a reproduced bug with a passing post-change regression
       and at least one is a small maintenance change.
-- [ ] No human acts between the initial start and confirmed merge.
-- [ ] Start, progress, plan, pull-request, review, and recommendation timing
+- [x] No human acts between the initial start and confirmed merge.
+- [x] Start, progress, plan, pull-request, review, and recommendation timing
       meet the speed targets.
-- [ ] Each exact pull-request head passes repository CI and independent review
+- [x] Each exact pull-request head passes repository CI and independent review
       before automatic merge.
-- [ ] The final package states residual risk and the automatic-merge
+- [x] The final package states residual risk and the automatic-merge
       recommendation before merge, then reports the merge commit and closed pull
       request.
-- [ ] No severity-1 or severity-2 Goal 1 defect remains.
+- [x] No severity-1 or severity-2 Goal 1 defect remains.
 - [ ] A maintainer reviews the three journeys and explicitly accepts that this
       basic delegation loop feels fast, clear, and worth using.
 
-Mark the run failed if any check remains unchecked; link the affected criterion
-to its defect rather than substituting unit, CI, schema, or internal-record
-evidence for the end-to-end maintainer-visible journey.
+The technically proven checks are complete. The explicit maintainer experience
+check remains open: this evidence does not claim that human product acceptance
+has occurred. Final development release verification, if recorded separately,
+is engineering evidence outside Goal 1 product acceptance.
