@@ -1293,7 +1293,7 @@ export class GitHubAppGateway {
     pullRequestNumber: number;
     expectedHeadSha: string;
     sections: Partial<
-      Record<"review" | "ci" | "limitations" | "action", string>
+      Record<"review" | "ci" | "limitations" | "decision" | "action", string>
     >;
   }): Promise<void> {
     const base = repositoryPath(input.repositoryFullName);
@@ -1317,7 +1317,7 @@ export class GitHubAppGateway {
       if (value !== undefined)
         body = replacePullRequestPackageSection(
           body,
-          name as "review" | "ci" | "limitations" | "action",
+          name as "review" | "ci" | "limitations" | "decision" | "action",
           value,
         );
     await this.api("PATCH", `${base}/pulls/${input.pullRequestNumber}`, {
