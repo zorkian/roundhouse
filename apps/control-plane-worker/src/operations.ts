@@ -319,8 +319,21 @@ export async function runRecoveryCycle(
     )
       .bind(run.runId)
       .first<{ workflow_instance_id: string }>();
-    if (activeWorkflow) continue;
-    if (run.lease && new Date(run.lease.expiresAt) > now) continue;
+    const leaseExpired = Boolean(
+      run.lease && new Date(run.lease.expiresAt) <= now,
+    );
+    if (run.lease && !leaseExpired) continue;
+    // A Workflow row protects the short pre-claim window, but it cannot prove
+    // liveness after the execution lease that it acquired has expired. Mark
+    // that stale owner terminal before dispatching a fresh recovery Workflow.
+    if (activeWorkflow && !leaseExpired) continue;
+    if (activeWorkflow) {
+      await env.DB.prepare(
+        "UPDATE trusted_execution_workflows SET status = 'failed', completed_at = COALESCE(completed_at, ?) WHERE workflow_instance_id = ? AND status IN ('pending', 'dispatched', 'running')",
+      )
+        .bind(now.toISOString(), activeWorkflow.workflow_instance_id)
+        .run();
+    }
     const recoveryKind = run.lease
       ? "expired_lease_requeued"
       : "lease_less_run_requeued";
