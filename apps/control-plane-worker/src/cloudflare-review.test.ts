@@ -13,6 +13,7 @@ import type {
   ExecutionContainerPort,
 } from "./cloudflare-execution.js";
 import { CloudflareIndependentReviewBackend } from "./cloudflare-review.js";
+import { validateIndependentReviewResult } from "./review-result-validation.js";
 
 const token = `setup-token-${"s".repeat(80)}`;
 
@@ -125,6 +126,26 @@ function bucket() {
 }
 
 describe("Cloudflare independent review backend", () => {
+  it("applies output and normalized-finding bounds to durable replays", async () => {
+    const input = request();
+    const valid = await result(input);
+    await expect(
+      validateIndependentReviewResult(
+        { ...input, maxOutputBytes: valid.outputBytes - 1 },
+        valid,
+      ),
+    ).rejects.toThrow("binding mismatch");
+    await expect(
+      validateIndependentReviewResult(input, {
+        ...valid,
+        findings: valid.findings.map((finding) => ({
+          ...finding,
+          findingId: `finding_${"9".repeat(40)}`,
+        })),
+      }),
+    ).rejects.toThrow("binding mismatch");
+  });
+
   it("retains one exact result and replays it without another Container", async () => {
     const input = request();
     const expected = await result(input);

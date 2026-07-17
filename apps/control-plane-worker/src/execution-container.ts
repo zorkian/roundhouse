@@ -30,6 +30,7 @@ import {
   modelRequestAuditAccepted,
 } from "./execution-egress.js";
 import { recordExecutionPhase } from "./execution-progress.js";
+import { validateIndependentReviewResult } from "./review-result-validation.js";
 import { withContainerControlTimeout } from "./execution-control.js";
 import {
   isValidAgentOutputTail,
@@ -84,24 +85,6 @@ function validatePlanningResult(
     result.baseCommit !== request.baseCommit
   )
     throw new Error("Durable planning result binding mismatch");
-  return result;
-}
-
-function validateReviewResult(
-  request: IndependentReviewRequest,
-  value: unknown,
-): IndependentReviewResult {
-  const result = independentReviewResultSchema.parse(value);
-  if (
-    result.reviewId !== request.reviewId ||
-    result.attemptId !== request.attemptId ||
-    result.cycle !== request.cycle ||
-    result.runId !== request.runId ||
-    result.baseCommit !== request.baseCommit ||
-    result.headCommit !== request.headCommit ||
-    result.patchSha256 !== request.patchSha256
-  )
-    throw new Error("Durable review result binding mismatch");
   return result;
 }
 
@@ -693,7 +676,7 @@ export class RoundhouseExecutionContainer extends Container<ControlPlaneEnv> {
       durableAttemptResult(
         this.ctx.storage,
         "attempt-result:review:v1",
-        (value) => validateReviewResult(request, value),
+        (value) => validateIndependentReviewResult(request, value),
         () => this.executeReviewJob(request, claudeAuthJson),
       ),
     );

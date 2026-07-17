@@ -14,12 +14,14 @@ export type DurableAttemptResultStorage = {
 export async function durableAttemptResult<T>(
   storage: DurableAttemptResultStorage,
   key: string,
-  validate: (value: unknown) => T,
+  validate: (value: unknown) => T | Promise<T>,
   execute: () => Promise<T>,
 ): Promise<T> {
   const existing = await storage.get(key);
-  if (existing !== undefined) return validate(existing);
-  const result = validate(await execute());
-  await storage.put(key, result);
+  if (existing !== undefined) return await validate(existing);
+  const result = await validate(await execute());
+  await storage.put(key, result).catch(() => {
+    console.warn("Durable attempt result retention failed", { key });
+  });
   return result;
 }

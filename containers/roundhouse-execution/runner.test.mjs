@@ -31,6 +31,7 @@ import {
   finishAgentOutput,
   pathAllowed,
   parsePlanningOutput,
+  operationKey,
   planningOutputContract,
   planningOutputLimits,
   planningPrompt,
@@ -63,6 +64,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 describe("execution runner command", () => {
+  it("rejects unvalidated identities before entering retained work", () => {
+    expect(() => operationKey("trusted", "implement", undefined)).toThrow(
+      "invalid_attempt_identity",
+    );
+    expect(() => operationKey("trusted", "implement", null)).toThrow(
+      "invalid_attempt_identity",
+    );
+    expect(operationKey("trusted", "implement", "attempt_1")).toBe(
+      "trusted:implement:attempt_1",
+    );
+  });
+
   it("reconnects concurrent callers to one retained successful operation", async () => {
     let resolveOperation;
     let invocations = 0;

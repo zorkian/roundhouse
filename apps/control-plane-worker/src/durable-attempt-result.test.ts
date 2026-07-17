@@ -60,4 +60,28 @@ describe("durable attempt result", () => {
     ).rejects.toThrow("binding mismatch");
     expect(execute).not.toHaveBeenCalled();
   });
+
+  it("returns an already-paid result when durable retention is unavailable", async () => {
+    const storage = memoryStorage();
+    storage.put = async () => {
+      throw new Error("storage unavailable");
+    };
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await expect(
+        durableAttemptResult(
+          storage,
+          "result",
+          (value) => value as { ok: true },
+          async () => ({ ok: true as const }),
+        ),
+      ).resolves.toEqual({ ok: true });
+      expect(warning).toHaveBeenCalledWith(
+        "Durable attempt result retention failed",
+        { key: "result" },
+      );
+    } finally {
+      warning.mockRestore();
+    }
+  });
 });

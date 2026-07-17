@@ -26,7 +26,12 @@ let draining = false;
 const codexHome = "/home/runner/.roundhouse-codex";
 const claudeHome = "/home/runner/.roundhouse-claude";
 
-function operationKey(mode, operation, attemptId) {
+export function operationKey(mode, operation, attemptId) {
+  if (
+    typeof attemptId !== "string" ||
+    !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(attemptId)
+  )
+    throw new Error("invalid_attempt_identity");
   return `${mode}:${operation}:${attemptId}`;
 }
 
