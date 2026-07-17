@@ -624,6 +624,50 @@ function githubCommand(
   return `${identity.commandPrefix} ${command}`;
 }
 
+type AcceptedGitHubCommandResult =
+  | { kind: "planning"; jobId: string; state: string; revision: number }
+  | { kind: "plan"; planId: string; state: string; revision: number }
+  | { kind: "run"; runId: string; state: string; revision: number }
+  | { kind: "manual_review"; reviewId: string; status: string };
+
+export function acceptedGitHubCommandComment(
+  identity: ReturnType<typeof runtimeIdentity>,
+  command: GitHubCommand,
+  result: AcceptedGitHubCommandResult,
+): string {
+  const target =
+    result.kind === "planning"
+      ? `Planning job \`${result.jobId}\` is \`${result.state}\` at revision \`${result.revision}\`.`
+      : result.kind === "plan"
+        ? `Plan \`${result.planId}\` is \`${result.state}\` at revision \`${result.revision}\`.`
+        : result.kind === "run"
+          ? `Run \`${result.runId}\` is \`${result.state}\` at revision \`${result.revision}\`.`
+          : `Independent review \`${result.reviewId}\` is \`${result.status}\`.`;
+  return [
+    `## ✅ Roundhouse accepted \`${githubCommand(identity, command.kind)}\``,
+    target,
+    "Next action: No action needed.",
+  ].join("\n\n");
+}
+
+async function enqueueAcceptedGitHubCommandComment(
+  env: ControlPlaneEnv,
+  deliveryId: string,
+  repositoryFullName: string,
+  issueNumber: number,
+  command: GitHubCommand,
+  result: AcceptedGitHubCommandResult,
+): Promise<void> {
+  const identity = runtimeIdentity(env);
+  await enqueueComment(
+    env,
+    `github-command-ack:${identity.commentNamespace}:${deliveryId}`,
+    issueNumber,
+    acceptedGitHubCommandComment(identity, command, result),
+    repositoryFullName,
+  );
+}
+
 function statusMarker(
   identity: ReturnType<typeof runtimeIdentity>,
   issueNumber: number,
@@ -2950,7 +2994,8 @@ function isAuthorizedCommandRejection(error: unknown): boolean {
   return (
     error instanceof HttpError ||
     error instanceof PlanCommandRejectionError ||
-    error instanceof RunRetryRejectionError
+    error instanceof RunRetryRejectionError ||
+    (error instanceof GitHubWebhookError && error.code === "unauthorized_actor")
   );
 }
 
@@ -3434,7 +3479,15 @@ async function githubWebhook(
         kind: "manual_review",
         reviewId: review.request.reviewId,
         status: review.status,
-      };
+      } as const;
+      await enqueueAcceptedGitHubCommandComment(
+        env,
+        webhook.deliveryId,
+        manualReview.repositoryFullName,
+        manualReview.pullRequestNumber,
+        manualReview.command,
+        result,
+      );
       await completeWebhookDelivery(
         env,
         webhook.deliveryId,
@@ -3502,6 +3555,14 @@ async function githubWebhook(
           value.actor,
           value.command,
         );
+    await enqueueAcceptedGitHubCommandComment(
+      env,
+      webhook.deliveryId,
+      value.repositoryFullName,
+      value.issueNumber,
+      value.command,
+      result,
+    );
     await completeWebhookDelivery(
       env,
       webhook.deliveryId,
@@ -3552,15 +3613,23 @@ async function githubWebhook(
     }
     if (isAuthorizedCommandRejection(error) && commandFailureTarget) {
       try {
+        const rejectionBody =
+          error instanceof GitHubWebhookError &&
+          error.code === "unauthorized_actor"
+            ? [
+                `Roundhouse rejected \`${githubCommand(runtimeIdentity(env), commandFailureTarget.command.kind)}\` because this actor is not authorized to run it.`,
+                "Next action: A repository maintainer must issue the command.",
+              ].join("\n\n")
+            : await commandRejectionComment(
+                env,
+                commandFailureTarget.issueNumber,
+                commandFailureTarget.command,
+              );
         await enqueueComment(
           env,
           `github-command-rejection-${webhook.deliveryId}`,
           commandFailureTarget.issueNumber,
-          await commandRejectionComment(
-            env,
-            commandFailureTarget.issueNumber,
-            commandFailureTarget.command,
-          ),
+          rejectionBody,
           commandFailureTarget.repositoryFullName,
         );
         await flushGitHubOutputs(env);

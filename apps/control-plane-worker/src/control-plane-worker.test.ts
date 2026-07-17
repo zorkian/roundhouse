@@ -18,6 +18,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import type { ControlPlaneEnv } from "./environment.js";
 import {
+  acceptedGitHubCommandComment,
   createControlPlaneHandler,
   executeTrustedExecutionWorkflow,
   independentReviewCheckOutcome,
@@ -25,6 +26,7 @@ import {
   reservePullRequestReview,
   safePlanningFailureSummary,
 } from "./index.js";
+import { runtimeIdentity } from "./runtime-config.js";
 import {
   controlPlaneSubmissionMigration,
   reserveSubmission,
@@ -88,6 +90,36 @@ const resetTables = [
 const token = "local-test-token";
 const repositoryPath = "/workspace/roundhouse";
 const remoteUrl = "https://github.com/zorkian/roundhouse.git";
+
+describe("GitHub command acknowledgements", () => {
+  it("uses the environment command family for retry and approve receipts", () => {
+    const development = runtimeIdentity({} as ControlPlaneEnv);
+    const production = runtimeIdentity({
+      ROUNDHOUSE_ENVIRONMENT: "production",
+      ROUNDHOUSE_PUBLIC_ORIGIN: "https://roundhouse.rm-rf.rip",
+    } as ControlPlaneEnv);
+
+    expect(
+      acceptedGitHubCommandComment(
+        development,
+        { kind: "retry" },
+        { kind: "run", runId: "run_retry", state: "created", revision: 4 },
+      ),
+    ).toContain("Roundhouse accepted `/rhd retry`");
+    expect(
+      acceptedGitHubCommandComment(
+        production,
+        { kind: "approve" },
+        {
+          kind: "run",
+          runId: "run_approve",
+          state: "completed",
+          revision: 7,
+        },
+      ),
+    ).toContain("Roundhouse accepted `/rh approve`");
+  });
+});
 
 const task: SelfDevelopmentTask = {
   schemaVersion: 1,
@@ -637,6 +669,7 @@ describe("local control-plane Worker", () => {
     env.ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY = await exportPKCS8(pair.privateKey);
     env.ROUNDHOUSE_GITHUB_WEBHOOK_SECRET = "signed-webhook-secret";
     let comments = 0;
+    const postedIssue17Comments: string[] = [];
     let statusComment:
       { id: number; html_url: string; body: string } | undefined;
     let lowRiskStatusComment:
@@ -705,11 +738,13 @@ describe("local control-plane Worker", () => {
         init?.method === "POST"
       ) {
         comments += 1;
+        const body = (JSON.parse(String(init.body)) as { body: string }).body;
+        postedIssue17Comments.push(body);
         statusComment = {
           id: 991,
           html_url:
             "https://github.com/zorkian/roundhouse/issues/17#issuecomment-991",
-          body: (JSON.parse(String(init.body)) as { body: string }).body,
+          body,
         };
         return new Response(JSON.stringify(statusComment), { status: 201 });
       }
@@ -843,12 +878,18 @@ describe("local control-plane Worker", () => {
       actor_id: "github:zorkian",
     });
     expect(queued.messages).toHaveLength(1);
-    expect(comments).toBe(1);
+    expect(comments).toBe(2);
+    expect(postedIssue17Comments.at(-1)).toContain(
+      "Roundhouse accepted `/rhd start`",
+    );
+    expect(postedIssue17Comments.at(-1)).toContain(
+      "Next action: No action needed.",
+    );
     expect(await readIssuePlan(env, 17)).toBeNull();
     await expect(
       deliver(handler, env, queued.messages.splice(0)),
     ).resolves.toEqual(["ack:0"]);
-    expect(comments).toBe(2);
+    expect(comments).toBe(3);
     const plan = await readIssuePlan(env, 17);
     expect(plan).toMatchObject({ status: "proposed", revision: 1 });
 
@@ -883,7 +924,7 @@ describe("local control-plane Worker", () => {
       state: "completed",
     });
     expect(queued.messages).toHaveLength(0);
-    expect(comments).toBe(2);
+    expect(comments).toBe(4);
 
     const replay = await handler.fetch!(
       await webhook("/rhd start", 41, "12345678-abcd-4321-abcd-1234567890ab"),
@@ -893,7 +934,7 @@ describe("local control-plane Worker", () => {
     expect(replay.status).toBe(200);
     await expect(replay.json()).resolves.toMatchObject({ replayed: true });
     expect(queued.messages).toHaveLength(0);
-    expect(comments).toBe(2);
+    expect(comments).toBe(4);
 
     const implementation = await handler.fetch!(
       await webhook(
@@ -929,9 +970,17 @@ describe("local control-plane Worker", () => {
       "codex/dogfood-development-issue-17",
     );
     expect(queued.messages).toHaveLength(1);
-    expect(comments).toBe(3);
-    expect(statusComment?.body).toContain(
-      `https://roundhouse-dev.rm-rf.rip/runs/${implementationResult.runId}`,
+    expect(comments).toBe(6);
+    expect(postedIssue17Comments).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          `https://roundhouse-dev.rm-rf.rip/runs/${implementationResult.runId}`,
+        ),
+        expect.stringContaining("Roundhouse accepted `/rhd implement`"),
+      ]),
+    );
+    expect(postedIssue17Comments.at(-1)).toContain(
+      `Run \`${implementationResult.runId}\``,
     );
 
     const planPage = await handler.fetch!(
@@ -1036,6 +1085,13 @@ describe("local control-plane Worker", () => {
     expect(JSON.parse(rejectionReceipt!.result_json)).toEqual({
       code: "unauthorized_actor",
     });
+    expect(postedIssue17Comments.at(-1)).toContain(
+      "because this actor is not authorized",
+    );
+    expect(postedIssue17Comments.at(-1)).toContain(
+      "Next action: A repository maintainer must issue the command.",
+    );
+    const commentsAfterRejection = comments;
     const rejectedReplay = await handler.fetch!(
       rejectedWebhook(),
       env,
@@ -1045,6 +1101,7 @@ describe("local control-plane Worker", () => {
     await expect(rejectedReplay.json()).resolves.toMatchObject({
       replayed: true,
     });
+    expect(comments).toBe(commentsAfterRejection);
 
     const lowRisk = await handler.fetch!(
       await webhook(
