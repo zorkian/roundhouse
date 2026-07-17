@@ -59,7 +59,7 @@ export async function claimTrustedRunFinalization(
   runId: string,
   revision: number,
   now = new Date(),
-  leaseMs = 5 * 60_000,
+  leaseMs = 10 * 60_000,
 ): Promise<string | null> {
   const claimId = `finalize_${crypto.randomUUID()}`;
   const occurredAt = now.toISOString();
@@ -109,13 +109,14 @@ export async function releaseTrustedRunFinalization(
   runId: string,
   revision: number,
   claimId: string,
+  now = new Date(),
 ): Promise<void> {
   await env.DB.prepare(
     `UPDATE trusted_run_finalizations
         SET claim_id = NULL, claim_expires_at = NULL, updated_at = ?
       WHERE run_id = ? AND revision = ? AND claim_id = ? AND completed_at IS NULL`,
   )
-    .bind(new Date().toISOString(), runId, revision, claimId)
+    .bind(now.toISOString(), runId, revision, claimId)
     .run();
 }
 

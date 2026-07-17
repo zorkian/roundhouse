@@ -13,6 +13,7 @@ import {
   consumeTrustedExecutionDelivery,
   runTrustedReviewWorkflow,
   runTrustedExecutionWorkflow,
+  releaseTrustedRunFinalization,
   trustedReviewWorkflowId,
   trustedExecutionWorkflowId,
   trustedExecutionWorkflowMigration,
@@ -137,6 +138,36 @@ describe("trusted execution Workflow dispatch", () => {
         new Date(started.getTime() + 3_000),
       ),
     ).resolves.toBeNull();
+  });
+
+  it("releases a finalization claim at the caller's logical time", async () => {
+    const env = environment(new Set());
+    const started = new Date("2026-07-17T01:00:00.000Z");
+    const released = new Date("2026-07-17T01:00:01.000Z");
+    const claim = await claimTrustedRunFinalization(
+      env,
+      delivery.runId,
+      8,
+      started,
+    );
+    await releaseTrustedRunFinalization(
+      env,
+      delivery.runId,
+      8,
+      claim!,
+      released,
+    );
+    await expect(
+      env.DB.prepare(
+        "SELECT claim_id, claim_expires_at, updated_at FROM trusted_run_finalizations WHERE run_id = ? AND revision = ?",
+      )
+        .bind(delivery.runId, 8)
+        .first(),
+    ).resolves.toEqual({
+      claim_id: null,
+      claim_expires_at: null,
+      updated_at: released.toISOString(),
+    });
   });
 
   it("derives a bounded deterministic identity from the exact delivery", async () => {

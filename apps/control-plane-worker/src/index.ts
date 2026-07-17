@@ -1203,6 +1203,21 @@ async function finalizeRunDelivery(
   );
   if (!claimId) return workflowResult(run);
   try {
+    const authoritative = await jobs.read(run.runId);
+    if (
+      authoritative.revision !== finalizationRevision ||
+      (authoritative.lease &&
+        Date.parse(authoritative.lease.expiresAt) > Date.now())
+    ) {
+      await releaseTrustedRunFinalization(
+        env,
+        delivery.runId,
+        finalizationRevision,
+        claimId,
+      );
+      return workflowResult(authoritative);
+    }
+    run = authoritative;
     const latest = run.attempts.at(-1);
     if (
       run.state !== "failed" &&
