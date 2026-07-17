@@ -133,6 +133,20 @@ export const planningOutputSchema = JSON.stringify({
   additionalProperties: false,
 });
 
+export function terminateCommandProcessTree(child, signal) {
+  if (child.pid && process.platform !== "win32") {
+    try {
+      process.kill(-child.pid, signal);
+      return true;
+    } catch {}
+  }
+  try {
+    return child.kill(signal);
+  } catch {
+    return false;
+  }
+}
+
 function json(response, status, value) {
   response.writeHead(status, { "content-type": "application/json" });
   response.end(JSON.stringify(value));
@@ -603,6 +617,7 @@ export async function command(executable, args, options = {}) {
       ...(options.env ?? {}),
     },
     shell: false,
+    detached: process.platform !== "win32",
     stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
   });
   activeChildren.add(child);
@@ -638,7 +653,7 @@ export async function command(executable, args, options = {}) {
   const timer = options.timeoutMs
     ? setTimeout(() => {
         timedOut = true;
-        child.kill("SIGKILL");
+        terminateCommandProcessTree(child, "SIGKILL");
       }, options.timeoutMs)
     : undefined;
   try {
@@ -2445,9 +2460,13 @@ export function drainRunner(
     }),
   );
   const hardStop = setTimeout(async () => {
-    for (const child of activeChildren) child.kill("SIGTERM");
-    await scrub();
-    exit(1);
+    try {
+      for (const child of activeChildren)
+        terminateCommandProcessTree(child, "SIGTERM");
+    } finally {
+      await scrub();
+      exit(1);
+    }
   }, hardTimeoutMs);
   hardStop.unref?.();
   server.close(async () => {
