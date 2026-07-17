@@ -157,9 +157,12 @@ import {
 } from "./github-review.js";
 import { DeterministicLocalDispatcher } from "./local-dispatch.js";
 import {
+  claimTrustedRunFinalization,
+  completeTrustedRunFinalization,
   consumeTrustedReviewDelivery,
   consumeTrustedExecutionDelivery,
   readTrustedExecutionWorkflows,
+  releaseTrustedRunFinalization,
   runTrustedReviewWorkflow,
   runTrustedExecutionWorkflow,
   trustedReviewWorkflowId,
@@ -1187,29 +1190,89 @@ async function finalizeRunDelivery(
         throw new Error("Trusted execution run is unavailable");
       throw error;
     }
-  const latest = run.attempts.at(-1);
-  if (run.state !== "failed" && latest?.status === "failed" && latest.retryable)
-    await env.RUN_QUEUE.send({
-      schemaVersion: 1,
-      runId: run.runId,
-      deliveryId: `retry_${run.runId}_${run.revision}`,
-      expectedRevision: run.revision,
-    });
-  run = await publishEligibleLowRiskRun(env, run);
-  if (run.task.source?.kind === "github_issue") {
-    await enqueueRunComment(env, run.task.source.issueNumber, run.runId);
-    await enqueueRunFailureComment(env, run.task.source.issueNumber, run);
-    await enqueueRunActionComment(env, run.task.source.issueNumber, run);
-    try {
-      await flushGitHubOutputs(env);
-    } catch (error) {
-      console.warn("GitHub Queue status delivery deferred", {
+  // Another transport may reach this callback while the authoritative D1
+  // owner is still executing. Only the lease-free owner completion projects
+  // retries, publication, and GitHub status side effects.
+  if (run.lease && Date.parse(run.lease.expiresAt) > Date.now())
+    return workflowResult(run);
+  const finalizationRevision = run.revision;
+  const claimId = await claimTrustedRunFinalization(
+    env,
+    run.runId,
+    finalizationRevision,
+  );
+  if (!claimId) return workflowResult(run);
+  try {
+    const authoritative = await jobs.read(run.runId);
+    if (
+      authoritative.revision !== finalizationRevision ||
+      (authoritative.lease &&
+        Date.parse(authoritative.lease.expiresAt) > Date.now())
+    ) {
+      await releaseTrustedRunFinalization(
+        env,
+        delivery.runId,
+        finalizationRevision,
+        claimId,
+      );
+      return workflowResult(authoritative);
+    }
+    run = authoritative;
+    // These projections are intentionally replay-safe: retry delivery uses a
+    // deterministic identity, publication is revision-CAS-bound, and GitHub
+    // output is persisted through idempotent outbox keys. Complete the claim
+    // only after projecting so an interruption retries missing work instead
+    // of permanently recording an incomplete finalization.
+    const latest = run.attempts.at(-1);
+    if (
+      run.state !== "failed" &&
+      latest?.status === "failed" &&
+      latest.retryable
+    )
+      await env.RUN_QUEUE.send({
+        schemaVersion: 1,
         runId: run.runId,
-        reason: redactedReason(error),
+        deliveryId: `retry_${run.runId}_${run.revision}`,
+        expectedRevision: run.revision,
+      });
+    run = await publishEligibleLowRiskRun(env, run);
+    if (run.task.source?.kind === "github_issue") {
+      await enqueueRunComment(env, run.task.source.issueNumber, run.runId);
+      await enqueueRunFailureComment(env, run.task.source.issueNumber, run);
+      await enqueueRunActionComment(env, run.task.source.issueNumber, run);
+      try {
+        await flushGitHubOutputs(env);
+      } catch (error) {
+        console.warn("GitHub Queue status delivery deferred", {
+          runId: run.runId,
+          reason: redactedReason(error),
+        });
+      }
+    }
+    await completeTrustedRunFinalization(
+      env,
+      delivery.runId,
+      finalizationRevision,
+      claimId,
+    );
+    return workflowResult(run);
+  } catch (error) {
+    try {
+      await releaseTrustedRunFinalization(
+        env,
+        delivery.runId,
+        finalizationRevision,
+        claimId,
+      );
+    } catch (releaseError) {
+      console.warn("Trusted run finalization release failed", {
+        runId: delivery.runId,
+        revision: finalizationRevision,
+        reason: redactedReason(releaseError),
       });
     }
+    throw error;
   }
-  return workflowResult(run);
 }
 
 export async function executeTrustedExecutionWorkflow(
@@ -1239,11 +1302,14 @@ export async function executeTrustedExecutionWorkflow(
       );
       if (processed) return workflowResult(processed);
       const current = await jobs.read(delivery.runId);
-      if (current.lease && Date.parse(current.lease.expiresAt) > Date.now())
-        throw new Error("Trusted execution run still has a valid lease");
       return workflowResult(current);
     },
-    async (delivery) => finalizeRunDelivery(env, delivery),
+    async (delivery, execution) => {
+      const current = await jobs.read(delivery.runId);
+      if (current.revision !== execution.revision)
+        return workflowResult(current);
+      return finalizeRunDelivery(env, delivery, current);
+    },
   );
 }
 

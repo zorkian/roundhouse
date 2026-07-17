@@ -58,6 +58,7 @@ let instance: Miniflare;
 let database: D1Database;
 const resetTables = [
   "github_automatic_merges",
+  "trusted_run_finalizations",
   "trusted_review_workflows",
   "trusted_execution_workflows",
   "execution_attempt_phases",
@@ -2613,6 +2614,57 @@ describe("local control-plane Worker", () => {
     });
   });
 
+  it("skips duplicate Workflow finalization while the D1 lease is active", async () => {
+    const { env, queued } = await runtime();
+    const handler = createControlPlaneHandler();
+    const submitted = await handler.fetch!(
+      submission("trusted-workflow-active-lease-01"),
+      env,
+      {} as ExecutionContext,
+    );
+    const { runId } = (await submitted.json()) as { runId: string };
+    env.EXECUTION_MODE = "cloudflare-trusted-codex";
+    env.TRUSTED_EXECUTION_WORKFLOW = {
+      createBatch: async (batch) => batch.map(({ id }) => ({ id })),
+    };
+    env.EXECUTION_CONTAINERS = {
+      getByName: () => ({
+        runJob: async () => {
+          throw new Error("active lease must prevent execution");
+        },
+        destroy: async () => undefined,
+      }),
+    };
+    env.ROUNDHOUSE_CODEX_AUTH_JSON = "{}";
+    env.EXECUTION_EVIDENCE = {
+      get: async () => null,
+      put: async () => {
+        throw new Error("active lease must prevent evidence writes");
+      },
+    };
+    const delivery = queued.messages[0] as RunDelivery;
+    await deliver(handler, env, [delivery]);
+    const claimed = await new D1JobStore(env.DB).claim(
+      runId,
+      "authoritative-worker",
+      new Date(),
+      60 * 60_000,
+      delivery.expectedRevision,
+    );
+    expect(claimed).toBeDefined();
+
+    await executeTrustedExecutionWorkflow(env, delivery, {
+      do: async (_name, _config, callback) => callback(),
+    });
+
+    await expect(
+      env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM github_comment_outbox",
+      ).first<{ count: number }>(),
+    ).resolves.toEqual({ count: 0 });
+    expect(queued.messages).toHaveLength(1);
+  });
+
   it("hands independent review to one idempotent Workflow without starting a Container in the Queue", async () => {
     const { env } = await runtime();
     const handler = createControlPlaneHandler();
@@ -3387,6 +3439,11 @@ describe("local control-plane Worker", () => {
     expect(first.status).toBe(200);
     expect(await replay.json()).toEqual(await first.json());
     expect(queued.messages).toHaveLength(1);
+    await env.DB.prepare(
+      "UPDATE self_development_runs SET updated_at = ? WHERE run_id = ?",
+    )
+      .bind("2026-07-12T18:00:00.000Z", runId)
+      .run();
 
     await handler.scheduled!(
       {} as ScheduledController,
@@ -3421,11 +3478,17 @@ describe("local control-plane Worker", () => {
   it("redacts scheduled recovery failures in durable alerts", async () => {
     const { env } = await runtime();
     const handler = createControlPlaneHandler();
-    await handler.fetch!(
+    const submitted = await handler.fetch!(
       submission("scheduled-recovery-redaction-01"),
       env,
       {} as ExecutionContext,
     );
+    const { runId } = (await submitted.json()) as { runId: string };
+    await env.DB.prepare(
+      "UPDATE self_development_runs SET updated_at = ? WHERE run_id = ?",
+    )
+      .bind("2026-07-12T18:00:00.000Z", runId)
+      .run();
     env.RUN_QUEUE = {
       send: async () => {
         throw new Error(

@@ -39,9 +39,86 @@ CREATE TABLE IF NOT EXISTS trusted_review_workflows (
 );
 CREATE INDEX IF NOT EXISTS trusted_review_workflows_review
   ON trusted_review_workflows(review_id, created_at);
+
+CREATE TABLE IF NOT EXISTS trusted_run_finalizations (
+  run_id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  claim_id TEXT,
+  claim_expires_at TEXT,
+  completed_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (run_id, revision)
+);
 `;
 
 export type TrustedWorkflowPayload = RunDelivery | ReviewDelivery;
+
+export async function claimTrustedRunFinalization(
+  env: ControlPlaneEnv,
+  runId: string,
+  revision: number,
+  now = new Date(),
+  leaseMs = 10 * 60_000,
+): Promise<string | null> {
+  const claimId = `finalize_${crypto.randomUUID()}`;
+  const occurredAt = now.toISOString();
+  await env.DB.prepare(
+    "INSERT OR IGNORE INTO trusted_run_finalizations(run_id, revision, created_at, updated_at) VALUES (?, ?, ?, ?)",
+  )
+    .bind(runId, revision, occurredAt, occurredAt)
+    .run();
+  const claimed = await env.DB.prepare(
+    `UPDATE trusted_run_finalizations
+        SET claim_id = ?, claim_expires_at = ?, updated_at = ?
+      WHERE run_id = ? AND revision = ? AND completed_at IS NULL
+        AND (claim_id IS NULL OR claim_expires_at <= ?)`,
+  )
+    .bind(
+      claimId,
+      new Date(now.getTime() + leaseMs).toISOString(),
+      occurredAt,
+      runId,
+      revision,
+      occurredAt,
+    )
+    .run();
+  return (claimed.meta.changes ?? 0) === 1 ? claimId : null;
+}
+
+export async function completeTrustedRunFinalization(
+  env: ControlPlaneEnv,
+  runId: string,
+  revision: number,
+  claimId: string,
+  now = new Date(),
+): Promise<void> {
+  const completed = await env.DB.prepare(
+    `UPDATE trusted_run_finalizations
+        SET completed_at = ?, claim_expires_at = NULL, updated_at = ?
+      WHERE run_id = ? AND revision = ? AND claim_id = ? AND completed_at IS NULL`,
+  )
+    .bind(now.toISOString(), now.toISOString(), runId, revision, claimId)
+    .run();
+  if ((completed.meta.changes ?? 0) !== 1)
+    throw new Error("Trusted run finalization claim was lost");
+}
+
+export async function releaseTrustedRunFinalization(
+  env: ControlPlaneEnv,
+  runId: string,
+  revision: number,
+  claimId: string,
+  now = new Date(),
+): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE trusted_run_finalizations
+        SET claim_id = NULL, claim_expires_at = NULL, updated_at = ?
+      WHERE run_id = ? AND revision = ? AND claim_id = ? AND completed_at IS NULL`,
+  )
+    .bind(now.toISOString(), runId, revision, claimId)
+    .run();
+}
 
 export type TrustedExecutionWorkflowBindingPort = {
   createBatch(
@@ -135,10 +212,6 @@ export async function dispatchTrustedExecutionWorkflow(
          SELECT 1 FROM self_development_runs
           WHERE run_id = ? AND revision = ?
             AND state NOT IN ('completed', 'cancelled', 'failed')
-       ) AND NOT EXISTS (
-         SELECT 1 FROM trusted_execution_workflows
-          WHERE run_id = ? AND expected_revision = ?
-            AND status IN ('pending', 'dispatched', 'running')
        )`,
   )
     .bind(
@@ -147,8 +220,6 @@ export async function dispatchTrustedExecutionWorkflow(
       delivery.deliveryId,
       delivery.expectedRevision,
       now,
-      delivery.runId,
-      delivery.expectedRevision,
       delivery.runId,
       delivery.expectedRevision,
     )
@@ -347,12 +418,15 @@ export async function runTrustedExecutionWorkflow(
   input: unknown,
   step: TrustedExecutionWorkflowStepPort,
   execute: (delivery: RunDelivery) => Promise<TrustedExecutionWorkflowResult>,
-  finalize: (delivery: RunDelivery) => Promise<TrustedExecutionWorkflowResult>,
+  finalize: (
+    delivery: RunDelivery,
+    execution: TrustedExecutionWorkflowResult,
+  ) => Promise<TrustedExecutionWorkflowResult>,
 ): Promise<TrustedExecutionWorkflowResult> {
   const delivery = runDeliverySchema.parse(input);
   const instanceId = await trustedExecutionWorkflowId(delivery);
   try {
-    await step.do(
+    const execution = await step.do(
       "execute trusted repository attempt",
       {
         retries: { limit: 5, delay: "10 minutes", backoff: "constant" },
@@ -382,7 +456,7 @@ export async function runTrustedExecutionWorkflow(
         timeout: "5 minutes",
       },
       async () => {
-        const result = await finalize(delivery);
+        const result = await finalize(delivery, execution);
         const completed = await env.DB.prepare(
           "UPDATE trusted_execution_workflows SET status = 'completed', completed_at = ? WHERE workflow_instance_id = ? AND run_id = ? AND delivery_id = ? AND expected_revision = ? AND status IN ('running', 'completed')",
         )
