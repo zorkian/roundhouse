@@ -58,6 +58,14 @@ describe("issue qualification and planning", () => {
     ).toEqual(["packages/domain/src/a.ts", "packages/domain/src/a.test.ts"]);
   });
 
+  it("accepts plus bullets in the exact-scope section", () => {
+    expect(
+      extractExactPaths(
+        `Scope is exactly:\n\n+ packages/domain/src/a.ts\n+ \`packages/domain/src/a.test.ts\``,
+      ),
+    ).toEqual(["packages/domain/src/a.ts", "packages/domain/src/a.test.ts"]);
+  });
+
   it("stops exact scope before prose bullets or the next section", () => {
     expect(
       extractExactPaths(
