@@ -26,6 +26,16 @@ export const selfDevelopmentTaskSchema = z.object({
   allowedPaths: z.array(z.string().min(1)).min(1),
   pathPolicy: repositoryPathPolicySchema.optional(),
   planning: planningBindingSchema.optional(),
+  continuation: z
+    .object({
+      kind: z.enum(["independent_review", "repository_ci"]),
+      sourceRunId: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/),
+      sourceRevision: z.number().int().positive(),
+      sourceHeadCommit: z.string().regex(/^[a-f0-9]{40}$/),
+      evidenceId: z.string().min(1).max(500),
+      evidenceSha256: z.string().regex(/^[a-f0-9]{64}$/),
+    })
+    .optional(),
   bugReproduction: bugReproductionPlanSchema.optional(),
   source: z
     .object({

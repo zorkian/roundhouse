@@ -1102,19 +1102,26 @@ async function enqueueRunActionComment(
   const attempt = run.attempts.at(-1);
   if (!attempt || attempt.status !== "succeeded") return;
   const identity = runtimeIdentity(env);
+  const continuation = run.task.continuation;
   await enqueueComment(
     env,
     `run-action:${identity.repositoryFullName}:${run.runId}:${attempt.attemptId}:approval`,
     issueNumber,
     [
-      "## 👀 Your review is needed",
-      "Roundhouse finished the implementation and its configured validation passed.",
+      continuation
+        ? "## 🛑 Remediation needs an authority decision"
+        : "## 👀 Your review is needed",
+      continuation
+        ? "Roundhouse validated the remediation but could not prove that it remains within the approved plan's scope, risk, and publication authority."
+        : "Roundhouse finished the implementation and its configured validation passed.",
       `**[Review the complete patch and validation →](${identity.origin}/runs/${run.runId})**`,
       "Changed files:",
       ...run.implementation.changedFiles.map((path) => `- \`${path}\``),
       `${run.implementation.changedFiles.length} changed files; ${run.implementation.patchBytes} patch bytes.`,
       "Approving opens a **draft pull request** and starts independent Claude review. It does **not** merge the change.",
-      "If the implementation matches the issue, approve the current validated candidate:",
+      continuation
+        ? "Exact human action: review the scope or risk expansion and approve this exact validated remediation candidate if it is authorized:"
+        : "If the implementation matches the issue, approve the current validated candidate:",
       "```text",
       githubCommand(identity, "approve"),
       "```",
@@ -1324,6 +1331,7 @@ async function finalizeRunDelivery(
         deliveryId: `retry_${run.runId}_${run.revision}`,
         expectedRevision: run.revision,
       });
+    run = await publishEligibleContinuationRun(env, run);
     run = await publishEligibleLowRiskRun(env, run);
     if (run.task.source?.kind === "github_issue") {
       await enqueueRunComment(env, run.task.source.issueNumber, run.runId);
@@ -2047,7 +2055,15 @@ async function startReviewRemediation(
         .join("\n\n")
         .slice(0, 20_000),
       baseCommit: review.request.headCommit,
-      allowedPaths: review.request.allowedPaths,
+      allowedPaths: source.task.allowedPaths,
+      continuation: {
+        kind: "independent_review",
+        sourceRunId: source.runId,
+        sourceRevision: source.revision,
+        sourceHeadCommit: review.request.headCommit,
+        evidenceId: review.request.reviewId,
+        evidenceSha256: review.execution.evidence.sha256,
+      },
       publication: {
         ...source.task.publication,
         expectedRemoteHead: review.request.headCommit,
@@ -2132,6 +2148,14 @@ async function startPullRequestFeedbackRemediation(
         .slice(0, 20_000),
       baseCommit: current.head_sha,
       allowedPaths: source.task.allowedPaths,
+      continuation: {
+        kind: "repository_ci",
+        sourceRunId: source.runId,
+        sourceRevision: source.revision,
+        sourceHeadCommit: current.head_sha,
+        evidenceId: feedback.sourceId,
+        evidenceSha256: await sha256(feedback.feedback),
+      },
       publication: {
         ...source.task.publication,
         expectedRemoteHead: current.head_sha,
@@ -4107,6 +4131,85 @@ async function publishEligibleLowRiskRun(
       actorId,
     );
     run = await new D1JobStore(env.DB).read(run.runId);
+  }
+  return run;
+}
+
+async function publishEligibleContinuationRun(
+  env: ControlPlaneEnv,
+  value: Awaited<ReturnType<D1JobStore["read"]>>,
+): Promise<Awaited<ReturnType<D1JobStore["read"]>>> {
+  let run = value;
+  const continuation = run.task.continuation;
+  if (
+    !continuation ||
+    !run.task.planning ||
+    !run.implementation ||
+    !["awaiting_approval", "awaiting_publication"].includes(run.state) ||
+    run.task.baseCommit !== continuation.sourceHeadCommit ||
+    run.task.publication.expectedRemoteHead !== continuation.sourceHeadCommit ||
+    run.implementation.changedFiles.some(
+      (path) =>
+        !run.task.allowedPaths.includes(path) ||
+        (run.task.pathPolicy &&
+          !repositoryPathAllowed(run.task.pathPolicy, path)),
+    )
+  )
+    return run;
+  const jobs = new D1JobStore(env.DB);
+  const source = await jobs.read(continuation.sourceRunId);
+  const plan = await readPlanById(env, run.task.planning.planId);
+  const riskRank = { low: 0, medium: 1, high: 2 } as const;
+  if (
+    !source.approval ||
+    !source.publication ||
+    source.revision !== continuation.sourceRevision ||
+    source.publication.commit !== continuation.sourceHeadCommit ||
+    source.task.planning?.planId !== run.task.planning.planId ||
+    source.task.planning.planSha256 !== run.task.planning.planSha256 ||
+    source.task.publication.branch !== run.task.publication.branch ||
+    source.task.publication.remoteUrl !== run.task.publication.remoteUrl ||
+    !plan ||
+    plan.status !== "materialized" ||
+    plan.plan.status !== "proposed" ||
+    plan.runId !== source.runId ||
+    plan.approvedBy !== run.task.planning.approvedBy ||
+    riskRank[repositoryRisk(run.implementation.changedFiles)] >
+      riskRank[plan.plan.risk]
+  )
+    return run;
+  const actorId = run.task.planning.approvedBy;
+  if (!run.approval) {
+    const evidence = run.evidence
+      .filter((item) => item.approvalEligible !== false)
+      .map(({ evidenceId, objectKey, sha256, size }) => ({
+        evidenceId,
+        objectKey,
+        sha256,
+        size,
+      }));
+    await approveRun(
+      run.runId,
+      {
+        schemaVersion: 1,
+        expectedRevision: run.revision,
+        patchSha256: run.implementation.patchSha256,
+        evidence,
+        approver: actorId,
+      },
+      env,
+      actorId,
+    );
+    run = await jobs.read(run.runId);
+  }
+  if (!run.publication) {
+    await publishGitHubRun(
+      run.runId,
+      { schemaVersion: 1, expectedRevision: run.revision },
+      env,
+      actorId,
+    );
+    run = await jobs.read(run.runId);
   }
   return run;
 }
