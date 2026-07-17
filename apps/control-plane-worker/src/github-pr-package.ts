@@ -22,7 +22,7 @@ const section = (name: string, body: string): string =>
 
 export function replacePullRequestPackageSection(
   body: string,
-  name: "review" | "ci" | "limitations" | "action",
+  name: "review" | "ci" | "limitations" | "decision" | "action",
   value: string,
 ): string {
   const start = `<!-- roundhouse-package:${name}:start -->`;
@@ -34,6 +34,40 @@ export function replacePullRequestPackageSection(
       "Pull request does not contain a Roundhouse review package",
     );
   return `${body.slice(0, from)}${section(name, value)}${body.slice(to + end.length)}`;
+}
+
+export function automaticMergeDecisionPackage(input: {
+  headSha: string;
+  approvedPaths: string[];
+}): string {
+  const paths = input.approvedPaths.map((path) => `\`${path}\``).join(", ");
+  return [
+    "## Risk analysis and recommendation",
+    "",
+    `- **Evidence binding:** exact head \`${input.headSha}\` passed repository CI and independent review.`,
+    "- **Policy risk:** low.",
+    `- **Blast radius:** ${input.approvedPaths.length} approved changed ${input.approvedPaths.length === 1 ? "file" : "files"}: ${paths}.`,
+    "- **Protected or sensitive areas:** no repository-profile-protected path is present in the approved change set, and no unresolved blocking review finding remains.",
+    "- **Migration, dependency, or configuration effects:** no protected migration, dependency-manifest, or deployment-configuration path is present in the approved change set.",
+    "- **Rollback:** revert the resulting merge commit if repository-owned post-merge checks expose a regression.",
+    "- **Test gaps and residual risk:** defects outside the configured validation, repository CI, and independent-review coverage may remain.",
+    "- **Confidence:** sufficient for the configured low-risk automatic-merge policy because all exact-head gates passed.",
+    "",
+    "**Recommendation: Merge automatically.**",
+  ].join("\n");
+}
+
+export function mergedPullRequestOutcomePackage(input: {
+  pullRequestNumber: number;
+  mergeCommitSha: string;
+}): string {
+  return [
+    "## Final outcome",
+    "",
+    "Recommendation executed: **Merge automatically.**",
+    `Pull request #${input.pullRequestNumber} is closed as merged at commit \`${input.mergeCommitSha}\`.`,
+    "No action needed. Roundhouse's responsibility ends at merge; deployment status is owned by the repository and is not reported here.",
+  ].join("\n");
 }
 
 export function renderPullRequestPackage(input: PullRequestPackage): string {
@@ -109,6 +143,11 @@ export function renderPullRequestPackage(input: PullRequestPackage): string {
     section(
       "limitations",
       "## Known limitations and deferred findings\n\nNone recorded yet. Advisory review findings remain visible here when reported.",
+    ),
+    "",
+    section(
+      "decision",
+      "## Risk analysis and recommendation\n\nPending exact-head validation, repository CI, and independent review. No merge recommendation has been made yet.",
     ),
     "",
     section(

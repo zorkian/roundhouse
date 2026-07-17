@@ -119,6 +119,10 @@ import {
 } from "./github-status.js";
 import { publishApprovedGitHubRun } from "./github-publication.js";
 import {
+  automaticMergeDecisionPackage,
+  mergedPullRequestOutcomePackage,
+} from "./github-pr-package.js";
+import {
   readPullRequestLifecycle,
   recordMergedPullRequestLifecycle,
   recordPullRequestLifecycle,
@@ -2059,6 +2063,24 @@ async function finishAutomaticMerge(
     mergeCommitSha,
     mergedAt: merged.mergedAt,
   });
+  await githubGateway(env)
+    .updatePullRequestPackage({
+      repositoryFullName: identity.repositoryFullName,
+      pullRequestNumber: identity.pullRequestNumber,
+      expectedHeadSha: identity.headSha,
+      sections: {
+        action: mergedPullRequestOutcomePackage({
+          pullRequestNumber: identity.pullRequestNumber,
+          mergeCommitSha,
+        }),
+      },
+    })
+    .catch((error) =>
+      console.warn("Automatic merge final package update deferred", {
+        runId: identity.runId,
+        reason: redactedReason(error),
+      }),
+    );
   await enqueueRunComment(env, identity.issueNumber, identity.runId);
   await enqueueMergedComment(env, lifecycle);
   await githubGateway(env).closeIssue(
@@ -2175,6 +2197,10 @@ async function attemptEligibleAutomaticMerge(
       pullRequestNumber: identity.pullRequestNumber,
       expectedHeadSha: identity.headSha,
       sections: {
+        decision: automaticMergeDecisionPackage({
+          headSha: identity.headSha,
+          approvedPaths,
+        }),
         action:
           "## Next action\n\nNo action needed. Exact-head independent review and repository CI passed; Roundhouse is merging this eligible low-risk change.",
       },
