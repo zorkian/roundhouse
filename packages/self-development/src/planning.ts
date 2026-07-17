@@ -217,7 +217,7 @@ export const qualifiedPlanSchema = z.object({
   instructionsSha256: sha64,
   baseCommit: sha40,
   exactPaths: z.array(repositoryRelativePathSchema).min(1).max(50),
-  validationLevel: z.literal("full"),
+  validationLevel: z.enum(["quick", "full"]),
   risk: z.enum(["low", "medium", "high"]),
   understanding: z.string().min(1).max(4_000).optional(),
   acceptanceCriteria: z.array(z.string().min(1).max(500)).max(20).default([]),
@@ -405,17 +405,20 @@ function pathFindings(paths: string[]) {
   return findings;
 }
 
+export function repositoryRisk(paths: string[]): "low" | "medium" {
+  const topLevelPrefixes = new Set(paths.map((path) => path.split("/", 1)[0]));
+  return paths.length > 4 ||
+    topLevelPrefixes.size > 1 ||
+    paths.some((path) => path.startsWith("apps/control-plane-worker/"))
+    ? "medium"
+    : "low";
+}
+
 function effectiveRisk(
   paths: string[],
   suggested: "low" | "medium" | "high" | undefined,
 ): "low" | "medium" | "high" {
-  const topLevelPrefixes = new Set(paths.map((path) => path.split("/", 1)[0]));
-  const policyRisk =
-    paths.length > 4 ||
-    topLevelPrefixes.size > 1 ||
-    paths.some((path) => path.startsWith("apps/control-plane-worker/"))
-      ? "medium"
-      : "low";
+  const policyRisk = repositoryRisk(paths);
   const rank = { low: 0, medium: 1, high: 2 } as const;
   return suggested && rank[suggested] > rank[policyRisk]
     ? suggested
@@ -514,6 +517,7 @@ export async function qualifyAndPlan(
       planSha256: await sha256(JSON.stringify(value)),
     });
   }
+  const risk = effectiveRisk(exactPaths, issue.suggestedRisk);
   const value = {
     schemaVersion: 1 as const,
     planId,
@@ -527,8 +531,8 @@ export async function qualifyAndPlan(
     instructionsSha256: await sha256(issue.instructions),
     baseCommit: issue.baseCommit,
     exactPaths,
-    validationLevel: "full" as const,
-    risk: effectiveRisk(exactPaths, issue.suggestedRisk),
+    validationLevel: risk === "low" ? ("quick" as const) : ("full" as const),
+    risk,
     understanding: issue.understanding,
     acceptanceCriteria: issue.acceptanceCriteria,
     planningAttemptId: issue.planningAttemptId,
@@ -558,11 +562,9 @@ export const planningBindingSchema = z.object({
   profileId: z.literal(roundhouseSelfDevelopmentProfile.profileId),
   profileVersion: roundhouseSelfDevelopmentProfileVersionSchema,
   issueContentSha256: sha64,
-  exactPathsSha256: sha64,
+  // Historical bindings retain this field. Repository policy, rather than a
+  // predicted path-set digest, is authoritative for newly issued plans.
+  exactPathsSha256: sha64.optional(),
   approvedBy: z.string().min(1).max(200),
   approvedAt: z.iso.datetime(),
 });
-
-export async function exactPathsSha256(paths: string[]): Promise<string> {
-  return sha256(JSON.stringify(canonicalPaths(paths)));
-}

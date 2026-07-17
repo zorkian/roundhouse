@@ -23,9 +23,8 @@ and produces a repository-policy-qualified plan before it can create a run.
    both against the single current plan and rejects an ineligible or ambiguous
    state without mutating it.
 4. For a medium- or high-risk proposal, review the base commit, objective,
-   acceptance criteria, likely paths, profile, limits, risk, plan SHA-256, and
-   evidence identity, then approve from the Access-protected plan page or post
-   `/rh implement`. A low-risk
+   acceptance criteria, likely paths, profile, limits, and risk, then approve
+   from the Access-protected plan page or post `/rh implement`. A low-risk
    proposal by the verified maintainer proceeds directly toward a draft PR.
 5. Follow the run link. The page polls every five seconds and displays durable
    state, revision, attempts, classifications, evidence objects, patch identity,
@@ -54,10 +53,12 @@ the enrolled prefixes even when a plan or issue suggests them.
 The current bounded limits are a 512 KiB patch, 900 seconds, 256 model requests,
 three automatic attempts, and ten explicit operator attempts.
 
-Plan identity is a SHA-256 binding over the issue snapshot, base commit, planning
-attempt, advisory path predictions, qualification outcome and evidence,
-operator clarification, profile, validation level, risk, and limits. D1 holds
-the durable plan state and R2 object identity; R2 holds every immutable plan revision under its plan ID.
+Plan identity remains an internal idempotency binding over the issue snapshot,
+base commit, planning attempt, qualification outcome and evidence, operator
+clarification, profile, validation level, risk, and limits. A separate predicted
+path-set hash is not issued for new plans because repository policy, not path
+prediction, is authoritative. D1 holds the durable plan state and R2 object
+identity; R2 holds every immutable plan revision under its plan ID.
 Approval uses a compare-and-swap revision and records the authenticated actor.
 Only a proposal can run. Duplicate webhooks, commands, UI requests, and Queue
 deliveries are idempotent.
@@ -94,6 +95,13 @@ differences in the exact changed-file inventory and implementation summary.
 Deterministic validation then checks the resulting patch and contract,
 independent review evaluates the exact published head, repository CI evaluates
 that same head, and a human makes the final merge decision.
+
+Ordinary low-risk code uses layered validation in the Container: formatter
+write, repository-policy and diff checks, bug reproduction when applicable,
+license checks, typechecking, and Vitest's related-test selection for the exact
+changed code. Medium/high-risk work and policy-sensitive changes use the full
+local repository suite. Required GitHub checks on the exact published commit
+remain the authoritative repository-wide merge gate for both levels.
 
 ## Operations and recovery
 

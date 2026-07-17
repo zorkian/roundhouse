@@ -1845,6 +1845,26 @@ export function remainingValidationBudget(deadlineAt, now = Date.now()) {
   return Math.max(1, deadlineAt - now);
 }
 
+export function targetedTestArgs(changedFiles) {
+  const codePaths = [...new Set(changedFiles)]
+    .filter((path) => /\.(?:cjs|js|jsx|mjs|ts|tsx)$/.test(path))
+    .sort();
+  return codePaths.length > 0
+    ? ["exec", "vitest", "related", ...codePaths, "--run"]
+    : null;
+}
+
+export function actualPathsRequireFullValidation(changedFiles) {
+  const topLevelPrefixes = new Set(
+    changedFiles.map((path) => path.split("/", 1)[0]),
+  );
+  return (
+    changedFiles.length > 4 ||
+    topLevelPrefixes.size > 1 ||
+    changedFiles.some((path) => path.startsWith("apps/control-plane-worker/"))
+  );
+}
+
 async function validationCommand(name, executable, args, request, deadlineAt) {
   lifecycle("validation.command.started", request, { name });
   const result = await command(executable, args, {
@@ -1961,7 +1981,12 @@ async function validateImplementation(value) {
   const codeChanged = trusted.changedFiles.some((path) =>
     /\.(?:cjs|js|jsx|mjs|ts|tsx)$/.test(path),
   );
-  if (request.validationLevel === "full" && codeChanged) {
+  const effectiveValidationLevel =
+    request.validationLevel === "full" ||
+    actualPathsRequireFullValidation(trusted.changedFiles)
+      ? "full"
+      : "quick";
+  if (codeChanged) {
     validation.push(
       await validationCommand(
         "typecheck",
@@ -1971,19 +1996,19 @@ async function validateImplementation(value) {
         validationDeadlineAt,
       ),
     );
+    const targetedArgs = targetedTestArgs(trusted.changedFiles);
     validation.push(
       await validationCommand(
         "test",
         "pnpm",
-        ["test"],
+        effectiveValidationLevel === "full" ? ["test"] : targetedArgs,
         request,
         validationDeadlineAt,
       ),
     );
   } else {
-    const reason = codeChanged
-      ? "Skipped because the submitted validation level is quick"
-      : "Skipped because the patch changes no JavaScript or TypeScript file";
+    const reason =
+      "Skipped because the patch changes no JavaScript or TypeScript file";
     validation.push(skippedValidation("typecheck", "not-applicable", reason));
     validation.push(skippedValidation("test", "not-applicable", reason));
   }

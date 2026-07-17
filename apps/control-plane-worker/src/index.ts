@@ -3,11 +3,11 @@
 
 import {
   dogfoodPublicationBranchSchema,
-  exactPathsSha256,
   extractExactPaths,
   maxPlannedInstructionCharacters,
   qualifyAndPlan,
   repositoryPathAllowed,
+  repositoryRisk,
   repositoryPathPolicySchema,
   repositoryRelativePathSchema,
   roundhouseSelfDevelopmentPathPolicy,
@@ -566,7 +566,6 @@ async function materializeGitHubPlan(
         profileId: plan.profileId,
         profileVersion: plan.profileVersion,
         issueContentSha256: plan.issueContentSha256,
-        exactPathsSha256: await exactPathsSha256(plan.exactPaths),
         approvedBy: approved.approvedBy!,
         approvedAt: approved.approvedAt!,
       },
@@ -2016,7 +2015,9 @@ async function automaticMergeIdentity(
     publication?.commit !== target.headSha ||
     publication.pullRequestUrl !==
       `https://github.com/${target.repositoryFullName}/pull/${target.pullRequestNumber}` ||
-    !run.task.planning
+    !run.task.planning ||
+    !run.implementation ||
+    repositoryRisk(run.implementation.changedFiles) !== "low"
   )
     return undefined;
   const plan = await readPlanById(env, run.task.planning.planId);
@@ -3867,7 +3868,8 @@ async function publishEligibleLowRiskRun(
     plan.status !== "materialized" ||
     plan.plan.status !== "proposed" ||
     plan.plan.risk !== "low" ||
-    plan.approvedBy !== run.task.planning.approvedBy
+    plan.approvedBy !== run.task.planning.approvedBy ||
+    repositoryRisk(run.implementation.changedFiles) !== "low"
   )
     return run;
   const actorId = run.task.planning.approvedBy;

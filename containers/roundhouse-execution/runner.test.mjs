@@ -14,6 +14,7 @@ import {
 
 import {
   agentOutputCapture,
+  actualPathsRequireFullValidation,
   appendAgentOutput,
   assertCompleteAgentOutput,
   boundedAgentFailure,
@@ -46,6 +47,7 @@ import {
   secretStrings,
   skippedValidation,
   startAgentOutput,
+  targetedTestArgs,
   terminateCommandProcessTree,
   trustedValidationEvidenceNames,
   validRepositoryPath,
@@ -798,6 +800,40 @@ describe("trusted agent output boundary", () => {
 });
 
 describe("trusted validation budget", () => {
+  it("selects related tests for quick typed-code validation", () => {
+    expect(
+      targetedTestArgs([
+        "apps/control-plane-worker/src/index.ts",
+        "docs/guide.md",
+        "apps/control-plane-worker/src/index.ts",
+      ]),
+    ).toEqual([
+      "exec",
+      "vitest",
+      "related",
+      "apps/control-plane-worker/src/index.ts",
+      "--run",
+    ]);
+    expect(targetedTestArgs(["docs/guide.md"])).toBeNull();
+  });
+
+  it("promotes actual policy-risk paths to full validation", () => {
+    expect(
+      actualPathsRequireFullValidation([
+        "apps/control-plane-worker/src/index.ts",
+      ]),
+    ).toBe(true);
+    expect(
+      actualPathsRequireFullValidation([
+        "packages/domain/src/a.ts",
+        "docs/guide.md",
+      ]),
+    ).toBe(true);
+    expect(actualPathsRequireFullValidation(["packages/domain/src/a.ts"])).toBe(
+      false,
+    );
+  });
+
   it("matches the shared bound for every standard runner evidence phase", () => {
     expect(trustedValidationEvidenceNames).toHaveLength(
       trustedValidationEvidenceLimit,
