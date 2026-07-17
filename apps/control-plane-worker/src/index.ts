@@ -1187,6 +1187,11 @@ async function finalizeRunDelivery(
         throw new Error("Trusted execution run is unavailable");
       throw error;
     }
+  // Another transport may reach this callback while the authoritative D1
+  // owner is still executing. Only the lease-free owner completion projects
+  // retries, publication, and GitHub status side effects.
+  if (run.lease && Date.parse(run.lease.expiresAt) > Date.now())
+    return workflowResult(run);
   const latest = run.attempts.at(-1);
   if (run.state !== "failed" && latest?.status === "failed" && latest.retryable)
     await env.RUN_QUEUE.send({

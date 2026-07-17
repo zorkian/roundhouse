@@ -2613,6 +2613,57 @@ describe("local control-plane Worker", () => {
     });
   });
 
+  it("skips duplicate Workflow finalization while the D1 lease is active", async () => {
+    const { env, queued } = await runtime();
+    const handler = createControlPlaneHandler();
+    const submitted = await handler.fetch!(
+      submission("trusted-workflow-active-lease-01"),
+      env,
+      {} as ExecutionContext,
+    );
+    const { runId } = (await submitted.json()) as { runId: string };
+    env.EXECUTION_MODE = "cloudflare-trusted-codex";
+    env.TRUSTED_EXECUTION_WORKFLOW = {
+      createBatch: async (batch) => batch.map(({ id }) => ({ id })),
+    };
+    env.EXECUTION_CONTAINERS = {
+      getByName: () => ({
+        runJob: async () => {
+          throw new Error("active lease must prevent execution");
+        },
+        destroy: async () => undefined,
+      }),
+    };
+    env.ROUNDHOUSE_CODEX_AUTH_JSON = "{}";
+    env.EXECUTION_EVIDENCE = {
+      get: async () => null,
+      put: async () => {
+        throw new Error("active lease must prevent evidence writes");
+      },
+    };
+    const delivery = queued.messages[0] as RunDelivery;
+    await deliver(handler, env, [delivery]);
+    const claimed = await new D1JobStore(env.DB).claim(
+      runId,
+      "authoritative-worker",
+      new Date(),
+      60 * 60_000,
+      delivery.expectedRevision,
+    );
+    expect(claimed).toBeDefined();
+
+    await executeTrustedExecutionWorkflow(env, delivery, {
+      do: async (_name, _config, callback) => callback(),
+    });
+
+    await expect(
+      env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM github_comment_outbox",
+      ).first<{ count: number }>(),
+    ).resolves.toEqual({ count: 0 });
+    expect(queued.messages).toHaveLength(1);
+  });
+
   it("hands independent review to one idempotent Workflow without starting a Container in the Queue", async () => {
     const { env } = await runtime();
     const handler = createControlPlaneHandler();
