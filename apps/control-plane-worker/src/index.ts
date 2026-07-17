@@ -4161,6 +4161,7 @@ async function publishEligibleContinuationRun(
   const plan = await readPlanById(env, run.task.planning.planId);
   const riskRank = { low: 0, medium: 1, high: 2 } as const;
   if (
+    source.task.continuation ||
     !source.approval ||
     !source.publication ||
     source.revision !== continuation.sourceRevision ||
