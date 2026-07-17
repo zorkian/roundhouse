@@ -531,6 +531,27 @@ describe("CloudflareTrustedImplementationBackend", () => {
     expect(destroyed).toBe(1);
   });
 
+  it("classifies a durable trusted binding mismatch without retrying", async () => {
+    const backend = new CloudflareTrustedImplementationBackend(
+      {
+        getByName: () => ({
+          runJob: async () => result(),
+          runTrustedJob: async () => {
+            throw new Error("Durable trusted result binding mismatch");
+          },
+          destroy: async () => undefined,
+        }),
+      },
+      new MemoryEvidence(),
+      "unused",
+    );
+
+    await expect(backend.execute(trustedRequest)).rejects.toMatchObject({
+      classification: "implementation_binding_mismatch",
+      retryable: false,
+    });
+  });
+
   it("retains a failed patch and complete validation diagnostics as immutable evidence", async () => {
     const evidence = new MemoryEvidence();
     const failedResult = {
@@ -899,6 +920,25 @@ describe("CloudflareRepositoryExecutionBackend", () => {
       retryable: true,
     });
     expect(destroyed).toBe(0);
+  });
+
+  it("classifies a durable repository binding mismatch without retrying", async () => {
+    const backend = new CloudflareRepositoryExecutionBackend(
+      {
+        getByName: () => ({
+          runJob: async () => {
+            throw new Error("Durable repository result binding mismatch");
+          },
+          destroy: async () => undefined,
+        }),
+      },
+      new MemoryEvidence(),
+    );
+
+    await expect(backend.execute(request)).rejects.toMatchObject({
+      classification: "execution_binding_mismatch",
+      retryable: false,
+    });
   });
 
   it("retains evidence for a classified nonzero exit", async () => {

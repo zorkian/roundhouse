@@ -416,6 +416,12 @@ export class CloudflareTrustedImplementationBackend implements TrustedImplementa
           );
         }
         const reason = boundedInfrastructureReason(error);
+        if (reason.includes("Durable trusted result binding mismatch"))
+          throw new StageFailure(
+            "Durable trusted result binding mismatch",
+            "implementation_binding_mismatch",
+            false,
+          );
         if (reason.includes("validation_failed")) {
           await container.destroy().catch(() => undefined);
           throw new StageFailure(
@@ -621,6 +627,12 @@ export class CloudflareRepositoryExecutionBackend implements RepositoryExecution
           attemptId: request.attemptId,
         });
         if (error instanceof StageFailure) throw error;
+        if (reason.includes("Durable repository result binding mismatch"))
+          throw new StageFailure(
+            "Durable repository result binding mismatch",
+            "execution_binding_mismatch",
+            false,
+          );
         throw new StageFailure(
           `Cloudflare Container execution was interrupted: ${reason}`,
           "container_interrupted",
