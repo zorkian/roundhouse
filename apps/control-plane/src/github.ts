@@ -166,15 +166,26 @@ function strings(value: unknown): readonly string[] {
     : [];
 }
 
+function untrustedText(value: unknown, maximum: number): string {
+  return String(value).slice(0, maximum).replaceAll("@", "@\u200b");
+}
+
 function reproductionComment(run: RunSnapshot, attempt: Attempt): string {
   const reproduction = attempt.result?.reproduction as
     Record<string, unknown> | undefined;
-  const status = String(reproduction?.status ?? "blocked");
-  const summary = String(
+  const status = untrustedText(reproduction?.status ?? "blocked", 100);
+  const summary = untrustedText(
     reproduction?.summary ?? "Reproduction did not produce a summary.",
-  ).slice(0, 3_000);
-  const expected = String(reproduction?.expectedBehavior ?? "Not reported.");
-  const observed = String(reproduction?.observedBehavior ?? "Not reported.");
+    3_000,
+  );
+  const expected = untrustedText(
+    reproduction?.expectedBehavior ?? "Not reported.",
+    2_000,
+  );
+  const observed = untrustedText(
+    reproduction?.observedBehavior ?? "Not reported.",
+    2_000,
+  );
   const commands = Array.isArray(reproduction?.commands)
     ? reproduction.commands
         .flatMap((value) => {
@@ -202,9 +213,9 @@ function reproductionComment(run: RunSnapshot, attempt: Attempt): string {
     "",
     summary,
     "",
-    `Expected: ${expected.slice(0, 2_000)}`,
+    `Expected: ${expected}`,
     "",
-    `Observed: ${observed.slice(0, 2_000)}`,
+    `Observed: ${observed}`,
     ...(commands.length ? ["", "Commands:", ...commands] : []),
     ...(files.length ? ["", "Relevant files:", ...files] : []),
     "",

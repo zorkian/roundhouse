@@ -49,6 +49,12 @@ describe("V2 agent runner", () => {
       additionalProperties: false,
       required: ["command", "exitCode", "output"],
     });
+    expect(reproductionSchema.properties.commands.maxItems).toBe(20);
+    expect(
+      reproductionSchema.properties.commands.items.properties.output.maxLength,
+    ).toBe(4000);
+    expect(reproductionSchema.properties.summary.maxLength).toBe(3000);
+    expect(reproductionSchema.properties.relevantFiles.maxItems).toBe(20);
   });
 
   it("reports only its versioned runner identity", () => {

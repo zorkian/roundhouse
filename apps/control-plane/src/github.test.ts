@@ -215,7 +215,7 @@ describe("GitHub intake", () => {
       result: {
         reproduction: {
           status: "confirmed",
-          summary: "The focused test fails as reported.",
+          summary: "The focused test fails as reported by @maintainer.",
           expectedBehavior: "The test passes.",
           observedBehavior: "The test fails.",
           commands: [{ command: "pnpm test", exitCode: 1, output: "failed" }],
@@ -232,6 +232,9 @@ describe("GitHub intake", () => {
     );
     expect(post.mock.calls[0]?.[1]).toMatchObject({
       body: expect.stringContaining("Next: planning."),
+    });
+    expect(post.mock.calls[0]?.[1]).toMatchObject({
+      body: expect.not.stringContaining("@maintainer"),
     });
   });
 });

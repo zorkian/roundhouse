@@ -150,24 +150,33 @@ export const reproductionSchema = Object.freeze({
       type: "string",
       enum: ["confirmed", "not_reproduced", "blocked"],
     },
-    summary: { type: "string" },
+    summary: { type: "string", maxLength: 3000 },
     commands: {
       type: "array",
+      maxItems: 20,
       items: {
         type: "object",
         additionalProperties: false,
         required: ["command", "exitCode", "output"],
         properties: {
-          command: { type: "string" },
+          command: { type: "string", maxLength: 500 },
           exitCode: { type: "integer" },
-          output: { type: "string" },
+          output: { type: "string", maxLength: 4000 },
         },
       },
     },
-    expectedBehavior: { type: "string" },
-    observedBehavior: { type: "string" },
-    relevantFiles: { type: "array", items: { type: "string" } },
-    uncertainties: { type: "array", items: { type: "string" } },
+    expectedBehavior: { type: "string", maxLength: 2000 },
+    observedBehavior: { type: "string", maxLength: 2000 },
+    relevantFiles: {
+      type: "array",
+      maxItems: 20,
+      items: { type: "string", maxLength: 500 },
+    },
+    uncertainties: {
+      type: "array",
+      maxItems: 20,
+      items: { type: "string", maxLength: 2000 },
+    },
   },
 });
 
