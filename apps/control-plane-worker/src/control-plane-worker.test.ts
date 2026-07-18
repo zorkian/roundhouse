@@ -24,6 +24,7 @@ import {
   executeTrustedExecutionWorkflow,
   independentReviewCheckOutcome,
   planningStatusComment,
+  publishEligibleLowRiskRun,
   reservePullRequestReview,
   runForIssueCommand,
   safePlanningFailureSummary,
@@ -612,6 +613,28 @@ describe("local control-plane Worker", () => {
         "apps/control-plane-worker/src/github-ci.ts",
       ]),
     ).toBe(false);
+  });
+
+  it("never lets a continuation bypass its evidence gate as generic low risk", async () => {
+    const { env } = await runtime();
+    const value = await awaitingImplementation(env);
+    const run = await value.jobs.read(value.runId);
+    const continuation = structuredClone(run);
+    continuation.task.continuation = {
+      kind: "repository_ci",
+      sourceRunId: "run_source",
+      sourceRevision: 1,
+      sourceHeadCommit: "a".repeat(40),
+      evidenceId: "check_run:42",
+      evidenceSha256: "b".repeat(64),
+      checkRunId: 42,
+    };
+    await expect(publishEligibleLowRiskRun(env, continuation)).resolves.toEqual(
+      continuation,
+    );
+    await expect(value.jobs.read(value.runId)).resolves.toMatchObject({
+      state: "awaiting_approval",
+    });
   });
 
   async function configureAdvisoryPullRequest(

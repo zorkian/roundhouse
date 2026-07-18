@@ -4089,12 +4089,13 @@ async function publishGitHubRun(
   });
 }
 
-async function publishEligibleLowRiskRun(
+export async function publishEligibleLowRiskRun(
   env: ControlPlaneEnv,
   value: Awaited<ReturnType<D1JobStore["read"]>>,
 ): Promise<Awaited<ReturnType<D1JobStore["read"]>>> {
   let run = value;
   if (
+    run.task.continuation ||
     !run.task.planning ||
     !run.implementation ||
     !["awaiting_approval", "awaiting_publication"].includes(run.state)
@@ -4199,8 +4200,8 @@ async function publishEligibleContinuationRun(
         review.request.branch === source.task.publication.branch &&
         review.request.patchSha256 === source.implementation?.patchSha256 &&
         same(
-          review.request.allowedPaths,
-          source.implementation?.changedFiles,
+          [...review.request.allowedPaths].sort(),
+          [...(source.implementation?.changedFiles ?? [])].sort(),
         ) &&
         review.execution?.evidence.sha256 === continuation.evidenceSha256 &&
         same(accepted, [...continuation.acceptedFindingIds].sort()),
