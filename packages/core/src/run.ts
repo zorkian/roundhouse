@@ -57,6 +57,13 @@ export interface IssueSnapshot {
   readonly body: string;
   readonly url: string;
   readonly actor: string;
+  readonly clarifications?: readonly IssueCommentSnapshot[];
+}
+
+export interface IssueCommentSnapshot {
+  readonly actor: string;
+  readonly body: string;
+  readonly url?: string;
 }
 
 export interface CreateRunInput {
@@ -141,5 +148,21 @@ export function transitionRun(
     ...nextTransition,
     currentHead: acceptedHead ?? current.currentHead,
     revision: run.revision + 1,
+  };
+}
+
+export function resumeRun(
+  run: RunSnapshot,
+  expectedRevision: number,
+  issue: IssueSnapshot,
+): RunSnapshot {
+  if (run.status !== "waiting" || run.waitingReason !== "clarification")
+    throw new Error("run_not_waiting_for_clarification");
+  return {
+    ...transitionRun(run, expectedRevision, {
+      status: "active",
+      stage: run.stage,
+    }),
+    issue,
   };
 }

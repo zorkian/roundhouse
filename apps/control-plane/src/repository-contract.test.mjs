@@ -121,6 +121,9 @@ function repositoryContract(label, createRepository) {
         }),
       ).resolves.toBe("completed");
       await expect(
+        repository.latestCompletedAttempt(run.id, "qualify", 2),
+      ).resolves.toMatchObject({ id: attempt.id, runRevision: 1 });
+      await expect(
         repository.completeAttempt(attempt.id, 1, "b".repeat(40), {
           outcome: "ok",
         }),
@@ -138,6 +141,37 @@ function repositoryContract(label, createRepository) {
           stage: "validate",
         }),
       ).resolves.toBeUndefined();
+    });
+
+    it("resumes clarification with the updated issue conversation", async () => {
+      const repository = createRepository();
+      const run = createRun({
+        ...input,
+        id: "run_clarification",
+        issue: {
+          title: "Needs context",
+          body: "Original report",
+          url: "https://github.com/zorkian/roundhouse/issues/42",
+          actor: "reporter",
+        },
+      });
+      await repository.create(run);
+      const waiting = await repository.transition(run.id, 1, {
+        status: "waiting",
+        stage: "qualify",
+        waitingReason: "clarification",
+      });
+      await expect(
+        repository.resumeClarification(run.id, waiting.revision, {
+          ...run.issue,
+          clarifications: [{ actor: "citizen", body: "More context" }],
+        }),
+      ).resolves.toMatchObject({
+        status: "active",
+        stage: "qualify",
+        revision: 3,
+        issue: { clarifications: [{ actor: "citizen", body: "More context" }] },
+      });
     });
   });
 }

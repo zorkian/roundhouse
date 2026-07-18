@@ -2,11 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import {
+  resumeRun,
   transitionRun,
   type Attempt,
+  type IssueSnapshot,
   type Lease,
   type RunRepository,
   type RunSnapshot,
+  type RunStage,
   type RunTransition,
   type Wakeup,
 } from "@roundhouse/core";
@@ -41,6 +44,30 @@ type AttemptRow = {
   result_json: string | null;
   routing_json: string | null;
 };
+
+function attemptFromRow(row: AttemptRow): Attempt {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    runRevision: row.run_revision,
+    kind: row.kind,
+    stage: row.stage,
+    role: row.role,
+    state: row.state,
+    deadlineAt: row.deadline_at,
+    baseCommit: row.base_commit,
+    expectedHead: row.expected_head,
+    ...(row.accepted_head ? { acceptedHead: row.accepted_head } : {}),
+    ...(row.result_json
+      ? { result: JSON.parse(row.result_json) as Record<string, unknown> }
+      : {}),
+    ...(row.routing_json
+      ? {
+          routing: JSON.parse(row.routing_json) as Record<string, unknown>,
+        }
+      : {}),
+  };
+}
 
 export class D1RunRepository implements RunRepository {
   constructor(
@@ -102,6 +129,31 @@ export class D1RunRepository implements RunRepository {
     const current = await this.get(runId);
     if (!current || current.revision !== expectedRevision) return undefined;
     const next = transitionRun(current, expectedRevision, transition);
+    const result = await this.db
+      .prepare(
+        "UPDATE runs SET status=?1, stage=?2, revision=?3, document_json=?4, lease_attempt_id=NULL, lease_revision=NULL, lease_expires_at=NULL, updated_at=?5 WHERE id=?6 AND revision=?7",
+      )
+      .bind(
+        next.status,
+        next.stage,
+        next.revision,
+        JSON.stringify(next),
+        this.now(),
+        runId,
+        expectedRevision,
+      )
+      .run();
+    return (result.meta.changes ?? 0) === 1 ? next : undefined;
+  }
+
+  async resumeClarification(
+    runId: string,
+    expectedRevision: number,
+    issue: IssueSnapshot,
+  ): Promise<RunSnapshot | undefined> {
+    const current = await this.get(runId);
+    if (!current || current.revision !== expectedRevision) return undefined;
+    const next = resumeRun(current, expectedRevision, issue);
     const result = await this.db
       .prepare(
         "UPDATE runs SET status=?1, stage=?2, revision=?3, document_json=?4, lease_attempt_id=NULL, lease_revision=NULL, lease_expires_at=NULL, updated_at=?5 WHERE id=?6 AND revision=?7",
@@ -203,38 +255,27 @@ export class D1RunRepository implements RunRepository {
       )
       .bind(attemptId)
       .first<AttemptRow>();
-    return row
-      ? {
-          id: row.id,
-          runId: row.run_id,
-          runRevision: row.run_revision,
-          kind: row.kind,
-          stage: row.stage,
-          role: row.role,
-          state: row.state,
-          deadlineAt: row.deadline_at,
-          baseCommit: row.base_commit,
-          expectedHead: row.expected_head,
-          ...(row.accepted_head ? { acceptedHead: row.accepted_head } : {}),
-          ...(row.result_json
-            ? { result: JSON.parse(row.result_json) as Record<string, unknown> }
-            : {}),
-          ...(row.routing_json
-            ? {
-                routing: JSON.parse(row.routing_json) as Record<
-                  string,
-                  unknown
-                >,
-              }
-            : {}),
-        }
-      : undefined;
+    return row ? attemptFromRow(row) : undefined;
+  }
+
+  async latestCompletedAttempt(
+    runId: string,
+    stage: RunStage,
+    beforeRevision: number,
+  ): Promise<Attempt | undefined> {
+    const row = await this.db
+      .prepare(
+        "SELECT id,run_id,run_revision,kind,stage,role,state,deadline_at,base_commit,expected_head,accepted_head,result_json,routing_json FROM attempts WHERE run_id=?1 AND stage=?2 AND state='completed' AND run_revision<?3 ORDER BY run_revision DESC LIMIT 1",
+      )
+      .bind(runId, stage, beforeRevision)
+      .first<AttemptRow>();
+    return row ? attemptFromRow(row) : undefined;
   }
 
   async expiredLeases(now: number): Promise<readonly Wakeup[]> {
     const result = await this.db
       .prepare(
-        "SELECT id,revision FROM runs WHERE status='active' AND stage IN ('qualify','reproduce') AND lease_expires_at<=?1",
+        "SELECT id,revision FROM runs WHERE status='active' AND stage IN ('qualify','reproduce','plan') AND lease_expires_at<=?1",
       )
       .bind(now)
       .all<{ id: string; revision: number }>();

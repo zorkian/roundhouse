@@ -3,12 +3,15 @@
 
 export {
   createRun,
+  resumeRun,
   runSchemaVersion,
   runStages,
   runStatuses,
   transitionRun,
   waitingReasons,
   type CreateRunInput,
+  type IssueCommentSnapshot,
+  type IssueSnapshot,
   type RunSnapshot,
   type RunStage,
   type RunStatus,

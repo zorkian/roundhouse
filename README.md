@@ -62,8 +62,9 @@ than as a parallel legacy tree. Phase 1 is deployed in isolated V2 development
 resources and proves D1-owned lifecycle state, Queue wakeups, thin Container
 Durable Objects, and Artifacts checkpoint handoff. Phase 2 has deployed real
 development GitHub intake, read-only qualification, and read-only reproduction
-through a private model broker. Natural-language clarification and planning are
-the next functional slices.
+through a private model broker. Its current slice adds unrestricted
+natural-language clarification and an evidence-backed read-only plan, ending at
+`implement`.
 
 ## Local checks
 

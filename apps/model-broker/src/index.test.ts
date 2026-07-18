@@ -44,6 +44,17 @@ describe("model broker", () => {
     });
   });
 
+  it("selects the planning policy from the trusted role envelope", () => {
+    const planning = request();
+    planning.headers.set("x-roundhouse-role", "plan");
+    planning.headers.set("x-roundhouse-task-type", "planning");
+    expect(selectRoute(planning, env)).toEqual({
+      model: "openai/gpt-5.6-sol",
+      reasoningEffort: "low",
+      rule: "planning-default-v1",
+    });
+  });
+
   it("replaces caller routing and uses a raw ZDR AI Gateway response", async () => {
     const run = vi.fn(async () =>
       Promise.resolve(
