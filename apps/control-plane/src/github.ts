@@ -101,7 +101,8 @@ export class GitHubClient {
 
   constructor(
     private readonly env: GitHubEnv,
-    private readonly send: typeof fetch = fetch,
+    private readonly send: typeof fetch = (input, init) =>
+      globalThis.fetch(input, init),
   ) {}
 
   private async installationToken(): Promise<string> {
