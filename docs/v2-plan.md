@@ -906,11 +906,19 @@ The deterministic implementation includes raw webhook signature verification,
 maintainer authorization, delivery and repeated-command deduplication, bounded
 issue snapshots, a read-only Codex runner, D1-enforced per-attempt model-call
 limits, private service-binding routing, and coordinator-owned qualification
-transitions. Live acceptance remains gated on provisioning the V2 development
-AI Gateway with AI Gateway Read/Edit credentials, loading bounded Unified
-Billing credits without auto-top-up, and passing streaming, structured-output,
-and tool-call compatibility proofs. Subscription-token fallback is not part of
-this design.
+transitions. The development AI Gateway is provisioned with bounded Unified
+Billing credits and no auto-top-up. Streaming, structured-output, tool-call,
+and controlled GitHub qualification proofs pass. Subscription-token fallback
+is not part of this design.
+
+The second slice consumes that durable qualification in a separate read-only
+reproduction attempt. It records commands, observed and expected behavior,
+relevant files, and uncertainties in a structured result. A confirmed result
+advances to `plan`; a blocked or unsuccessful reproduction waits explicitly.
+The callback still only records a validated unchanged checkpoint, the
+coordinator remains the sole transition authority, and the broker selects the
+reproduction policy from the trusted role envelope. Planning is deliberately
+not dispatched by this slice.
 
 Actions:
 

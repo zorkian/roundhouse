@@ -10,6 +10,7 @@ import {
   createCheckpoint,
   qualificationProviderRetries,
   qualificationSandbox,
+  reproductionSchema,
   runnerIdentity,
   runnerResponse,
   validateCheckpoint,
@@ -27,6 +28,27 @@ describe("V2 agent runner", () => {
 
   it("limits each model request to three total attempts", () => {
     expect(qualificationProviderRetries).toBe(2);
+  });
+
+  it("requires bounded structured reproduction evidence", () => {
+    expect(reproductionSchema.properties.status.enum).toEqual([
+      "confirmed",
+      "not_reproduced",
+      "blocked",
+    ]);
+    expect(reproductionSchema.required).toEqual(
+      expect.arrayContaining([
+        "commands",
+        "expectedBehavior",
+        "observedBehavior",
+        "relevantFiles",
+        "uncertainties",
+      ]),
+    );
+    expect(reproductionSchema.properties.commands.items).toMatchObject({
+      additionalProperties: false,
+      required: ["command", "exitCode", "output"],
+    });
   });
 
   it("reports only its versioned runner identity", () => {

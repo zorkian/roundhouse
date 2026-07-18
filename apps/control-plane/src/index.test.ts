@@ -3,7 +3,11 @@
 
 import { describe, expect, it } from "vitest";
 import { RoundhouseAttemptContainer } from "./attempt-container.js";
-import { controlPlaneService, handleRequest } from "./index.js";
+import {
+  controlPlaneService,
+  handleRequest,
+  successorWakeup,
+} from "./index.js";
 
 describe("V2 control plane", () => {
   it("reports a small versioned health contract", async () => {
@@ -16,6 +20,30 @@ describe("V2 control plane", () => {
       ok: true,
       service: controlPlaneService,
     });
+  });
+
+  it("reconciles only the immediate reproduction successor wakeup", () => {
+    const processed = { runId: "run_1", expectedRevision: 1 };
+    const run = {
+      schemaVersion: 2,
+      id: "run_1",
+      repository: "zorkian/roundhouse",
+      issueNumber: 1,
+      baseCommit: "a".repeat(40),
+      currentHead: "a".repeat(40),
+      profileVersion: "v2",
+      status: "active",
+      stage: "reproduce",
+      revision: 2,
+    } as const;
+    expect(successorWakeup(run, processed)).toEqual({
+      runId: "run_1",
+      expectedRevision: 2,
+    });
+    expect(
+      successorWakeup({ ...run, stage: "plan" }, processed),
+    ).toBeUndefined();
+    expect(successorWakeup({ ...run, revision: 3 }, processed)).toBeUndefined();
   });
 
   it("does not expose undeclared routes or methods", async () => {

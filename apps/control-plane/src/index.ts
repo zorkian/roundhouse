@@ -3,6 +3,7 @@
 
 import {
   runSchemaVersion,
+  immutableAttemptId,
   type Attempt,
   type RunSnapshot,
   type Wakeup,
@@ -22,7 +23,7 @@ import { D1RunRepository, type D1Like } from "./d1-store.js";
 import {
   acceptGitHubStart,
   GitHubClient,
-  GitHubQualificationReporter,
+  GitHubStageReporter,
 } from "./github.js";
 export { ContainerProxy } from "@cloudflare/containers";
 export { RoundhouseAttemptContainer } from "./attempt-container.js";
@@ -49,6 +50,17 @@ export function handleRequest(request: Request): Response {
     });
   }
   return json({ error: "not_found" }, 404);
+}
+
+export function successorWakeup(
+  run: RunSnapshot | undefined,
+  processed: Wakeup,
+): Wakeup | undefined {
+  return run?.status === "active" &&
+    run.stage === "reproduce" &&
+    run.revision === processed.expectedRevision + 1
+    ? { runId: run.id, expectedRevision: run.revision }
+    : undefined;
 }
 
 interface AttemptStub {
@@ -87,6 +99,7 @@ class ContainerDispatcher implements AttemptDispatcher {
     private readonly artifacts: CloudflareArtifactsNamespace,
     private readonly callbackSigningSecret: string,
     private readonly controlPlaneOrigin: string,
+    private readonly runs: D1RunRepository,
   ) {}
 
   async submit(attempt: Attempt, run: RunSnapshot): Promise<void> {
@@ -104,16 +117,30 @@ class ContainerDispatcher implements AttemptDispatcher {
       this.callbackSigningSecret,
       attempt.id,
     );
+    const previous =
+      attempt.stage === "reproduce"
+        ? await this.runs.getAttempt(
+            immutableAttemptId(run.id, run.revision - 1),
+          )
+        : undefined;
+    const qualification = previous?.result?.qualification;
+    if (attempt.stage === "reproduce" && !qualification)
+      throw new Error("reproduction_qualification_missing");
+    const routingRule =
+      attempt.stage === "reproduce"
+        ? "reproduction-default-v1"
+        : "qualification-default-v1";
     const assignment = {
       ...attempt,
       baseCommit: attempt.baseCommit,
       protectedPaths,
       issue: run.issue,
+      context: qualification ? { qualification } : undefined,
       routing: {
         role: attempt.role,
         taskType: "validation",
         complexity: "unknown",
-        rule: "qualification-default-v1",
+        rule: routingRule,
       },
       artifact: {
         repositoryId: repository.id,
@@ -259,6 +286,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       artifactsNamespace(env),
       env.CALLBACK_SIGNING_SECRET,
       env.CONTROL_PLANE_ORIGIN,
+      repository,
     );
     for (const message of batch.messages) {
       try {
@@ -268,8 +296,13 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
           message.body,
           Date.now(),
           30 * 60_000,
-          new GitHubQualificationReporter(new GitHubClient(env)),
+          new GitHubStageReporter(new GitHubClient(env)),
         );
+        const next = successorWakeup(
+          await repository.get(message.body.runId),
+          message.body,
+        );
+        if (next) await env.RUN_WAKEUPS.send(next);
         message.ack();
       } catch (error) {
         console.error(

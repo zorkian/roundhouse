@@ -14,7 +14,7 @@ import {
   signCallback,
   type AttemptCallback,
 } from "./callback.js";
-import { coordinate } from "./coordinator.js";
+import { coordinate, reproductionTransition } from "./coordinator.js";
 
 const input = {
   id: "run_slice",
@@ -43,11 +43,21 @@ async function callbackFor(
       changedPaths: [`.roundhouse/checkpoints/${attempt.id}.json`],
     },
     artifactTokenId: `token-${attempt.id}`,
-    result: {
-      outcome: "ok",
-      checkpoint: head,
-      qualification: { classification: "bug", summary: "Eligible bug" },
-    },
+    result:
+      attempt.stage === "reproduce"
+        ? {
+            outcome: "ok",
+            checkpoint: head,
+            reproduction: {
+              status: "confirmed",
+              summary: "Reproduced",
+            },
+          }
+        : {
+            outcome: "ok",
+            checkpoint: head,
+            qualification: { classification: "bug", summary: "Eligible bug" },
+          },
   };
   return {
     ...unsigned,
@@ -273,7 +283,48 @@ describe("single coordinator", () => {
     });
   });
 
-  it("runs a deterministic fake GitHub qualification journey and stops at reproduce", async () => {
+  it("maps reproduction evidence to explicit lifecycle outcomes", () => {
+    const attempt = {
+      id: "run_slice_rev_2",
+      runId: input.id,
+      runRevision: 2,
+      kind: "agent",
+      stage: "reproduce",
+      role: "reproduce",
+      state: "completed",
+      deadlineAt: 1_000,
+      baseCommit: input.baseCommit,
+      expectedHead: input.baseCommit,
+    } satisfies Attempt;
+    expect(
+      reproductionTransition({
+        ...attempt,
+        result: { reproduction: { status: "confirmed" } },
+      }),
+    ).toEqual({ status: "active", stage: "plan" });
+    expect(
+      reproductionTransition({
+        ...attempt,
+        result: { reproduction: { status: "not_reproduced" } },
+      }),
+    ).toEqual({
+      status: "waiting",
+      stage: "reproduce",
+      waitingReason: "maintainer_judgment",
+    });
+    expect(
+      reproductionTransition({
+        ...attempt,
+        result: { reproduction: { status: "blocked" } },
+      }),
+    ).toEqual({
+      status: "waiting",
+      stage: "reproduce",
+      waitingReason: "external_check",
+    });
+  });
+
+  it("runs qualification and reproduction before stopping at plan", async () => {
     const store = new MemoryRunRepository();
     await store.create(createRun(input));
     const wakeups = [{ runId: input.id, expectedRevision: 1 }];
@@ -305,12 +356,15 @@ describe("single coordinator", () => {
       await acceptCallback(store, "journey-secret", validator, callback);
       await coordinate(store, { submit: async () => undefined }, wakeup, 200);
       previousHead = outputHead;
+      const current = await store.get(input.id);
+      if (current?.status === "active" && current.stage === "reproduce")
+        wakeups.push({ runId: current.id, expectedRevision: current.revision });
     }
-    expect(stages).toEqual(["qualify"]);
+    expect(stages).toEqual(["qualify", "reproduce"]);
     await expect(store.get(input.id)).resolves.toMatchObject({
       status: "active",
-      stage: "reproduce",
-      revision: 2,
+      stage: "plan",
+      revision: 3,
       currentHead: previousHead,
     });
   });

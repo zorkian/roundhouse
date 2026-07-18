@@ -104,7 +104,7 @@ export class D1RunRepository implements RunRepository {
     const next = transitionRun(current, expectedRevision, transition);
     const result = await this.db
       .prepare(
-        "UPDATE runs SET status=?1, stage=?2, revision=?3, document_json=?4, updated_at=?5 WHERE id=?6 AND revision=?7",
+        "UPDATE runs SET status=?1, stage=?2, revision=?3, document_json=?4, lease_attempt_id=NULL, lease_revision=NULL, lease_expires_at=NULL, updated_at=?5 WHERE id=?6 AND revision=?7",
       )
       .bind(
         next.status,
@@ -234,7 +234,7 @@ export class D1RunRepository implements RunRepository {
   async expiredLeases(now: number): Promise<readonly Wakeup[]> {
     const result = await this.db
       .prepare(
-        "SELECT id,revision FROM runs WHERE status='active' AND lease_expires_at<=?1",
+        "SELECT id,revision FROM runs WHERE status='active' AND stage IN ('qualify','reproduce') AND lease_expires_at<=?1",
       )
       .bind(now)
       .all<{ id: string; revision: number }>();
