@@ -21,6 +21,7 @@ import {
 const env = {
   GITHUB_APP_ID: "development-app",
   GITHUB_APP_INSTALLATION_ID: "development-installation",
+  GITHUB_START_COMMAND: "/roundhouse-dev start",
   ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY: "not-used-by-fake",
   ROUNDHOUSE_GITHUB_WEBHOOK_SECRET: "webhook-secret",
 } satisfies GitHubEnv;
@@ -68,7 +69,7 @@ async function reportedBody(
 
 async function delivery(
   id: string,
-  command = "/roundhouse start",
+  command = "/roundhouse-dev start",
   actor = "maintainer",
   type = "User",
 ) {
@@ -101,7 +102,7 @@ async function delivery(
 
 describe("GitHub intake", () => {
   it("verifies the raw delivery body before parsing", async () => {
-    const raw = '{"comment":{"body":"/roundhouse start"}}';
+    const raw = '{"comment":{"body":"/roundhouse-dev start"}}';
     const signature = await signCallback("webhook-secret", raw);
     await expect(
       verifyGitHubWebhook(raw, `sha256=${signature}`, "webhook-secret"),
@@ -187,7 +188,7 @@ describe("GitHub intake", () => {
     const enqueue = vi.fn();
     await expect(
       acceptGitHubComment(
-        await delivery("delivery-1", "/roundhouse start now"),
+        await delivery("delivery-1", "/roundhouse-dev start now"),
         env,
         repository,
         enqueue,

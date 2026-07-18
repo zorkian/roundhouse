@@ -38,6 +38,7 @@ export const enrolledRepository = Object.freeze({
 export interface GitHubEnv {
   readonly GITHUB_APP_ID: string;
   readonly GITHUB_APP_INSTALLATION_ID: string;
+  readonly GITHUB_START_COMMAND: string;
   readonly ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY: string;
   readonly ROUNDHOUSE_GITHUB_WEBHOOK_SECRET: string;
 }
@@ -483,7 +484,7 @@ export async function acceptGitHubComment(
   if (!actor || !issueNumber || !comment) return "ignored";
   const id = runId(issueNumber);
   let run = await repository.get(id);
-  if (comment.trim() !== "/roundhouse start") {
+  if (comment.trim() !== env.GITHUB_START_COMMAND) {
     if (
       payload.sender?.type === "Bot" ||
       comment.includes("<!-- roundhouse:v2:") ||
