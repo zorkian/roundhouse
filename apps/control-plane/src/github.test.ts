@@ -474,5 +474,8 @@ describe("GitHub intake", () => {
     expect(post.mock.calls[0]?.[1]).toMatchObject({
       body: expect.stringContaining("Next: implementation."),
     });
+    expect(post.mock.calls[0]?.[1]).toMatchObject({
+      body: expect.not.stringContaining("focused regression test"),
+    });
   });
 });
