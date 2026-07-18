@@ -1,7 +1,6 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-const maximumRequestBytes = 2 * 1024 * 1024;
 const routingHeaders = [
   "x-roundhouse-attempt-id",
   "x-roundhouse-role",
@@ -84,10 +83,6 @@ export async function brokerRequest(
       { error: "compressed_request_not_supported" },
       { status: 415 },
     );
-  const contentLength = Number(request.headers.get("content-length") ?? "0");
-  if (Number.isFinite(contentLength) && contentLength > maximumRequestBytes)
-    return Response.json({ error: "request_too_large" }, { status: 413 });
-
   let body: Record<string, unknown>;
   try {
     body = (await request.json()) as Record<string, unknown>;

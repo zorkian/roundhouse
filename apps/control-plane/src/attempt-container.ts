@@ -65,10 +65,7 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
     );
     return new Response("stale_attempt", { status: 409 });
   }
-  if (!(await repository.reserveModelCall(attemptId))) {
-    console.error(JSON.stringify({ message: "model_egress_budget_exhausted" }));
-    return new Response("model_budget_exhausted", { status: 429 });
-  }
+  await repository.recordModelCall(attemptId);
   const headers = new Headers(request.headers);
   headers.delete("authorization");
   headers.delete("x-roundhouse-attempt-capability");
