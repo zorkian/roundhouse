@@ -9,7 +9,7 @@
     {
       "binding": "DB",
       "database_name": "roundhouse-v2-development",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "8d3dfa61-e922-4c7b-ae26-199319eba0b5",
       "migrations_dir": "migrations",
     },
   ],
@@ -56,7 +56,9 @@
     },
   ],
   "triggers": { "crons": ["*/5 * * * *"] },
-  "vars": { "CONTROL_PLANE_ORIGIN": "https://v2-development.rm-rm.rip" },
+  "vars": {
+    "CONTROL_PLANE_ORIGIN": "https://roundhouse-v2-control-plane.default-07f.workers.dev",
+  },
   "observability": {
     "enabled": true,
   },

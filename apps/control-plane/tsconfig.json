@@ -8,5 +8,5 @@
     "types": ["@cloudflare/workers-types"]
   },
   "references": [{ "path": "../../packages/core" }],
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "worker-configuration.d.ts"]
 }

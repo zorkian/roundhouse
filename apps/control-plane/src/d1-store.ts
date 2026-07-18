@@ -35,6 +35,7 @@ type AttemptRow = {
   role: string;
   state: Attempt["state"];
   deadline_at: number;
+  base_commit: string;
   expected_head: string;
   accepted_head: string | null;
   result_json: string | null;
@@ -135,7 +136,7 @@ export class D1RunRepository implements RunRepository {
   async createAttempt(attempt: Attempt): Promise<"created" | "exists"> {
     const result = await this.db
       .prepare(
-        "INSERT OR IGNORE INTO attempts (id,run_id,run_revision,kind,stage,role,state,deadline_at,expected_head,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?10)",
+        "INSERT OR IGNORE INTO attempts (id,run_id,run_revision,kind,stage,role,state,deadline_at,base_commit,expected_head,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?11)",
       )
       .bind(
         attempt.id,
@@ -146,6 +147,7 @@ export class D1RunRepository implements RunRepository {
         attempt.role,
         attempt.state,
         attempt.deadlineAt,
+        attempt.baseCommit,
         attempt.expectedHead,
         this.now(),
       )
@@ -196,7 +198,7 @@ export class D1RunRepository implements RunRepository {
   async getAttempt(attemptId: string): Promise<Attempt | undefined> {
     const row = await this.db
       .prepare(
-        "SELECT id,run_id,run_revision,kind,stage,role,state,deadline_at,expected_head,accepted_head,result_json FROM attempts WHERE id=?1",
+        "SELECT id,run_id,run_revision,kind,stage,role,state,deadline_at,base_commit,expected_head,accepted_head,result_json FROM attempts WHERE id=?1",
       )
       .bind(attemptId)
       .first<AttemptRow>();
@@ -210,6 +212,7 @@ export class D1RunRepository implements RunRepository {
           role: row.role,
           state: row.state,
           deadlineAt: row.deadline_at,
+          baseCommit: row.base_commit,
           expectedHead: row.expected_head,
           ...(row.accepted_head ? { acceptedHead: row.accepted_head } : {}),
           ...(row.result_json

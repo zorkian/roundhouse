@@ -23,11 +23,13 @@ export class RoundhouseAttemptContainer extends Container {
         enableInternet: true,
       },
     });
-    const response = await this.containerFetch("http://runner/assign", {
+    const path = new URL(request.url).pathname;
+    const response = await this.containerFetch(`http://runner${path}`, {
       method: "POST",
       headers: request.headers,
       body: JSON.stringify(attempt),
     });
+    if (path === "/validate") return response;
     return response.ok
       ? Response.json(
           { accepted: true, attemptId: attempt.id },

@@ -43,6 +43,7 @@ export interface RunSnapshot {
   readonly repository: string;
   readonly issueNumber: number;
   readonly baseCommit: string;
+  readonly currentHead: string;
   readonly profileVersion: string;
   readonly status: RunStatus;
   readonly stage: RunStage;
@@ -62,6 +63,7 @@ export interface RunTransition {
   readonly status: RunStatus;
   readonly stage: RunStage;
   readonly waitingReason?: WaitingReason;
+  readonly acceptedHead?: string;
 }
 
 const terminalStatuses = new Set<RunStatus>([
@@ -95,6 +97,7 @@ export function createRun(input: CreateRunInput): RunSnapshot {
   return {
     schemaVersion: runSchemaVersion,
     ...input,
+    currentHead: input.baseCommit,
     status: "active",
     stage: "qualify",
     revision: 1,
@@ -106,6 +109,11 @@ function assertTransition(transition: RunTransition): void {
     throw new Error("waiting_reason_required");
   if (transition.status !== "waiting" && transition.waitingReason)
     throw new Error("waiting_reason_not_allowed");
+  if (
+    transition.acceptedHead &&
+    !/^[a-f0-9]{40}$/.test(transition.acceptedHead)
+  )
+    throw new Error("invalid_accepted_head");
 }
 
 export function transitionRun(
@@ -118,9 +126,11 @@ export function transitionRun(
   assertTransition(transition);
 
   const { waitingReason: _waitingReason, ...current } = run;
+  const { acceptedHead, ...nextTransition } = transition;
   return {
     ...current,
-    ...transition,
+    ...nextTransition,
+    currentHead: acceptedHead ?? current.currentHead,
     revision: run.revision + 1,
   };
 }

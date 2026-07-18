@@ -9,7 +9,7 @@ import {
 } from "@roundhouse/core";
 
 export interface AttemptDispatcher {
-  submit(attempt: Attempt): Promise<void>;
+  submit(attempt: Attempt, repository: string): Promise<void>;
 }
 
 export async function coordinate(
@@ -47,13 +47,14 @@ export async function coordinate(
     role: run.stage,
     state: "created",
     deadlineAt: now + leaseMilliseconds,
-    expectedHead: run.baseCommit,
+    baseCommit: run.baseCommit,
+    expectedHead: run.currentHead,
   };
   const created = await repository.createAttempt(attempt);
   const durable = await repository.getAttempt(attemptId);
   if (created === "exists" && durable?.state === "completed")
     return "duplicate";
-  await dispatcher.submit(attempt);
+  await dispatcher.submit(attempt, run.repository);
   await repository.markDispatched(attemptId);
   return "dispatched";
 }

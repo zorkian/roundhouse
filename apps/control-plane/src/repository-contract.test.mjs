@@ -42,6 +42,12 @@ class LocalD1 {
         "utf8",
       ),
     );
+    this.database.exec(
+      readFileSync(
+        new URL("../migrations/0002_attempt_base_commit.sql", import.meta.url),
+        "utf8",
+      ),
+    );
   }
 
   prepare(sql) {
@@ -94,6 +100,7 @@ function repositoryContract(label, createRepository) {
         role: "qualification",
         state: "created",
         deadlineAt: 200,
+        baseCommit: run.baseCommit,
         expectedHead: run.baseCommit,
       };
       await expect(repository.createAttempt(attempt)).resolves.toBe("created");

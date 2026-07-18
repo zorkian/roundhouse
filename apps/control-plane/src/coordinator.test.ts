@@ -13,6 +13,7 @@ import {
   acceptCallbackAndAdvance,
   callbackPayload,
   signCallback,
+  type AttemptCallback,
 } from "./callback.js";
 import { coordinate } from "./coordinator.js";
 
@@ -23,6 +24,33 @@ const input = {
   baseCommit: "a".repeat(40),
   profileVersion: "v2",
 };
+const validator = { validate: async () => undefined };
+
+async function callbackFor(
+  attempt: Attempt,
+  head: string,
+  secret: string,
+): Promise<AttemptCallback> {
+  const unsigned = {
+    attemptId: attempt.id,
+    expectedRevision: attempt.runRevision,
+    checkpoint: {
+      repositoryId: "artifact-repo-id",
+      repository: attempt.runId,
+      baseCommit: attempt.baseCommit,
+      inputHead: attempt.expectedHead,
+      outputHead: head,
+      ref: `refs/heads/roundhouse/${attempt.runId}`,
+      changedPaths: [`.roundhouse/checkpoints/${attempt.id}.json`],
+    },
+    artifactTokenId: `token-${attempt.id}`,
+    result: { outcome: "ok", checkpoint: head },
+  };
+  return {
+    ...unsigned,
+    signature: await signCallback(secret, callbackPayload(unsigned)),
+  };
+}
 
 describe("single coordinator", () => {
   it("claims exactly one revision-bound attempt for duplicate wakeups", async () => {
@@ -53,7 +81,7 @@ describe("single coordinator", () => {
     expect(submitted).toHaveLength(1);
   });
 
-  it("rejects stale wakeups and makes signed duplicate callbacks harmless", async () => {
+  it("rejects stale wakeups and makes fully signed duplicate callbacks harmless", async () => {
     const store = new MemoryRunRepository();
     await store.create(createRun(input));
     await coordinate(
@@ -70,28 +98,24 @@ describe("single coordinator", () => {
         100,
       ),
     ).resolves.toBe("stale");
-    const attemptId = "run_slice_rev_1",
-      head = "b".repeat(40),
-      secret = "attempt-specific-secret";
-    const signature = await signCallback(
-      secret,
-      callbackPayload(attemptId, 1, head),
-    );
-    const callback = {
-      attemptId,
-      expectedRevision: 1,
-      acceptedHead: head,
-      result: { outcome: "ok" },
-      signature,
-    };
-    await expect(acceptCallback(store, secret, callback)).resolves.toBe(
-      "completed",
-    );
-    await expect(acceptCallback(store, secret, callback)).resolves.toBe(
-      "duplicate",
+    const attempt = await store.getAttempt("run_slice_rev_1");
+    if (!attempt) throw new Error("missing_attempt");
+    const callback = await callbackFor(
+      attempt,
+      "b".repeat(40),
+      "attempt-specific-secret",
     );
     await expect(
-      acceptCallback(store, secret, { ...callback, signature: "00" }),
+      acceptCallback(store, "attempt-specific-secret", validator, callback),
+    ).resolves.toBe("completed");
+    await expect(
+      acceptCallback(store, "attempt-specific-secret", validator, callback),
+    ).resolves.toBe("duplicate");
+    await expect(
+      acceptCallback(store, "attempt-specific-secret", validator, {
+        ...callback,
+        result: { outcome: "tampered" },
+      }),
     ).resolves.toBe("unauthorized");
   });
 
@@ -156,19 +180,13 @@ describe("single coordinator", () => {
       { runId: input.id, expectedRevision: 1 },
       100,
     );
-    const attemptId = "run_slice_rev_1";
-    const acceptedHead = "b".repeat(40);
-    const signature = await signCallback(
+    const attempt = await store.getAttempt("run_slice_rev_1");
+    if (!attempt) throw new Error("missing_attempt");
+    const callback = await callbackFor(
+      attempt,
+      "b".repeat(40),
       "callback-retry-secret",
-      callbackPayload(attemptId, 1, acceptedHead),
     );
-    const inputCallback = {
-      attemptId,
-      expectedRevision: 1,
-      acceptedHead,
-      result: { outcome: "ok" },
-      signature,
-    };
     const wakeups: unknown[] = [];
     const enqueue = async (wakeup: unknown) => {
       wakeups.push(wakeup);
@@ -176,7 +194,8 @@ describe("single coordinator", () => {
     await acceptCallbackAndAdvance(
       store,
       "callback-retry-secret",
-      inputCallback,
+      validator,
+      callback,
       enqueue,
     );
     wakeups.length = 0;
@@ -184,18 +203,20 @@ describe("single coordinator", () => {
       acceptCallbackAndAdvance(
         store,
         "callback-retry-secret",
-        inputCallback,
+        validator,
+        callback,
         enqueue,
       ),
     ).resolves.toBe("duplicate");
     expect(wakeups).toEqual([{ runId: input.id, expectedRevision: 2 }]);
   });
 
-  it("runs one deterministic low-risk fake journey through D1-owned revisions", async () => {
+  it("runs a deterministic fake GitHub journey with exact input/output checkpoints", async () => {
     const store = new MemoryRunRepository();
     await store.create(createRun(input));
     const wakeups = [{ runId: input.id, expectedRevision: 1 }];
     const stages: RunStage[] = [];
+    let previousHead = input.baseCommit;
     while (wakeups.length) {
       const wakeup = wakeups.shift();
       if (!wakeup) break;
@@ -212,30 +233,32 @@ describe("single coordinator", () => {
         wakeup.expectedRevision * 100,
       );
       if (!dispatched) throw new Error("attempt_not_dispatched");
-      const acceptedHead = String(wakeup.expectedRevision).repeat(40);
-      const signature = await signCallback(
+      expect(dispatched.expectedHead).toBe(previousHead);
+      const outputHead =
+        dispatched.stage === "implement"
+          ? wakeup.expectedRevision.toString(16).repeat(40)
+          : previousHead;
+      const callback = await callbackFor(
+        dispatched,
+        outputHead,
         "journey-secret",
-        callbackPayload(dispatched.id, dispatched.runRevision, acceptedHead),
       );
       await acceptCallbackAndAdvance(
         store,
         "journey-secret",
-        {
-          attemptId: dispatched.id,
-          expectedRevision: dispatched.runRevision,
-          acceptedHead,
-          result: { outcome: "ok" },
-          signature,
-        },
+        validator,
+        callback,
         async (next) => {
           wakeups.push(next);
         },
       );
+      previousHead = outputHead;
     }
     expect(stages).toEqual(["qualify", "implement", "validate", "review"]);
     await expect(store.get(input.id)).resolves.toMatchObject({
       status: "succeeded",
       revision: 5,
+      currentHead: previousHead,
     });
   });
 });
