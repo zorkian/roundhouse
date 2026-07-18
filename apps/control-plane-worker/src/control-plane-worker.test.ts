@@ -19,6 +19,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { ControlPlaneEnv } from "./environment.js";
 import {
   acceptedGitHubCommandComment,
+  continuationChangedFilesAllowed,
   createControlPlaneHandler,
   executeTrustedExecutionWorkflow,
   independentReviewCheckOutcome,
@@ -574,6 +575,45 @@ describe("planning failure summaries", () => {
 });
 
 describe("local control-plane Worker", () => {
+  it("treats likely paths as advisory when hard repository policy exists", () => {
+    const sourceTask = structuredClone(task);
+    sourceTask.allowedPaths = ["apps/control-plane-worker/src/index.ts"];
+    sourceTask.pathPolicy = {
+      allowedExactPaths: [],
+      allowedPrefixes: ["apps/control-plane-worker/src/"],
+      deniedExactPaths: ["apps/control-plane-worker/src/protected.ts"],
+      deniedPrefixes: [],
+      deniedBasenames: [],
+      maxChangedFiles: 50,
+    };
+    expect(
+      continuationChangedFilesAllowed(sourceTask, [
+        "apps/control-plane-worker/src/github-ci.ts",
+      ]),
+    ).toBe(true);
+    expect(
+      continuationChangedFilesAllowed(sourceTask, [
+        "apps/control-plane-worker/src/protected.ts",
+      ]),
+    ).toBe(false);
+  });
+
+  it("keeps legacy allowed paths authoritative without repository policy", () => {
+    const sourceTask = structuredClone(task);
+    sourceTask.allowedPaths = ["apps/control-plane-worker/src/index.ts"];
+    delete sourceTask.pathPolicy;
+    expect(
+      continuationChangedFilesAllowed(sourceTask, [
+        "apps/control-plane-worker/src/index.ts",
+      ]),
+    ).toBe(true);
+    expect(
+      continuationChangedFilesAllowed(sourceTask, [
+        "apps/control-plane-worker/src/github-ci.ts",
+      ]),
+    ).toBe(false);
+  });
+
   async function configureAdvisoryPullRequest(
     env: ControlPlaneEnv,
     headCommit: () => string,

@@ -4237,10 +4237,9 @@ async function publishEligibleContinuationRun(
     source.task.planning?.planId !== run.task.planning.planId ||
     source.task.planning.planSha256 !== run.task.planning.planSha256 ||
     !sameTaskAuthority ||
-    run.implementation.changedFiles.some((path) =>
-      source.task.pathPolicy
-        ? !repositoryPathAllowed(source.task.pathPolicy, path)
-        : !source.task.allowedPaths.includes(path),
+    !continuationChangedFilesAllowed(
+      source.task,
+      run.implementation.changedFiles,
     ) ||
     !plan ||
     plan.status !== "materialized" ||
@@ -4286,6 +4285,17 @@ async function publishEligibleContinuationRun(
     run = await jobs.read(run.runId);
   }
   return run;
+}
+
+export function continuationChangedFilesAllowed(
+  sourceTask: SelfDevelopmentTask,
+  changedFiles: string[],
+): boolean {
+  return changedFiles.every((path) =>
+    sourceTask.pathPolicy
+      ? repositoryPathAllowed(sourceTask.pathPolicy, path)
+      : sourceTask.allowedPaths.includes(path),
+  );
 }
 
 async function route(
