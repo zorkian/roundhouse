@@ -14,6 +14,7 @@ export interface ArtifactRepository {
   readonly id: string;
   readonly name: string;
   readonly remote: string;
+  readonly hostname: string;
   createToken(
     access: ArtifactAccess,
     ttlSeconds: number,
@@ -45,11 +46,13 @@ class CloudflareArtifactRepository implements ArtifactRepository {
   readonly id: string;
   readonly name: string;
   readonly remote: string;
+  readonly hostname: string;
 
   constructor(private readonly repository: ArtifactsRepo) {
     this.id = repository.id;
     this.name = repository.name;
     this.remote = repository.remote;
+    this.hostname = new URL(repository.remote).hostname;
   }
 
   async createToken(access: ArtifactAccess, ttlSeconds: number) {

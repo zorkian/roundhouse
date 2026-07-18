@@ -7,7 +7,10 @@ import { verifyCallback } from "./callback.js";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
 
 interface AttemptAssignment extends Attempt {
-  readonly artifact: { readonly remote: string };
+  readonly artifact: {
+    readonly remote: string;
+    readonly hostname: string;
+  };
   readonly issue?: unknown;
 }
 
@@ -88,7 +91,7 @@ export class RoundhouseAttemptContainer extends Container<Cloudflare.Env> {
 
     this.allowedHosts = [
       modelHost,
-      new URL(attempt.artifact.remote).hostname,
+      attempt.artifact.hostname,
       request.headers.get("x-roundhouse-callback-url")
         ? new URL(request.headers.get("x-roundhouse-callback-url")!).hostname
         : "",

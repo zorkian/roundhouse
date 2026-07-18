@@ -12,6 +12,7 @@ import {
 class FakeRepo implements ArtifactRepository {
   readonly id: string;
   readonly remote: string;
+  readonly hostname: string;
   readonly tokens = new Map<string, ArtifactAccess>();
   head: string;
   constructor(
@@ -20,6 +21,7 @@ class FakeRepo implements ArtifactRepository {
   ) {
     this.id = `repo-${name}`;
     this.remote = `https://artifacts.invalid/${name}`;
+    this.hostname = "artifacts.invalid";
     this.head = base;
   }
   async createToken(access: ArtifactAccess, _ttlSeconds: number) {
@@ -78,6 +80,7 @@ describe("Artifacts workspace contract", () => {
     );
     const writer = await repo.createToken("write", 300);
     const reviewer = await repo.createToken("read", 300);
+    expect(repo.hostname).toBe("artifacts.invalid");
     const first = (repo as FakeRepo).clone(writer.plaintext);
     expect(first.head).toBe(base);
     first.push(head);
