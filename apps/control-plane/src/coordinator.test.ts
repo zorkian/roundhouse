@@ -18,6 +18,7 @@ import {
   coordinate,
   implementationTransition,
   planTransition,
+  reviewTransition,
   reproductionTransition,
 } from "./coordinator.js";
 
@@ -78,14 +79,24 @@ async function callbackFor(
                   validation: [],
                 },
               }
-            : {
-                outcome: "ok",
-                checkpoint: head,
-                qualification: {
-                  classification: "bug",
-                  summary: "Eligible bug",
+            : attempt.stage === "review"
+              ? {
+                  outcome: "ok",
+                  checkpoint: head,
+                  review: {
+                    status: "clean",
+                    summary: "The candidate is correct",
+                    findings: [],
+                  },
+                }
+              : {
+                  outcome: "ok",
+                  checkpoint: head,
+                  qualification: {
+                    classification: "bug",
+                    summary: "Eligible bug",
+                  },
                 },
-              },
   };
   return {
     ...unsigned,
@@ -359,7 +370,7 @@ describe("single coordinator", () => {
     });
   });
 
-  it("finishes after a validated implementation checkpoint", () => {
+  it("reviews the validated implementation checkpoint next", () => {
     const head = "b".repeat(40);
     const attempt = {
       id: "run_slice_rev_4",
@@ -376,13 +387,45 @@ describe("single coordinator", () => {
       result: { implementation: { summary: "Done" } },
     } satisfies Attempt;
     expect(implementationTransition(attempt)).toEqual({
-      status: "succeeded",
-      stage: "implement",
+      status: "active",
+      stage: "review",
       acceptedHead: head,
     });
   });
 
-  it("runs qualification, reproduction, and planning before implementation", async () => {
+  it("advances a clean review to CI and returns findings to implementation", () => {
+    const attempt = {
+      id: "run_slice_rev_5",
+      runId: input.id,
+      runRevision: 5,
+      kind: "agent",
+      stage: "review",
+      role: "review",
+      state: "completed",
+      deadlineAt: 1_000,
+      baseCommit: input.baseCommit,
+      expectedHead: "b".repeat(40),
+    } satisfies Attempt;
+    expect(
+      reviewTransition({
+        ...attempt,
+        result: { review: { status: "clean", findings: [] } },
+      }),
+    ).toEqual({ status: "active", stage: "ci" });
+    expect(
+      reviewTransition({
+        ...attempt,
+        result: {
+          review: {
+            status: "changes_requested",
+            findings: [{ title: "Regression" }],
+          },
+        },
+      }),
+    ).toEqual({ status: "active", stage: "implement" });
+  });
+
+  it("runs qualification through exact-commit review before CI", async () => {
     const store = new MemoryRunRepository();
     await store.create(createRun(input));
     const wakeups = [{ runId: input.id, expectedRevision: 1 }];
@@ -418,15 +461,21 @@ describe("single coordinator", () => {
       const current = await store.get(input.id);
       if (
         current?.status === "active" &&
-        new Set(["reproduce", "plan", "implement"]).has(current.stage)
+        new Set(["reproduce", "plan", "implement", "review"]).has(current.stage)
       )
         wakeups.push({ runId: current.id, expectedRevision: current.revision });
     }
-    expect(stages).toEqual(["qualify", "reproduce", "plan", "implement"]);
+    expect(stages).toEqual([
+      "qualify",
+      "reproduce",
+      "plan",
+      "implement",
+      "review",
+    ]);
     await expect(store.get(input.id)).resolves.toMatchObject({
-      status: "succeeded",
-      stage: "implement",
-      revision: 5,
+      status: "active",
+      stage: "ci",
+      revision: 6,
       currentHead: previousHead,
     });
   });

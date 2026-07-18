@@ -1004,26 +1004,28 @@ Exit gate:
 - an out-of-policy patch is rejected before publication;
 - GitHub credentials never enter the implementation container.
 
-### Phase 4 — Pluggable adversarial review
+### Phase 4 — Exact-commit review
 
 Actions:
 
-1. Implement the reviewer registry and normalized finding contract.
-2. Configure one required reviewer using a different provider/model family from
-   implementation.
-3. Aggregate findings, fingerprint duplicates, and create one remediation batch
-   per candidate head.
-4. Rerun validation and affected reviewers on the repaired head.
-5. Exercise a second fake reviewer role in journey tests to prove that a new
-   role needs configuration and an adapter, not workflow/schema changes.
+1. Run a read-only reviewer against the exact promoted candidate commit with
+   the issue, plan, implementation result, and repository diff.
+2. Advance a clean review to `ci` with the reviewed commit recorded in durable
+   evidence.
+3. Return actionable findings to implementation with no arbitrary round count.
+4. Validate and promote the repaired commit, update the same draft pull
+   request, and review the new exact commit.
+5. Keep the GitHub review concise while retaining complete findings in durable
+   attempt evidence for the future run-details page.
 
 Exit gate:
 
 - clean review passes the exact candidate;
 - a seeded blocking finding is fixed, validated, and reviewed again;
-- scope expansion waits for replanning and approval;
-- duplicate findings terminate rather than loop;
-- conflicting reviewers produce one useful human decision.
+- remediation updates the existing draft pull request rather than creating a
+  duplicate;
+- changing the candidate invalidates the previous review naturally because the
+  next review is bound to the new commit.
 
 ### Phase 5 — Exact-head CI and risk-aware merge
 

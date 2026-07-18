@@ -597,7 +597,9 @@ describe("GitHub intake", () => {
       get: async <T>(path: string) =>
         (path.endsWith("/comments?per_page=100")
           ? []
-          : { default_branch: "main" }) as T,
+          : path.includes("/pulls?state=open")
+            ? []
+            : { default_branch: "main" }) as T,
       post: post as GitHubApi["post"],
     });
     const run = {
@@ -655,6 +657,124 @@ describe("GitHub intake", () => {
     );
     expect(JSON.stringify(post.mock.calls)).not.toContain("pnpm test");
     expect(JSON.stringify(post.mock.calls)).not.toContain("passed");
+  });
+
+  it("updates the same draft pull request after review findings", async () => {
+    const post = vi.fn(async () => ({}));
+    const reporter = new GitHubStageReporter({
+      get: async <T>(path: string) =>
+        (path.includes("/pulls?state=open")
+          ? [
+              {
+                number: 73,
+                html_url: "https://github.com/zorkian/roundhouse/pull/73",
+              },
+            ]
+          : []) as T,
+      post: post as GitHubApi["post"],
+    });
+    const run = {
+      ...createRun({
+        id: "run_remediation",
+        repository: "zorkian/roundhouse",
+        issueNumber: 42,
+        baseCommit: "a".repeat(40),
+        profileVersion: "v2",
+      }),
+      status: "active",
+      stage: "review",
+      revision: 7,
+      currentHead: "c".repeat(40),
+    } as const;
+    await reporter.report(run, {
+      id: "run_remediation_rev_6",
+      runId: run.id,
+      runRevision: 6,
+      kind: "agent",
+      stage: "implement",
+      role: "implement",
+      state: "completed",
+      deadlineAt: Date.now() + 1_000,
+      baseCommit: run.baseCommit,
+      expectedHead: "b".repeat(40),
+      acceptedHead: run.currentHead,
+      result: {
+        implementation: {
+          summary: "Addressed the review finding.",
+          pullRequestTitle: "Handle empty input",
+          pullRequestBody: "Handles empty input.",
+          validation: [],
+        },
+      },
+    });
+    expect(post).not.toHaveBeenCalledWith(
+      "/repos/zorkian/roundhouse/pulls",
+      expect.anything(),
+    );
+    expect(post).toHaveBeenCalledWith(
+      "/repos/zorkian/roundhouse/issues/42/comments",
+      {
+        body: expect.stringContaining("## I updated the draft pull request"),
+      },
+    );
+  });
+
+  it("posts a concise review bound to the exact candidate commit", async () => {
+    const post = vi.fn(async () => ({}));
+    const reporter = new GitHubStageReporter({
+      get: async <T>(path: string) =>
+        (path.includes("/pulls?state=open")
+          ? [
+              {
+                number: 73,
+                html_url: "https://github.com/zorkian/roundhouse/pull/73",
+              },
+            ]
+          : []) as T,
+      post: post as GitHubApi["post"],
+    });
+    const head = "c".repeat(40);
+    const run = {
+      ...createRun({
+        id: "run_review",
+        repository: "zorkian/roundhouse",
+        issueNumber: 42,
+        baseCommit: "a".repeat(40),
+        profileVersion: "v2",
+      }),
+      status: "active",
+      stage: "ci",
+      revision: 6,
+      currentHead: head,
+    } as const;
+    await reporter.report(run, {
+      id: "run_review_rev_5",
+      runId: run.id,
+      runRevision: 5,
+      kind: "agent",
+      stage: "review",
+      role: "review",
+      state: "completed",
+      deadlineAt: Date.now() + 1_000,
+      baseCommit: run.baseCommit,
+      expectedHead: head,
+      acceptedHead: head,
+      result: {
+        review: {
+          status: "clean",
+          summary: "The change matches the requested behavior.",
+          findings: [],
+        },
+      },
+    });
+    expect(post).toHaveBeenCalledWith(
+      "/repos/zorkian/roundhouse/issues/73/comments",
+      {
+        body: expect.stringContaining(
+          `Reviewed commit \`${head}\`. CI is next.`,
+        ),
+      },
+    );
   });
 
   it("does not open a pull request for a failed implementation", async () => {

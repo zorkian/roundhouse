@@ -51,7 +51,9 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
   const attempt = await repository.getAttempt(attemptId);
   if (
     !attempt ||
-    !["qualify", "reproduce", "plan", "implement"].includes(attempt.stage) ||
+    !["qualify", "reproduce", "plan", "implement", "review"].includes(
+      attempt.stage,
+    ) ||
     !["created", "dispatched"].includes(attempt.state) ||
     attempt.deadlineAt <= Date.now()
   ) {
@@ -77,7 +79,9 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
       ? "planning"
       : attempt.stage === "implement"
         ? "implementation"
-        : "validation",
+        : attempt.stage === "review"
+          ? "review"
+          : "validation",
   );
   headers.set("x-roundhouse-complexity", "unknown");
   const requestedUrl = new URL(request.url);
@@ -138,7 +142,9 @@ export class RoundhouseAttemptContainer extends Container<Cloudflare.Env> {
               ? "planning"
               : attempt.stage === "implement"
                 ? "implementation"
-                : "validation",
+                : attempt.stage === "review"
+                  ? "review"
+                  : "validation",
           ROUNDHOUSE_COMPLEXITY: "unknown",
           ROUNDHOUSE_DUMMY_TOKEN: "service-binding-auth-only",
           GIT_SSL_CAINFO: containerCa,

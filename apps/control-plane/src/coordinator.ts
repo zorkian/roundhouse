@@ -76,10 +76,21 @@ export function implementationTransition(attempt: Attempt) {
   if (!outcome || typeof outcome !== "object" || !attempt.acceptedHead)
     return { status: "failed", stage: "implement" } as const;
   return {
-    status: "succeeded",
-    stage: "implement",
+    status: "active",
+    stage: "review",
     acceptedHead: attempt.acceptedHead,
   } as const;
+}
+
+export function reviewTransition(attempt: Attempt) {
+  const outcome = attempt.result?.review;
+  if (!outcome || typeof outcome !== "object")
+    return { status: "failed", stage: "review" } as const;
+  const status = (outcome as Record<string, unknown>).status;
+  if (status === "clean") return { status: "active", stage: "ci" } as const;
+  if (status === "changes_requested")
+    return { status: "active", stage: "implement" } as const;
+  return { status: "failed", stage: "review" } as const;
 }
 
 function completedTransition(attempt: Attempt) {
@@ -87,6 +98,7 @@ function completedTransition(attempt: Attempt) {
   if (attempt.stage === "reproduce") return reproductionTransition(attempt);
   if (attempt.stage === "plan") return planTransition(attempt);
   if (attempt.stage === "implement") return implementationTransition(attempt);
+  if (attempt.stage === "review") return reviewTransition(attempt);
   return undefined;
 }
 
@@ -105,7 +117,11 @@ export async function coordinate(
     run.status !== "active"
   )
     return "stale";
-  if (!new Set(["qualify", "reproduce", "plan", "implement"]).has(run.stage))
+  if (
+    !new Set(["qualify", "reproduce", "plan", "implement", "review"]).has(
+      run.stage,
+    )
+  )
     return "stale";
   const attemptId = immutableAttemptId(run.id, run.revision);
   const previous = await repository.getAttempt(attemptId);

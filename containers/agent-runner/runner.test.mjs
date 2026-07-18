@@ -12,6 +12,7 @@ import {
   planSchema,
   prepareWorkspace,
   qualificationSandbox,
+  reviewSchema,
   reproductionSchema,
   runnerIdentity,
   runnerResponse,
@@ -87,6 +88,19 @@ describe("V2 agent runner", () => {
     expect(
       implementationSchema.properties.validation.items.properties.output,
     ).not.toHaveProperty("maxLength");
+  });
+
+  it("returns concrete review findings without arbitrary caps", () => {
+    expect(reviewSchema.properties.status.enum).toEqual([
+      "clean",
+      "changes_requested",
+    ]);
+    expect(reviewSchema.required).toEqual(["status", "summary", "findings"]);
+    expect(reviewSchema.properties.findings).not.toHaveProperty("maxItems");
+    expect(reviewSchema.properties.findings.items).toMatchObject({
+      additionalProperties: false,
+      required: ["title", "details", "file"],
+    });
   });
 
   it("reports only its versioned runner identity", () => {
