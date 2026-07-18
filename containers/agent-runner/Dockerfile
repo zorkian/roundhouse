@@ -7,7 +7,7 @@ RUN apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install --global @openai/codex@0.144.5
+RUN npm install --global @openai/codex@0.144.6
 
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin runner
 
