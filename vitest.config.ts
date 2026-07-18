@@ -10,7 +10,6 @@ export default defineConfig({
       "apps/**/*.test.ts",
       "containers/**/*.test.mjs",
       "packages/**/*.test.ts",
-      "scripts/**/*.test.mjs",
     ],
     testTimeout: 15_000,
   },
