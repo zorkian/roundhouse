@@ -5,7 +5,7 @@
 
 - Status: Active
 - Audience: Maintainers and implementers
-- Last updated: 2026-07-17
+- Last updated: 2026-07-18
 
 This is the product contract, architecture decision, transition plan, and
 acceptance plan for Roundhouse V2. It supersedes every V1 plan, ADR, manifest,
@@ -240,8 +240,9 @@ the V1 orchestration as a compatibility layer.
 
 ## 6. V2 architecture
 
-V2 has one control-plane deployable, one agent-runner image, one pure core
-package, and a small number of managed resources.
+V2 has two trusted Worker deployables, one agent-runner image, one pure core
+package, and a small number of managed resources. The second Worker is a
+private model broker, not another lifecycle service.
 
 ```text
 GitHub webhook/comment/check
@@ -258,6 +259,19 @@ GitHub webhook/comment/check
           +------> Artifacts (one durable Git repo per run)
           |
           +------> agent Container (one stage attempt)
+          |               |
+          |               v
+          |       trusted outbound handler
+          |               |
+          |               v
+          |       private model-broker Worker
+          |       - task/complexity routing
+          |       - AI Gateway binding
+          |               |
+          |               v
+          |       Cloudflare AI Gateway
+          |       - Unified Billing
+          |       - no vendor key in Roundhouse
           |
           +------> GitHub publication / CI / merge
 ```
@@ -266,6 +280,7 @@ Target source layout:
 
 ```text
 apps/control-plane/       Worker, GitHub adapter, coordinator, D1, queue
+apps/model-broker/        private model routing and credential injection
 packages/core/            pure state transitions, policy, shared contracts
 containers/agent-runner/  qualification, reproduction, implementation, review
 tests/journeys/           end-to-end scenarios with real contract boundaries
@@ -274,6 +289,24 @@ docs/v2-plan.md           this document
 
 The precise folders may change once, during transition, if the resulting
 boundary is smaller. They must not proliferate into one package per stage.
+
+The agent calls a virtual model hostname with a dummy bearer credential and an
+attempt-bound capability. Cloudflare Container outbound interception verifies
+that capability and the live D1 attempt, enforces the request budget, replaces
+container-supplied routing metadata, and forwards through a private
+[service binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/).
+The broker uses a Workers AI binding to call third-party models through
+[AI Gateway Unified Billing](https://developers.cloudflare.com/ai-gateway/features/unified-billing/).
+Cloudflare supplies provider authentication; Roundhouse stores neither a
+vendor API key nor a model-subscription token. The broker requests raw
+Responses output so it can stream the protocol unchanged, disables Gateway
+request logging and caching per request, and requires ZDR for supported
+providers. The named environment gateway must also have logging disabled, ZDR
+enabled, and a spend limit before the live model path is deployed. The initial
+rule selects one model and effort; later rules may select by semantic role,
+task type, and complexity without changing the runner or lifecycle schema.
+Container internet access remains disabled; only explicit Artifacts, callback,
+and intercepted model hosts are allowed.
 
 ### 6.1 One coordinator owns progress
 
@@ -726,11 +759,12 @@ without inspecting raw D1 tables, Queue messages, or container internals.
 
 The budget is a product requirement:
 
-- one Worker deployable;
+- two Worker deployables: the lifecycle control plane and private model broker;
 - one runner image;
 - one D1 database;
 - one Queue plus dead-letter queue;
 - one Artifacts namespace per environment;
+- one AI Gateway per environment;
 - no required R2 bucket initially;
 - at most seven initial D1 tables;
 - one lifecycle owner;
@@ -845,6 +879,25 @@ Exit gate:
 - schema and resources stay inside the complexity budget.
 
 ### Phase 2 — Qualification, clarification, and reproduction
+
+The first Phase 2 slice stops deliberately after real qualification. It accepts
+an authorized `/roundhouse start` from a separately signed V2 development
+repository webhook, snapshots the exact default-branch commit, runs one
+read-only qualification through the private AI Gateway model broker, posts one
+reconciled qualification comment, and leaves an eligible run active at
+`reproduce`. The development GitHub App remains the outbound API authority;
+its existing V1 webhook URL is not redirected during this isolated slice.
+Production App configuration and every V1 resource remain unchanged.
+
+The deterministic implementation includes raw webhook signature verification,
+maintainer authorization, delivery and repeated-command deduplication, bounded
+issue snapshots, a read-only Codex runner, D1-enforced per-attempt model-call
+limits, private service-binding routing, and coordinator-owned qualification
+transitions. Live acceptance remains gated on provisioning the V2 development
+AI Gateway with AI Gateway Read/Edit credentials, loading bounded Unified
+Billing credits without auto-top-up, and passing streaming, structured-output,
+and tool-call compatibility proofs. Subscription-token fallback is not part of
+this design.
 
 Actions:
 
@@ -1029,3 +1082,5 @@ This compact log replaces standalone ADRs.
 | 2026-07-17 | Make provider/model/effort routing versioned policy and immutable attempt evidence. |
 | 2026-07-17 | Auto-merge only low risk; medium/high receives plan and final review.               |
 | 2026-07-17 | Keep only the README and this plan as normative documentation.                      |
+| 2026-07-17 | Put model access and future model selection behind one private broker.              |
+| 2026-07-18 | Use AI Gateway Unified Billing; do not deploy model-subscription credentials.       |

@@ -39,6 +39,7 @@ type AttemptRow = {
   expected_head: string;
   accepted_head: string | null;
   result_json: string | null;
+  routing_json: string | null;
 };
 
 export class D1RunRepository implements RunRepository {
@@ -198,7 +199,7 @@ export class D1RunRepository implements RunRepository {
   async getAttempt(attemptId: string): Promise<Attempt | undefined> {
     const row = await this.db
       .prepare(
-        "SELECT id,run_id,run_revision,kind,stage,role,state,deadline_at,base_commit,expected_head,accepted_head,result_json FROM attempts WHERE id=?1",
+        "SELECT id,run_id,run_revision,kind,stage,role,state,deadline_at,base_commit,expected_head,accepted_head,result_json,routing_json FROM attempts WHERE id=?1",
       )
       .bind(attemptId)
       .first<AttemptRow>();
@@ -218,6 +219,14 @@ export class D1RunRepository implements RunRepository {
           ...(row.result_json
             ? { result: JSON.parse(row.result_json) as Record<string, unknown> }
             : {}),
+          ...(row.routing_json
+            ? {
+                routing: JSON.parse(row.routing_json) as Record<
+                  string,
+                  unknown
+                >,
+              }
+            : {}),
         }
       : undefined;
   }
@@ -233,5 +242,39 @@ export class D1RunRepository implements RunRepository {
       runId: row.id,
       expectedRevision: row.revision,
     }));
+  }
+
+  async recordGitHubDelivery(
+    runId: string,
+    deliveryId: string,
+    payload: Readonly<Record<string, unknown>>,
+  ): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        "INSERT OR IGNORE INTO events (run_id,kind,payload_json,created_at,delivery_id) VALUES (?1,'github_delivery',?2,?3,?4)",
+      )
+      .bind(runId, JSON.stringify(payload), this.now(), deliveryId)
+      .run();
+    return (result.meta.changes ?? 0) === 1;
+  }
+
+  async reserveModelCall(attemptId: string, maximum = 8): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        "UPDATE attempts SET model_calls=model_calls+1,updated_at=?1 WHERE id=?2 AND state IN ('created','dispatched') AND deadline_at>?1 AND model_calls<?3",
+      )
+      .bind(this.now(), attemptId, maximum)
+      .run();
+    return (result.meta.changes ?? 0) === 1;
+  }
+
+  async recordModelRouting(
+    attemptId: string,
+    routing: Readonly<Record<string, unknown>>,
+  ): Promise<void> {
+    await this.db
+      .prepare("UPDATE attempts SET routing_json=?1,updated_at=?2 WHERE id=?3")
+      .bind(JSON.stringify(routing), this.now(), attemptId)
+      .run();
   }
 }

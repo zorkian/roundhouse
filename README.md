@@ -45,15 +45,18 @@ normative design document in this repository.
 GitHub is the public source of truth for issues, pull requests, CI, and merged
 code. D1 owns workflow state. Cloudflare Artifacts is V2's Git-native workspace
 and handoff layer. Agent containers never receive GitHub App,
-Cloudflare administration, or deployment credentials.
+Cloudflare administration, deployment, or model subscription credentials.
 
 ## Repository status
 
 Phase 0 froze the V1 proof of concept at the `v1-poc-final` Git tag and merged
 the minimal V2 core, control-plane Worker, and agent runner into `main`. V1 code
 and historical documents remain available from the tag and Git history rather
-than as a parallel legacy tree. No V2 Cloudflare resource has been deployed
-yet. Phase 1 proceeds on a short-lived reviewed branch from `main`.
+than as a parallel legacy tree. Phase 1 is deployed in isolated V2 development
+resources and proves D1-owned lifecycle state, Queue wakeups, thin Container
+Durable Objects, and Artifacts checkpoint handoff. Phase 2 is adding
+development GitHub intake and real read-only qualification through a private
+model broker.
 
 ## Local checks
 

@@ -2,7 +2,7 @@
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "roundhouse-v2-control-plane",
   "main": "src/index.ts",
-  "compatibility_date": "2026-07-17",
+  "compatibility_date": "2026-07-18",
   "workers_dev": true,
   "preview_urls": false,
   "d1_databases": [
@@ -33,6 +33,12 @@
   "artifacts": [
     { "binding": "ARTIFACTS", "namespace": "roundhouse-v2-development" },
   ],
+  "services": [
+    {
+      "binding": "MODEL_BROKER",
+      "service": "roundhouse-v2-model-broker",
+    },
+  ],
   "containers": [
     {
       "class_name": "RoundhouseAttemptContainer",
@@ -58,6 +64,8 @@
   "triggers": { "crons": ["*/5 * * * *"] },
   "vars": {
     "CONTROL_PLANE_ORIGIN": "https://roundhouse-v2-control-plane.default-07f.workers.dev",
+    "GITHUB_APP_ID": "4281837",
+    "GITHUB_APP_INSTALLATION_ID": "146147681",
   },
   "observability": {
     "enabled": true,

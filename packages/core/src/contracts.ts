@@ -39,6 +39,7 @@ export interface Attempt {
   readonly expectedHead: string;
   readonly acceptedHead?: string;
   readonly result?: Readonly<Record<string, unknown>>;
+  readonly routing?: Readonly<Record<string, unknown>>;
 }
 
 export interface Approval {

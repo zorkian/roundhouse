@@ -49,6 +49,14 @@ export interface RunSnapshot {
   readonly stage: RunStage;
   readonly revision: number;
   readonly waitingReason?: WaitingReason;
+  readonly issue?: IssueSnapshot;
+}
+
+export interface IssueSnapshot {
+  readonly title: string;
+  readonly body: string;
+  readonly url: string;
+  readonly actor: string;
 }
 
 export interface CreateRunInput {
@@ -57,6 +65,7 @@ export interface CreateRunInput {
   readonly issueNumber: number;
   readonly baseCommit: string;
   readonly profileVersion: string;
+  readonly issue?: IssueSnapshot;
 }
 
 export interface RunTransition {
