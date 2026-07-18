@@ -21,11 +21,13 @@ type AttemptContainerEnv = Cloudflare.Env & {
 };
 
 const modelHost = "model.roundhouse.internal";
+const containerCa = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
 
 export class RoundhouseAttemptContainer extends Container<Cloudflare.Env> {
   override defaultPort = 8080;
   override sleepAfter = "35m";
   override enableInternet = false;
+  override interceptHttps = true;
 
   static override outboundByHost = {
     [modelHost]: async (request: Request, env: Cloudflare.Env) => {
@@ -107,6 +109,8 @@ export class RoundhouseAttemptContainer extends Container<Cloudflare.Env> {
           ROUNDHOUSE_TASK_TYPE: "validation",
           ROUNDHOUSE_COMPLEXITY: "unknown",
           ROUNDHOUSE_DUMMY_TOKEN: "service-binding-auth-only",
+          GIT_SSL_CAINFO: containerCa,
+          NODE_EXTRA_CA_CERTS: containerCa,
         },
         enableInternet: false,
       },
