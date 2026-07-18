@@ -10,7 +10,6 @@ import {
 import { describe, expect, it } from "vitest";
 import {
   acceptCallback,
-  acceptCallbackAndAdvance,
   callbackPayload,
   signCallback,
   type AttemptCallback,
@@ -44,7 +43,11 @@ async function callbackFor(
       changedPaths: [`.roundhouse/checkpoints/${attempt.id}.json`],
     },
     artifactTokenId: `token-${attempt.id}`,
-    result: { outcome: "ok", checkpoint: head },
+    result: {
+      outcome: "ok",
+      checkpoint: head,
+      qualification: { classification: "bug", summary: "Eligible bug" },
+    },
   };
   return {
     ...unsigned,
@@ -171,7 +174,7 @@ describe("single coordinator", () => {
     });
   });
 
-  it("re-enqueues progress when a successful callback response was lost", async () => {
+  it("advances a recorded qualification only through the coordinator", async () => {
     const store = new MemoryRunRepository();
     await store.create(createRun(input));
     await coordinate(
@@ -187,31 +190,90 @@ describe("single coordinator", () => {
       "b".repeat(40),
       "callback-retry-secret",
     );
-    const wakeups: unknown[] = [];
-    const enqueue = async (wakeup: unknown) => {
-      wakeups.push(wakeup);
-    };
-    await acceptCallbackAndAdvance(
-      store,
-      "callback-retry-secret",
-      validator,
-      callback,
-      enqueue,
-    );
-    wakeups.length = 0;
+    await acceptCallback(store, "callback-retry-secret", validator, callback);
     await expect(
-      acceptCallbackAndAdvance(
-        store,
-        "callback-retry-secret",
-        validator,
-        callback,
-        enqueue,
-      ),
+      acceptCallback(store, "callback-retry-secret", validator, callback),
     ).resolves.toBe("duplicate");
-    expect(wakeups).toEqual([{ runId: input.id, expectedRevision: 2 }]);
+    await expect(store.get(input.id)).resolves.toMatchObject({
+      stage: "qualify",
+      revision: 1,
+    });
+    await expect(
+      coordinate(
+        store,
+        { submit: async () => undefined },
+        { runId: input.id, expectedRevision: 1 },
+        200,
+      ),
+    ).resolves.toBe("dispatched");
+    await expect(store.get(input.id)).resolves.toMatchObject({
+      stage: "reproduce",
+      revision: 2,
+    });
   });
 
-  it("runs a deterministic fake GitHub journey with exact input/output checkpoints", async () => {
+  it("keeps a failed qualification report retryable before transition", async () => {
+    const store = new MemoryRunRepository();
+    await store.create(createRun(input));
+    await coordinate(
+      store,
+      { submit: async () => undefined },
+      { runId: input.id, expectedRevision: 1 },
+      100,
+    );
+    const attempt = await store.getAttempt("run_slice_rev_1");
+    if (!attempt) throw new Error("missing_attempt");
+    await acceptCallback(
+      store,
+      "report-retry-secret",
+      validator,
+      await callbackFor(attempt, input.baseCommit, "report-retry-secret"),
+    );
+    const reports: number[] = [];
+    await expect(
+      coordinate(
+        store,
+        { submit: async () => undefined },
+        { runId: input.id, expectedRevision: 1 },
+        200,
+        50,
+        {
+          report: async () => {
+            reports.push(1);
+            throw new Error("github_response_lost");
+          },
+        },
+      ),
+    ).rejects.toThrow("github_response_lost");
+    await expect(store.get(input.id)).resolves.toMatchObject({
+      stage: "qualify",
+      revision: 1,
+    });
+    await expect(store.expiredLeases(250)).resolves.toEqual([
+      { runId: input.id, expectedRevision: 1 },
+    ]);
+    await expect(
+      coordinate(
+        store,
+        { submit: async () => undefined },
+        { runId: input.id, expectedRevision: 1 },
+        250,
+        50,
+        {
+          report: async () => {
+            reports.push(2);
+          },
+        },
+      ),
+    ).resolves.toBe("dispatched");
+    expect(reports).toEqual([1, 2]);
+    await expect(store.get(input.id)).resolves.toMatchObject({
+      stage: "reproduce",
+      revision: 2,
+    });
+  });
+
+  it("runs a deterministic fake GitHub qualification journey and stops at reproduce", async () => {
     const store = new MemoryRunRepository();
     await store.create(createRun(input));
     const wakeups = [{ runId: input.id, expectedRevision: 1 }];
@@ -234,30 +296,21 @@ describe("single coordinator", () => {
       );
       if (!dispatched) throw new Error("attempt_not_dispatched");
       expect(dispatched.expectedHead).toBe(previousHead);
-      const outputHead =
-        dispatched.stage === "implement"
-          ? wakeup.expectedRevision.toString(16).repeat(40)
-          : previousHead;
+      const outputHead = previousHead;
       const callback = await callbackFor(
         dispatched,
         outputHead,
         "journey-secret",
       );
-      await acceptCallbackAndAdvance(
-        store,
-        "journey-secret",
-        validator,
-        callback,
-        async (next) => {
-          wakeups.push(next);
-        },
-      );
+      await acceptCallback(store, "journey-secret", validator, callback);
+      await coordinate(store, { submit: async () => undefined }, wakeup, 200);
       previousHead = outputHead;
     }
-    expect(stages).toEqual(["qualify", "implement", "validate", "review"]);
+    expect(stages).toEqual(["qualify"]);
     await expect(store.get(input.id)).resolves.toMatchObject({
-      status: "succeeded",
-      revision: 5,
+      status: "active",
+      stage: "reproduce",
+      revision: 2,
       currentHead: previousHead,
     });
   });

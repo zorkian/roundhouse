@@ -1,34 +1,44 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import { readFile, readdir } from "node:fs/promises";
-import { extname, join } from "node:path";
+import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { basename, extname } from "node:path";
+import { promisify } from "node:util";
 
 const roots = ["apps", "containers", "packages", "scripts"];
 const sourceExtensions = new Set([".js", ".mjs", ".cjs", ".ts", ".tsx", ".pl"]);
 const marker = "SPDX-License-Identifier: Apache-2.0";
-const excludedDirectories = new Set(["dist", "node_modules"]);
 const generatedFiles = new Set(["worker-configuration.d.ts"]);
 const missing = [];
+const run = promisify(execFile);
 
-async function inspect(path) {
-  for (const entry of await readdir(path, { withFileTypes: true })) {
-    const child = join(path, entry.name);
-    if (entry.isDirectory()) {
-      if (!excludedDirectories.has(entry.name)) await inspect(child);
-      continue;
-    }
+const { stdout } = await run(
+  "git",
+  [
+    "ls-files",
+    "--cached",
+    "--others",
+    "--exclude-standard",
+    "-z",
+    "--",
+    ...roots,
+  ],
+  { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+);
+const files = stdout.split("\0").filter(Boolean);
+
+await Promise.all(
+  files.map(async (path) => {
+    const name = basename(path);
     if (
-      generatedFiles.has(entry.name) ||
-      (entry.name !== "Dockerfile" &&
-        !sourceExtensions.has(extname(entry.name)))
+      generatedFiles.has(name) ||
+      (name !== "Dockerfile" && !sourceExtensions.has(extname(name)))
     )
-      continue;
-    if (!(await readFile(child, "utf8")).includes(marker)) missing.push(child);
-  }
-}
-
-await Promise.all(roots.map(inspect));
+      return;
+    if (!(await readFile(path, "utf8")).includes(marker)) missing.push(path);
+  }),
+);
 
 if (missing.length > 0) {
   console.error(`Missing ${marker}:\n${missing.sort().join("\n")}`);

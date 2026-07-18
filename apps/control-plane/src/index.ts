@@ -1,19 +1,30 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import { runSchemaVersion, type Attempt, type Wakeup } from "@roundhouse/core";
+import {
+  runSchemaVersion,
+  type Attempt,
+  type RunSnapshot,
+  type Wakeup,
+} from "@roundhouse/core";
 import {
   CloudflareArtifactsNamespace,
   validateCheckpointIdentity,
 } from "./artifacts.js";
 import { coordinate, type AttemptDispatcher } from "./coordinator.js";
 import {
-  acceptCallbackAndAdvance,
+  acceptCallback,
   signCallback,
   type AttemptCallback,
   type CheckpointValidator,
 } from "./callback.js";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
+import {
+  acceptGitHubStart,
+  GitHubClient,
+  GitHubQualificationReporter,
+} from "./github.js";
+export { ContainerProxy } from "@cloudflare/containers";
 export { RoundhouseAttemptContainer } from "./attempt-container.js";
 
 export const controlPlaneService = "roundhouse-v2-control-plane";
@@ -50,7 +61,18 @@ interface AttemptNamespace {
 type RuntimeEnv = Cloudflare.Env & {
   DB: D1Like;
   CALLBACK_SIGNING_SECRET: string;
+  GITHUB_APP_ID: string;
+  GITHUB_APP_INSTALLATION_ID: string;
+  ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY: string;
+  ROUNDHOUSE_GITHUB_WEBHOOK_SECRET: string;
 };
+
+function artifactsNamespace(env: RuntimeEnv) {
+  return new CloudflareArtifactsNamespace(env.ARTIFACTS, {
+    namespace: env.ARTIFACTS_NAMESPACE,
+    remoteOrigin: env.ARTIFACTS_REMOTE_ORIGIN,
+  });
+}
 
 function workspaceName(runId: string): string {
   return runId;
@@ -67,10 +89,10 @@ class ContainerDispatcher implements AttemptDispatcher {
     private readonly controlPlaneOrigin: string,
   ) {}
 
-  async submit(attempt: Attempt, repositoryName: string): Promise<void> {
+  async submit(attempt: Attempt, run: RunSnapshot): Promise<void> {
     const repository = await this.artifacts.importBase(
       workspaceName(attempt.runId),
-      `https://github.com/${repositoryName}.git`,
+      `https://github.com/${run.repository}.git`,
     );
     // Recovery invalidates every token from an interrupted container before a
     // replacement receives a fresh, short-lived credential.
@@ -86,10 +108,18 @@ class ContainerDispatcher implements AttemptDispatcher {
       ...attempt,
       baseCommit: attempt.baseCommit,
       protectedPaths,
+      issue: run.issue,
+      routing: {
+        role: attempt.role,
+        taskType: "validation",
+        complexity: "unknown",
+        rule: "qualification-default-v1",
+      },
       artifact: {
         repositoryId: repository.id,
         repository: repository.name,
         remote: repository.remote,
+        hostname: repository.hostname,
         tokenId: token.id,
         token: token.plaintext,
         access: token.access,
@@ -157,6 +187,7 @@ class ContainerCheckpointValidator implements CheckpointValidator {
                 repositoryId: artifact.id,
                 repository: artifact.name,
                 remote: artifact.remote,
+                hostname: artifact.hostname,
                 tokenId: token.id,
                 token: token.plaintext,
                 access: token.access,
@@ -178,11 +209,25 @@ class ContainerCheckpointValidator implements CheckpointValidator {
 const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname === "/github/webhook" && request.method === "POST") {
+      const outcome = await acceptGitHubStart(
+        request,
+        env,
+        new D1RunRepository(env.DB),
+        async (wakeup) => {
+          await env.RUN_WAKEUPS.send(wakeup);
+        },
+      );
+      return json(
+        { outcome },
+        outcome === "unauthorized" ? 401 : outcome === "ignored" ? 202 : 202,
+      );
+    }
     if (url.pathname === "/attempts/callback" && request.method === "POST") {
       const input = await request.json<AttemptCallback>();
       const repository = new D1RunRepository(env.DB);
-      const artifacts = new CloudflareArtifactsNamespace(env.ARTIFACTS);
-      const outcome = await acceptCallbackAndAdvance(
+      const artifacts = artifactsNamespace(env);
+      const outcome = await acceptCallback(
         repository,
         await signCallback(env.CALLBACK_SIGNING_SECRET, input.attemptId),
         new ContainerCheckpointValidator(
@@ -191,10 +236,15 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
           repository,
         ),
         input,
-        async (wakeup) => {
-          await env.RUN_WAKEUPS.send(wakeup);
-        },
       );
+      if (outcome === "completed" || outcome === "duplicate") {
+        const attempt = await repository.getAttempt(input.attemptId);
+        if (attempt)
+          await env.RUN_WAKEUPS.send({
+            runId: attempt.runId,
+            expectedRevision: attempt.runRevision,
+          });
+      }
       return json(
         { outcome },
         outcome === "unauthorized" ? 401 : outcome === "stale" ? 409 : 202,
@@ -206,15 +256,30 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
     const repository = new D1RunRepository(env.DB);
     const dispatcher = new ContainerDispatcher(
       env.ATTEMPT_CONTAINERS,
-      new CloudflareArtifactsNamespace(env.ARTIFACTS),
+      artifactsNamespace(env),
       env.CALLBACK_SIGNING_SECRET,
       env.CONTROL_PLANE_ORIGIN,
     );
     for (const message of batch.messages) {
       try {
-        await coordinate(repository, dispatcher, message.body, Date.now());
+        await coordinate(
+          repository,
+          dispatcher,
+          message.body,
+          Date.now(),
+          30 * 60_000,
+          new GitHubQualificationReporter(new GitHubClient(env)),
+        );
         message.ack();
-      } catch {
+      } catch (error) {
+        console.error(
+          JSON.stringify({
+            message: "coordination_failed",
+            runId: message.body.runId,
+            expectedRevision: message.body.expectedRevision,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
         message.retry();
       }
     }

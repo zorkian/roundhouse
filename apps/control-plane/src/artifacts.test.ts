@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  artifactIdentity,
   validateCheckpointIdentity,
   type ArtifactAccess,
   type ArtifactRepository,
@@ -12,6 +13,7 @@ import {
 class FakeRepo implements ArtifactRepository {
   readonly id: string;
   readonly remote: string;
+  readonly hostname: string;
   readonly tokens = new Map<string, ArtifactAccess>();
   head: string;
   constructor(
@@ -20,6 +22,7 @@ class FakeRepo implements ArtifactRepository {
   ) {
     this.id = `repo-${name}`;
     this.remote = `https://artifacts.invalid/${name}`;
+    this.hostname = "artifacts.invalid";
     this.head = base;
   }
   async createToken(access: ArtifactAccess, _ttlSeconds: number) {
@@ -68,6 +71,21 @@ class FakeArtifacts implements ArtifactsNamespace {
 }
 
 describe("Artifacts workspace contract", () => {
+  it("derives one stable repository identity from its configured namespace", () => {
+    expect(
+      artifactIdentity("run_1", {
+        namespace: "roundhouse-v2-development",
+        remoteOrigin: "https://account.artifacts.cloudflare.net",
+      }),
+    ).toEqual({
+      id: "artifacts:roundhouse-v2-development/run_1",
+      name: "run_1",
+      remote:
+        "https://account.artifacts.cloudflare.net/git/roundhouse-v2-development/run_1.git",
+      hostname: "account.artifacts.cloudflare.net",
+    });
+  });
+
   it("covers scoped handoff, replacement, validation, revocation, and cleanup", async () => {
     const artifacts = new FakeArtifacts();
     const base = "a".repeat(40),
@@ -78,6 +96,7 @@ describe("Artifacts workspace contract", () => {
     );
     const writer = await repo.createToken("write", 300);
     const reviewer = await repo.createToken("read", 300);
+    expect(repo.hostname).toBe("artifacts.invalid");
     const first = (repo as FakeRepo).clone(writer.plaintext);
     expect(first.head).toBe(base);
     first.push(head);

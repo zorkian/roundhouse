@@ -8,6 +8,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   completionRequest,
   createCheckpoint,
+  qualificationProviderRetries,
+  qualificationSandbox,
   runnerIdentity,
   runnerResponse,
   validateCheckpoint,
@@ -19,6 +21,14 @@ afterEach(async () => {
 });
 
 describe("V2 agent runner", () => {
+  it("uses the Container rather than an unavailable nested sandbox", () => {
+    expect(qualificationSandbox).toBe("danger-full-access");
+  });
+
+  it("limits each model request to three total attempts", () => {
+    expect(qualificationProviderRetries).toBe(2);
+  });
+
   it("reports only its versioned runner identity", () => {
     expect(runnerResponse("GET", "/health")).toEqual({
       status: 200,

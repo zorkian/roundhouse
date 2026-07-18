@@ -3,13 +3,35 @@
 
 import {
   immutableAttemptId,
+  transitionRun,
   type Attempt,
   type RunRepository,
+  type RunSnapshot,
   type Wakeup,
 } from "@roundhouse/core";
 
 export interface AttemptDispatcher {
-  submit(attempt: Attempt, repository: string): Promise<void>;
+  submit(attempt: Attempt, run: RunSnapshot): Promise<void>;
+}
+
+export interface QualificationReporter {
+  report(run: RunSnapshot, attempt: Attempt): Promise<void>;
+}
+
+export function qualificationTransition(attempt: Attempt) {
+  const outcome = attempt.result?.qualification;
+  if (!outcome || typeof outcome !== "object")
+    return { status: "failed", stage: "qualify" } as const;
+  const classification = (outcome as Record<string, unknown>).classification;
+  if (["bug", "feature", "maintenance"].includes(String(classification)))
+    return { status: "active", stage: "reproduce" } as const;
+  if (classification === "unclear")
+    return {
+      status: "waiting",
+      stage: "qualify",
+      waitingReason: "clarification",
+    } as const;
+  return { status: "succeeded", stage: "qualify" } as const;
 }
 
 export async function coordinate(
@@ -18,6 +40,7 @@ export async function coordinate(
   wakeup: Wakeup,
   now: number,
   leaseMilliseconds = 30 * 60_000,
+  reporter?: QualificationReporter,
 ): Promise<"dispatched" | "duplicate" | "stale"> {
   const run = await repository.get(wakeup.runId);
   if (
@@ -27,6 +50,26 @@ export async function coordinate(
   )
     return "stale";
   const attemptId = immutableAttemptId(run.id, run.revision);
+  const previous = await repository.getAttempt(attemptId);
+  if (previous?.state === "completed") {
+    if (run.stage !== "qualify") return "stale";
+    const claimed = await repository.claimLease(
+      run.id,
+      run.revision,
+      {
+        attemptId,
+        runRevision: run.revision,
+        expiresAt: now + Math.min(leaseMilliseconds, 60_000),
+      },
+      now,
+    );
+    if (!claimed) return "duplicate";
+    const transition = qualificationTransition(previous);
+    const projected = transitionRun(run, run.revision, transition);
+    if (reporter) await reporter.report(projected, previous);
+    const next = await repository.transition(run.id, run.revision, transition);
+    return next ? "dispatched" : "stale";
+  }
   const claimed = await repository.claimLease(
     run.id,
     run.revision,
@@ -54,7 +97,7 @@ export async function coordinate(
   const durable = await repository.getAttempt(attemptId);
   if (created === "exists" && durable?.state === "completed")
     return "duplicate";
-  await dispatcher.submit(attempt, run.repository);
+  await dispatcher.submit(attempt, run);
   await repository.markDispatched(attemptId);
   return "dispatched";
 }

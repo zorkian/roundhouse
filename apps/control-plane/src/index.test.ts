@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from "vitest";
+import { RoundhouseAttemptContainer } from "./attempt-container.js";
 import { controlPlaneService, handleRequest } from "./index.js";
 
 describe("V2 control plane", () => {
@@ -27,5 +28,11 @@ describe("V2 control plane", () => {
     );
     expect(mutation.status).toBe(405);
     expect(mutation.headers.get("allow")).toBe("GET");
+  });
+
+  it("registers the private model egress handler with the Containers SDK", () => {
+    expect(
+      RoundhouseAttemptContainer.outboundByHost?.["model.roundhouse.internal"],
+    ).toBeTypeOf("function");
   });
 });

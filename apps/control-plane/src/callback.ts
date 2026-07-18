@@ -1,7 +1,7 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import type { RunRepository, RunStage, Wakeup } from "@roundhouse/core";
+import type { RunRepository } from "@roundhouse/core";
 import type { Checkpoint } from "./artifacts.js";
 
 export interface AttemptCallback {
@@ -88,58 +88,4 @@ export async function acceptCallback(
     input.checkpoint.outputHead,
     input.result,
   );
-}
-
-const nextStage: Partial<Record<RunStage, RunStage>> = {
-  qualify: "implement",
-  implement: "validate",
-  validate: "review",
-};
-
-export async function acceptCallbackAndAdvance(
-  repository: RunRepository,
-  secret: string,
-  validator: CheckpointValidator,
-  input: AttemptCallback,
-  enqueue: (wakeup: Wakeup) => Promise<void>,
-): Promise<Awaited<ReturnType<typeof acceptCallback>>> {
-  const accepted = await acceptCallback(repository, secret, validator, input);
-  if (accepted === "unauthorized" || accepted === "stale") return accepted;
-  const attempt = await repository.getAttempt(input.attemptId);
-  if (!attempt) return "stale";
-  const current = await repository.get(attempt.runId);
-  if (!current) return "stale";
-  if (current.revision === input.expectedRevision + 1) {
-    if (current.status === "active")
-      await enqueue({ runId: current.id, expectedRevision: current.revision });
-    return accepted;
-  }
-  if (current.revision !== input.expectedRevision) return "stale";
-  const stage = nextStage[attempt.stage];
-  const next = await repository.transition(
-    attempt.runId,
-    input.expectedRevision,
-    stage
-      ? { status: "active", stage, acceptedHead: input.checkpoint.outputHead }
-      : {
-          status: "succeeded",
-          stage: attempt.stage,
-          acceptedHead: input.checkpoint.outputHead,
-        },
-  );
-  if (!next) {
-    const reconciled = await repository.get(attempt.runId);
-    if (
-      reconciled?.revision === input.expectedRevision + 1 &&
-      reconciled.status === "active"
-    )
-      await enqueue({
-        runId: reconciled.id,
-        expectedRevision: reconciled.revision,
-      });
-    return reconciled ? accepted : "stale";
-  }
-  if (next.status === "active")
-    await enqueue({ runId: next.id, expectedRevision: next.revision });
-  return accepted;
 }

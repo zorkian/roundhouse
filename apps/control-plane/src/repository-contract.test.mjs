@@ -48,6 +48,12 @@ class LocalD1 {
         "utf8",
       ),
     );
+    this.database.exec(
+      readFileSync(
+        new URL("../migrations/0003_github_intake.sql", import.meta.url),
+        "utf8",
+      ),
+    );
   }
 
   prepare(sql) {
