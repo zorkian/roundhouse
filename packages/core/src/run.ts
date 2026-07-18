@@ -1,0 +1,126 @@
+// Copyright 2026 Mark Smith
+// SPDX-License-Identifier: Apache-2.0
+
+export const runSchemaVersion = 2 as const;
+
+export const runStatuses = [
+  "active",
+  "waiting",
+  "succeeded",
+  "failed",
+  "cancelled",
+] as const;
+
+export const runStages = [
+  "qualify",
+  "reproduce",
+  "plan",
+  "implement",
+  "validate",
+  "review",
+  "publish",
+  "ci",
+  "merge",
+] as const;
+
+export const waitingReasons = [
+  "clarification",
+  "plan_approval",
+  "final_approval",
+  "maintainer_judgment",
+  "budget",
+  "external_check",
+  "retry_exhausted",
+] as const;
+
+export type RunStatus = (typeof runStatuses)[number];
+export type RunStage = (typeof runStages)[number];
+export type WaitingReason = (typeof waitingReasons)[number];
+
+export interface RunSnapshot {
+  readonly schemaVersion: typeof runSchemaVersion;
+  readonly id: string;
+  readonly repository: string;
+  readonly issueNumber: number;
+  readonly baseCommit: string;
+  readonly profileVersion: string;
+  readonly status: RunStatus;
+  readonly stage: RunStage;
+  readonly revision: number;
+  readonly waitingReason?: WaitingReason;
+}
+
+export interface CreateRunInput {
+  readonly id: string;
+  readonly repository: string;
+  readonly issueNumber: number;
+  readonly baseCommit: string;
+  readonly profileVersion: string;
+}
+
+export interface RunTransition {
+  readonly status: RunStatus;
+  readonly stage: RunStage;
+  readonly waitingReason?: WaitingReason;
+}
+
+const terminalStatuses = new Set<RunStatus>([
+  "succeeded",
+  "failed",
+  "cancelled",
+]);
+
+function assertCreateInput(input: CreateRunInput): void {
+  if (!/^run_[a-z0-9][a-z0-9_-]{0,119}$/.test(input.id))
+    throw new Error("invalid_run_id");
+  if (
+    !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(input.repository) ||
+    input.repository.length > 200
+  )
+    throw new Error("invalid_repository");
+  if (!Number.isInteger(input.issueNumber) || input.issueNumber < 1)
+    throw new Error("invalid_issue_number");
+  if (!/^[a-f0-9]{40}$/.test(input.baseCommit))
+    throw new Error("invalid_base_commit");
+  if (
+    input.profileVersion.length < 1 ||
+    input.profileVersion.length > 100 ||
+    !/^[A-Za-z0-9._-]+$/.test(input.profileVersion)
+  )
+    throw new Error("invalid_profile_version");
+}
+
+export function createRun(input: CreateRunInput): RunSnapshot {
+  assertCreateInput(input);
+  return {
+    schemaVersion: runSchemaVersion,
+    ...input,
+    status: "active",
+    stage: "qualify",
+    revision: 1,
+  };
+}
+
+function assertTransition(transition: RunTransition): void {
+  if (transition.status === "waiting" && !transition.waitingReason)
+    throw new Error("waiting_reason_required");
+  if (transition.status !== "waiting" && transition.waitingReason)
+    throw new Error("waiting_reason_not_allowed");
+}
+
+export function transitionRun(
+  run: RunSnapshot,
+  expectedRevision: number,
+  transition: RunTransition,
+): RunSnapshot {
+  if (run.revision !== expectedRevision) throw new Error("stale_run_revision");
+  if (terminalStatuses.has(run.status)) throw new Error("run_is_terminal");
+  assertTransition(transition);
+
+  const { waitingReason: _waitingReason, ...current } = run;
+  return {
+    ...current,
+    ...transition,
+    revision: run.revision + 1,
+  };
+}

@@ -49,11 +49,11 @@ Cloudflare administration, or deployment credentials.
 
 ## Repository status
 
-The current source tree still contains the frozen V1 implementation while the
-V2 transition begins. V1 code is evidence and a source of small reusable
-components; it is not the V2 architecture or product contract. Historical V1
-plans, ADRs, manifests, and dogfood records are available in Git history rather
-than retained as competing current documentation.
+Phase 0 has frozen the V1 proof of concept at the `v1-poc-final` Git tag and
+reset `codex/v2` to a minimal V2 core, control-plane Worker, and agent runner.
+V1 code and historical documents remain available from the tag and Git history
+rather than as a parallel legacy tree. No V2 Cloudflare resource has been
+deployed yet.
 
 ## Local checks
 

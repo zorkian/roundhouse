@@ -2,10 +2,4 @@ packages:
   - apps/*
   - packages/*
 
-catalog:
-  "@cloudflare/containers": 0.3.7
-  ulid: ^3.0.1
-  yaml: ^2.8.0
-  zod: ^4.0.5
-
 onlyBuiltDependencies: []

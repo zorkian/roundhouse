@@ -3,4 +3,3 @@ dist
 coverage
 .wrangler
 pnpm-lock.yaml
-docs/v1-plan.md

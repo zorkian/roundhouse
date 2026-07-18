@@ -1,12 +1,7 @@
 {
   "files": [],
   "references": [
-    { "path": "./apps/control-plane-worker" },
-    { "path": "./apps/control-plane-spike" },
-    { "path": "./apps/dreamwidth-container-spike" },
-    { "path": "./packages/domain" },
-    { "path": "./packages/repository-profile" },
-    { "path": "./packages/execution" },
-    { "path": "./packages/self-development" }
+    { "path": "./packages/core" },
+    { "path": "./apps/control-plane" }
   ]
 }

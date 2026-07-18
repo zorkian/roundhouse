@@ -720,7 +720,7 @@ passes; merged scaffolding without the journey is not progress.
 
 ### Phase 0 — Freeze V1 and reset the repository
 
-Phase 0 started on 2026-07-17 with these fixed boundaries:
+Phase 0 completed on 2026-07-17 with these fixed boundaries:
 
 - the final deployed V1 baseline is `f922198`, preserved as
   `v1-poc-final`;
@@ -733,6 +733,15 @@ Phase 0 started on 2026-07-17 with these fixed boundaries:
   to `codex/v2`; and
 - no Cloudflare resource is deleted or repurposed. Any new V2 resource must
   use a `v2` namespace in its name and route.
+
+The V2 branch now contains only the target runtime skeleton:
+
+- `packages/core` for pure run-state contracts;
+- `apps/control-plane` for the V2-namespaced Worker; and
+- `containers/agent-runner` for the non-root runner image.
+
+No V2 module imports or wraps V1 orchestration code. Cloudflare resources will
+be created only when Phase 1 has a component that uses them.
 
 Actions:
 
