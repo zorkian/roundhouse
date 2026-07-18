@@ -7,7 +7,7 @@ import {
   type RunSnapshot,
   type Wakeup,
 } from "@roundhouse/core";
-import type { QualificationReporter } from "./coordinator.js";
+import type { AttemptReporter } from "./coordinator.js";
 import { verifyCallback } from "./callback.js";
 
 export interface GitHubIntakeRepository {
@@ -160,15 +160,87 @@ export class GitHubClient {
   }
 }
 
-export class GitHubQualificationReporter implements QualificationReporter {
+function strings(value: unknown): readonly string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+function untrustedText(value: unknown, maximum: number): string {
+  return String(value).slice(0, maximum).replaceAll("@", "@\u200b");
+}
+
+function reproductionComment(run: RunSnapshot, attempt: Attempt): string {
+  const reproduction = attempt.result?.reproduction as
+    Record<string, unknown> | undefined;
+  const status = untrustedText(reproduction?.status ?? "blocked", 100);
+  const summary = untrustedText(
+    reproduction?.summary ?? "Reproduction did not produce a summary.",
+    3_000,
+  );
+  const expected = untrustedText(
+    reproduction?.expectedBehavior ?? "Not reported.",
+    2_000,
+  );
+  const observed = untrustedText(
+    reproduction?.observedBehavior ?? "Not reported.",
+    2_000,
+  );
+  const commands = Array.isArray(reproduction?.commands)
+    ? reproduction.commands
+        .flatMap((value) => {
+          if (!value || typeof value !== "object") return [];
+          const command = String(
+            (value as Record<string, unknown>).command ?? "",
+          );
+          const exitCode = (value as Record<string, unknown>).exitCode;
+          return command
+            ? [`- \`${command.slice(0, 500)}\` — exit ${String(exitCode)}`]
+            : [];
+        })
+        .slice(0, 20)
+    : [];
+  const files = strings(reproduction?.relevantFiles)
+    .slice(0, 20)
+    .map((file) => `- \`${file.slice(0, 500)}\``);
+  const next =
+    run.stage === "plan"
+      ? "Next: planning."
+      : "Roundhouse is waiting for maintainer input.";
+  return [
+    `<!-- roundhouse:v2:reproduction:${run.id} -->`,
+    `Roundhouse reproduction: **${status}**`,
+    "",
+    summary,
+    "",
+    `Expected: ${expected}`,
+    "",
+    `Observed: ${observed}`,
+    ...(commands.length ? ["", "Commands:", ...commands] : []),
+    ...(files.length ? ["", "Relevant files:", ...files] : []),
+    "",
+    next,
+  ].join("\n");
+}
+
+export class GitHubStageReporter implements AttemptReporter {
   constructor(private readonly github: GitHubApi) {}
 
   async report(run: RunSnapshot, attempt: Attempt): Promise<void> {
-    const marker = `<!-- roundhouse:v2:qualification:${run.id} -->`;
+    const phase =
+      attempt.stage === "reproduce" ? "reproduction" : "qualification";
+    const marker = `<!-- roundhouse:v2:${phase}:${run.id} -->`;
     const comments = await this.github.get<readonly { body?: string }[]>(
       `/repos/${run.repository}/issues/${run.issueNumber}/comments?per_page=100`,
     );
     if (comments.some((comment) => comment.body?.includes(marker))) return;
+    if (attempt.stage === "reproduce") {
+      await this.github.post(
+        `/repos/${run.repository}/issues/${run.issueNumber}/comments`,
+        { body: reproductionComment(run, attempt).slice(0, 65_000) },
+      );
+      return;
+    }
     const qualification = attempt.result?.qualification as
       Record<string, unknown> | undefined;
     const classification = String(qualification?.classification ?? "unclear");

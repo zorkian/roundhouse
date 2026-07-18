@@ -1,11 +1,17 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import { createRun, MemoryRunRepository, type Wakeup } from "@roundhouse/core";
+import {
+  createRun,
+  MemoryRunRepository,
+  type Attempt,
+  type Wakeup,
+} from "@roundhouse/core";
 import { describe, expect, it, vi } from "vitest";
 import { signCallback } from "./callback.js";
 import {
   acceptGitHubStart,
+  GitHubStageReporter,
   verifyGitHubWebhook,
   type GitHubApi,
   type GitHubEnv,
@@ -173,5 +179,62 @@ describe("GitHub intake", () => {
       ),
     ).resolves.toBe("unauthorized");
     expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("posts one evidence-backed reproduction comment", async () => {
+    const post = vi.fn(async (_path: string, _body: unknown) => undefined);
+    const reporter = new GitHubStageReporter({
+      get: async <T>() => [] as T,
+      post: async <T>(path: string, body: unknown) => {
+        await post(path, body);
+        return {} as T;
+      },
+    });
+    const run = {
+      ...createRun({
+        id: "run_reproduction",
+        repository: "zorkian/roundhouse",
+        issueNumber: 42,
+        baseCommit: "a".repeat(40),
+        profileVersion: "v2",
+      }),
+      stage: "plan",
+      revision: 3,
+    } as const;
+    const attempt = {
+      id: "run_reproduction_rev_2",
+      runId: run.id,
+      runRevision: 2,
+      kind: "agent",
+      stage: "reproduce",
+      role: "reproduce",
+      state: "completed",
+      deadlineAt: Date.now() + 1_000,
+      baseCommit: run.baseCommit,
+      expectedHead: run.currentHead,
+      result: {
+        reproduction: {
+          status: "confirmed",
+          summary: "The focused test fails as reported by @maintainer.",
+          expectedBehavior: "The test passes.",
+          observedBehavior: "The test fails.",
+          commands: [{ command: "pnpm test", exitCode: 1, output: "failed" }],
+          relevantFiles: ["src/example.ts"],
+        },
+      },
+    } satisfies Attempt;
+    await reporter.report(run, attempt);
+    expect(post).toHaveBeenCalledWith(
+      "/repos/zorkian/roundhouse/issues/42/comments",
+      {
+        body: expect.stringContaining("Roundhouse reproduction: **confirmed**"),
+      },
+    );
+    expect(post.mock.calls[0]?.[1]).toMatchObject({
+      body: expect.stringContaining("Next: planning."),
+    });
+    expect(post.mock.calls[0]?.[1]).toMatchObject({
+      body: expect.not.stringContaining("@maintainer"),
+    });
   });
 });

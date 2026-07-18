@@ -54,9 +54,9 @@ the minimal V2 core, control-plane Worker, and agent runner into `main`. V1 code
 and historical documents remain available from the tag and Git history rather
 than as a parallel legacy tree. Phase 1 is deployed in isolated V2 development
 resources and proves D1-owned lifecycle state, Queue wakeups, thin Container
-Durable Objects, and Artifacts checkpoint handoff. Phase 2 is adding
-development GitHub intake and real read-only qualification through a private
-model broker.
+Durable Objects, and Artifacts checkpoint handoff. Phase 2 has deployed real
+development GitHub intake and read-only qualification through a private model
+broker; read-only reproduction is the current slice.
 
 ## Local checks
 

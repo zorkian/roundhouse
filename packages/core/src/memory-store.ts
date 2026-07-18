@@ -28,6 +28,7 @@ export class MemoryRunRepository implements RunRepository {
     if (!run || run.revision !== expectedRevision) return undefined;
     const next = transitionRun(run, expectedRevision, transition);
     this.runs.set(runId, next);
+    this.leases.delete(runId);
     return next;
   }
 
@@ -91,7 +92,8 @@ export class MemoryRunRepository implements RunRepository {
 
   async expiredLeases(now: number): Promise<readonly Wakeup[]> {
     return [...this.leases.entries()].flatMap(([runId, lease]) =>
-      lease.expiresAt <= now
+      lease.expiresAt <= now &&
+      new Set(["qualify", "reproduce"]).has(this.runs.get(runId)?.stage ?? "")
         ? [{ runId, expectedRevision: lease.runRevision }]
         : [],
     );

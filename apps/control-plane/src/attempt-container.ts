@@ -50,7 +50,7 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
   const attempt = await repository.getAttempt(attemptId);
   if (
     !attempt ||
-    attempt.stage !== "qualify" ||
+    !["qualify", "reproduce"].includes(attempt.stage) ||
     !["created", "dispatched"].includes(attempt.state) ||
     attempt.deadlineAt <= Date.now()
   ) {
