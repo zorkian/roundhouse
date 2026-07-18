@@ -963,6 +963,12 @@ a short-lived development GitHub App token to promote the validated commit.
 The control plane opens a draft pull request and links it from the issue.
 Implementation commands and output stay in durable attempt evidence and are not
 copied into GitHub comments or the pull-request body.
+Every generated pull request includes GitHub's `Fixes #<issue>` closing
+reference so the change links back to its source issue and closes it when
+merged. When V2 has a real run-details page, the pull request also links to that
+page for the diff, commands, model routing, checkpoints, and other durable
+evidence. Until that page exists, Roundhouse omits the link rather than
+publishing a placeholder destination.
 
 Actions:
 

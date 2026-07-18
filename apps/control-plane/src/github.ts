@@ -271,6 +271,17 @@ function implementationComment(
   ].join("\n");
 }
 
+function pullRequestBody(
+  run: RunSnapshot,
+  implementation?: Record<string, unknown>,
+) {
+  const summary = String(
+    implementation?.pullRequestBody ??
+      `Implements the change requested in #${run.issueNumber}.`,
+  ).trim();
+  return `${summary}\n\nFixes #${run.issueNumber}`;
+}
+
 export class GitHubStageReporter implements AttemptReporter {
   constructor(private readonly github: GitHubApi) {}
 
@@ -304,10 +315,7 @@ export class GitHubStageReporter implements AttemptReporter {
         ),
         head: `roundhouse/issue-${run.issueNumber}`,
         base: repository.default_branch ?? "main",
-        body: String(
-          implementation?.pullRequestBody ??
-            `Implements the change requested in #${run.issueNumber}.`,
-        ),
+        body: pullRequestBody(run, implementation),
         draft: true,
       });
       await this.github.post(

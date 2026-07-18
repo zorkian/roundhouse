@@ -641,7 +641,7 @@ describe("GitHub intake", () => {
       title: "Handle empty input",
       head: "roundhouse/issue-42",
       base: "main",
-      body: "Fixes the empty-input behavior described in #42.",
+      body: "Fixes the empty-input behavior described in #42.\n\nFixes #42",
       draft: true,
     });
     expect(post).toHaveBeenNthCalledWith(
