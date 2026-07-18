@@ -99,7 +99,7 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
 
 export class RoundhouseAttemptContainer extends Container<Cloudflare.Env> {
   override defaultPort = 8080;
-  override sleepAfter = "35m";
+  override sleepAfter = "5m";
   override enableInternet = false;
   override interceptHttps = true;
 
