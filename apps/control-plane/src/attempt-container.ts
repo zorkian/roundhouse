@@ -23,89 +23,85 @@ type AttemptContainerEnv = Cloudflare.Env & {
 const modelHost = "model.roundhouse.internal";
 const containerCa = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
 
+async function modelEgress(request: Request, env: Cloudflare.Env) {
+  const runtime = env as AttemptContainerEnv;
+  const attemptId = request.headers.get("x-roundhouse-attempt-id") ?? "";
+  const capability =
+    request.headers.get("x-roundhouse-attempt-capability") ?? "";
+  const validCapability =
+    attemptId &&
+    capability &&
+    (await verifyCallback(
+      runtime.CALLBACK_SIGNING_SECRET,
+      attemptId,
+      capability,
+    ));
+  if (!validCapability) {
+    console.error(
+      JSON.stringify({
+        message: "model_egress_unauthorized",
+        attemptIdPresent: Boolean(attemptId),
+        capabilityPresent: Boolean(capability),
+      }),
+    );
+    return new Response("unauthorized", { status: 401 });
+  }
+  const repository = new D1RunRepository(runtime.DB);
+  const attempt = await repository.getAttempt(attemptId);
+  if (
+    !attempt ||
+    attempt.stage !== "qualify" ||
+    !["created", "dispatched"].includes(attempt.state) ||
+    attempt.deadlineAt <= Date.now()
+  ) {
+    console.error(
+      JSON.stringify({
+        message: "model_egress_stale",
+        attemptFound: Boolean(attempt),
+        stage: attempt?.stage,
+        state: attempt?.state,
+        deadlineActive: Boolean(attempt && attempt.deadlineAt > Date.now()),
+      }),
+    );
+    return new Response("stale_attempt", { status: 409 });
+  }
+  if (!(await repository.reserveModelCall(attemptId))) {
+    console.error(JSON.stringify({ message: "model_egress_budget_exhausted" }));
+    return new Response("model_budget_exhausted", { status: 429 });
+  }
+  const headers = new Headers(request.headers);
+  headers.delete("authorization");
+  headers.delete("x-roundhouse-attempt-capability");
+  headers.set("x-roundhouse-role", attempt.role);
+  headers.set("x-roundhouse-task-type", "validation");
+  headers.set("x-roundhouse-complexity", "unknown");
+  const requestedUrl = new URL(request.url);
+  const response = await runtime.MODEL_BROKER.fetch(
+    new Request(
+      `https://broker.roundhouse.internal${requestedUrl.pathname}${requestedUrl.search}`,
+      {
+        method: request.method,
+        headers,
+        body: request.body,
+        redirect: "manual",
+      },
+    ),
+  );
+  const routing = {
+    model: response.headers.get("x-roundhouse-routing-model"),
+    reasoningEffort: response.headers.get("x-roundhouse-routing-effort"),
+    rule: response.headers.get("x-roundhouse-routing-rule"),
+  };
+  if (routing.model && routing.reasoningEffort && routing.rule)
+    await repository.recordModelRouting(attemptId, routing);
+  return response;
+}
+
 export class RoundhouseAttemptContainer extends Container<Cloudflare.Env> {
   override defaultPort = 8080;
   override sleepAfter = "35m";
   override enableInternet = false;
   override interceptHttps = true;
-
-  static override outboundByHost = {
-    [modelHost]: async (request: Request, env: Cloudflare.Env) => {
-      const runtime = env as AttemptContainerEnv;
-      const attemptId = request.headers.get("x-roundhouse-attempt-id") ?? "";
-      const capability =
-        request.headers.get("x-roundhouse-attempt-capability") ?? "";
-      const validCapability =
-        attemptId &&
-        capability &&
-        (await verifyCallback(
-          runtime.CALLBACK_SIGNING_SECRET,
-          attemptId,
-          capability,
-        ));
-      if (!validCapability) {
-        console.error(
-          JSON.stringify({
-            message: "model_egress_unauthorized",
-            attemptIdPresent: Boolean(attemptId),
-            capabilityPresent: Boolean(capability),
-          }),
-        );
-        return new Response("unauthorized", { status: 401 });
-      }
-      const repository = new D1RunRepository(runtime.DB);
-      const attempt = await repository.getAttempt(attemptId);
-      if (
-        !attempt ||
-        attempt.stage !== "qualify" ||
-        !["created", "dispatched"].includes(attempt.state) ||
-        attempt.deadlineAt <= Date.now()
-      ) {
-        console.error(
-          JSON.stringify({
-            message: "model_egress_stale",
-            attemptFound: Boolean(attempt),
-            stage: attempt?.stage,
-            state: attempt?.state,
-            deadlineActive: Boolean(attempt && attempt.deadlineAt > Date.now()),
-          }),
-        );
-        return new Response("stale_attempt", { status: 409 });
-      }
-      if (!(await repository.reserveModelCall(attemptId))) {
-        console.error(
-          JSON.stringify({ message: "model_egress_budget_exhausted" }),
-        );
-        return new Response("model_budget_exhausted", { status: 429 });
-      }
-      const headers = new Headers(request.headers);
-      headers.delete("authorization");
-      headers.delete("x-roundhouse-attempt-capability");
-      headers.set("x-roundhouse-role", attempt.role);
-      headers.set("x-roundhouse-task-type", "validation");
-      headers.set("x-roundhouse-complexity", "unknown");
-      const requestedUrl = new URL(request.url);
-      const response = await runtime.MODEL_BROKER.fetch(
-        new Request(
-          `https://broker.roundhouse.internal${requestedUrl.pathname}${requestedUrl.search}`,
-          {
-            method: request.method,
-            headers,
-            body: request.body,
-            redirect: "manual",
-          },
-        ),
-      );
-      const routing = {
-        model: response.headers.get("x-roundhouse-routing-model"),
-        reasoningEffort: response.headers.get("x-roundhouse-routing-effort"),
-        rule: response.headers.get("x-roundhouse-routing-rule"),
-      };
-      if (routing.model && routing.reasoningEffort && routing.rule)
-        await repository.recordModelRouting(attemptId, routing);
-      return response;
-    },
-  };
 
   override async fetch(request: Request): Promise<Response> {
     if (request.method !== "POST")
@@ -153,3 +149,5 @@ export class RoundhouseAttemptContainer extends Container<Cloudflare.Env> {
       : new Response("runner_rejected", { status: 503 });
   }
 }
+
+RoundhouseAttemptContainer.outboundByHost = { [modelHost]: modelEgress };
