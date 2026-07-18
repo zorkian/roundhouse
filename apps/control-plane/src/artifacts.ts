@@ -211,3 +211,10 @@ export function validateCheckpointIdentity(
   )
     throw new Error("protected_path_changed");
 }
+
+export function validateReadOnlyCheckpoint(checkpoint: Checkpoint): void {
+  if (checkpoint.outputHead !== checkpoint.inputHead)
+    throw new Error("read_only_head_changed");
+  if (checkpoint.changedPaths.length !== 0)
+    throw new Error("read_only_paths_changed");
+}

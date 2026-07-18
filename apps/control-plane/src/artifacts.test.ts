@@ -5,10 +5,37 @@ import { describe, expect, it } from "vitest";
 import {
   artifactIdentity,
   validateCheckpointIdentity,
+  validateReadOnlyCheckpoint,
   type ArtifactAccess,
   type ArtifactRepository,
   type ArtifactsNamespace,
 } from "./artifacts.js";
+
+it("accepts only unchanged checkpoints from read-only attempts", () => {
+  const checkpoint = {
+    repositoryId: "artifact-repo-id",
+    repository: "v2-run-1",
+    baseCommit: "a".repeat(40),
+    inputHead: "b".repeat(40),
+    outputHead: "b".repeat(40),
+    ref: "refs/heads/roundhouse/run-1",
+    changedPaths: [],
+  };
+
+  expect(() => validateReadOnlyCheckpoint(checkpoint)).not.toThrow();
+  expect(() =>
+    validateReadOnlyCheckpoint({
+      ...checkpoint,
+      outputHead: "c".repeat(40),
+    }),
+  ).toThrow("read_only_head_changed");
+  expect(() =>
+    validateReadOnlyCheckpoint({
+      ...checkpoint,
+      changedPaths: ["README.md"],
+    }),
+  ).toThrow("read_only_paths_changed");
+});
 
 class FakeRepo implements ArtifactRepository {
   readonly id: string;
