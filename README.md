@@ -49,11 +49,11 @@ Cloudflare administration, or deployment credentials.
 
 ## Repository status
 
-Phase 0 has frozen the V1 proof of concept at the `v1-poc-final` Git tag and
-reset `codex/v2` to a minimal V2 core, control-plane Worker, and agent runner.
-V1 code and historical documents remain available from the tag and Git history
-rather than as a parallel legacy tree. No V2 Cloudflare resource has been
-deployed yet.
+Phase 0 froze the V1 proof of concept at the `v1-poc-final` Git tag and merged
+the minimal V2 core, control-plane Worker, and agent runner into `main`. V1 code
+and historical documents remain available from the tag and Git history rather
+than as a parallel legacy tree. No V2 Cloudflare resource has been deployed
+yet. Phase 1 proceeds on a short-lived reviewed branch from `main`.
 
 ## Local checks
 

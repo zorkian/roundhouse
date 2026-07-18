@@ -5,7 +5,7 @@ FROM node:24.4.1-bookworm-slim@sha256:36ae19f59c91f3303c7a648f07493fe14c4bd91320
 
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin runner
 
-COPY --chown=runner:runner containers/agent-runner/runner.mjs /opt/roundhouse/runner.mjs
+COPY --chown=runner:runner runner.mjs /opt/roundhouse/runner.mjs
 
 USER runner
 WORKDIR /home/runner
