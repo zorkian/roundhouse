@@ -627,6 +627,7 @@ describe("local control-plane Worker", () => {
       sourceHeadCommit: "a".repeat(40),
       evidenceId: "check_run:42",
       evidenceSha256: "b".repeat(64),
+      pullRequestNumber: 23,
       checkRunId: 42,
     };
     await expect(publishEligibleLowRiskRun(env, continuation)).resolves.toEqual(

@@ -40,15 +40,21 @@ export const selfDevelopmentTaskSchema = z.object({
           .min(1)
           .max(50),
       }),
-      z.object({
-        kind: z.literal("repository_ci"),
-        sourceRunId: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/),
-        sourceRevision: z.number().int().positive(),
-        sourceHeadCommit: z.string().regex(/^[a-f0-9]{40}$/),
-        evidenceId: z.string().regex(/^check_run:[1-9][0-9]*$/),
-        evidenceSha256: z.string().regex(/^[a-f0-9]{64}$/),
-        checkRunId: z.number().int().positive(),
-      }),
+      z
+        .object({
+          kind: z.literal("repository_ci"),
+          sourceRunId: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/),
+          sourceRevision: z.number().int().positive(),
+          sourceHeadCommit: z.string().regex(/^[a-f0-9]{40}$/),
+          evidenceId: z.string().regex(/^check_run:[1-9][0-9]*$/),
+          evidenceSha256: z.string().regex(/^[a-f0-9]{64}$/),
+          pullRequestNumber: z.number().int().positive(),
+          checkRunId: z.number().int().positive(),
+        })
+        .refine(
+          (value) => value.evidenceId === `check_run:${value.checkRunId}`,
+          { message: "evidenceId must match checkRunId" },
+        ),
     ])
     .optional(),
   bugReproduction: bugReproductionPlanSchema.optional(),

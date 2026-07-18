@@ -334,6 +334,7 @@ describe("trusted self-development contracts", () => {
       sourceHeadCommit: "a".repeat(40),
       evidenceId: "check_run:42",
       evidenceSha256: "c".repeat(64),
+      pullRequestNumber: 23,
       checkRunId: 42,
     };
     const schema = selfDevelopmentTaskSchema.shape.continuation;
@@ -343,6 +344,9 @@ describe("trusted self-development contracts", () => {
     );
     expect(
       schema.safeParse({ ...continuation, evidenceId: "comment:42" }).success,
+    ).toBe(false);
+    expect(
+      schema.safeParse({ ...continuation, evidenceId: "check_run:43" }).success,
     ).toBe(false);
   });
 });

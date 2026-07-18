@@ -2613,6 +2613,7 @@ async function handleExactCiTarget(
         sourceHeadCommit: target.headSha,
         evidenceId: `check_run:${target.checkRunId}`,
         evidenceSha256,
+        pullRequestNumber: target.pullRequestNumber,
         checkRunId: target.checkRunId,
       },
     );
@@ -4177,6 +4178,9 @@ async function publishEligibleContinuationRun(
   const sameTaskAuthority =
     source.task.repositoryPath === run.task.repositoryPath &&
     source.task.validationLevel === run.task.validationLevel &&
+    // ADR 9 makes likely/allowedPaths advisory when pathPolicy exists. A
+    // review continuation deliberately narrows this guidance to reviewed
+    // files; actual changes are authorized below by the immutable pathPolicy.
     same(source.task.pathPolicy, run.task.pathPolicy) &&
     same(source.task.planning, run.task.planning) &&
     same(source.task.bugReproduction, run.task.bugReproduction) &&
@@ -4208,14 +4212,15 @@ async function publishEligibleContinuationRun(
       );
     }
     const sourceIdentity = source.task.source;
-    const pullRequestNumber = Number(
-      source.publication?.pullRequestUrl?.match(/\/pull\/([1-9][0-9]*)$/)?.[1],
-    );
-    if (!sourceIdentity || !Number.isSafeInteger(pullRequestNumber))
+    if (
+      !sourceIdentity ||
+      source.publication?.pullRequestUrl !==
+        `https://github.com/${sourceIdentity.owner}/${sourceIdentity.repository}/pull/${continuation.pullRequestNumber}`
+    )
       return false;
     const remediation = await readCiRemediation(env, {
       repositoryFullName: `${sourceIdentity.owner}/${sourceIdentity.repository}`,
-      pullRequestNumber,
+      pullRequestNumber: continuation.pullRequestNumber,
       headSha: continuation.sourceHeadCommit,
       checkRunId: continuation.checkRunId,
     });
