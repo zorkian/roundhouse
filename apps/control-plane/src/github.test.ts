@@ -5,6 +5,7 @@ import {
   createRun,
   MemoryRunRepository,
   type Attempt,
+  type RunSnapshot,
   type Wakeup,
 } from "@roundhouse/core";
 import { describe, expect, it, vi } from "vitest";
@@ -47,6 +48,22 @@ function github(permission = "write"): GitHubApi {
     }) as GitHubApi["get"],
     post: vi.fn(async () => ({})) as GitHubApi["post"],
   };
+}
+
+async function reportedBody(
+  run: RunSnapshot,
+  attempt: Attempt,
+): Promise<string> {
+  let reported = "";
+  const reporter = new GitHubStageReporter({
+    get: async <T>() => [] as T,
+    post: async <T>(_path: string, value: unknown) => {
+      reported = String((value as { body?: unknown }).body ?? "");
+      return {} as T;
+    },
+  });
+  await reporter.report(run, attempt);
+  return reported;
 }
 
 async function delivery(
@@ -314,7 +331,7 @@ describe("GitHub intake", () => {
     ).resolves.toBe("ignored");
   });
 
-  it("asks focused qualification questions and invites a prose reply", async () => {
+  it("asks focused qualification questions without explaining how to answer", async () => {
     const post = vi.fn(async (_path: string, _body: unknown) => undefined);
     const reporter = new GitHubStageReporter({
       get: async <T>() => [] as T,
@@ -357,9 +374,95 @@ describe("GitHub intake", () => {
     });
     expect(post.mock.calls[0]?.[1]).toMatchObject({
       body: expect.stringContaining(
-        "- Which input demonstrates the problem?\n\nPlease reply in prose.",
+        "## A few questions before I start\n\nThe failing input is missing.\n\n### Questions\n- Which input demonstrates the problem?",
       ),
     });
+    expect(post.mock.calls[0]?.[1]).toMatchObject({
+      body: expect.not.stringContaining("reply in prose"),
+    });
+  });
+
+  it("turns terminal classifications into plain-language conclusions", async () => {
+    const cases = [
+      ["duplicate", "## This looks like a duplicate"],
+      ["already_satisfied", "## This appears to be already addressed"],
+      ["unsupported", "## I can’t take this on"],
+    ] as const;
+    for (const [classification, heading] of cases) {
+      const run = {
+        ...createRun({
+          id: `run_${classification}`,
+          repository: "zorkian/roundhouse",
+          issueNumber: 42,
+          baseCommit: "a".repeat(40),
+          profileVersion: "v2",
+        }),
+        status: "succeeded",
+        stage: "qualify",
+        revision: 2,
+      } as const;
+      const body = await reportedBody(run, {
+        id: `${run.id}_rev_1`,
+        runId: run.id,
+        runRevision: 1,
+        kind: "agent",
+        stage: "qualify",
+        role: "qualify",
+        state: "completed",
+        deadlineAt: Date.now() + 1_000,
+        baseCommit: run.baseCommit,
+        expectedHead: run.currentHead,
+        result: {
+          qualification: { classification, summary: "Here’s what I found." },
+        },
+      });
+      expect(body).toContain(heading);
+      expect(body).not.toContain("Roundhouse has stopped here");
+    }
+  });
+
+  it("asks natural follow-up questions when reproduction is inconclusive", async () => {
+    const run = {
+      ...createRun({
+        id: "run_not_reproduced",
+        repository: "zorkian/roundhouse",
+        issueNumber: 42,
+        baseCommit: "a".repeat(40),
+        profileVersion: "v2",
+      }),
+      status: "waiting",
+      stage: "reproduce",
+      revision: 3,
+      waitingReason: "clarification",
+    } as const;
+    const body = await reportedBody(run, {
+      id: "run_not_reproduced_rev_2",
+      runId: run.id,
+      runRevision: 2,
+      kind: "agent",
+      stage: "reproduce",
+      role: "reproduce",
+      state: "completed",
+      deadlineAt: Date.now() + 1_000,
+      baseCommit: run.baseCommit,
+      expectedHead: run.currentHead,
+      result: {
+        reproduction: {
+          status: "not_reproduced",
+          summary: "I couldn’t trigger the behavior described.",
+          expectedBehavior: "The page should remain open.",
+          observedBehavior: "The page remained open in my test.",
+          uncertainties: ["What did you click immediately before it closed?"],
+        },
+      },
+    });
+    expect(body).toContain(
+      "## I couldn’t reproduce this yet\n\nI couldn’t trigger the behavior described.",
+    );
+    expect(body).toContain(
+      "### Questions\n- What did you click immediately before it closed?",
+    );
+    expect(body).not.toContain("reply in prose");
   });
 
   it("posts one evidence-backed reproduction comment", async () => {
@@ -408,11 +511,13 @@ describe("GitHub intake", () => {
     expect(post).toHaveBeenCalledWith(
       "/repos/zorkian/roundhouse/issues/42/comments",
       {
-        body: expect.stringContaining("Roundhouse reproduction: **confirmed**"),
+        body: expect.stringContaining("## I reproduced this"),
       },
     );
     expect(post.mock.calls[0]?.[1]).toMatchObject({
-      body: expect.stringContaining("Next: planning."),
+      body: expect.stringContaining(
+        "I’ll put together a plan for the change next.",
+      ),
     });
     expect(post.mock.calls[0]?.[1]).toMatchObject({
       body: expect.not.stringContaining("Commands:"),
@@ -468,14 +573,57 @@ describe("GitHub intake", () => {
     expect(post).toHaveBeenCalledWith(
       "/repos/zorkian/roundhouse/issues/42/comments",
       {
-        body: expect.stringContaining("Roundhouse plan: **ready**"),
+        body: expect.stringContaining("## Proposed approach"),
       },
     );
     expect(post.mock.calls[0]?.[1]).toMatchObject({
-      body: expect.stringContaining("Next: implementation."),
+      body: expect.stringContaining("This is ready to be worked on."),
     });
     expect(post.mock.calls[0]?.[1]).toMatchObject({
       body: expect.not.stringContaining("focused regression test"),
     });
+  });
+
+  it("asks plan questions without exposing workflow status", async () => {
+    const run = {
+      ...createRun({
+        id: "run_plan_question",
+        repository: "zorkian/roundhouse",
+        issueNumber: 42,
+        baseCommit: "a".repeat(40),
+        profileVersion: "v2",
+      }),
+      status: "waiting",
+      stage: "plan",
+      revision: 4,
+      waitingReason: "clarification",
+    } as const;
+    const body = await reportedBody(run, {
+      id: "run_plan_question_rev_3",
+      runId: run.id,
+      runRevision: 3,
+      kind: "agent",
+      stage: "plan",
+      role: "plan",
+      state: "completed",
+      deadlineAt: Date.now() + 1_000,
+      baseCommit: run.baseCommit,
+      expectedHead: run.currentHead,
+      result: {
+        plan: {
+          status: "needs_clarification",
+          summary: "There are two reasonable ways to handle existing data.",
+          proposedChange: "Update the stored records during the change.",
+          acceptanceCriteria: [],
+          validation: [],
+          questions: ["Should existing records be updated automatically?"],
+        },
+      },
+    });
+    expect(body).toContain("## A few questions about the proposed change");
+    expect(body).toContain(
+      "### Questions\n- Should existing records be updated automatically?",
+    );
+    expect(body).not.toContain("needs_clarification");
   });
 });

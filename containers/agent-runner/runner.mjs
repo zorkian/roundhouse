@@ -266,6 +266,7 @@ export async function qualify(assignment, directory, attemptSecret) {
     issue.body,
     "Clarification conversation:",
     JSON.stringify(issue.clarifications ?? []),
+    "The summary and any questions will be posted directly to the issue author. Write them in clear, approachable language. Do not mention internal stages, schemas, classifications, or tell the author how to format a reply.",
     "If the issue is unclear, put each focused question needed to proceed in uncertainties.",
     "Return only the requested structured qualification.",
   ].join("\n");
@@ -295,6 +296,7 @@ export async function reproduce(assignment, directory, attemptSecret) {
     JSON.stringify(issue.clarifications ?? []),
     "Qualification:",
     JSON.stringify(qualification),
+    "The summary, expected behavior, observed behavior, and any questions will be posted directly to the issue author. Write them in clear, approachable language. Do not mention internal stages, schemas, statuses, or tell the author how to format a reply.",
     "If reproduction cannot proceed, put each focused question needed to proceed in uncertainties.",
     "Return only the requested structured reproduction evidence.",
   ].join("\n");
@@ -326,6 +328,7 @@ export async function plan(assignment, directory, attemptSecret) {
     JSON.stringify(qualification),
     "Reproduction:",
     JSON.stringify(reproduction),
+    "The summary, proposed change, acceptance criteria, and any questions will be posted directly to the issue author. Write them in clear, approachable language. Do not mention internal stages, schemas, statuses, or tell the author how to format a reply.",
     "Plan the smallest complete behavioral change and how to validate it. Do not add risk policy, approval gates, retries, limits, or speculative hardening.",
     "If material information is still missing, set status to needs_clarification and put each focused question in questions. Otherwise set status to ready.",
     "Return only the requested structured plan.",

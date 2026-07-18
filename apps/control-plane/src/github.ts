@@ -174,8 +174,23 @@ function stringList(value: unknown): readonly string[] {
 function questionLines(value: unknown): readonly string[] {
   const questions = stringList(value);
   return questions.length
-    ? ["", "Questions:", ...questions.map((question) => `- ${question}`)]
+    ? ["", "### Questions", ...questions.map((question) => `- ${question}`)]
     : [];
+}
+
+function qualificationHeading(classification: string): string {
+  if (classification === "unclear") return "A few questions before I start";
+  if (classification === "duplicate") return "This looks like a duplicate";
+  if (classification === "already_satisfied")
+    return "This appears to be already addressed";
+  if (classification === "unsupported") return "I can’t take this on";
+  return "I’m looking into this";
+}
+
+function reproductionHeading(status: string): string {
+  if (status === "confirmed") return "I reproduced this";
+  if (status === "not_reproduced") return "I couldn’t reproduce this yet";
+  return "I need a little more information";
 }
 
 function reproductionComment(run: RunSnapshot, attempt: Attempt): string {
@@ -183,53 +198,57 @@ function reproductionComment(run: RunSnapshot, attempt: Attempt): string {
     Record<string, unknown> | undefined;
   const status = String(reproduction?.status ?? "blocked");
   const summary = String(
-    reproduction?.summary ?? "Reproduction did not produce a summary.",
+    reproduction?.summary ?? "I wasn’t able to summarize what happened.",
   );
-  const expected = String(reproduction?.expectedBehavior ?? "Not reported.");
-  const observed = String(reproduction?.observedBehavior ?? "Not reported.");
-  const next =
-    run.status === "waiting" ? "Please reply in prose." : "Next: planning.";
+  const expected = String(
+    reproduction?.expectedBehavior ??
+      "I couldn’t determine the expected behavior.",
+  );
+  const observed = String(
+    reproduction?.observedBehavior ??
+      "I couldn’t determine the current behavior.",
+  );
+  const waiting = run.status === "waiting";
   return [
     `<!-- roundhouse:v2:reproduction:${attempt.id} -->`,
-    `Roundhouse reproduction: **${status}**`,
+    `## ${reproductionHeading(status)}`,
     "",
     summary,
     "",
-    `Expected: ${expected}`,
+    "### Expected",
+    expected,
     "",
-    `Observed: ${observed}`,
-    ...questionLines(reproduction?.uncertainties),
-    "",
-    next,
+    "### What I found",
+    observed,
+    ...(waiting ? questionLines(reproduction?.uncertainties) : []),
+    ...(waiting ? [] : ["", "I’ll put together a plan for the change next."]),
   ].join("\n");
 }
 
 function planComment(run: RunSnapshot, attempt: Attempt): string {
   const plan = attempt.result?.plan as Record<string, unknown> | undefined;
-  const status = String(plan?.status ?? "needs_clarification");
   const summary = String(
-    plan?.summary ?? "Planning did not produce a summary.",
+    plan?.summary ?? "I wasn’t able to prepare a proposed approach.",
   );
   const acceptance = stringList(plan?.acceptanceCriteria);
-  const proposedChange = String(plan?.proposedChange ?? "Not reported.");
-  const next =
-    run.status === "waiting"
-      ? "Please reply in prose."
-      : "Next: implementation.";
+  const proposedChange = String(
+    plan?.proposedChange ??
+      "I need more information before I can propose a change.",
+  );
+  const waiting = run.status === "waiting";
   return [
     `<!-- roundhouse:v2:plan:${attempt.id} -->`,
-    `Roundhouse plan: **${status}**`,
+    `## ${waiting ? "A few questions about the proposed change" : "Proposed approach"}`,
     "",
     summary,
     "",
-    "Proposed change:",
+    "### Proposed change",
     proposedChange,
     ...(acceptance.length
-      ? ["", "Acceptance criteria:", ...acceptance.map((item) => `- ${item}`)]
+      ? ["", "### Done when", ...acceptance.map((item) => `- ${item}`)]
       : []),
-    ...questionLines(plan?.questions),
-    "",
-    next,
+    ...(waiting ? questionLines(plan?.questions) : []),
+    ...(waiting ? [] : ["", "This is ready to be worked on."]),
   ].join("\n");
 }
 
@@ -266,25 +285,22 @@ export class GitHubStageReporter implements AttemptReporter {
       Record<string, unknown> | undefined;
     const classification = String(qualification?.classification ?? "unclear");
     const summary = String(
-      qualification?.summary ?? "Qualification did not produce a summary.",
+      qualification?.summary ??
+        "I need more information before I can continue.",
     );
-    const next =
-      run.status === "waiting"
-        ? "Please reply in prose."
-        : run.stage === "reproduce"
-          ? "Next: reproduction."
-          : "Roundhouse has stopped here.";
+    const waiting = run.status === "waiting";
     await this.github.post(
       `/repos/${run.repository}/issues/${run.issueNumber}/comments`,
       {
         body: [
           marker,
-          `Roundhouse qualification: **${classification}**`,
+          `## ${qualificationHeading(classification)}`,
           "",
           summary,
-          ...questionLines(qualification?.uncertainties),
-          "",
-          next,
+          ...(waiting ? questionLines(qualification?.uncertainties) : []),
+          ...(run.stage === "reproduce"
+            ? ["", "I’ll check what the project does today."]
+            : []),
         ]
           .join("\n")
           .slice(0, 65_000),
