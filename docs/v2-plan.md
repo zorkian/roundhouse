@@ -293,9 +293,22 @@ Duplicate and stale messages are harmless.
 A scheduled recovery pass finds expired active reservations and enqueues them.
 It uses the same coordinator path; it is not a second recovery state machine.
 
-V2 will not use Cloudflare Workflows or Durable Objects initially. They may be
-added only when an observed requirement cannot be met by the D1-plus-Queue
-model and the change replaces, rather than duplicates, an existing authority.
+V2 uses Durable Objects only where Cloudflare Containers require them.
+Container Durable Objects provide instance routing and process lifecycle
+management; they do not own Roundhouse workflow state, retries, approvals, or
+business decisions. D1 remains the sole lifecycle authority. V2 will not
+initially use Cloudflare Workflows or additional application-level Durable
+Objects.
+
+Cloudflare requires each Container to be managed by a Durable Object, and its
+Container API supplies lifecycle, port-readiness, and idle-time controls. The
+adapter therefore uses an immutable attempt ID as the Durable Object name and
+returns after assignment instead of treating a Queue consumer as the attempt
+lifetime. Queue consumers have a 15-minute wall-clock limit. See the official
+[Container class](https://developers.cloudflare.com/containers/container-class/),
+[Durable Object Container](https://developers.cloudflare.com/durable-objects/api/container/),
+and [Queues limits](https://developers.cloudflare.com/queues/platform/limits/)
+documentation.
 
 ### 6.2 Run and attempt model
 
@@ -337,6 +350,9 @@ that adds a table must name the user journey or operational query requiring it.
 
 D1 stores small structured model outputs, summaries, commands, status, object
 references, and costs. It does not store Git repository contents or secrets.
+The D1 adapter uses ordered prepared-statement parameters and conditional
+updates for revision and lease compare-and-swap behavior, following the
+[D1 prepared statement contract](https://developers.cloudflare.com/d1/worker-api/prepared-statements/).
 
 ### 6.4 Cloudflare Artifacts is the workspace layer
 
@@ -410,6 +426,14 @@ Relevant Cloudflare documentation:
 - [Git protocol and token scopes](https://developers.cloudflare.com/artifacts/api/git-protocol/)
 - [Limits](https://developers.cloudflare.com/artifacts/platform/limits/)
 - [Pricing and explicit deletion](https://developers.cloudflare.com/artifacts/platform/pricing/)
+
+The Workers binding creates, imports, retrieves, and deletes repositories and
+mints repo-scoped tokens. Git clients use `read` tokens for clone/fetch/pull
+and `write` tokens for push; tokens are supplied through an authorization
+header rather than persisted in a remote URL. These assumptions follow the
+[Workers binding](https://developers.cloudflare.com/artifacts/api/workers-binding/)
+and [Artifacts authentication](https://developers.cloudflare.com/artifacts/guides/authentication/)
+contracts.
 
 ### 6.5 Agent runner
 
@@ -724,13 +748,13 @@ Phase 0 completed on 2026-07-17 with these fixed boundaries:
 
 - the final deployed V1 baseline is `f922198`, preserved as
   `v1-poc-final`;
-- V2 development happens on `codex/v2`, based on that deployed baseline;
-- the unmerged routing implementation at `23e30bc` remains on its original
-  branch as reference and is not part of the V2 code base;
+- `codex/v2` was merged into `main` and deleted; `main` is now the sole active
+  local and GitHub branch before each new reviewed slice begins;
+- the model-routing branch and every other partial V1 branch were deliberately
+  discarded rather than retained or reconstructed;
 - GitHub's `Release development` and `Promote production` workflows are
   disabled, and the pending V1 production promotion was cancelled;
-- ordinary `CI` remains enabled and runs for pull requests and direct pushes
-  to `codex/v2`; and
+- ordinary `CI` remains enabled for reviewed V2 changes; and
 - no Cloudflare resource is deleted or repurposed. Any new V2 resource must
   use a `v2` namespace in its name and route.
 
@@ -765,6 +789,32 @@ Exit gate:
 - no V2 module imports V1 orchestration code.
 
 ### Phase 1 — Executable core and Artifacts workspace
+
+Current review cut (branch `codex/v2-phase-1`): the smallest deterministic
+foundation proves revision-bound D1 leases, one immutable attempt per wakeup,
+prompt Container dispatch through the mandatory thin Durable Object, signed
+revision-bound callbacks, replay safety, lease-expiry recovery, and exact
+Artifacts checkpoint resumption through fakes. The seven-table migration and
+all V2-namespaced resource bindings are reproducible in the Worker
+configuration.
+
+The real Artifacts exercise used the new `roundhouse-v2-development` namespace
+and a disposable opaque repository. It established `df1d1fa` as the exact
+base, pushed an accepted checkpoint with a five-minute write token, cloned that
+checkpoint with a read token and a replacement writer, rejected read-token
+push, unexpected head, ancestry, and protected-path cases, verified that Git
+remotes retained no credentials, revoked every repo token, proved the revoked
+token failed, and deleted the repo. Immediate reuse of a just-deleted repo name
+returned private-beta error `10400`; a new opaque name worked. The production
+adapter must therefore reconcile create/get by stored opaque identity and must
+not rely on immediate name reuse.
+
+The empty V2 Artifacts namespace is the only live resource retained by this
+cut. Local migration validation, the runner image build, and the
+Worker/Container dry build pass. Live D1, Queue, Worker, Container application,
+route, generated binding types, and deployment checks remain before Phase 1 is
+complete; the real D1 ID must replace the deliberately invalid placeholder. No
+production or V1 resource was changed.
 
 Actions:
 

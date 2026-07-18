@@ -5,6 +5,58 @@
   "compatibility_date": "2026-07-17",
   "workers_dev": true,
   "preview_urls": false,
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "roundhouse-v2-development",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations",
+    },
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "RUN_WAKEUPS",
+        "queue": "roundhouse-v2-development-wakeups",
+      },
+    ],
+    "consumers": [
+      {
+        "queue": "roundhouse-v2-development-wakeups",
+        "dead_letter_queue": "roundhouse-v2-development-wakeups-dlq",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 5,
+      },
+    ],
+  },
+  "artifacts": [
+    { "binding": "ARTIFACTS", "namespace": "roundhouse-v2-development" },
+  ],
+  "containers": [
+    {
+      "class_name": "RoundhouseAttemptContainer",
+      "image": "../../containers/agent-runner/Dockerfile",
+      "instance_type": "lite",
+      "max_instances": 10,
+    },
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "ATTEMPT_CONTAINERS",
+        "class_name": "RoundhouseAttemptContainer",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v2-phase-1",
+      "new_sqlite_classes": ["RoundhouseAttemptContainer"],
+    },
+  ],
+  "triggers": { "crons": ["*/5 * * * *"] },
+  "vars": { "CONTROL_PLANE_ORIGIN": "https://v2-development.rm-rm.rip" },
   "observability": {
     "enabled": true,
   },
