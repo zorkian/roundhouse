@@ -10,6 +10,7 @@ import {
 import {
   CloudflareArtifactsNamespace,
   validateCheckpointIdentity,
+  validateReadOnlyCheckpoint,
 } from "./artifacts.js";
 import { coordinate, type AttemptDispatcher } from "./coordinator.js";
 import {
@@ -218,6 +219,14 @@ class ContainerCheckpointValidator implements CheckpointValidator {
       ref: workspaceRef(run.id),
       protectedPaths,
     });
+    if (attempt.stage !== "implement") {
+      try {
+        validateReadOnlyCheckpoint(input.checkpoint);
+      } finally {
+        await artifact.revokeToken(input.artifactTokenId);
+      }
+      return;
+    }
     const token = await artifact.createToken("read", 5 * 60);
     try {
       const response = await this.containers
