@@ -258,14 +258,13 @@ export class D1RunRepository implements RunRepository {
     return (result.meta.changes ?? 0) === 1;
   }
 
-  async reserveModelCall(attemptId: string, maximum = 8): Promise<boolean> {
-    const result = await this.db
+  async recordModelCall(attemptId: string): Promise<void> {
+    await this.db
       .prepare(
-        "UPDATE attempts SET model_calls=model_calls+1,updated_at=?1 WHERE id=?2 AND state IN ('created','dispatched') AND deadline_at>?1 AND model_calls<?3",
+        "UPDATE attempts SET model_calls=model_calls+1,updated_at=?1 WHERE id=?2",
       )
-      .bind(this.now(), attemptId, maximum)
+      .bind(this.now(), attemptId)
       .run();
-    return (result.meta.changes ?? 0) === 1;
   }
 
   async recordModelRouting(

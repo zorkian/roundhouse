@@ -160,49 +160,15 @@ export class GitHubClient {
   }
 }
 
-function strings(value: unknown): readonly string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string")
-    : [];
-}
-
-function untrustedText(value: unknown, maximum: number): string {
-  return String(value).slice(0, maximum).replaceAll("@", "@\u200b");
-}
-
 function reproductionComment(run: RunSnapshot, attempt: Attempt): string {
   const reproduction = attempt.result?.reproduction as
     Record<string, unknown> | undefined;
-  const status = untrustedText(reproduction?.status ?? "blocked", 100);
-  const summary = untrustedText(
+  const status = String(reproduction?.status ?? "blocked");
+  const summary = String(
     reproduction?.summary ?? "Reproduction did not produce a summary.",
-    3_000,
   );
-  const expected = untrustedText(
-    reproduction?.expectedBehavior ?? "Not reported.",
-    2_000,
-  );
-  const observed = untrustedText(
-    reproduction?.observedBehavior ?? "Not reported.",
-    2_000,
-  );
-  const commands = Array.isArray(reproduction?.commands)
-    ? reproduction.commands
-        .flatMap((value) => {
-          if (!value || typeof value !== "object") return [];
-          const command = String(
-            (value as Record<string, unknown>).command ?? "",
-          );
-          const exitCode = (value as Record<string, unknown>).exitCode;
-          return command
-            ? [`- \`${command.slice(0, 500)}\` — exit ${String(exitCode)}`]
-            : [];
-        })
-        .slice(0, 20)
-    : [];
-  const files = strings(reproduction?.relevantFiles)
-    .slice(0, 20)
-    .map((file) => `- \`${file.slice(0, 500)}\``);
+  const expected = String(reproduction?.expectedBehavior ?? "Not reported.");
+  const observed = String(reproduction?.observedBehavior ?? "Not reported.");
   const next =
     run.stage === "plan"
       ? "Next: planning."
@@ -216,8 +182,6 @@ function reproductionComment(run: RunSnapshot, attempt: Attempt): string {
     `Expected: ${expected}`,
     "",
     `Observed: ${observed}`,
-    ...(commands.length ? ["", "Commands:", ...commands] : []),
-    ...(files.length ? ["", "Relevant files:", ...files] : []),
     "",
     next,
   ].join("\n");

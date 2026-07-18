@@ -3,7 +3,6 @@
 
 import {
   immutableAttemptId,
-  transitionRun,
   type Attempt,
   type RunRepository,
   type RunSnapshot,
@@ -45,13 +44,13 @@ export function reproductionTransition(attempt: Attempt) {
     return {
       status: "waiting",
       stage: "reproduce",
-      waitingReason: "maintainer_judgment",
+      waitingReason: "clarification",
     } as const;
   if (status === "blocked")
     return {
       status: "waiting",
       stage: "reproduce",
-      waitingReason: "external_check",
+      waitingReason: "clarification",
     } as const;
   return { status: "failed", stage: "reproduce" } as const;
 }
@@ -83,21 +82,10 @@ export async function coordinate(
   if (previous?.state === "completed") {
     const transition = completedTransition(previous);
     if (!transition) return "stale";
-    const claimed = await repository.claimLease(
-      run.id,
-      run.revision,
-      {
-        attemptId,
-        runRevision: run.revision,
-        expiresAt: now + Math.min(leaseMilliseconds, 60_000),
-      },
-      now,
-    );
-    if (!claimed) return "duplicate";
-    const projected = transitionRun(run, run.revision, transition);
-    if (reporter) await reporter.report(projected, previous);
     const next = await repository.transition(run.id, run.revision, transition);
-    return next ? "dispatched" : "stale";
+    if (!next) return "stale";
+    if (reporter) await reporter.report(next, previous);
+    return "dispatched";
   }
   const claimed = await repository.claimLease(
     run.id,

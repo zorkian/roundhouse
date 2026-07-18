@@ -13,7 +13,6 @@ export const runnerIdentity = Object.freeze({
   service: "roundhouse-v2-agent-runner",
 });
 export const qualificationSandbox = "danger-full-access";
-export const qualificationProviderRetries = 2;
 
 const jsonHeaders = Object.freeze({
   "cache-control": "no-store",
@@ -84,19 +83,9 @@ function command(commandName, args, options = {}) {
       env: options.env ?? process.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    const stdout = [],
-      stderr = [];
-    let bytes = 0;
-    const capture = (target, chunk) => {
-      bytes += chunk.length;
-      if (bytes > (options.maxBytes ?? 1024 * 1024)) {
-        child.kill("SIGKILL");
-        return;
-      }
-      target.push(chunk);
-    };
-    child.stdout.on("data", (chunk) => capture(stdout, chunk));
-    child.stderr.on("data", (chunk) => capture(stderr, chunk));
+    const stdout = [];
+    child.stdout.on("data", (chunk) => stdout.push(chunk));
+    child.stderr.resume();
     child.once("error", rejectCommand);
     child.once("close", (code) => {
       if (code === 0) resolveCommand(Buffer.concat(stdout).toString().trim());
@@ -150,32 +139,29 @@ export const reproductionSchema = Object.freeze({
       type: "string",
       enum: ["confirmed", "not_reproduced", "blocked"],
     },
-    summary: { type: "string", maxLength: 3000 },
+    summary: { type: "string" },
     commands: {
       type: "array",
-      maxItems: 20,
       items: {
         type: "object",
         additionalProperties: false,
         required: ["command", "exitCode", "output"],
         properties: {
-          command: { type: "string", maxLength: 500 },
+          command: { type: "string" },
           exitCode: { type: "integer" },
-          output: { type: "string", maxLength: 4000 },
+          output: { type: "string" },
         },
       },
     },
-    expectedBehavior: { type: "string", maxLength: 2000 },
-    observedBehavior: { type: "string", maxLength: 2000 },
+    expectedBehavior: { type: "string" },
+    observedBehavior: { type: "string" },
     relevantFiles: {
       type: "array",
-      maxItems: 20,
-      items: { type: "string", maxLength: 500 },
+      items: { type: "string" },
     },
     uncertainties: {
       type: "array",
-      maxItems: 20,
-      items: { type: "string", maxLength: 2000 },
+      items: { type: "string" },
     },
   },
 });
@@ -226,10 +212,6 @@ async function structuredAgent(
       'model_providers.roundhouse.wire_api="responses"',
       "-c",
       `model_providers.roundhouse.env_http_headers=${headers}`,
-      "-c",
-      `model_providers.roundhouse.request_max_retries=${qualificationProviderRetries}`,
-      "-c",
-      `model_providers.roundhouse.stream_max_retries=${qualificationProviderRetries}`,
       "-c",
       "features.enable_request_compression=false",
       "-c",
@@ -441,31 +423,16 @@ async function completeAssignment(assignment, headers) {
         routing: assignment.routing,
       }
     : undefined;
-  let lastError;
-  for (
-    let attempt = 0;
-    attempt < 3 && Date.now() < assignment.deadlineAt;
-    attempt++
-  ) {
-    try {
-      const response = await fetch(
-        completionRequest(
-          assignment,
-          checkpoint,
-          callbackUrl,
-          attemptSecret,
-          result,
-        ),
-      );
-      if (response.ok) return;
-      lastError = new Error(`callback_http_${response.status}`);
-    } catch (error) {
-      lastError = error;
-    }
-    if (attempt < 2)
-      await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
-  }
-  throw lastError ?? new Error("callback_failed");
+  const response = await fetch(
+    completionRequest(
+      assignment,
+      checkpoint,
+      callbackUrl,
+      attemptSecret,
+      result,
+    ),
+  );
+  if (!response.ok) throw new Error(`callback_http_${response.status}`);
 }
 
 function response(status, value, headers = {}) {

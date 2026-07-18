@@ -13,6 +13,26 @@ spike note, and acceptance checklist. When implementation and this document
 disagree, either the implementation is wrong or this document must be updated
 in the same change.
 
+### Prototype-first development rule
+
+V2 is a prototype. The immediate objective is to make one real issue travel the
+entire functional path to a merged change as soon as possible, then observe how
+the system behaves in real operation.
+
+We **must not** add hardening based only on imagined failures. That includes
+arbitrary attempt or conversation limits, retry and recovery systems, spend or
+resource governors, abuse controls, generalized policy frameworks, approval
+machinery, and predictive failure handling. When development or production
+operation exposes a concrete failure, we will decide whether to fix the local
+implementation or change the architecture and add only the smallest mechanism
+supported by that evidence. We will re-architect a bad boundary rather than
+stacking compensating hacks on top of it.
+
+This rule does not defer the small security kernel that makes prototype
+operation responsible: credentials stay out of agent containers, authority
+stays in the trusted control plane, untrusted execution stays isolated, and
+GitHub mutations remain authenticated and scoped.
+
 ## 1. Decision
 
 Roundhouse V1 is a successful proof of concept and an unsuitable foundation for
@@ -77,8 +97,9 @@ objects, or internal identifiers.
 
 Clarification happens in the existing issue. A reporter or maintainer answers
 in ordinary prose, and the same work item resumes from the new issue snapshot.
-Roundhouse may ask multiple focused questions at once, but it should normally
-need at most one clarification round.
+Roundhouse may ask multiple focused questions at once and continues the
+conversation for as long as useful questions and responsive answers are moving
+the issue toward a supported outcome.
 
 Clarification content supplies facts, not authority. Any GitHub user may offer
 information on a public issue. Only an actor authorized by repository policy
@@ -99,10 +120,11 @@ A reproduction result is one of:
 - `expected_behavior`; or
 - `inconclusive_needs_judgment`.
 
-The issue shows the relevant command or procedure, expected behavior, observed
-behavior, base commit, and bounded diagnostics. Roundhouse never invents a
-reproduction or quietly treats “tests passed” as proof that the report was
-reproduced.
+The issue shows a concise status, expected behavior, observed behavior, and the
+next action. Commands, raw output, relevant files, and other detailed evidence
+remain in durable attempt evidence for later inspection rather than cluttering
+the public conversation. Roundhouse never invents a reproduction or quietly
+treats “tests passed” as proof that the report was reproduced.
 
 When reproduction cannot proceed because information is missing, Roundhouse
 asks for it. When the result is already fixed, expected behavior, unsupported,
@@ -139,7 +161,7 @@ with reviewed repository profiles.
 In scope:
 
 - GitHub issues, comments, pull requests, checks, reviews, and merge;
-- bugs, bounded maintenance tasks, and small features;
+- bugs, small maintenance tasks, and small features;
 - natural-language clarification in the issue;
 - repository-aware reproduction and validation;
 - low, medium, and high risk classification;
@@ -162,7 +184,6 @@ Not in the first V2 release:
 - a marketplace of reviewer plugins;
 - a dashboard duplicating GitHub's maintainer experience;
 - self-modifying policy, prompts, permissions, or model routing;
-- unlimited repair or review loops; or
 - claims that automated validation proves a change secure or correct.
 
 Roundhouse's responsibility ends at merge. Repository-owned release and
@@ -182,14 +203,13 @@ V2 keeps these boundaries even when doing so costs implementation effort:
 6. Never provide an agent container with GitHub App credentials, Cloudflare
    administration credentials, deployment credentials, or authority over the
    default branch.
-7. Give each attempt only short-lived, least-privilege credentials and bounded
-   time, turns, compute, output, disk, and model usage.
+7. Give each attempt only short-lived, least-privilege credentials.
 8. Keep publication and merge in the trusted control plane.
 9. Validate repository policy and expected Git ancestry before publication.
 10. Bind validation, review, CI, approval, and merge to the exact current head.
     A new head invalidates gates for the old head.
-11. Make cancellation, exhausted limits, ambiguous state, and stale approval
-    fail closed with one visible next action.
+11. Make cancellation, ambiguous state, and stale approval fail closed with one
+    visible next action.
 12. Do not retain credentials, authorization headers, or known secret values in
     prompts, logs, Git commits, D1, R2, GitHub comments, or model output.
 
@@ -207,11 +227,11 @@ change, or escape the reviewed workflow.
 - Separation between the control plane and untrusted agent execution.
 - Exact base/head identity and exact-head merge gates.
 - Repository path policy and actor authorization.
-- Bounded, disposable container execution.
+- Disposable container execution.
 - Idempotent attempt identity, durable completion, and reconnection after a
   Worker release or lost caller.
 - D1 compare-and-swap lease ownership with one lifecycle authority.
-- Secret redaction and bounded command output.
+- Secret redaction.
 - Validation and replay tests that exercise real failure classes.
 - The measured V1 dogfood evidence and latency targets.
 - Explicit per-stage model and reasoning-effort selection, recorded in attempt
@@ -320,7 +340,7 @@ A coordinator invocation:
 6. enqueues the run again when another automatic action is ready.
 
 Queue messages are wakeups containing a run ID and expected revision. They do
-not own business state, consume retry budgets, or decide that a run is dead.
+not own business state or decide that a run is dead.
 Duplicate and stale messages are harmless.
 
 A scheduled recovery pass finds expired active reservations and enqueues them.
@@ -347,7 +367,7 @@ documentation.
 
 A **work item** is the enduring GitHub issue. A **run** is one execution of the
 V2 workflow against a snapshot of that issue and a repository profile. An
-**attempt** is one bounded invocation of a stage, provider, or system action.
+**attempt** is one invocation of a stage, provider, or system action.
 
 The run has two orthogonal fields:
 
@@ -355,9 +375,9 @@ The run has two orthogonal fields:
 - `stage`: `qualify`, `reproduce`, `plan`, `implement`, `validate`, `review`,
   `publish`, `ci`, or `merge`.
 
-A waiting run also has one reason: `clarification`, `plan_approval`,
-`final_approval`, `maintainer_judgment`, `budget`, `external_check`, or
-`retry_exhausted`.
+A waiting run also has one reason. The prototype currently uses
+`clarification`; approval reasons will be added when their functional slices
+require them.
 
 This avoids encoding every combination as a new state. State-specific data is
 stored in a versioned run document and normalized only when it has a real
@@ -487,14 +507,13 @@ policy. It receives:
 - Artifacts remote plus the least-privilege token;
 - exact base or candidate commit;
 - immutable repository-profile snapshot;
-- bounded issue, plan, reproduction, and prior-finding context;
+- issue, plan, reproduction, and prior-finding context;
 - selected provider, model, and reasoning effort;
-- permitted command classes and network destinations; and
-- resource and output limits.
+- permitted command classes and network destinations.
 
 The result includes exact input and output commits, structured outcome,
-commands and exit results, bounded diagnostics, changed paths, actual model
-routing, timing and available usage, retry classification, and a redacted
+commands and exit results, diagnostics, changed paths, actual model routing,
+timing and available usage, failure classification, and a redacted
 human summary.
 
 The runner may not publish to GitHub or decide the next workflow stage.
@@ -612,9 +631,10 @@ Validation is profile-defined and layered:
 5. targeted tests; and
 6. full local validation when the profile or risk requires it.
 
-Mechanical failures return to implementation with exact diagnostics and a
-bounded retry budget. A repair produces a new commit and reruns affected
-validation. The model cannot relabel a failed command as success.
+Mechanical failures return to implementation with exact diagnostics. A repair
+produces a new commit and reruns affected validation. The model cannot relabel
+a failed command as success. We will add loop policy only if real operation
+shows that the natural implementation/validation conversation needs it.
 
 GitHub required checks remain the authoritative repository-wide validation on
 the published exact head.
@@ -635,7 +655,6 @@ Each reviewer declares:
 - changed-path or risk conditions activating it;
 - finding severities it may block;
 - which outcomes require rerun; and
-- per-reviewer attempt and remediation limits.
 
 Every reviewer examines the exact candidate, approved plan, reproduction,
 validation, and relevant repository policy. Findings have a stable fingerprint,
@@ -648,15 +667,15 @@ The coordinator aggregates required outcomes:
   findings;
 - scope/risk expansion: replan and request approval;
 - duplicate or dispositioned findings: record without another loop;
-- exhausted or conflicting findings: wait for maintainer judgment.
+- conflicting findings: wait for maintainer judgment.
 
 After remediation, validation runs first, then every reviewer affected by the
 new head reruns. No reviewer can approve its own remediation, merge, grant
 capabilities, change risk policy, or silently widen scope.
 
-The loop is bounded by policy and cost, but the data model does not hard-code
-“two cycles.” The initial default is two remediation batches and three attempts
-per reviewer. Exhaustion produces a useful `needs_changes` result.
+The prototype follows actionable findings until the change works or a real
+decision is needed. It does not impose a speculative number of review or
+remediation rounds.
 
 ### 7.6 Publication, CI, and merge
 
@@ -671,8 +690,8 @@ The trusted publication broker:
 6. records publication idempotently.
 
 A new head invalidates old CI, reviews, and final approval. Roundhouse waits for
-required GitHub checks on the exact head. Failures may receive one bounded,
-in-scope diagnosis and repair loop.
+required GitHub checks on the exact head. In-scope failures return to diagnosis
+and repair.
 
 The final pull-request package shows:
 
@@ -700,7 +719,6 @@ repository. The initial schema contains only:
 - allowed/protected path and semantic risk rules;
 - reproduction and validation commands with timeouts;
 - permitted package-install behavior and egress destinations;
-- resource, model, retry, and output budgets;
 - required reviewers and activation conditions;
 - automatic-merge policy; and
 - retention periods.
@@ -712,22 +730,26 @@ model output into a shell.
 Profile edits apply only to new runs unless a maintainer explicitly restarts a
 waiting run under the new version. Changing the profile is high risk.
 
-## 9. Failure and recovery contract
+## 9. Deferred hardening and recovery
+
+Failure hardening is deliberately deferred until the functional end-to-end
+prototype works and real operation gives us evidence. The categories and
+scenarios below are observations we may need to make, not authorization to
+pre-build retry counts, backoff, recovery state machines, resource limits, or
+fallback policy.
 
 Every failure is classified as transient infrastructure/provider,
 deterministic agent/result failure, validation/review finding, policy or
-authorization block, budget exhaustion, stale/conflicting external state, or
-internal invariant violation.
+authorization block, stale/conflicting external state, or internal invariant
+violation.
 
-Only transient failures retry automatically, with bounded exponential delay.
-Deterministic failures return useful diagnostics to an implementation or human
-decision loop. Internal invariant violations stop; they do not “try another
-model.”
+For now, deterministic failures return useful diagnostics to the active
+implementation or human conversation. Internal invariant violations stop; they
+do not silently change the requested work.
 
-Attempt dispatch uses a stable idempotency key. Before paid work, the runner
-checks for an existing durable completion and active handle. A replacement
-Worker reconnects to the same handle or reads its completed result. It never
-starts a second paid invocation merely because the caller changed.
+The already-proven stable attempt identity and durable completion contract stay
+in place because they are part of the current architecture. Additional
+reconnection or recovery behavior must be justified by an observed failure.
 
 Test these outcomes:
 
@@ -739,7 +761,7 @@ Test these outcomes:
 - GitHub read, publication, check, and merge failures;
 - cancellation during every model-using stage;
 - stale approval and changed pull-request head; and
-- exhausted, ambiguous, or corrupted state stopping safely.
+- ambiguous or corrupted state stopping safely.
 
 ## 10. Maintainer experience and observability
 
@@ -770,7 +792,7 @@ without inspecting raw D1 tables, Queue messages, or container internals.
 
 ## 11. Complexity budget
 
-The budget is a product requirement:
+The budget is a simplicity constraint, not a reason to add runtime governors:
 
 - two Worker deployables: the lifecycle control plane and private model broker;
 - one runner image;
@@ -786,8 +808,12 @@ The budget is a product requirement:
 - no runtime source file larger than roughly 800 lines without explicit review;
 - no user-facing internal IDs or hashes in routine commands;
 - no abstraction until there are two implementations or a boundary that must
-  be faked in journey tests; and
-- no feature work without a named maintainer journey and exit test.
+  be faked in journey tests;
+- no feature work without a named maintainer journey and exit test;
+- no speculative hardening before a real operational failure demonstrates the
+  need; and
+- no arbitrary caps on conversations, model calls, repairs, reviews, command
+  output, or evidence.
 
 When a proposal exceeds this budget, simplify the proposal rather than silently
 amend the architecture.
@@ -903,17 +929,17 @@ its existing V1 webhook URL is not redirected during this isolated slice.
 Production App configuration and every V1 resource remain unchanged.
 
 The deterministic implementation includes raw webhook signature verification,
-maintainer authorization, delivery and repeated-command deduplication, bounded
-issue snapshots, a read-only Codex runner, D1-enforced per-attempt model-call
-limits, private service-binding routing, and coordinator-owned qualification
-transitions. The development AI Gateway is provisioned with bounded Unified
-Billing credits and no auto-top-up. Streaming, structured-output, tool-call,
-and controlled GitHub qualification proofs pass. Subscription-token fallback
-is not part of this design.
+maintainer authorization, delivery and repeated-command deduplication, a
+read-only Codex runner, private service-binding routing, and coordinator-owned
+qualification transitions. The development AI Gateway uses its existing
+account-level spend control. Streaming, structured-output, tool-call, and
+controlled GitHub qualification proofs pass. Subscription-token fallback is
+not part of this design.
 
 The second slice consumes that durable qualification in a separate read-only
 reproduction attempt. It records commands, observed and expected behavior,
-relevant files, and uncertainties in a structured result. A confirmed result
+relevant files, and uncertainties in durable structured evidence while keeping
+the GitHub response concise. A confirmed result
 advances to `plan`; a blocked or unsuccessful reproduction waits explicitly.
 The callback still only records a validated unchanged checkpoint, the
 coordinator remains the sole transition authority, and the broker selects the
@@ -926,16 +952,14 @@ Actions:
    status updates, and comment ingestion.
 2. Implement the minimal profile and enrollment validation.
 3. Run real qualification and reproduction attempts.
-4. Support one natural-language clarification round and same-run resumption.
-5. Produce an evidence-backed plan with deterministic risk floors.
-6. Bind and enforce medium/high plan approval.
+4. Support natural-language clarification and same-run resumption.
+5. Produce an evidence-backed plan.
 
 Exit gate:
 
 - one clear bug is reproduced before its plan;
-- one unclear bug asks a useful question and resumes after one answer;
+- one unclear bug asks useful questions and resumes from prose answers;
 - one non-reproducible or already-fixed report stops truthfully;
-- one risky plan cannot dispatch implementation without valid approval;
 - no interaction requires an internal identifier.
 
 ### Phase 3 — Implementation and self-repairing validation
@@ -947,7 +971,7 @@ Actions:
 3. Commit candidate changes and verify ancestry and repository policy.
 4. Implement profile-selected formatting, targeted validation, and promotion
    to full validation.
-5. Feed mechanical failures into bounded repair and rerun affected checks.
+5. Feed mechanical failures back into implementation and rerun affected checks.
 6. Publish a draft pull request through the trusted broker; do not merge yet.
 
 Exit gate:
@@ -977,14 +1001,14 @@ Exit gate:
 - a seeded blocking finding is fixed, validated, and reviewed again;
 - scope expansion waits for replanning and approval;
 - duplicate findings terminate rather than loop;
-- exhausted/conflicting reviewers produce one useful human decision.
+- conflicting reviewers produce one useful human decision.
 
 ### Phase 5 — Exact-head CI and risk-aware merge
 
 Actions:
 
 1. Observe required GitHub checks for the exact published head.
-2. Add bounded in-scope CI diagnosis and repair.
+2. Feed in-scope CI failures back into diagnosis and repair.
 3. Build the final merge-decision package.
 4. Enable automatic merge only for low-risk work.
 5. Bind medium/high final approval to the exact passing head.
@@ -997,7 +1021,12 @@ Exit gate:
 - stale CI, review, approval, conflict, or changed head blocks merge;
 - final GitHub status is concise and truthful.
 
-### Phase 6 — Resilience, external pilot, and cutover
+### Phase 6 — Evidence-driven hardening, external pilot, and cutover
+
+This phase begins only after the functional issue-to-merge journey works. Its
+hardening work responds to failures actually observed during dogfood and the
+external pilot; the scenario list is for measurement, not speculative
+implementation.
 
 Actions:
 
@@ -1025,8 +1054,8 @@ One V2 release candidate must demonstrate:
 1. **Clear low-risk bug:** reproduced, planned, implemented, repaired if needed,
    reviewed, exact-head CI passed, and automatically merged with no human action
    after start.
-2. **Clarified bug:** one useful clarification round resumes the same work item
-   and reaches a supported outcome.
+2. **Clarified bug:** useful prose clarification resumes the same work item and
+   reaches a supported outcome.
 3. **Cannot reproduce:** accurate evidence and a truthful stop or maintainer
    decision, with no invented fix.
 4. **Risky change:** deterministic signals force plan and final approval; stale
@@ -1092,16 +1121,17 @@ pull request must explain why updating this plan is insufficient.
 
 This compact log replaces standalone ADRs.
 
-| Date       | Decision                                                                            |
-| ---------- | ----------------------------------------------------------------------------------- |
-| 2026-07-17 | Treat V1 as a proven POC and rewrite its orchestration for V2.                      |
-| 2026-07-17 | Keep the V1 control/execution credential boundary and exact-head gates.             |
-| 2026-07-17 | Use D1 as the only workflow authority and Queue only as wakeups.                    |
-| 2026-07-17 | Use one Artifacts repository per run for workspace and handoff.                     |
-| 2026-07-17 | Keep R2 optional for non-Git oversized/binary payloads.                             |
-| 2026-07-17 | Make reviewers data-driven; initially ship one independent code-quality reviewer.   |
-| 2026-07-17 | Make provider/model/effort routing versioned policy and immutable attempt evidence. |
-| 2026-07-17 | Auto-merge only low risk; medium/high receives plan and final review.               |
-| 2026-07-17 | Keep only the README and this plan as normative documentation.                      |
-| 2026-07-17 | Put model access and future model selection behind one private broker.              |
-| 2026-07-18 | Use AI Gateway Unified Billing; do not deploy model-subscription credentials.       |
+| Date       | Decision                                                                              |
+| ---------- | ------------------------------------------------------------------------------------- |
+| 2026-07-17 | Treat V1 as a proven POC and rewrite its orchestration for V2.                        |
+| 2026-07-17 | Keep the V1 control/execution credential boundary and exact-head gates.               |
+| 2026-07-17 | Use D1 as the only workflow authority and Queue only as wakeups.                      |
+| 2026-07-17 | Use one Artifacts repository per run for workspace and handoff.                       |
+| 2026-07-17 | Keep R2 optional for non-Git oversized/binary payloads.                               |
+| 2026-07-17 | Make reviewers data-driven; initially ship one independent code-quality reviewer.     |
+| 2026-07-17 | Make provider/model/effort routing versioned policy and immutable attempt evidence.   |
+| 2026-07-17 | Auto-merge only low risk; medium/high receives plan and final review.                 |
+| 2026-07-17 | Keep only the README and this plan as normative documentation.                        |
+| 2026-07-17 | Put model access and future model selection behind one private broker.                |
+| 2026-07-18 | Use AI Gateway Unified Billing; do not deploy model-subscription credentials.         |
+| 2026-07-18 | Build the functional prototype first; harden only from observed operational evidence. |

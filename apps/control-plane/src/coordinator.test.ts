@@ -222,7 +222,7 @@ describe("single coordinator", () => {
     });
   });
 
-  it("keeps a failed qualification report retryable before transition", async () => {
+  it("does not hold workflow progress behind GitHub reporting", async () => {
     const store = new MemoryRunRepository();
     await store.create(createRun(input));
     await coordinate(
@@ -239,7 +239,6 @@ describe("single coordinator", () => {
       validator,
       await callbackFor(attempt, input.baseCommit, "report-retry-secret"),
     );
-    const reports: number[] = [];
     await expect(
       coordinate(
         store,
@@ -249,34 +248,11 @@ describe("single coordinator", () => {
         50,
         {
           report: async () => {
-            reports.push(1);
             throw new Error("github_response_lost");
           },
         },
       ),
     ).rejects.toThrow("github_response_lost");
-    await expect(store.get(input.id)).resolves.toMatchObject({
-      stage: "qualify",
-      revision: 1,
-    });
-    await expect(store.expiredLeases(250)).resolves.toEqual([
-      { runId: input.id, expectedRevision: 1 },
-    ]);
-    await expect(
-      coordinate(
-        store,
-        { submit: async () => undefined },
-        { runId: input.id, expectedRevision: 1 },
-        250,
-        50,
-        {
-          report: async () => {
-            reports.push(2);
-          },
-        },
-      ),
-    ).resolves.toBe("dispatched");
-    expect(reports).toEqual([1, 2]);
     await expect(store.get(input.id)).resolves.toMatchObject({
       stage: "reproduce",
       revision: 2,
@@ -310,7 +286,7 @@ describe("single coordinator", () => {
     ).toEqual({
       status: "waiting",
       stage: "reproduce",
-      waitingReason: "maintainer_judgment",
+      waitingReason: "clarification",
     });
     expect(
       reproductionTransition({
@@ -320,7 +296,7 @@ describe("single coordinator", () => {
     ).toEqual({
       status: "waiting",
       stage: "reproduce",
-      waitingReason: "external_check",
+      waitingReason: "clarification",
     });
   });
 

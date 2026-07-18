@@ -20,6 +20,15 @@ The complete product contract, architecture, transition sequence, and
 acceptance gates are in the [V2 plan](docs/v2-plan.md). That is the only
 normative design document in this repository.
 
+> [!IMPORTANT]
+> V2 is a prototype whose immediate goal is a working end-to-end issue-to-merge
+> journey. Build the simplest functional path, run it for real, and learn from
+> what actually happens. Do not add limits, retry or recovery systems, abuse
+> controls, generalized policy, approval gates, or other hardening for failures
+> we have not observed. After real operation exposes a problem, add the
+> smallest response that solves that problem. Credential, authority, and
+> isolation boundaries remain required from the start.
+
 > [!CAUTION]
 > Roundhouse is experimental, pre-release software for explicitly enrolled
 > public repositories. Generated code and automated reviews can be wrong. Do
@@ -32,15 +41,12 @@ normative design document in this repository.
    required.
 3. For a bug, Roundhouse attempts to reproduce the behavior before proposing a
    fix.
-4. Roundhouse posts its understanding, evidence, implementation plan, and risk
-   assessment. Risky plans wait for maintainer approval.
+4. Roundhouse posts its understanding, evidence, and implementation plan.
 5. An isolated implementation agent changes the code and iterates on formatter,
    lint, typecheck, build, and test failures.
-6. One or more independently configured reviewers examine the exact candidate
-   commit. Actionable findings return through the implementation and validation
-   loop until the required reviewers pass or a bounded limit is reached.
-7. Exact-head repository CI gates every merge. Low-risk changes may merge
-   automatically; other changes wait for a maintainer's final review.
+6. A reviewer examines the exact candidate commit and actionable findings
+   return through implementation and validation until the change works.
+7. Exact-head repository CI gates the merge.
 
 GitHub is the public source of truth for issues, pull requests, CI, and merged
 code. D1 owns workflow state. Cloudflare Artifacts is V2's Git-native workspace
@@ -55,8 +61,9 @@ and historical documents remain available from the tag and Git history rather
 than as a parallel legacy tree. Phase 1 is deployed in isolated V2 development
 resources and proves D1-owned lifecycle state, Queue wakeups, thin Container
 Durable Objects, and Artifacts checkpoint handoff. Phase 2 has deployed real
-development GitHub intake and read-only qualification through a private model
-broker; read-only reproduction is the current slice.
+development GitHub intake, read-only qualification, and read-only reproduction
+through a private model broker. Natural-language clarification and planning are
+the next functional slices.
 
 ## Local checks
 

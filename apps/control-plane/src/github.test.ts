@@ -234,7 +234,10 @@ describe("GitHub intake", () => {
       body: expect.stringContaining("Next: planning."),
     });
     expect(post.mock.calls[0]?.[1]).toMatchObject({
-      body: expect.not.stringContaining("@maintainer"),
+      body: expect.not.stringContaining("Commands:"),
+    });
+    expect(post.mock.calls[0]?.[1]).toMatchObject({
+      body: expect.not.stringContaining("Relevant files:"),
     });
   });
 });
