@@ -13,6 +13,7 @@ type PlanRow = {
   issue_number: number;
   status: string;
   plan_sha256: string;
+  plan_json: string;
   approved_at: string | null;
   run_id: string | null;
   created_at: string;
@@ -63,6 +64,43 @@ function parseRun(row: RunRow | undefined): SelfDevelopmentRun | undefined {
   if (!row) return undefined;
   try {
     return JSON.parse(row.payload) as SelfDevelopmentRun;
+  } catch {
+    return undefined;
+  }
+}
+
+function planningRouting(
+  planJson: string,
+): { model: string; effort: string } | undefined {
+  try {
+    const value = JSON.parse(planJson) as { planningEvidence?: unknown[] };
+    const line = value.planningEvidence?.find(
+      (item): item is string =>
+        typeof item === "string" && item.startsWith("Planning model: "),
+    );
+    const match = /^Planning model: ([a-zA-Z0-9.-]+); effort: ([a-z]+)\.$/.exec(
+      line ?? "",
+    );
+    return match ? { model: match[1]!, effort: match[2]! } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function reviewRouting(
+  payload: string | undefined,
+): { model: string; effort: string } | undefined {
+  try {
+    const result = JSON.parse(payload ?? "null") as {
+      execution?: {
+        result?: { model?: unknown; requestedEffort?: unknown };
+      };
+    };
+    const model = result?.execution?.result?.model;
+    const effort = result?.execution?.result?.requestedEffort;
+    return typeof model === "string" && typeof effort === "string"
+      ? { model, effort }
+      : undefined;
   } catch {
     return undefined;
   }
@@ -183,7 +221,7 @@ export async function reliabilitySummary(
     .bind(repositoryFullName)
     .first<{ deliveries: number; unique_payloads: number }>();
   const plans = await env.DB.prepare(
-    `SELECT plan_id, issue_number, status, plan_sha256, approved_at, run_id, created_at, updated_at
+    `SELECT plan_id, issue_number, status, plan_sha256, plan_json, approved_at, run_id, created_at, updated_at
        FROM github_issue_plans ORDER BY updated_at DESC LIMIT ?`,
   )
     .bind(Math.min(Math.max(limit, 1), 100))
@@ -198,6 +236,7 @@ export async function reliabilitySummary(
           .first<RunRow>()
       : undefined;
     const run = parseRun(runRow ?? undefined);
+    const plannedModel = planningRouting(plan.plan_json);
     const planning = await env.DB.prepare(
       `SELECT job_id, actor_id, created_at, command_json, status, attempt_count, failure_reason FROM github_planning_jobs
         WHERE roundhouse_environment = ? AND repository_full_name = ? AND issue_number = ?
@@ -227,6 +266,7 @@ export async function reliabilitySummary(
             updated_at: string;
           }>()
       : { results: [] };
+    const reviewedModel = reviewRouting(reviews.results.at(-1)?.payload);
     const pullNumber = pullRequestNumber(run?.publication?.pullRequestUrl);
     const ci = pullNumber
       ? await env.DB.prepare(
@@ -390,10 +430,18 @@ export async function reliabilitySummary(
             0,
           ),
           terminal: planningTerminal(planning.results.at(-1)),
+          ...(plannedModel ?? {}),
         },
         implementation: {
           attempts: implementationAttempts.length,
           terminal: implementationTerminal(implementationAttempts.at(-1)),
+          ...(run?.implementation?.requestedModel &&
+          run.implementation.requestedEffort
+            ? {
+                model: run.implementation.requestedModel,
+                effort: run.implementation.requestedEffort,
+              }
+            : {}),
         },
         independentReview: {
           attempts: reviews.results.reduce(
@@ -401,6 +449,7 @@ export async function reliabilitySummary(
             0,
           ),
           terminal: reviewTerminal(reviews.results.at(-1)),
+          ...(reviewedModel ?? {}),
         },
       },
       manualFallbackRequired: manualFallback,

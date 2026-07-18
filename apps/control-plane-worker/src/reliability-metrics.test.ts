@@ -14,7 +14,7 @@ let instance: Miniflare;
 let db: D1Database;
 
 const schema = `
-CREATE TABLE github_issue_plans(plan_id TEXT PRIMARY KEY, issue_number INTEGER, revision INTEGER, status TEXT, plan_sha256 TEXT, approved_at TEXT, run_id TEXT, created_at TEXT, updated_at TEXT);
+CREATE TABLE github_issue_plans(plan_id TEXT PRIMARY KEY, issue_number INTEGER, revision INTEGER, status TEXT, plan_sha256 TEXT, plan_json TEXT, approved_at TEXT, run_id TEXT, created_at TEXT, updated_at TEXT);
 CREATE TABLE github_planning_jobs(job_id TEXT PRIMARY KEY, roundhouse_environment TEXT, repository_full_name TEXT, issue_number INTEGER, actor_id TEXT, command_json TEXT, status TEXT, attempt_count INTEGER, failure_reason TEXT, created_at TEXT);
 CREATE TABLE self_development_runs(run_id TEXT PRIMARY KEY, state TEXT, payload TEXT);
 CREATE TABLE independent_reviews(review_id TEXT PRIMARY KEY, run_id TEXT, cycle INTEGER, status TEXT, attempt_count INTEGER, payload TEXT, created_at TEXT, updated_at TEXT);
@@ -62,9 +62,14 @@ async function seedCompleted() {
   const planSha = "a".repeat(64);
   await db
     .prepare(
-      "INSERT INTO github_issue_plans VALUES ('plan_metrics', 83, 1, 'materialized', ?, '2026-07-15T00:02:00.000Z', 'run_metrics', '2026-07-15T00:01:00.000Z', '2026-07-15T00:10:00.000Z')",
+      "INSERT INTO github_issue_plans VALUES ('plan_metrics', 83, 1, 'materialized', ?, ?, '2026-07-15T00:02:00.000Z', 'run_metrics', '2026-07-15T00:01:00.000Z', '2026-07-15T00:10:00.000Z')",
     )
-    .bind(planSha)
+    .bind(
+      planSha,
+      JSON.stringify({
+        planningEvidence: ["Planning model: gpt-5.6-sol; effort: medium."],
+      }),
+    )
     .run();
   await db
     .prepare(
@@ -107,6 +112,10 @@ async function seedCompleted() {
       verifiedAt: "2026-07-15T00:07:00.000Z",
       pullRequestUrl: "https://github.com/zorkian/roundhouse/pull/99",
     },
+    implementation: {
+      requestedModel: "gpt-5.5",
+      requestedEffort: "medium",
+    },
   };
   await db
     .prepare(
@@ -121,7 +130,14 @@ async function seedCompleted() {
     .run();
   await db
     .prepare(
-      "INSERT INTO independent_reviews VALUES ('review_metrics', 'run_metrics', 2, 'completed', 1, '{}', '2026-07-15T00:07:00.000Z', '2026-07-15T00:08:00.000Z')",
+      "INSERT INTO independent_reviews VALUES ('review_metrics', 'run_metrics', 2, 'completed', 1, ?, '2026-07-15T00:07:00.000Z', '2026-07-15T00:08:00.000Z')",
+    )
+    .bind(
+      JSON.stringify({
+        execution: {
+          result: { model: "claude-fable-5", requestedEffort: "medium" },
+        },
+      }),
     )
     .run();
   await db
@@ -171,14 +187,20 @@ describe("V1 pilot reliability metrics", () => {
         planning: {
           attempts: 3,
           terminal: { status: "terminal", outcome: "succeeded" },
+          model: "gpt-5.6-sol",
+          effort: "medium",
         },
         implementation: {
           attempts: 2,
           terminal: { status: "terminal", outcome: "succeeded" },
+          model: "gpt-5.5",
+          effort: "medium",
         },
         independentReview: {
           attempts: 1,
           terminal: { status: "terminal", outcome: "succeeded" },
+          model: "claude-fable-5",
+          effort: "medium",
         },
       },
     });
@@ -195,7 +217,7 @@ describe("V1 pilot reliability metrics", () => {
   it("keeps failed and incomplete legacy workflows readable", async () => {
     await db
       .prepare(
-        "INSERT INTO github_issue_plans VALUES ('plan_legacy', 7, 1, 'materialized', ?, NULL, 'run_legacy', '2026-07-15T00:00:00.000Z', '2026-07-15T00:00:00.000Z')",
+        "INSERT INTO github_issue_plans VALUES ('plan_legacy', 7, 1, 'materialized', ?, '{}', NULL, 'run_legacy', '2026-07-15T00:00:00.000Z', '2026-07-15T00:00:00.000Z')",
       )
       .bind("b".repeat(64))
       .run();
@@ -240,7 +262,7 @@ describe("V1 pilot reliability metrics", () => {
   it("reports bounded deterministic planning failures and incomplete work", async () => {
     await db
       .prepare(
-        "INSERT INTO github_issue_plans VALUES ('plan_failed', 9, 1, 'rejected', ?, NULL, NULL, '2026-07-15T00:00:00.000Z', '2026-07-15T00:01:00.000Z'), ('plan_incomplete', 10, 1, 'proposed', ?, NULL, NULL, '2026-07-15T00:02:00.000Z', '2026-07-15T00:02:00.000Z')",
+        "INSERT INTO github_issue_plans VALUES ('plan_failed', 9, 1, 'rejected', ?, '{}', NULL, NULL, '2026-07-15T00:00:00.000Z', '2026-07-15T00:01:00.000Z'), ('plan_incomplete', 10, 1, 'proposed', ?, '{}', NULL, NULL, '2026-07-15T00:02:00.000Z', '2026-07-15T00:02:00.000Z')",
       )
       .bind("c".repeat(64), "d".repeat(64))
       .run();
@@ -290,7 +312,7 @@ describe("V1 pilot reliability metrics", () => {
   it("keeps implementation and review classifications phase-bound", async () => {
     await db
       .prepare(
-        "INSERT INTO github_issue_plans VALUES ('plan_phase_failure', 11, 1, 'materialized', ?, NULL, 'run_phase_failure', '2026-07-15T00:00:00.000Z', '2026-07-15T00:04:00.000Z')",
+        "INSERT INTO github_issue_plans VALUES ('plan_phase_failure', 11, 1, 'materialized', ?, '{}', NULL, 'run_phase_failure', '2026-07-15T00:00:00.000Z', '2026-07-15T00:04:00.000Z')",
       )
       .bind("e".repeat(64))
       .run();
@@ -361,7 +383,7 @@ describe("V1 pilot reliability metrics", () => {
   it("reports trusted prepare-stage implementation and repair attempts separately", async () => {
     await db
       .prepare(
-        "INSERT INTO github_issue_plans VALUES ('plan_trusted_repair', 12, 1, 'materialized', ?, NULL, 'run_trusted_repair', '2026-07-15T01:00:00.000Z', '2026-07-15T01:04:00.000Z')",
+        "INSERT INTO github_issue_plans VALUES ('plan_trusted_repair', 12, 1, 'materialized', ?, '{}', NULL, 'run_trusted_repair', '2026-07-15T01:00:00.000Z', '2026-07-15T01:04:00.000Z')",
       )
       .bind("f".repeat(64))
       .run();

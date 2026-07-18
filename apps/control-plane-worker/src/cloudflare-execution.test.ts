@@ -13,11 +13,44 @@ import { describe, expect, it } from "vitest";
 import {
   CloudflareRepositoryExecutionBackend,
   CloudflareTrustedImplementationBackend,
+  CloudflareTrustedExecutionDispatcher,
   isValidAgentOutputTail,
   readAgentOutput,
   type EvidenceBucketPort,
   type ExecutionContainerPort,
 } from "./cloudflare-execution.js";
+
+describe("trusted implementation model routing", () => {
+  it("pins GPT-5.5 with medium effort on every new dispatched attempt", async () => {
+    let received: TrustedImplementationRequest | undefined;
+    const dispatcher = new CloudflareTrustedExecutionDispatcher({
+      execute: async (input) => {
+        received = input;
+        return { state: "awaiting_approval" };
+      },
+    });
+
+    await dispatcher.dispatch({
+      schemaVersion: 1,
+      runId: "run_model_routing",
+      stage: "prepare",
+      attemptNumber: 2,
+      expectedRevision: 4,
+      taskId: "task_model_routing",
+      subject: "Pin implementation routing",
+      instructions: "Use the approved implementation model and effort.",
+      allowedPaths: ["apps/control-plane-worker/src/index.ts"],
+      baseCommit: "a".repeat(40),
+      validationLevel: "quick",
+    });
+
+    expect(received).toMatchObject({
+      model: "gpt-5.5",
+      modelEffort: "medium",
+      attemptNumber: 2,
+    });
+  });
+});
 
 const request: RepositoryExecutionRequest = {
   schemaVersion: 1,
@@ -753,6 +786,30 @@ describe("CloudflareTrustedImplementationBackend", () => {
     );
     await expect(
       backend.execute({ ...trustedRequest, maxPatchBytes: 1 }),
+    ).rejects.toMatchObject({
+      classification: "implementation_binding_mismatch",
+      retryable: false,
+    });
+  });
+
+  it("rejects implementation evidence that omits immutable model routing", async () => {
+    const backend = new CloudflareTrustedImplementationBackend(
+      {
+        getByName: () => ({
+          runJob: async () => result(),
+          runTrustedJob: async () => trustedResult(),
+          destroy: async () => undefined,
+        }),
+      },
+      new MemoryEvidence(),
+      "unused",
+    );
+    await expect(
+      backend.execute({
+        ...trustedRequest,
+        model: "gpt-5.5",
+        modelEffort: "medium",
+      }),
     ).rejects.toMatchObject({
       classification: "implementation_binding_mismatch",
       retryable: false,

@@ -5,6 +5,8 @@ import { z } from "zod";
 
 import {
   exactApprovalSchema,
+  implementationModel,
+  implementationModelEffort,
   publicationAuthorEmailSchema,
   publicationAuthorNameSchema,
   repositoryPathPolicySchema,
@@ -196,6 +198,8 @@ export const selfDevelopmentRunSchema = z.object({
       changedFiles: z.array(repositoryRelativePathSchema).min(1).max(50),
       evidenceId: z.string().min(1),
       objectKey: z.string().min(1),
+      requestedModel: z.literal(implementationModel).optional(),
+      requestedEffort: z.literal(implementationModelEffort).optional(),
     })
     .optional(),
   approval: exactApprovalSchema.optional(),

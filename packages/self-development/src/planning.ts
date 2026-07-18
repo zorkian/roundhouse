@@ -112,25 +112,39 @@ export const qualificationIssueSchema = z.object({
 
 export type QualificationIssue = z.input<typeof qualificationIssueSchema>;
 
-export const planningAgentRequestSchema = z.object({
-  schemaVersion: z.literal(1),
-  attemptId: z.string().regex(/^planning_[a-f0-9]{40}$/),
-  repositoryUrl: z.literal("https://github.com/zorkian/roundhouse.git"),
-  baseCommit: sha40,
-  issueNumber: z.number().int().positive(),
-  subject: z.string().min(1).max(500),
-  instructions: z.string().min(1).max(maxPlannedInstructionCharacters),
-  timeoutMs: z
-    .number()
-    .int()
-    .positive()
-    .max(15 * 60_000),
-  maxOutputBytes: z
-    .number()
-    .int()
-    .positive()
-    .max(256 * 1024),
-});
+export const planningModel = "gpt-5.6-sol" as const;
+export const planningModelEffort = "medium" as const;
+
+export const planningAgentRequestSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    attemptId: z.string().regex(/^planning_[a-f0-9]{40}$/),
+    repositoryUrl: z.literal("https://github.com/zorkian/roundhouse.git"),
+    baseCommit: sha40,
+    issueNumber: z.number().int().positive(),
+    subject: z.string().min(1).max(500),
+    instructions: z.string().min(1).max(maxPlannedInstructionCharacters),
+    model: z.literal(planningModel).optional(),
+    modelEffort: z.literal(planningModelEffort).optional(),
+    timeoutMs: z
+      .number()
+      .int()
+      .positive()
+      .max(15 * 60_000),
+    maxOutputBytes: z
+      .number()
+      .int()
+      .positive()
+      .max(256 * 1024),
+  })
+  .superRefine((request, context) => {
+    if ((request.model === undefined) !== (request.modelEffort === undefined))
+      context.addIssue({
+        code: "custom",
+        path: [request.model === undefined ? "model" : "modelEffort"],
+        message: "Model and effort must be routed together",
+      });
+  });
 
 export type PlanningAgentRequest = z.infer<typeof planningAgentRequestSchema>;
 
@@ -139,6 +153,13 @@ export const planningAgentResultSchema = z
     schemaVersion: z.literal(1),
     attemptId: z.string().regex(/^planning_[a-f0-9]{40}$/),
     baseCommit: sha40,
+    agent: z
+      .object({
+        provider: z.literal("codex-subscription"),
+        requestedModel: z.literal(planningModel),
+        requestedEffort: z.literal(planningModelEffort),
+      })
+      .optional(),
     status: z.enum([
       "proposed",
       "needs_clarification",

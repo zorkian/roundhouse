@@ -4,7 +4,11 @@
 import {
   dogfoodPublicationBranchSchema,
   extractExactPaths,
+  independentReviewModel,
+  independentReviewModelEffort,
   maxPlannedInstructionCharacters,
+  planningModel,
+  planningModelEffort,
   qualifyAndPlan,
   repositoryPathAllowed,
   repositoryRisk,
@@ -469,6 +473,8 @@ async function planGitHubIssue(
           issueNumber,
           subject: snapshot.title,
           instructions: plannedInstructions,
+          model: planningModel,
+          modelEffort: planningModelEffort,
           timeoutMs: githubPlanningBudgetMs,
           maxOutputBytes: 256 * 1024,
         })
@@ -492,9 +498,14 @@ async function planGitHubIssue(
           : agentPlan?.status,
       evidence: agentPlan?.evidence ?? [],
       duplicateOf: agentPlan?.duplicateOf,
-      planningEvidence: revisionRequest?.answers
-        ? [revisionRequest.answers]
-        : [],
+      planningEvidence: [
+        ...(revisionRequest?.answers ? [revisionRequest.answers] : []),
+        ...(agentPlan?.agent
+          ? [
+              `Planning model: ${agentPlan.agent.requestedModel}; effort: ${agentPlan.agent.requestedEffort}.`,
+            ]
+          : []),
+      ],
       bugReproduction: agentPlan?.bugReproduction,
     },
     new Date(snapshot.updatedAt),
@@ -1761,6 +1772,8 @@ async function reservePublicationReview(
       timeoutMs: 15 * 60_000,
       maxOutputBytes: 256 * 1024,
       maxFindings: 50,
+      model: independentReviewModel,
+      modelEffort: independentReviewModelEffort,
       scenario: env.INDEPENDENT_REVIEW_SCENARIO ?? "success",
     },
     new Date(),
@@ -1891,6 +1904,8 @@ async function reserveManualReview(
       timeoutMs: 15 * 60_000,
       maxOutputBytes: 256 * 1024,
       maxFindings: 50,
+      model: independentReviewModel,
+      modelEffort: independentReviewModelEffort,
       scenario: env.INDEPENDENT_REVIEW_SCENARIO ?? "success",
     },
     new Date(),
@@ -1995,6 +2010,8 @@ export async function reservePullRequestReview(
       timeoutMs: 15 * 60_000,
       maxOutputBytes: 256 * 1024,
       maxFindings: 50,
+      model: independentReviewModel,
+      modelEffort: independentReviewModelEffort,
       scenario: env.INDEPENDENT_REVIEW_SCENARIO ?? "success",
     },
     new Date(),
@@ -3939,6 +3956,8 @@ async function implementationEvidence(
     changedFiles: result.changedFiles,
     patchBytes: result.patchBytes,
     summary: result.agent.summary,
+    requestedModel: result.agent.requestedModel,
+    requestedEffort: result.agent.requestedEffort,
     validation: result.validation,
     regressionEvidence: result.regressionEvidence,
     retryLineage: result.retryLineage,

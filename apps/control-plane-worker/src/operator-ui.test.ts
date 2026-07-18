@@ -684,6 +684,9 @@ describe("operator UI", () => {
               sha256: "e".repeat(64),
             },
             result: {
+              requestedModel: "claude-fable-5",
+              requestedEffort: "medium",
+              model: "claude-fable-5",
               findings: [
                 {
                   findingId: `finding_${"f".repeat(40)}`,
@@ -710,6 +713,7 @@ describe("operator UI", () => {
       "https://github.com/zorkian/roundhouse/pull/25",
     );
     expect(app.innerHTML).toContain("Agent status");
+    expect(app.innerHTML).toContain("claude-fable-5 · medium");
     expect(app.innerHTML).toContain(
       `/v1/reviews/${reviewId}/agent-output/${reviewId}-attempt-1`,
     );
@@ -952,7 +956,11 @@ describe("operator UI", () => {
               subject: "Review this implementation",
               state: "awaiting_approval",
               revision: 7,
-              implementation: { patchSha256: "a".repeat(64) },
+              implementation: {
+                patchSha256: "a".repeat(64),
+                requestedModel: "gpt-5.5",
+                requestedEffort: "medium",
+              },
               attempts: [],
               evidence: [],
               events: [],
@@ -968,6 +976,7 @@ describe("operator UI", () => {
     expect(app.innerHTML).toContain("plan-compliance");
     expect(app.innerHTML).toContain("reviewable");
     expect(app.innerHTML).toContain("agent.implement");
+    expect(app.innerHTML).toContain("gpt-5.5 · medium");
     expect(app.innerHTML).not.toContain(`${runId}-prepare-1`);
   });
 
@@ -1001,6 +1010,9 @@ describe("operator UI", () => {
               understanding: "The interaction surface is ambiguous.",
               questions: ["Should this change the issue or run page?"],
               evidence: [],
+              planningEvidence: [
+                "Planning model: gpt-5.6-sol; effort: medium.",
+              ],
             },
           },
         }),
@@ -1012,6 +1024,9 @@ describe("operator UI", () => {
       expect(app.innerHTML).toContain(
         "Should this change the issue or run page?",
       ),
+    );
+    expect(app.innerHTML).toContain(
+      "Planning model: gpt-5.6-sol; effort: medium.",
     );
   });
 

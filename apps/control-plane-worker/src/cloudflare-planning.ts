@@ -100,7 +100,10 @@ export class CloudflarePlanningBackend {
         }
         if (
           result.attemptId !== request.attemptId ||
-          result.baseCommit !== request.baseCommit
+          result.baseCommit !== request.baseCommit ||
+          (request.model !== undefined &&
+            (result.agent?.requestedModel !== request.model ||
+              result.agent.requestedEffort !== request.modelEffort))
         )
           throw new Error("Planning result binding does not match request");
         return result;

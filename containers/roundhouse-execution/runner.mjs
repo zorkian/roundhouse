@@ -25,6 +25,11 @@ const agentOutputByAttempt = new Map();
 let draining = false;
 const codexHome = "/home/runner/.roundhouse-codex";
 const claudeHome = "/home/runner/.roundhouse-claude";
+export const phaseModelRouting = Object.freeze({
+  planning: Object.freeze({ model: "gpt-5.6-sol", effort: "medium" }),
+  implementation: Object.freeze({ model: "gpt-5.5", effort: "medium" }),
+  review: Object.freeze({ model: "claude-fable-5", effort: "medium" }),
+});
 
 export function operationKey(mode, operation, attemptId) {
   if (
@@ -433,6 +438,9 @@ function validateTrusted(value) {
     typeof value.instructions !== "string" ||
     value.instructions.length < 1 ||
     value.instructions.length > 20_000 ||
+    ((value.model !== undefined || value.modelEffort !== undefined) &&
+      (value.model !== phaseModelRouting.implementation.model ||
+        value.modelEffort !== phaseModelRouting.implementation.effort)) ||
     (value.retryContext !== undefined &&
       (typeof value.retryContext !== "string" ||
         value.retryContext.length < 1 ||
@@ -550,6 +558,9 @@ function validateReview(value) {
     typeof value.instructions !== "string" ||
     value.instructions.length < 1 ||
     value.instructions.length > 20_000 ||
+    ((value.model !== undefined || value.modelEffort !== undefined) &&
+      (value.model !== phaseModelRouting.review.model ||
+        value.modelEffort !== phaseModelRouting.review.effort)) ||
     !Array.isArray(value.allowedPaths) ||
     value.allowedPaths.length < 1 ||
     value.allowedPaths.length > 50 ||
@@ -587,6 +598,9 @@ function validatePlanning(value) {
     typeof value.instructions !== "string" ||
     value.instructions.length < 1 ||
     value.instructions.length > 18_000 ||
+    ((value.model !== undefined || value.modelEffort !== undefined) &&
+      (value.model !== phaseModelRouting.planning.model ||
+        value.modelEffort !== phaseModelRouting.planning.effort)) ||
     !Number.isInteger(value.timeoutMs) ||
     value.timeoutMs < 1 ||
     value.timeoutMs > 900_000 ||
@@ -1289,6 +1303,15 @@ export function parsePlanningOutput(value, request) {
     schemaVersion: 1,
     attemptId: request.attemptId,
     baseCommit: request.baseCommit,
+    ...(request.model
+      ? {
+          agent: {
+            provider: "codex-subscription",
+            requestedModel: request.model,
+            requestedEffort: request.modelEffort,
+          },
+        }
+      : {}),
     status: value.status,
     summary: value.summary,
     exactPaths: [...value.exactPaths].sort(),
@@ -1299,6 +1322,36 @@ export function parsePlanningOutput(value, request) {
     risk: value.risk,
     bugReproduction: value.bugReproduction,
   };
+}
+
+export function planningCodexArgs(request, schemaPath, outputPath) {
+  return [
+    "exec",
+    ...(request.model
+      ? [
+          "--model",
+          request.model,
+          "-c",
+          `model_reasoning_effort=${JSON.stringify(request.modelEffort)}`,
+        ]
+      : []),
+    "--ephemeral",
+    "--ignore-user-config",
+    "--ignore-rules",
+    "--sandbox",
+    "read-only",
+    "-c",
+    "sandbox_workspace_write.network_access=false",
+    "-c",
+    'shell_environment_policy.inherit="none"',
+    "--output-schema",
+    schemaPath,
+    "-o",
+    outputPath,
+    "-C",
+    workspace,
+    planningPrompt(request),
+  ];
 }
 
 async function runPlanning(value) {
@@ -1318,25 +1371,7 @@ async function runPlanning(value) {
   try {
     const result = await command(
       "codex",
-      [
-        "exec",
-        "--ephemeral",
-        "--ignore-user-config",
-        "--ignore-rules",
-        "--sandbox",
-        "read-only",
-        "-c",
-        "sandbox_workspace_write.network_access=false",
-        "-c",
-        'shell_environment_policy.inherit="none"',
-        "--output-schema",
-        schemaPath,
-        "-o",
-        outputPath,
-        "-C",
-        workspace,
-        planningPrompt(request),
-      ],
+      planningCodexArgs(request, schemaPath, outputPath),
       {
         timeoutMs: request.timeoutMs,
         maxOutputBytes: request.maxOutputBytes,
@@ -1377,6 +1412,33 @@ async function runPlanning(value) {
       credentialInstalled: false,
     };
   }
+}
+
+export function implementationCodexArgs(request) {
+  return [
+    "exec",
+    ...(request.model
+      ? [
+          "--model",
+          request.model,
+          "-c",
+          `model_reasoning_effort=${JSON.stringify(request.modelEffort)}`,
+        ]
+      : []),
+    "--ephemeral",
+    "--ignore-user-config",
+    "--ignore-rules",
+    "--sandbox",
+    "workspace-write",
+    "-c",
+    "sandbox_workspace_write.network_access=false",
+    "-c",
+    'shell_environment_policy.inherit="none"',
+    "--json",
+    "-C",
+    workspace,
+    promptFor(request),
+  ];
 }
 
 async function implement(value) {
@@ -1426,25 +1488,7 @@ async function implement(value) {
       ? ["node", ["-e", "process.exit(29)"]]
       : request.scenario === "timeout"
         ? ["node", ["-e", "setTimeout(() => {}, 300000)"]]
-        : [
-            "codex",
-            [
-              "exec",
-              "--ephemeral",
-              "--ignore-user-config",
-              "--ignore-rules",
-              "--sandbox",
-              "workspace-write",
-              "-c",
-              "sandbox_workspace_write.network_access=false",
-              "-c",
-              'shell_environment_policy.inherit="none"',
-              "--json",
-              "-C",
-              workspace,
-              promptFor(request),
-            ],
-          ];
+        : ["codex", implementationCodexArgs(request)];
   let agent;
   const credentialSecrets = [...trusted.secrets];
   const output = agentOutputCapture(request.attemptId, credentialSecrets);
@@ -1558,6 +1602,32 @@ async function implement(value) {
   };
 }
 
+export function reviewClaudeArgs(request) {
+  return [
+    "-p",
+    "--model",
+    request.model ?? "sonnet",
+    "--effort",
+    request.modelEffort ?? "low",
+    "--tools",
+    "",
+    "--disable-slash-commands",
+    "--no-chrome",
+    "--no-session-persistence",
+    "--strict-mcp-config",
+    "--mcp-config",
+    '{"mcpServers":{}}',
+    "--setting-sources",
+    "",
+    "--output-format",
+    "json",
+    "--json-schema",
+    claudeReviewOutputSchema,
+    "--max-budget-usd",
+    "1.50",
+  ];
+}
+
 async function runReview(value) {
   const request = validateReview(value);
   if (
@@ -1595,32 +1665,7 @@ async function runReview(value) {
       ? ["node", ["-e", "setTimeout(() => {}, 300000)"]]
       : request.scenario === "invalid-output"
         ? ["node", ["-e", "process.stdout.write('not-json')"]]
-        : [
-            "claude",
-            [
-              "-p",
-              "--model",
-              "sonnet",
-              "--effort",
-              "low",
-              "--tools",
-              "",
-              "--disable-slash-commands",
-              "--no-chrome",
-              "--no-session-persistence",
-              "--strict-mcp-config",
-              "--mcp-config",
-              '{"mcpServers":{}}',
-              "--setting-sources",
-              "",
-              "--output-format",
-              "json",
-              "--json-schema",
-              claudeReviewOutputSchema,
-              "--max-budget-usd",
-              "1.50",
-            ],
-          ];
+        : ["claude", reviewClaudeArgs(request)];
   const secrets = [...review.secrets];
   const output = agentOutputCapture(request.attemptId, secrets);
   let outputStatus = "review failed";
@@ -1649,6 +1694,8 @@ async function runReview(value) {
         `review_agent_failed: ${boundedAgentFailure(result.stderr, secrets)}`,
       );
     parsed = parseClaudeReviewOutput(result.stdout, request);
+    if (request.model && parsed.model !== request.model)
+      throw new Error("review_model_mismatch");
     const possibleEvidence = JSON.stringify(parsed);
     if (secrets.some((secret) => possibleEvidence.includes(secret)))
       throw new Error("review_credential_leak_detected");
@@ -1712,6 +1759,12 @@ async function finalizeReview(value) {
     startedAt: review.startedAt,
     completedAt: review.completedAt,
     provider: "claude-subscription",
+    ...(request.model
+      ? {
+          requestedModel: request.model,
+          requestedEffort: request.modelEffort,
+        }
+      : {}),
     model: review.parsed.model,
     summary: review.parsed.summary,
     findings: review.parsed.findings,
@@ -2112,6 +2165,12 @@ async function validateImplementation(value) {
     validationDurationMs: Date.now() - validationStarted,
     agent: {
       provider: "codex-subscription",
+      ...(request.model
+        ? {
+            requestedModel: request.model,
+            requestedEffort: request.modelEffort,
+          }
+        : {}),
       sessionId: trusted.agent.sessionId,
       inputTokens: trusted.agent.inputTokens,
       outputTokens: trusted.agent.outputTokens,

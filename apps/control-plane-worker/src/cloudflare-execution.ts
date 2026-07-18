@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import {
+  implementationModel,
+  implementationModelEffort,
   repositoryExecutionRequestSchema,
   repositoryExecutionResultSchema,
   repositoryPathAllowed,
@@ -307,6 +309,12 @@ async function validateTrustedResult(
   )
     mismatchedBindings.push("patch_content");
   if (
+    request.model !== undefined &&
+    (result.agent.requestedModel !== request.model ||
+      result.agent.requestedEffort !== request.modelEffort)
+  )
+    mismatchedBindings.push("model_routing");
+  if (
     result.patchBytes > request.maxPatchBytes ||
     publicationBytes > request.maxPatchBytes
   )
@@ -607,6 +615,8 @@ export class CloudflareTrustedImplementationBackend implements TrustedImplementa
           changedFiles: result.changedFiles,
           evidenceId: evidence.evidenceId,
           objectKey: key,
+          requestedModel: result.agent.requestedModel,
+          requestedEffort: result.agent.requestedEffort,
         },
       },
     };
@@ -849,6 +859,8 @@ export class CloudflareTrustedExecutionDispatcher implements ExecutionDispatcher
       baseCommit: request.baseCommit,
       subject: request.subject,
       instructions: request.instructions,
+      model: implementationModel,
+      modelEffort: implementationModelEffort,
       retryContext: request.retryContext,
       retryFromAttemptId: request.retryFromAttemptId,
       allowedPaths: request.allowedPaths,

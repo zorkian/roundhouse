@@ -20,6 +20,9 @@ export const reviewSeveritySchema = z.enum([
 ]);
 export type ReviewSeverity = z.infer<typeof reviewSeveritySchema>;
 
+export const independentReviewModel = "claude-fable-5" as const;
+export const independentReviewModelEffort = "medium" as const;
+
 export const reviewEvidenceBindingSchema = z.object({
   evidenceId: boundedIdentitySchema,
   objectKey: z.string().min(1).max(1_000),
@@ -65,6 +68,8 @@ export const independentReviewRequestSchema = z
     patchSha256: sha256Schema,
     subject: z.string().min(1).max(500),
     instructions: z.string().min(1).max(20_000),
+    model: z.literal(independentReviewModel).optional(),
+    modelEffort: z.literal(independentReviewModelEffort).optional(),
     allowedPaths: z.array(repositoryRelativePathSchema).min(1).max(50),
     planning: z
       .object({
@@ -90,6 +95,12 @@ export const independentReviewRequestSchema = z
       .default("success"),
   })
   .superRefine((request, context) => {
+    if ((request.model === undefined) !== (request.modelEffort === undefined))
+      context.addIssue({
+        code: "custom",
+        path: [request.model === undefined ? "model" : "modelEffort"],
+        message: "Model and effort must be routed together",
+      });
     if (request.sourceKind === "pull_request") {
       if (request.advisoryOnly !== true || request.manualFallback !== true)
         context.addIssue({
@@ -167,6 +178,8 @@ export const independentReviewResultSchema = z.object({
   completedAt: z.iso.datetime(),
   startupDurationMs: z.number().int().nonnegative().default(0),
   provider: z.literal("claude-subscription"),
+  requestedModel: z.literal(independentReviewModel).optional(),
+  requestedEffort: z.literal(independentReviewModelEffort).optional(),
   model: z.string().min(1).max(200),
   summary: z.string().max(20_000),
   findings: z.array(reviewFindingSchema).max(50),

@@ -73,7 +73,13 @@ async function result(
     completedAt: "2026-07-12T00:00:01.000Z",
     startupDurationMs: 100,
     provider: "claude-subscription",
-    model: "claude-sonnet-4-6",
+    ...(input.model
+      ? {
+          requestedModel: input.model,
+          requestedEffort: input.modelEffort,
+        }
+      : {}),
+    model: input.model ?? "claude-sonnet-4-6",
     summary: "One material finding.",
     findings: await normalizeReviewFindings(
       input.reviewId,
@@ -126,6 +132,21 @@ function bucket() {
 }
 
 describe("Cloudflare independent review backend", () => {
+  it("rejects an actual review model that differs from the immutable request", async () => {
+    const input: IndependentReviewRequest = {
+      ...request(),
+      model: "claude-fable-5",
+      modelEffort: "medium",
+    };
+    const mismatched = {
+      ...(await result(input)),
+      model: "claude-sonnet-4-6",
+    };
+    await expect(
+      validateIndependentReviewResult(input, mismatched),
+    ).rejects.toThrow("binding mismatch");
+  });
+
   it("applies output and normalized-finding bounds to durable replays", async () => {
     const input = request();
     const valid = await result(input);

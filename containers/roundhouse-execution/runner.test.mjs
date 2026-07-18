@@ -29,6 +29,7 @@ import {
   drainRunner,
   formatCandidateImplementation,
   finishAgentOutput,
+  implementationCodexArgs,
   pathAllowed,
   parsePlanningOutput,
   operationKey,
@@ -36,9 +37,12 @@ import {
   planningOutputLimits,
   planningPrompt,
   planningOutputSchema,
+  planningCodexArgs,
+  phaseModelRouting,
   promptFor,
   redactKnownSecrets,
   readAgentOutput,
+  reviewClaudeArgs,
   retainSuccessfulOperation,
   remainingValidationBudget,
   reproductionInvocation,
@@ -62,6 +66,94 @@ import { once } from "node:events";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+describe("phase model routing", () => {
+  it("constructs exact planning, implementation, and review model arguments", () => {
+    const planning = planningCodexArgs(
+      {
+        model: phaseModelRouting.planning.model,
+        modelEffort: phaseModelRouting.planning.effort,
+        issueNumber: 243,
+        subject: "Plan model routing",
+        instructions: "Plan the bounded change.",
+        baseCommit: "a".repeat(40),
+      },
+      "/tmp/schema.json",
+      "/tmp/output.json",
+    );
+    expect(planning.slice(0, 7)).toEqual([
+      "exec",
+      "--model",
+      "gpt-5.6-sol",
+      "-c",
+      'model_reasoning_effort="medium"',
+      "--ephemeral",
+      "--ignore-user-config",
+    ]);
+
+    const implementation = implementationCodexArgs({
+      model: phaseModelRouting.implementation.model,
+      modelEffort: phaseModelRouting.implementation.effort,
+      subject: "Implement model routing",
+      instructions: "Implement the bounded change.",
+      allowedPaths: ["containers/roundhouse-execution/runner.mjs"],
+      validationLevel: "quick",
+    });
+    expect(implementation.slice(0, 7)).toEqual([
+      "exec",
+      "--model",
+      "gpt-5.5",
+      "-c",
+      'model_reasoning_effort="medium"',
+      "--ephemeral",
+      "--ignore-user-config",
+    ]);
+
+    expect(
+      reviewClaudeArgs({
+        model: phaseModelRouting.review.model,
+        modelEffort: phaseModelRouting.review.effort,
+      }).slice(0, 6),
+    ).toEqual([
+      "-p",
+      "--model",
+      "claude-fable-5",
+      "--effort",
+      "medium",
+      "--tools",
+    ]);
+  });
+
+  it("does not reinterpret legacy in-flight Codex requests", () => {
+    expect(
+      planningCodexArgs(
+        {
+          issueNumber: 243,
+          subject: "Legacy plan",
+          instructions: "Keep legacy routing.",
+          baseCommit: "a".repeat(40),
+        },
+        "/tmp/schema.json",
+        "/tmp/output.json",
+      ),
+    ).not.toContain("--model");
+    expect(
+      implementationCodexArgs({
+        subject: "Legacy implementation",
+        instructions: "Keep legacy routing.",
+        allowedPaths: ["README.md"],
+        validationLevel: "quick",
+      }),
+    ).not.toContain("--model");
+    expect(reviewClaudeArgs({}).slice(0, 5)).toEqual([
+      "-p",
+      "--model",
+      "sonnet",
+      "--effort",
+      "low",
+    ]);
+  });
+});
 
 describe("execution runner command", () => {
   it("rejects unvalidated identities before entering retained work", () => {
@@ -129,9 +221,9 @@ describe("execution runner command", () => {
 
   it("passes bounded prompts through stdin instead of argv", async () => {
     const input = "review-prompt\n".repeat(20_000);
-    const args = ["-e", "process.stdin.pipe(process.stdout)"];
+    const args = [];
     expect(args).not.toContain(input);
-    const result = await command("node", args, {
+    const result = await command("/bin/cat", args, {
       cwd: process.cwd(),
       input,
       maxOutputBytes: 512 * 1024,

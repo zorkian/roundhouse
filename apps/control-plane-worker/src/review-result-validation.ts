@@ -27,6 +27,10 @@ export async function validateIndependentReviewResult(
     result.baseCommit !== request.baseCommit ||
     result.headCommit !== request.headCommit ||
     result.patchSha256 !== request.patchSha256 ||
+    (request.model !== undefined &&
+      (result.requestedModel !== request.model ||
+        result.requestedEffort !== request.modelEffort ||
+        result.model !== request.model)) ||
     result.outputBytes > request.maxOutputBytes ||
     JSON.stringify(result.findings) !== JSON.stringify(normalized)
   )

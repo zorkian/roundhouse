@@ -152,6 +152,9 @@ export type TrustedPublicationManifest = z.infer<
   typeof trustedPublicationManifestSchema
 >;
 
+export const implementationModel = "gpt-5.5" as const;
+export const implementationModelEffort = "medium" as const;
+
 export const trustedImplementationRequestSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -163,6 +166,8 @@ export const trustedImplementationRequestSchema = z
     baseCommit: commit,
     subject: z.string().min(1).max(500),
     instructions: z.string().min(1).max(20_000),
+    model: z.literal(implementationModel).optional(),
+    modelEffort: z.literal(implementationModelEffort).optional(),
     retryContext: z.string().min(1).max(20_000).optional(),
     retryFromAttemptId: boundedIdentity.optional(),
     retryCandidate: z
@@ -231,6 +236,12 @@ export const trustedImplementationRequestSchema = z
       .default("success"),
   })
   .superRefine((request, context) => {
+    if ((request.model === undefined) !== (request.modelEffort === undefined))
+      context.addIssue({
+        code: "custom",
+        path: [request.model === undefined ? "model" : "modelEffort"],
+        message: "Model and effort must be routed together",
+      });
     if (
       request.pathPolicy &&
       request.pathPolicy.maxChangedFiles !== request.maxChangedFiles
@@ -349,6 +360,8 @@ export const trustedImplementationResultSchema = z.object({
   validationDurationMs: z.number().int().nonnegative(),
   agent: z.object({
     provider: z.literal("codex-subscription"),
+    requestedModel: z.literal(implementationModel).optional(),
+    requestedEffort: z.literal(implementationModelEffort).optional(),
     sessionId: z.string().min(1).max(300).optional(),
     inputTokens: z.number().int().nonnegative().optional(),
     outputTokens: z.number().int().nonnegative().optional(),

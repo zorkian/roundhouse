@@ -2167,9 +2167,19 @@ describe("local control-plane Worker", () => {
     );
     expect(first.status).toBe(200);
     const firstBody = (await first.json()) as {
-      review: { request: { reviewId: string } };
+      review: {
+        request: {
+          reviewId: string;
+          model?: string;
+          modelEffort?: string;
+        };
+      };
     };
     expect(await replay.json()).toEqual(firstBody);
+    expect(firstBody.review.request).toMatchObject({
+      model: "claude-fable-5",
+      modelEffort: "medium",
+    });
     expect(pullWrites).toBe(1);
     expect(pullRequestBody).toContain("Human review package");
     expect(pullRequestBody).toContain(`Exact head:** \`${commit}\``);
@@ -2258,7 +2268,9 @@ describe("local control-plane Worker", () => {
             completedAt: "2026-07-12T00:04:01.000Z",
             startupDurationMs: 1,
             provider: "claude-subscription",
-            model: "claude-sonnet-4-6",
+            requestedModel: "claude-fable-5",
+            requestedEffort: "medium",
+            model: "claude-fable-5",
             summary: "One material finding.",
             findings: await normalizeReviewFindings(
               review.reviewId,

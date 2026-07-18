@@ -23,6 +23,37 @@ const request = {
 };
 
 describe("Cloudflare planning backend", () => {
+  it("rejects evidence that omits the immutable requested model", async () => {
+    const routed = {
+      ...request,
+      model: "gpt-5.6-sol" as const,
+      modelEffort: "medium" as const,
+    };
+    const backend = new CloudflarePlanningBackend(
+      {
+        getByName: () => ({
+          runJob: async () => ({}),
+          runPlanningJob: async () => ({
+            schemaVersion: 1,
+            attemptId: routed.attemptId,
+            baseCommit: routed.baseCommit,
+            status: "proposed",
+            summary: "Expose existing release metadata.",
+            exactPaths: ["apps/control-plane-worker/src/operator-ui.ts"],
+            acceptanceCriteria: ["The status page names the exact release."],
+            questions: [],
+            risk: "low",
+          }),
+          destroy: async () => undefined,
+        }),
+      },
+      "credential",
+    );
+    await expect(backend.execute(routed)).rejects.toThrow(
+      "Planning result binding does not match request",
+    );
+  });
+
   it("classifies only bounded deployment transport failures as retryable", () => {
     expect(
       isRetryablePlanningInterruption(
