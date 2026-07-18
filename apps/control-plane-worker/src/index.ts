@@ -2056,7 +2056,7 @@ async function startReviewRemediation(
         .join("\n\n")
         .slice(0, 20_000),
       baseCommit: review.request.headCommit,
-      allowedPaths: source.task.allowedPaths,
+      allowedPaths: review.request.allowedPaths,
       continuation: {
         kind: "independent_review",
         sourceRunId: source.runId,
@@ -4221,6 +4221,7 @@ async function publishEligibleContinuationRun(
     return Boolean(
       remediation &&
       continuation.evidenceId === `check_run:${continuation.checkRunId}` &&
+      remediation.checkRunId === continuation.checkRunId &&
       remediation.disposition === "remediation_started" &&
       remediation.attemptCount === 1 &&
       remediation.classification === "actionable" &&
