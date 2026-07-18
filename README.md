@@ -57,7 +57,8 @@ yet. Phase 1 proceeds on a short-lived reviewed branch from `main`.
 
 ## Local checks
 
-Prerequisites are Git, Node.js 24 or newer, Corepack, and pnpm 10.13.1.
+Prerequisites are Git, Node.js 24.18.0, Corepack, and pnpm 10.13.1. CI and the
+runner image use the version in `.node-version`.
 
 ```sh
 corepack enable
