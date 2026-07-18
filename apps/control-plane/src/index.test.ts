@@ -22,7 +22,7 @@ describe("V2 control plane", () => {
     });
   });
 
-  it("reconciles immediate reproduction and planning successor wakeups", () => {
+  it("reconciles immediate successor wakeups through implementation", () => {
     const processed = { runId: "run_1", expectedRevision: 1 };
     const run = {
       schemaVersion: 2,
@@ -44,9 +44,10 @@ describe("V2 control plane", () => {
       runId: "run_1",
       expectedRevision: 2,
     });
-    expect(
-      successorWakeup({ ...run, stage: "implement" }, processed),
-    ).toBeUndefined();
+    expect(successorWakeup({ ...run, stage: "implement" }, processed)).toEqual({
+      runId: "run_1",
+      expectedRevision: 2,
+    });
     expect(successorWakeup({ ...run, revision: 3 }, processed)).toBeUndefined();
   });
 

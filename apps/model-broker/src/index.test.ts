@@ -55,6 +55,17 @@ describe("model broker", () => {
     });
   });
 
+  it("selects the implementation policy from the trusted role envelope", () => {
+    const implementation = request();
+    implementation.headers.set("x-roundhouse-role", "implement");
+    implementation.headers.set("x-roundhouse-task-type", "implementation");
+    expect(selectRoute(implementation, env)).toEqual({
+      model: "openai/gpt-5.6-sol",
+      reasoningEffort: "low",
+      rule: "implementation-default-v1",
+    });
+  });
+
   it("replaces caller routing and uses a raw ZDR AI Gateway response", async () => {
     const run = vi.fn(async () =>
       Promise.resolve(

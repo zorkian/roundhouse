@@ -418,8 +418,7 @@ Each run gets an isolated Artifacts repository containing:
 - the exact upstream base commit;
 - a stable Roundhouse work branch;
 - checkpoint commits produced by successful attempts;
-- the exact candidate commit reviewed and validated at each cycle; and
-- optional non-secret run metadata attached to commits when useful.
+- the exact candidate commit reviewed and validated at each cycle.
 
 The control plane stores only repository identity, exact base, accepted head,
 and lifecycle timestamps in D1. It never stores a repo token. The current
@@ -955,6 +954,16 @@ reproduction dispatches a read-only planning attempt; a ready plan is posted
 concisely and advances to `implement`, while a plan needing information uses
 the same prose clarification path.
 
+The fourth slice gives the implementation attempt a short-lived Artifacts
+write token and lets Codex edit and validate the checked-out repository inside
+the Cloudflare Container sandbox. The runner commits only the actual source
+change to Artifacts. A separate clean container clones that exact checkpoint,
+verifies its ancestry, changed-path declaration, and protected paths, then uses
+a short-lived development GitHub App token to promote the validated commit.
+The control plane opens a draft pull request and links it from the issue.
+Implementation commands and output stay in durable attempt evidence and are not
+copied into GitHub comments or the pull-request body.
+
 Actions:
 
 1. Connect real GitHub webhook verification, issue snapshots, authorization,
@@ -971,25 +980,23 @@ Exit gate:
 - one non-reproducible or already-fixed report stops truthfully;
 - no interaction requires an internal identifier.
 
-### Phase 3 — Implementation and self-repairing validation
+### Phase 3 — Implementation and validated draft pull request
 
 Actions:
 
 1. Implement the runner contract and immutable routing snapshot.
 2. Give implementation a short-lived Artifacts write token.
-3. Commit candidate changes and verify ancestry and repository policy.
-4. Implement profile-selected formatting, targeted validation, and promotion
-   to full validation.
-5. Feed mechanical failures back into implementation and rerun affected checks.
-6. Publish a draft pull request through the trusted broker; do not merge yet.
+3. Commit the actual candidate changes and verify ancestry and protected paths
+   from a clean clone.
+4. Promote only that validated commit with a short-lived GitHub App token held
+   outside the implementation container.
+5. Open a draft pull request; do not merge yet.
 
 Exit gate:
 
 - one reproduced bug reaches a draft PR with a passing regression;
-- formatter and targeted-test failures repair without human action;
 - an out-of-policy patch is rejected before publication;
-- container/caller recovery creates no duplicate paid attempt or branch;
-- GitHub credentials never enter the runner.
+- GitHub credentials never enter the implementation container.
 
 ### Phase 4 — Pluggable adversarial review
 

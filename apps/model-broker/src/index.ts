@@ -32,7 +32,8 @@ export interface BrokerRoute {
   readonly rule:
     | "qualification-default-v1"
     | "reproduction-default-v1"
-    | "planning-default-v1";
+    | "planning-default-v1"
+    | "implementation-default-v1";
 }
 
 export function selectRoute(request: Request, env: BrokerEnv): BrokerRoute {
@@ -46,7 +47,9 @@ export function selectRoute(request: Request, env: BrokerEnv): BrokerRoute {
         ? "reproduction-default-v1"
         : request.headers.get("x-roundhouse-role") === "plan"
           ? "planning-default-v1"
-          : "qualification-default-v1",
+          : request.headers.get("x-roundhouse-role") === "implement"
+            ? "implementation-default-v1"
+            : "qualification-default-v1",
   };
 }
 

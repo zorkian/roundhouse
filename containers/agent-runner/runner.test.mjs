@@ -7,8 +7,10 @@ import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   completionRequest,
-  createCheckpoint,
+  checkpointWorkspace,
+  implementationSchema,
   planSchema,
+  prepareWorkspace,
   qualificationSandbox,
   reproductionSchema,
   runnerIdentity,
@@ -70,6 +72,21 @@ describe("V2 agent runner", () => {
       ]),
     );
     expect(planSchema.properties.questions).not.toHaveProperty("maxItems");
+  });
+
+  it("keeps implementation evidence separate from the pull request text", () => {
+    expect(implementationSchema.required).toEqual([
+      "summary",
+      "pullRequestTitle",
+      "pullRequestBody",
+      "validation",
+    ]);
+    expect(implementationSchema.properties.validation).not.toHaveProperty(
+      "maxItems",
+    );
+    expect(
+      implementationSchema.properties.validation.items.properties.output,
+    ).not.toHaveProperty("maxLength");
   });
 
   it("reports only its versioned runner identity", () => {
@@ -167,10 +184,11 @@ describe("V2 agent runner", () => {
     });
   });
 
-  it("pushes one deterministic checkpoint and resumes it from a replacement clone", async () => {
+  it("checkpoints the implementation and promotes it from a clean clone", async () => {
     process.env.ROUNDHOUSE_WORKSPACE_ROOT = resolve(testRoot, "runner");
     const source = resolve(testRoot, "fake-github"),
-      remote = resolve(testRoot, "artifact.git");
+      remote = resolve(testRoot, "artifact.git"),
+      githubRemote = resolve(testRoot, "github.git");
     await mkdir(source, { recursive: true });
     execFileSync("git", ["init", "--initial-branch=main"], { cwd: source });
     await writeFile(resolve(source, "README.md"), "fake GitHub baseline\n");
@@ -200,10 +218,12 @@ describe("V2 agent runner", () => {
       encoding: "utf8",
     }).trim();
     execFileSync("git", ["clone", "--bare", source, remote]);
+    execFileSync("git", ["clone", "--bare", source, githubRemote]);
     const assignment = {
       id: "run_git_rev_1",
       runId: "run_git",
       runRevision: 1,
+      issueNumber: 42,
       deadlineAt: Date.now() + 60_000,
       baseCommit,
       expectedHead: baseCommit,
@@ -218,21 +238,45 @@ describe("V2 agent runner", () => {
         ref: "refs/heads/roundhouse/run_git",
       },
     };
-    const first = await createCheckpoint(assignment);
-    const replacement = await createCheckpoint(assignment);
+    const firstDirectory = await prepareWorkspace(assignment);
+    await writeFile(
+      resolve(firstDirectory, "README.md"),
+      "fake GitHub baseline\nimplemented change\n",
+    );
+    const first = await checkpointWorkspace(assignment, firstDirectory);
+    const replacementDirectory = await prepareWorkspace(assignment);
+    await writeFile(
+      resolve(replacementDirectory, "README.md"),
+      "fake GitHub baseline\nimplemented change\n",
+    );
+    const replacement = await checkpointWorkspace(
+      assignment,
+      replacementDirectory,
+    );
     expect(replacement).toEqual(first);
     expect(first.inputHead).toBe(baseCommit);
     expect(first.outputHead).toMatch(/^[a-f0-9]{40}$/);
-    expect(first.changedPaths).toEqual([
-      ".roundhouse/checkpoints/run_git_rev_1.json",
-    ]);
+    expect(first.changedPaths).toEqual(["README.md"]);
     await expect(
       validateCheckpoint({
         ...assignment,
         id: "run_git_rev_1_validation",
         checkpoint: first,
         artifact: { ...assignment.artifact, access: "read" },
+        publish: {
+          remote: githubRemote,
+          hostname: "github.invalid",
+          token: "github-installation-token",
+          ref: "refs/heads/roundhouse/issue-42",
+        },
       }),
     ).resolves.toBeUndefined();
+    expect(
+      execFileSync(
+        "git",
+        ["--git-dir", githubRemote, "rev-parse", "roundhouse/issue-42"],
+        { encoding: "utf8" },
+      ).trim(),
+    ).toBe(first.outputHead);
   });
 });

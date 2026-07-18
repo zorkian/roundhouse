@@ -42,16 +42,18 @@ normative design document in this repository.
 3. For a bug, Roundhouse attempts to reproduce the behavior before proposing a
    fix.
 4. Roundhouse posts its understanding, evidence, and implementation plan.
-5. An isolated implementation agent changes the code and iterates on formatter,
-   lint, typecheck, build, and test failures.
+5. An isolated implementation agent changes the code and runs the relevant
+   local validation.
 6. A reviewer examines the exact candidate commit and actionable findings
    return through implementation and validation until the change works.
 7. Exact-head repository CI gates the merge.
 
 GitHub is the public source of truth for issues, pull requests, CI, and merged
 code. D1 owns workflow state. Cloudflare Artifacts is V2's Git-native workspace
-and handoff layer. Agent containers never receive GitHub App,
-Cloudflare administration, deployment, or model subscription credentials.
+and handoff layer. The implementation container never receives GitHub App,
+Cloudflare administration, deployment, or model subscription credentials. A
+separate clean promotion container receives a short-lived GitHub App token only
+after it has independently validated the candidate checkpoint.
 
 ## Repository status
 
@@ -61,10 +63,13 @@ and historical documents remain available from the tag and Git history rather
 than as a parallel legacy tree. Phase 1 is deployed in isolated V2 development
 resources and proves D1-owned lifecycle state, Queue wakeups, thin Container
 Durable Objects, and Artifacts checkpoint handoff. Phase 2 has deployed real
-development GitHub intake, read-only qualification, and read-only reproduction
-through a private model broker. Its current slice adds unrestricted
-natural-language clarification and an evidence-backed read-only plan, ending at
-`implement`.
+development GitHub intake, read-only qualification and reproduction,
+unrestricted natural-language clarification, and evidence-backed planning
+through a private model broker. Its current slice implements the accepted plan
+in an isolated container, records the actual source commit in Artifacts,
+validates that checkpoint from a clean clone, promotes the validated commit to
+GitHub, and opens a draft pull request. Validation commands and output remain
+durable Roundhouse evidence rather than issue or pull-request commentary.
 
 ## Local checks
 
