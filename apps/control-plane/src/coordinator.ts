@@ -3,6 +3,7 @@
 
 import {
   immutableAttemptId,
+  transitionRun,
   type Attempt,
   type RunRepository,
   type RunSnapshot,
@@ -52,12 +53,21 @@ export async function coordinate(
   const previous = await repository.getAttempt(attemptId);
   if (previous?.state === "completed") {
     if (run.stage !== "qualify") return "stale";
-    const next = await repository.transition(
+    const claimed = await repository.claimLease(
       run.id,
       run.revision,
-      qualificationTransition(previous),
+      {
+        attemptId,
+        runRevision: run.revision,
+        expiresAt: now + Math.min(leaseMilliseconds, 60_000),
+      },
+      now,
     );
-    if (next && reporter) await reporter.report(next, previous);
+    if (!claimed) return "duplicate";
+    const transition = qualificationTransition(previous);
+    const projected = transitionRun(run, run.revision, transition);
+    if (reporter) await reporter.report(projected, previous);
+    const next = await repository.transition(run.id, run.revision, transition);
     return next ? "dispatched" : "stale";
   }
   const claimed = await repository.claimLease(

@@ -173,7 +173,7 @@ export class GitHubQualificationReporter implements QualificationReporter {
     const classification = String(qualification?.classification ?? "unclear");
     const summary = String(
       qualification?.summary ?? "Qualification did not produce a summary.",
-    );
+    ).slice(0, 4_000);
     const next =
       run.stage === "reproduce"
         ? "Next: reproduction."

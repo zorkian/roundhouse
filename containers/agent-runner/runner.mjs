@@ -98,12 +98,7 @@ function command(commandName, args, options = {}) {
     child.once("error", rejectCommand);
     child.once("close", (code) => {
       if (code === 0) resolveCommand(Buffer.concat(stdout).toString().trim());
-      else
-        rejectCommand(
-          new Error(
-            `${commandName}_failed_${code}: ${Buffer.concat(stderr).toString().trim()}`,
-          ),
-        );
+      else rejectCommand(new Error(`${commandName}_failed_${code}`));
     });
   });
 }

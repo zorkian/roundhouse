@@ -212,6 +212,67 @@ describe("single coordinator", () => {
     });
   });
 
+  it("keeps a failed qualification report retryable before transition", async () => {
+    const store = new MemoryRunRepository();
+    await store.create(createRun(input));
+    await coordinate(
+      store,
+      { submit: async () => undefined },
+      { runId: input.id, expectedRevision: 1 },
+      100,
+    );
+    const attempt = await store.getAttempt("run_slice_rev_1");
+    if (!attempt) throw new Error("missing_attempt");
+    await acceptCallback(
+      store,
+      "report-retry-secret",
+      validator,
+      await callbackFor(attempt, input.baseCommit, "report-retry-secret"),
+    );
+    const reports: number[] = [];
+    await expect(
+      coordinate(
+        store,
+        { submit: async () => undefined },
+        { runId: input.id, expectedRevision: 1 },
+        200,
+        50,
+        {
+          report: async () => {
+            reports.push(1);
+            throw new Error("github_response_lost");
+          },
+        },
+      ),
+    ).rejects.toThrow("github_response_lost");
+    await expect(store.get(input.id)).resolves.toMatchObject({
+      stage: "qualify",
+      revision: 1,
+    });
+    await expect(store.expiredLeases(250)).resolves.toEqual([
+      { runId: input.id, expectedRevision: 1 },
+    ]);
+    await expect(
+      coordinate(
+        store,
+        { submit: async () => undefined },
+        { runId: input.id, expectedRevision: 1 },
+        250,
+        50,
+        {
+          report: async () => {
+            reports.push(2);
+          },
+        },
+      ),
+    ).resolves.toBe("dispatched");
+    expect(reports).toEqual([1, 2]);
+    await expect(store.get(input.id)).resolves.toMatchObject({
+      stage: "reproduce",
+      revision: 2,
+    });
+  });
+
   it("runs a deterministic fake GitHub qualification journey and stops at reproduce", async () => {
     const store = new MemoryRunRepository();
     await store.create(createRun(input));
