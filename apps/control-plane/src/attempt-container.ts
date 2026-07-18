@@ -35,15 +35,24 @@ export class RoundhouseAttemptContainer extends Container<Cloudflare.Env> {
       const attemptId = request.headers.get("x-roundhouse-attempt-id") ?? "";
       const capability =
         request.headers.get("x-roundhouse-attempt-capability") ?? "";
-      if (
-        !attemptId ||
-        !(await verifyCallback(
+      const validCapability =
+        attemptId &&
+        capability &&
+        (await verifyCallback(
           runtime.CALLBACK_SIGNING_SECRET,
           attemptId,
           capability,
-        ))
-      )
+        ));
+      if (!validCapability) {
+        console.error(
+          JSON.stringify({
+            message: "model_egress_unauthorized",
+            attemptIdPresent: Boolean(attemptId),
+            capabilityPresent: Boolean(capability),
+          }),
+        );
         return new Response("unauthorized", { status: 401 });
+      }
       const repository = new D1RunRepository(runtime.DB);
       const attempt = await repository.getAttempt(attemptId);
       if (
