@@ -1,7 +1,6 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-export const modelBrokerService = "roundhouse-v2-model-broker";
 const maximumRequestBytes = 2 * 1024 * 1024;
 const routingHeaders = [
   "x-roundhouse-attempt-id",
