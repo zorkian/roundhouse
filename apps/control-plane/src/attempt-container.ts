@@ -60,10 +60,24 @@ export class RoundhouseAttemptContainer extends Container<Cloudflare.Env> {
         attempt.stage !== "qualify" ||
         !["created", "dispatched"].includes(attempt.state) ||
         attempt.deadlineAt <= Date.now()
-      )
+      ) {
+        console.error(
+          JSON.stringify({
+            message: "model_egress_stale",
+            attemptFound: Boolean(attempt),
+            stage: attempt?.stage,
+            state: attempt?.state,
+            deadlineActive: Boolean(attempt && attempt.deadlineAt > Date.now()),
+          }),
+        );
         return new Response("stale_attempt", { status: 409 });
-      if (!(await repository.reserveModelCall(attemptId)))
+      }
+      if (!(await repository.reserveModelCall(attemptId))) {
+        console.error(
+          JSON.stringify({ message: "model_egress_budget_exhausted" }),
+        );
         return new Response("model_budget_exhausted", { status: 429 });
+      }
       const headers = new Headers(request.headers);
       headers.delete("authorization");
       headers.delete("x-roundhouse-attempt-capability");
