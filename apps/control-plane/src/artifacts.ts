@@ -42,17 +42,38 @@ function isArtifactsError(error: unknown, code: string): boolean {
   );
 }
 
+export interface ArtifactLocation {
+  readonly namespace: string;
+  readonly remoteOrigin: string;
+}
+
+export function artifactIdentity(name: string, location: ArtifactLocation) {
+  const path = `/git/${encodeURIComponent(location.namespace)}/${encodeURIComponent(name)}.git`;
+  const remote = new URL(path, location.remoteOrigin).toString();
+  return {
+    id: `artifacts:${location.namespace}/${name}`,
+    name,
+    remote,
+    hostname: new URL(remote).hostname,
+  };
+}
+
 class CloudflareArtifactRepository implements ArtifactRepository {
   readonly id: string;
   readonly name: string;
   readonly remote: string;
   readonly hostname: string;
 
-  constructor(private readonly repository: ArtifactsRepo) {
-    this.id = repository.id;
-    this.name = repository.name;
-    this.remote = repository.remote;
-    this.hostname = new URL(repository.remote).hostname;
+  constructor(
+    private readonly repository: ArtifactsRepo,
+    name: string,
+    location: ArtifactLocation,
+  ) {
+    const identity = artifactIdentity(name, location);
+    this.id = identity.id;
+    this.name = identity.name;
+    this.remote = identity.remote;
+    this.hostname = identity.hostname;
   }
 
   async createToken(access: ArtifactAccess, ttlSeconds: number) {
@@ -80,7 +101,10 @@ class CloudflareArtifactRepository implements ArtifactRepository {
 }
 
 export class CloudflareArtifactsNamespace implements ArtifactsNamespace {
-  constructor(private readonly artifacts: Artifacts) {}
+  constructor(
+    private readonly artifacts: Artifacts,
+    private readonly location: ArtifactLocation,
+  ) {}
 
   private async ready(name: string): Promise<ArtifactsRepo> {
     for (let attempt = 0; attempt < 60; attempt++) {
@@ -109,7 +133,7 @@ export class CloudflareArtifactsNamespace implements ArtifactsNamespace {
       // Revoke it immediately, then issue narrowly scoped attempt tokens.
       const repository = await this.ready(name);
       await repository.revokeToken(created.token);
-      return new CloudflareArtifactRepository(repository);
+      return new CloudflareArtifactRepository(repository, name, this.location);
     } catch (error) {
       // A timed-out import may still have committed. Reconcile by immutable
       // repository name before treating the operation as failed.
@@ -118,13 +142,21 @@ export class CloudflareArtifactsNamespace implements ArtifactsNamespace {
         if (reconciled) return reconciled;
         throw error;
       }
-      return new CloudflareArtifactRepository(await this.ready(name));
+      return new CloudflareArtifactRepository(
+        await this.ready(name),
+        name,
+        this.location,
+      );
     }
   }
 
   async get(name: string): Promise<ArtifactRepository | undefined> {
     try {
-      return new CloudflareArtifactRepository(await this.ready(name));
+      return new CloudflareArtifactRepository(
+        await this.ready(name),
+        name,
+        this.location,
+      );
     } catch (error) {
       if (isArtifactsError(error, "NOT_FOUND")) return undefined;
       throw error;

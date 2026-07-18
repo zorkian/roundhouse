@@ -67,6 +67,13 @@ type RuntimeEnv = Cloudflare.Env & {
   ROUNDHOUSE_GITHUB_WEBHOOK_SECRET: string;
 };
 
+function artifactsNamespace(env: RuntimeEnv) {
+  return new CloudflareArtifactsNamespace(env.ARTIFACTS, {
+    namespace: env.ARTIFACTS_NAMESPACE,
+    remoteOrigin: env.ARTIFACTS_REMOTE_ORIGIN,
+  });
+}
+
 function workspaceName(runId: string): string {
   return runId;
 }
@@ -219,7 +226,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
     if (url.pathname === "/attempts/callback" && request.method === "POST") {
       const input = await request.json<AttemptCallback>();
       const repository = new D1RunRepository(env.DB);
-      const artifacts = new CloudflareArtifactsNamespace(env.ARTIFACTS);
+      const artifacts = artifactsNamespace(env);
       const outcome = await acceptCallback(
         repository,
         await signCallback(env.CALLBACK_SIGNING_SECRET, input.attemptId),
@@ -249,7 +256,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
     const repository = new D1RunRepository(env.DB);
     const dispatcher = new ContainerDispatcher(
       env.ATTEMPT_CONTAINERS,
-      new CloudflareArtifactsNamespace(env.ARTIFACTS),
+      artifactsNamespace(env),
       env.CALLBACK_SIGNING_SECRET,
       env.CONTROL_PLANE_ORIGIN,
     );

@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  artifactIdentity,
   validateCheckpointIdentity,
   type ArtifactAccess,
   type ArtifactRepository,
@@ -70,6 +71,21 @@ class FakeArtifacts implements ArtifactsNamespace {
 }
 
 describe("Artifacts workspace contract", () => {
+  it("derives one stable repository identity from its configured namespace", () => {
+    expect(
+      artifactIdentity("run_1", {
+        namespace: "roundhouse-v2-development",
+        remoteOrigin: "https://account.artifacts.cloudflare.net",
+      }),
+    ).toEqual({
+      id: "artifacts:roundhouse-v2-development/run_1",
+      name: "run_1",
+      remote:
+        "https://account.artifacts.cloudflare.net/git/roundhouse-v2-development/run_1.git",
+      hostname: "account.artifacts.cloudflare.net",
+    });
+  });
+
   it("covers scoped handoff, replacement, validation, revocation, and cleanup", async () => {
     const artifacts = new FakeArtifacts();
     const base = "a".repeat(40),
