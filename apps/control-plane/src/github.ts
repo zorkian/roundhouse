@@ -211,7 +211,6 @@ function planComment(run: RunSnapshot, attempt: Attempt): string {
     plan?.summary ?? "Planning did not produce a summary.",
   );
   const acceptance = stringList(plan?.acceptanceCriteria);
-  const validation = stringList(plan?.validation);
   const proposedChange = String(plan?.proposedChange ?? "Not reported.");
   const next =
     run.status === "waiting"
@@ -227,9 +226,6 @@ function planComment(run: RunSnapshot, attempt: Attempt): string {
     proposedChange,
     ...(acceptance.length
       ? ["", "Acceptance criteria:", ...acceptance.map((item) => `- ${item}`)]
-      : []),
-    ...(validation.length
-      ? ["", "Validation:", ...validation.map((item) => `- ${item}`)]
       : []),
     ...questionLines(plan?.questions),
     "",
