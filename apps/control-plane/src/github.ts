@@ -13,6 +13,11 @@ import { verifyCallback } from "./callback.js";
 export interface GitHubIntakeRepository {
   get(runId: string): Promise<RunSnapshot | undefined>;
   create(run: RunSnapshot): Promise<void>;
+  resumeClarification(
+    runId: string,
+    expectedRevision: number,
+    issue: NonNullable<RunSnapshot["issue"]>,
+  ): Promise<RunSnapshot | undefined>;
   recordGitHubDelivery(
     runId: string,
     deliveryId: string,
@@ -40,14 +45,14 @@ export interface GitHubEnv {
 interface CommentPayload {
   readonly action?: string;
   readonly repository?: { readonly full_name?: string };
-  readonly sender?: { readonly login?: string };
+  readonly sender?: { readonly login?: string; readonly type?: string };
   readonly issue?: {
     readonly number?: number;
     readonly title?: string;
     readonly body?: string | null;
     readonly html_url?: string;
   };
-  readonly comment?: { readonly body?: string };
+  readonly comment?: { readonly body?: string; readonly html_url?: string };
 }
 
 function bytesToBase64Url(bytes: ArrayBuffer | Uint8Array): string {
@@ -160,6 +165,19 @@ export class GitHubClient {
   }
 }
 
+function stringList(value: unknown): readonly string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+function questionLines(value: unknown): readonly string[] {
+  const questions = stringList(value);
+  return questions.length
+    ? ["", "Questions:", ...questions.map((question) => `- ${question}`)]
+    : [];
+}
+
 function reproductionComment(run: RunSnapshot, attempt: Attempt): string {
   const reproduction = attempt.result?.reproduction as
     Record<string, unknown> | undefined;
@@ -170,11 +188,9 @@ function reproductionComment(run: RunSnapshot, attempt: Attempt): string {
   const expected = String(reproduction?.expectedBehavior ?? "Not reported.");
   const observed = String(reproduction?.observedBehavior ?? "Not reported.");
   const next =
-    run.stage === "plan"
-      ? "Next: planning."
-      : "Roundhouse is waiting for maintainer input.";
+    run.status === "waiting" ? "Please reply in prose." : "Next: planning.";
   return [
-    `<!-- roundhouse:v2:reproduction:${run.id} -->`,
+    `<!-- roundhouse:v2:reproduction:${attempt.id} -->`,
     `Roundhouse reproduction: **${status}**`,
     "",
     summary,
@@ -182,6 +198,40 @@ function reproductionComment(run: RunSnapshot, attempt: Attempt): string {
     `Expected: ${expected}`,
     "",
     `Observed: ${observed}`,
+    ...questionLines(reproduction?.uncertainties),
+    "",
+    next,
+  ].join("\n");
+}
+
+function planComment(run: RunSnapshot, attempt: Attempt): string {
+  const plan = attempt.result?.plan as Record<string, unknown> | undefined;
+  const status = String(plan?.status ?? "needs_clarification");
+  const summary = String(
+    plan?.summary ?? "Planning did not produce a summary.",
+  );
+  const acceptance = stringList(plan?.acceptanceCriteria);
+  const validation = stringList(plan?.validation);
+  const proposedChange = String(plan?.proposedChange ?? "Not reported.");
+  const next =
+    run.status === "waiting"
+      ? "Please reply in prose."
+      : "Next: implementation.";
+  return [
+    `<!-- roundhouse:v2:plan:${attempt.id} -->`,
+    `Roundhouse plan: **${status}**`,
+    "",
+    summary,
+    "",
+    "Proposed change:",
+    proposedChange,
+    ...(acceptance.length
+      ? ["", "Acceptance criteria:", ...acceptance.map((item) => `- ${item}`)]
+      : []),
+    ...(validation.length
+      ? ["", "Validation:", ...validation.map((item) => `- ${item}`)]
+      : []),
+    ...questionLines(plan?.questions),
     "",
     next,
   ].join("\n");
@@ -192,8 +242,12 @@ export class GitHubStageReporter implements AttemptReporter {
 
   async report(run: RunSnapshot, attempt: Attempt): Promise<void> {
     const phase =
-      attempt.stage === "reproduce" ? "reproduction" : "qualification";
-    const marker = `<!-- roundhouse:v2:${phase}:${run.id} -->`;
+      attempt.stage === "reproduce"
+        ? "reproduction"
+        : attempt.stage === "plan"
+          ? "plan"
+          : "qualification";
+    const marker = `<!-- roundhouse:v2:${phase}:${attempt.id} -->`;
     const comments = await this.github.get<readonly { body?: string }[]>(
       `/repos/${run.repository}/issues/${run.issueNumber}/comments?per_page=100`,
     );
@@ -205,20 +259,39 @@ export class GitHubStageReporter implements AttemptReporter {
       );
       return;
     }
+    if (attempt.stage === "plan") {
+      await this.github.post(
+        `/repos/${run.repository}/issues/${run.issueNumber}/comments`,
+        { body: planComment(run, attempt).slice(0, 65_000) },
+      );
+      return;
+    }
     const qualification = attempt.result?.qualification as
       Record<string, unknown> | undefined;
     const classification = String(qualification?.classification ?? "unclear");
     const summary = String(
       qualification?.summary ?? "Qualification did not produce a summary.",
-    ).slice(0, 4_000);
+    );
     const next =
-      run.stage === "reproduce"
-        ? "Next: reproduction."
-        : "Roundhouse has stopped here.";
+      run.status === "waiting"
+        ? "Please reply in prose."
+        : run.stage === "reproduce"
+          ? "Next: reproduction."
+          : "Roundhouse has stopped here.";
     await this.github.post(
       `/repos/${run.repository}/issues/${run.issueNumber}/comments`,
       {
-        body: `${marker}\nRoundhouse qualification: **${classification}**\n\n${summary}\n\n${next}`,
+        body: [
+          marker,
+          `Roundhouse qualification: **${classification}**`,
+          "",
+          summary,
+          ...questionLines(qualification?.uncertainties),
+          "",
+          next,
+        ]
+          .join("\n")
+          .slice(0, 65_000),
       },
     );
   }
@@ -237,7 +310,7 @@ export async function verifyGitHubWebhook(
   return verifyCallback(secret, body, signature.slice(7));
 }
 
-export async function acceptGitHubStart(
+export async function acceptGitHubComment(
   request: Request,
   env: GitHubEnv,
   repository: GitHubIntakeRepository,
@@ -260,13 +333,50 @@ export async function acceptGitHubStart(
   const payload = JSON.parse(raw) as CommentPayload;
   if (
     payload.action !== "created" ||
-    payload.repository?.full_name !== enrolledRepository.repository ||
-    payload.comment?.body?.trim() !== "/roundhouse start"
+    payload.repository?.full_name !== enrolledRepository.repository
   )
     return "ignored";
   const actor = payload.sender?.login;
   const issueNumber = payload.issue?.number;
-  if (!actor || !issueNumber) return "ignored";
+  const comment = payload.comment?.body;
+  if (!actor || !issueNumber || !comment) return "ignored";
+  const id = runId(issueNumber);
+  let run = await repository.get(id);
+  if (comment.trim() !== "/roundhouse start") {
+    if (
+      payload.sender?.type === "Bot" ||
+      comment.includes("<!-- roundhouse:v2:") ||
+      !run?.issue ||
+      run.status !== "waiting" ||
+      run.waitingReason !== "clarification"
+    )
+      return "ignored";
+    const fresh = await repository.recordGitHubDelivery(id, deliveryId, {
+      event,
+      actor,
+      issueNumber,
+    });
+    if (!fresh) return "duplicate";
+    run = await repository.resumeClarification(id, run.revision, {
+      ...run.issue,
+      title: payload.issue?.title ?? run.issue.title,
+      body: payload.issue?.body ?? run.issue.body,
+      url: payload.issue?.html_url ?? run.issue.url,
+      clarifications: [
+        ...(run.issue.clarifications ?? []),
+        {
+          actor,
+          body: comment,
+          ...(payload.comment?.html_url
+            ? { url: payload.comment.html_url }
+            : {}),
+        },
+      ],
+    });
+    if (!run) return "ignored";
+    await enqueue({ runId: id, expectedRevision: run.revision });
+    return "accepted";
+  }
   const permission = await github.get<{ permission?: string }>(
     `/repos/${enrolledRepository.repository}/collaborators/${encodeURIComponent(actor)}/permission`,
   );
@@ -278,8 +388,6 @@ export async function acceptGitHubStart(
   const commit = await github.get<{ sha: string }>(
     `/repos/${enrolledRepository.repository}/commits/${encodeURIComponent(repo.default_branch)}`,
   );
-  const id = runId(issueNumber);
-  let run = await repository.get(id);
   const existing = Boolean(run);
   if (!run) {
     run = createRun({
@@ -289,8 +397,8 @@ export async function acceptGitHubStart(
       baseCommit: commit.sha,
       profileVersion: enrolledRepository.profileVersion,
       issue: {
-        title: (payload.issue?.title ?? "").slice(0, 1_000),
-        body: (payload.issue?.body ?? "").slice(0, 50_000),
+        title: payload.issue?.title ?? "",
+        body: payload.issue?.body ?? "",
         url: payload.issue?.html_url ?? "",
         actor,
       },

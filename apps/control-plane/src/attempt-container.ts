@@ -50,7 +50,7 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
   const attempt = await repository.getAttempt(attemptId);
   if (
     !attempt ||
-    !["qualify", "reproduce"].includes(attempt.stage) ||
+    !["qualify", "reproduce", "plan"].includes(attempt.stage) ||
     !["created", "dispatched"].includes(attempt.state) ||
     attempt.deadlineAt <= Date.now()
   ) {
@@ -70,7 +70,10 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
   headers.delete("authorization");
   headers.delete("x-roundhouse-attempt-capability");
   headers.set("x-roundhouse-role", attempt.role);
-  headers.set("x-roundhouse-task-type", "validation");
+  headers.set(
+    "x-roundhouse-task-type",
+    attempt.stage === "plan" ? "planning" : "validation",
+  );
   headers.set("x-roundhouse-complexity", "unknown");
   const requestedUrl = new URL(request.url);
   const response = await runtime.MODEL_BROKER.fetch(
@@ -124,7 +127,8 @@ export class RoundhouseAttemptContainer extends Container<Cloudflare.Env> {
           ROUNDHOUSE_ATTEMPT_ID: attempt.id,
           ROUNDHOUSE_ATTEMPT_CAPABILITY:
             request.headers.get("x-roundhouse-attempt-secret") ?? "",
-          ROUNDHOUSE_TASK_TYPE: "validation",
+          ROUNDHOUSE_TASK_TYPE:
+            attempt.stage === "plan" ? "planning" : "validation",
           ROUNDHOUSE_COMPLEXITY: "unknown",
           ROUNDHOUSE_DUMMY_TOKEN: "service-binding-auth-only",
           GIT_SSL_CAINFO: containerCa,

@@ -14,7 +14,11 @@ import {
   signCallback,
   type AttemptCallback,
 } from "./callback.js";
-import { coordinate, reproductionTransition } from "./coordinator.js";
+import {
+  coordinate,
+  planTransition,
+  reproductionTransition,
+} from "./coordinator.js";
 
 const input = {
   id: "run_slice",
@@ -53,11 +57,20 @@ async function callbackFor(
               summary: "Reproduced",
             },
           }
-        : {
-            outcome: "ok",
-            checkpoint: head,
-            qualification: { classification: "bug", summary: "Eligible bug" },
-          },
+        : attempt.stage === "plan"
+          ? {
+              outcome: "ok",
+              checkpoint: head,
+              plan: {
+                status: "ready",
+                summary: "Small implementation plan",
+              },
+            }
+          : {
+              outcome: "ok",
+              checkpoint: head,
+              qualification: { classification: "bug", summary: "Eligible bug" },
+            },
   };
   return {
     ...unsigned,
@@ -300,7 +313,38 @@ describe("single coordinator", () => {
     });
   });
 
-  it("runs qualification and reproduction before stopping at plan", async () => {
+  it("maps planning to implementation or another prose clarification", () => {
+    const attempt = {
+      id: "run_slice_rev_3",
+      runId: input.id,
+      runRevision: 3,
+      kind: "agent",
+      stage: "plan",
+      role: "plan",
+      state: "completed",
+      deadlineAt: 1_000,
+      baseCommit: input.baseCommit,
+      expectedHead: input.baseCommit,
+    } satisfies Attempt;
+    expect(
+      planTransition({
+        ...attempt,
+        result: { plan: { status: "ready" } },
+      }),
+    ).toEqual({ status: "active", stage: "implement" });
+    expect(
+      planTransition({
+        ...attempt,
+        result: { plan: { status: "needs_clarification" } },
+      }),
+    ).toEqual({
+      status: "waiting",
+      stage: "plan",
+      waitingReason: "clarification",
+    });
+  });
+
+  it("runs qualification, reproduction, and planning before implementation", async () => {
     const store = new MemoryRunRepository();
     await store.create(createRun(input));
     const wakeups = [{ runId: input.id, expectedRevision: 1 }];
@@ -333,14 +377,17 @@ describe("single coordinator", () => {
       await coordinate(store, { submit: async () => undefined }, wakeup, 200);
       previousHead = outputHead;
       const current = await store.get(input.id);
-      if (current?.status === "active" && current.stage === "reproduce")
+      if (
+        current?.status === "active" &&
+        new Set(["reproduce", "plan"]).has(current.stage)
+      )
         wakeups.push({ runId: current.id, expectedRevision: current.revision });
     }
-    expect(stages).toEqual(["qualify", "reproduce"]);
+    expect(stages).toEqual(["qualify", "reproduce", "plan"]);
     await expect(store.get(input.id)).resolves.toMatchObject({
       status: "active",
-      stage: "plan",
-      revision: 3,
+      stage: "implement",
+      revision: 4,
       currentHead: previousHead,
     });
   });

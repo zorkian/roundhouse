@@ -1,7 +1,12 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import type { RunSnapshot, RunStage, RunTransition } from "./run.js";
+import type {
+  IssueSnapshot,
+  RunSnapshot,
+  RunStage,
+  RunTransition,
+} from "./run.js";
 
 export const attemptKinds = ["agent", "external"] as const;
 export const attemptStates = [
@@ -87,6 +92,11 @@ export interface RunRepository {
     expectedRevision: number,
     transition: RunTransition,
   ): Promise<RunSnapshot | undefined>;
+  resumeClarification(
+    runId: string,
+    expectedRevision: number,
+    issue: IssueSnapshot,
+  ): Promise<RunSnapshot | undefined>;
   claimLease(
     runId: string,
     expectedRevision: number,
@@ -102,6 +112,11 @@ export interface RunRepository {
     result: Readonly<Record<string, unknown>>,
   ): Promise<"completed" | "duplicate" | "stale">;
   getAttempt(attemptId: string): Promise<Attempt | undefined>;
+  latestCompletedAttempt(
+    runId: string,
+    stage: RunStage,
+    beforeRevision: number,
+  ): Promise<Attempt | undefined>;
   expiredLeases(now: number): Promise<readonly Wakeup[]>;
 }
 

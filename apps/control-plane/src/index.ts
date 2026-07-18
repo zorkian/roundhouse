@@ -3,7 +3,6 @@
 
 import {
   runSchemaVersion,
-  immutableAttemptId,
   type Attempt,
   type RunSnapshot,
   type Wakeup,
@@ -21,7 +20,7 @@ import {
 } from "./callback.js";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
 import {
-  acceptGitHubStart,
+  acceptGitHubComment,
   GitHubClient,
   GitHubStageReporter,
 } from "./github.js";
@@ -57,7 +56,7 @@ export function successorWakeup(
   processed: Wakeup,
 ): Wakeup | undefined {
   return run?.status === "active" &&
-    run.stage === "reproduce" &&
+    new Set(["reproduce", "plan"]).has(run.stage) &&
     run.revision === processed.expectedRevision + 1
     ? { runId: run.id, expectedRevision: run.revision }
     : undefined;
@@ -117,28 +116,50 @@ class ContainerDispatcher implements AttemptDispatcher {
       this.callbackSigningSecret,
       attempt.id,
     );
-    const previous =
-      attempt.stage === "reproduce"
-        ? await this.runs.getAttempt(
-            immutableAttemptId(run.id, run.revision - 1),
+    const qualificationAttempt =
+      attempt.stage === "reproduce" || attempt.stage === "plan"
+        ? await this.runs.latestCompletedAttempt(
+            run.id,
+            "qualify",
+            run.revision,
           )
         : undefined;
-    const qualification = previous?.result?.qualification;
+    const reproductionAttempt =
+      attempt.stage === "plan"
+        ? await this.runs.latestCompletedAttempt(
+            run.id,
+            "reproduce",
+            run.revision,
+          )
+        : undefined;
+    const qualification = qualificationAttempt?.result?.qualification;
+    const reproduction = reproductionAttempt?.result?.reproduction;
     if (attempt.stage === "reproduce" && !qualification)
       throw new Error("reproduction_qualification_missing");
+    if (attempt.stage === "plan" && !reproduction)
+      throw new Error("planning_reproduction_missing");
     const routingRule =
       attempt.stage === "reproduce"
         ? "reproduction-default-v1"
-        : "qualification-default-v1";
+        : attempt.stage === "plan"
+          ? "planning-default-v1"
+          : "qualification-default-v1";
+    const taskType = attempt.stage === "plan" ? "planning" : "validation";
     const assignment = {
       ...attempt,
       baseCommit: attempt.baseCommit,
       protectedPaths,
       issue: run.issue,
-      context: qualification ? { qualification } : undefined,
+      context:
+        qualification || reproduction
+          ? {
+              ...(qualification ? { qualification } : {}),
+              ...(reproduction ? { reproduction } : {}),
+            }
+          : undefined,
       routing: {
         role: attempt.role,
-        taskType: "validation",
+        taskType,
         complexity: "unknown",
         rule: routingRule,
       },
@@ -237,7 +258,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === "/github/webhook" && request.method === "POST") {
-      const outcome = await acceptGitHubStart(
+      const outcome = await acceptGitHubComment(
         request,
         env,
         new D1RunRepository(env.DB),

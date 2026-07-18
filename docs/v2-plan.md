@@ -523,13 +523,12 @@ The Cloudflare Container is the agent sandbox. Codex runs with its inner
 inside the Container runtime. That mode grants no host or control-plane access:
 the process remains non-root in a disposable Container, internet access is
 disabled, outbound requests are intercepted and allowlisted, and qualification
-receives only a read-scoped Artifacts credential. A qualification may change
-its disposable checkout, but it cannot push a durable checkpoint; the control
-plane accepts only the unchanged, independently validated input commit. V2 does
-not add elevated Linux capabilities merely to nest one sandbox inside another.
-Both ordinary request and streaming reconnect limits are explicitly set to two,
-so a model call makes no more than three total attempts including its initial
-request.
+and other read-only stages receive only a read-scoped Artifacts credential. A
+read-only attempt may change its disposable checkout, but it cannot push a
+durable checkpoint; the control plane accepts only the unchanged, independently
+validated input commit. V2 does not add elevated Linux capabilities merely to
+nest one sandbox inside another and does not override the model client's normal
+behavior with speculative retry counts.
 
 ### 6.6 Model routing is policy
 
@@ -917,7 +916,7 @@ Exit gate:
 - only D1 decides lifecycle state;
 - schema and resources stay inside the complexity budget.
 
-### Phase 2 — Qualification, clarification, and reproduction
+### Phase 2 — Qualification, clarification, reproduction, and planning
 
 The first Phase 2 slice stops deliberately after real qualification. It accepts
 an authorized `/roundhouse start` from a separately signed V2 development
@@ -939,12 +938,22 @@ not part of this design.
 The second slice consumes that durable qualification in a separate read-only
 reproduction attempt. It records commands, observed and expected behavior,
 relevant files, and uncertainties in durable structured evidence while keeping
-the GitHub response concise. A confirmed result
-advances to `plan`; a blocked or unsuccessful reproduction waits explicitly.
+the GitHub response concise. A confirmed result advances to `plan`; a blocked
+or unsuccessful reproduction asks focused questions.
 The callback still only records a validated unchanged checkpoint, the
 coordinator remains the sole transition authority, and the broker selects the
 reproduction policy from the trusted role envelope. Planning is deliberately
 not dispatched by this slice.
+
+The third slice accepts ordinary prose from any GitHub user while a run is
+waiting for clarification. The comment is appended to the issue conversation,
+the same stage resumes, and the model decides from the complete context whether
+the answer resolves the question or another focused question is useful. There
+is no answer command or clarification-round count. Completed evidence is looked
+up by stage rather than assumed to occupy an adjacent revision. Confirmed
+reproduction dispatches a read-only planning attempt; a ready plan is posted
+concisely and advances to `implement`, while a plan needing information uses
+the same prose clarification path.
 
 Actions:
 
@@ -1135,3 +1144,4 @@ This compact log replaces standalone ADRs.
 | 2026-07-17 | Put model access and future model selection behind one private broker.                |
 | 2026-07-18 | Use AI Gateway Unified Billing; do not deploy model-subscription credentials.         |
 | 2026-07-18 | Build the functional prototype first; harden only from observed operational evidence. |
+| 2026-07-18 | Accept clarification as ordinary issue prose with no command or round count.          |

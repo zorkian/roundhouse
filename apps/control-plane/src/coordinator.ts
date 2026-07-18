@@ -55,9 +55,26 @@ export function reproductionTransition(attempt: Attempt) {
   return { status: "failed", stage: "reproduce" } as const;
 }
 
+export function planTransition(attempt: Attempt) {
+  const outcome = attempt.result?.plan;
+  if (!outcome || typeof outcome !== "object")
+    return { status: "failed", stage: "plan" } as const;
+  const status = (outcome as Record<string, unknown>).status;
+  if (status === "ready")
+    return { status: "active", stage: "implement" } as const;
+  if (status === "needs_clarification")
+    return {
+      status: "waiting",
+      stage: "plan",
+      waitingReason: "clarification",
+    } as const;
+  return { status: "failed", stage: "plan" } as const;
+}
+
 function completedTransition(attempt: Attempt) {
   if (attempt.stage === "qualify") return qualificationTransition(attempt);
   if (attempt.stage === "reproduce") return reproductionTransition(attempt);
+  if (attempt.stage === "plan") return planTransition(attempt);
   return undefined;
 }
 
@@ -76,7 +93,7 @@ export async function coordinate(
     run.status !== "active"
   )
     return "stale";
-  if (!new Set(["qualify", "reproduce"]).has(run.stage)) return "stale";
+  if (!new Set(["qualify", "reproduce", "plan"]).has(run.stage)) return "stale";
   const attemptId = immutableAttemptId(run.id, run.revision);
   const previous = await repository.getAttempt(attemptId);
   if (previous?.state === "completed") {

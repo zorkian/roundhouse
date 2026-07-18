@@ -10,7 +10,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { signCallback } from "./callback.js";
 import {
-  acceptGitHubStart,
+  acceptGitHubComment,
   GitHubStageReporter,
   verifyGitHubWebhook,
   type GitHubApi,
@@ -49,18 +49,26 @@ function github(permission = "write"): GitHubApi {
   };
 }
 
-async function delivery(id: string, command = "/roundhouse start") {
+async function delivery(
+  id: string,
+  command = "/roundhouse start",
+  actor = "maintainer",
+  type = "User",
+) {
   const body = JSON.stringify({
     action: "created",
     repository: { full_name: "zorkian/roundhouse" },
-    sender: { login: "maintainer" },
+    sender: { login: actor, type },
     issue: {
       number: 42,
       title: "Qualify this",
       body: "Acceptance details",
       html_url: "https://github.com/zorkian/roundhouse/issues/42",
     },
-    comment: { body: command },
+    comment: {
+      body: command,
+      html_url: `https://github.com/zorkian/roundhouse/issues/42#issuecomment-${id}`,
+    },
   });
   const signature = await signCallback("webhook-secret", body);
   return new Request("https://roundhouse.invalid/github/webhook", {
@@ -96,7 +104,7 @@ describe("GitHub intake", () => {
     const repository = new IntakeRepository();
     const wakeups: Wakeup[] = [];
     await expect(
-      acceptGitHubStart(
+      acceptGitHubComment(
         await delivery("delivery-1"),
         env,
         repository,
@@ -129,7 +137,7 @@ describe("GitHub intake", () => {
       wakeups.push(wakeup);
     };
     const api = github();
-    await acceptGitHubStart(
+    await acceptGitHubComment(
       await delivery("delivery-1"),
       env,
       repository,
@@ -137,7 +145,7 @@ describe("GitHub intake", () => {
       api,
     );
     await expect(
-      acceptGitHubStart(
+      acceptGitHubComment(
         await delivery("delivery-1"),
         env,
         repository,
@@ -146,7 +154,7 @@ describe("GitHub intake", () => {
       ),
     ).resolves.toBe("duplicate");
     await expect(
-      acceptGitHubStart(
+      acceptGitHubComment(
         await delivery("delivery-2"),
         env,
         repository,
@@ -161,7 +169,7 @@ describe("GitHub intake", () => {
     const repository = new IntakeRepository();
     const enqueue = vi.fn();
     await expect(
-      acceptGitHubStart(
+      acceptGitHubComment(
         await delivery("delivery-1", "/roundhouse start now"),
         env,
         repository,
@@ -170,7 +178,7 @@ describe("GitHub intake", () => {
       ),
     ).resolves.toBe("ignored");
     await expect(
-      acceptGitHubStart(
+      acceptGitHubComment(
         await delivery("delivery-2"),
         env,
         repository,
@@ -179,6 +187,179 @@ describe("GitHub intake", () => {
       ),
     ).resolves.toBe("unauthorized");
     expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("resumes repeated clarification from ordinary citizen prose", async () => {
+    const repository = new IntakeRepository();
+    const wakeups: Wakeup[] = [];
+    const enqueue = async (wakeup: Wakeup) => {
+      wakeups.push(wakeup);
+    };
+    await acceptGitHubComment(
+      await delivery("delivery-start"),
+      env,
+      repository,
+      enqueue,
+      github(),
+    );
+    const id = "run_zorkian_roundhouse_issue_42";
+    await repository.transition(id, 1, {
+      status: "waiting",
+      stage: "qualify",
+      waitingReason: "clarification",
+    });
+    const noPermissionCheck: GitHubApi = {
+      get: vi.fn(async () => {
+        throw new Error("prose_must_not_require_repository_permission");
+      }),
+      post: vi.fn(async () => ({})) as GitHubApi["post"],
+    };
+    await expect(
+      acceptGitHubComment(
+        await delivery(
+          "delivery-answer-1",
+          "It happens when the input is empty.",
+          "random-citizen",
+        ),
+        env,
+        repository,
+        enqueue,
+        noPermissionCheck,
+      ),
+    ).resolves.toBe("accepted");
+    await expect(repository.get(id)).resolves.toMatchObject({
+      status: "active",
+      stage: "qualify",
+      revision: 3,
+      issue: {
+        clarifications: [
+          {
+            actor: "random-citizen",
+            body: "It happens when the input is empty.",
+          },
+        ],
+      },
+    });
+    await repository.transition(id, 3, {
+      status: "waiting",
+      stage: "qualify",
+      waitingReason: "clarification",
+    });
+    await expect(
+      acceptGitHubComment(
+        await delivery(
+          "delivery-answer-2",
+          "The expected result is an empty list.",
+          "another-citizen",
+        ),
+        env,
+        repository,
+        enqueue,
+        noPermissionCheck,
+      ),
+    ).resolves.toBe("accepted");
+    await expect(repository.get(id)).resolves.toMatchObject({
+      status: "active",
+      stage: "qualify",
+      revision: 5,
+      issue: {
+        clarifications: [
+          { actor: "random-citizen" },
+          { actor: "another-citizen" },
+        ],
+      },
+    });
+    expect(wakeups).toEqual([
+      { runId: id, expectedRevision: 1 },
+      { runId: id, expectedRevision: 3 },
+      { runId: id, expectedRevision: 5 },
+    ]);
+  });
+
+  it("does not treat Roundhouse's own question as a clarification answer", async () => {
+    const repository = new IntakeRepository();
+    await repository.create(
+      createRun({
+        id: "run_zorkian_roundhouse_issue_42",
+        repository: "zorkian/roundhouse",
+        issueNumber: 42,
+        baseCommit: "a".repeat(40),
+        profileVersion: "v2",
+        issue: {
+          title: "Question",
+          body: "Details",
+          url: "https://github.com/zorkian/roundhouse/issues/42",
+          actor: "maintainer",
+        },
+      }),
+    );
+    await repository.transition("run_zorkian_roundhouse_issue_42", 1, {
+      status: "waiting",
+      stage: "qualify",
+      waitingReason: "clarification",
+    });
+    await expect(
+      acceptGitHubComment(
+        await delivery(
+          "delivery-bot",
+          "<!-- roundhouse:v2:qualification:attempt -->\nWhat input fails?",
+          "roundhouse[bot]",
+          "Bot",
+        ),
+        env,
+        repository,
+        vi.fn(),
+        github(),
+      ),
+    ).resolves.toBe("ignored");
+  });
+
+  it("asks focused qualification questions and invites a prose reply", async () => {
+    const post = vi.fn(async (_path: string, _body: unknown) => undefined);
+    const reporter = new GitHubStageReporter({
+      get: async <T>() => [] as T,
+      post: async <T>(path: string, body: unknown) => {
+        await post(path, body);
+        return {} as T;
+      },
+    });
+    const run = {
+      ...createRun({
+        id: "run_question",
+        repository: "zorkian/roundhouse",
+        issueNumber: 42,
+        baseCommit: "a".repeat(40),
+        profileVersion: "v2",
+      }),
+      status: "waiting",
+      stage: "qualify",
+      revision: 2,
+      waitingReason: "clarification",
+    } as const;
+    await reporter.report(run, {
+      id: "run_question_rev_1",
+      runId: run.id,
+      runRevision: 1,
+      kind: "agent",
+      stage: "qualify",
+      role: "qualify",
+      state: "completed",
+      deadlineAt: Date.now() + 1_000,
+      baseCommit: run.baseCommit,
+      expectedHead: run.currentHead,
+      result: {
+        qualification: {
+          classification: "unclear",
+          summary: "The failing input is missing.",
+          uncertainties: ["Which input demonstrates the problem?"],
+        },
+      },
+    });
+    expect(post.mock.calls[0]?.[1]).toMatchObject({
+      body: expect.stringContaining(
+        "- Which input demonstrates the problem?\n\nPlease reply in prose.",
+      ),
+    });
   });
 
   it("posts one evidence-backed reproduction comment", async () => {
@@ -238,6 +419,60 @@ describe("GitHub intake", () => {
     });
     expect(post.mock.calls[0]?.[1]).toMatchObject({
       body: expect.not.stringContaining("Relevant files:"),
+    });
+  });
+
+  it("posts a concise evidence-backed plan", async () => {
+    const post = vi.fn(async (_path: string, _body: unknown) => undefined);
+    const reporter = new GitHubStageReporter({
+      get: async <T>() => [] as T,
+      post: async <T>(path: string, body: unknown) => {
+        await post(path, body);
+        return {} as T;
+      },
+    });
+    const run = {
+      ...createRun({
+        id: "run_plan",
+        repository: "zorkian/roundhouse",
+        issueNumber: 42,
+        baseCommit: "a".repeat(40),
+        profileVersion: "v2",
+      }),
+      stage: "implement",
+      revision: 4,
+    } as const;
+    const attempt = {
+      id: "run_plan_rev_3",
+      runId: run.id,
+      runRevision: 3,
+      kind: "agent",
+      stage: "plan",
+      role: "plan",
+      state: "completed",
+      deadlineAt: Date.now() + 1_000,
+      baseCommit: run.baseCommit,
+      expectedHead: run.currentHead,
+      result: {
+        plan: {
+          status: "ready",
+          summary: "Handle the empty input consistently.",
+          proposedChange: "Return an empty list for empty input.",
+          acceptanceCriteria: ["Empty input returns an empty list."],
+          validation: ["Add and run the focused regression test."],
+          questions: [],
+        },
+      },
+    } satisfies Attempt;
+    await reporter.report(run, attempt);
+    expect(post).toHaveBeenCalledWith(
+      "/repos/zorkian/roundhouse/issues/42/comments",
+      {
+        body: expect.stringContaining("Roundhouse plan: **ready**"),
+      },
+    );
+    expect(post.mock.calls[0]?.[1]).toMatchObject({
+      body: expect.stringContaining("Next: implementation."),
     });
   });
 });

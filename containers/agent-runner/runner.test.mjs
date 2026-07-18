@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   completionRequest,
   createCheckpoint,
+  planSchema,
   qualificationSandbox,
   reproductionSchema,
   runnerIdentity,
@@ -53,6 +54,22 @@ describe("V2 agent runner", () => {
     expect(reproductionSchema.properties.summary).not.toHaveProperty(
       "maxLength",
     );
+  });
+
+  it("supports a ready plan or focused prose questions without caps", () => {
+    expect(planSchema.properties.status.enum).toEqual([
+      "ready",
+      "needs_clarification",
+    ]);
+    expect(planSchema.required).toEqual(
+      expect.arrayContaining([
+        "acceptanceCriteria",
+        "proposedChange",
+        "validation",
+        "questions",
+      ]),
+    );
+    expect(planSchema.properties.questions).not.toHaveProperty("maxItems");
   });
 
   it("reports only its versioned runner identity", () => {

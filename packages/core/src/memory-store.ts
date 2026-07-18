@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { Attempt, Lease, RunRepository, Wakeup } from "./contracts.js";
-import type { RunSnapshot } from "./run.js";
-import { transitionRun, type RunTransition } from "./run.js";
+import type { IssueSnapshot, RunSnapshot, RunStage } from "./run.js";
+import { resumeRun, transitionRun, type RunTransition } from "./run.js";
 
 export class MemoryRunRepository implements RunRepository {
   readonly runs = new Map<string, RunSnapshot>();
@@ -27,6 +27,19 @@ export class MemoryRunRepository implements RunRepository {
     const run = this.runs.get(runId);
     if (!run || run.revision !== expectedRevision) return undefined;
     const next = transitionRun(run, expectedRevision, transition);
+    this.runs.set(runId, next);
+    this.leases.delete(runId);
+    return next;
+  }
+
+  async resumeClarification(
+    runId: string,
+    expectedRevision: number,
+    issue: IssueSnapshot,
+  ): Promise<RunSnapshot | undefined> {
+    const run = this.runs.get(runId);
+    if (!run || run.revision !== expectedRevision) return undefined;
+    const next = resumeRun(run, expectedRevision, issue);
     this.runs.set(runId, next);
     this.leases.delete(runId);
     return next;
@@ -90,10 +103,28 @@ export class MemoryRunRepository implements RunRepository {
     return this.attempts.get(attemptId);
   }
 
+  async latestCompletedAttempt(
+    runId: string,
+    stage: RunStage,
+    beforeRevision: number,
+  ): Promise<Attempt | undefined> {
+    return [...this.attempts.values()]
+      .filter(
+        (attempt) =>
+          attempt.runId === runId &&
+          attempt.stage === stage &&
+          attempt.state === "completed" &&
+          attempt.runRevision < beforeRevision,
+      )
+      .sort((left, right) => right.runRevision - left.runRevision)[0];
+  }
+
   async expiredLeases(now: number): Promise<readonly Wakeup[]> {
     return [...this.leases.entries()].flatMap(([runId, lease]) =>
       lease.expiresAt <= now &&
-      new Set(["qualify", "reproduce"]).has(this.runs.get(runId)?.stage ?? "")
+      new Set(["qualify", "reproduce", "plan"]).has(
+        this.runs.get(runId)?.stage ?? "",
+      )
         ? [{ runId, expectedRevision: lease.runRevision }]
         : [],
     );
