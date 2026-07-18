@@ -2,6 +2,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { RunRepository, RunStage, Wakeup } from "@roundhouse/core";
+import type { Checkpoint } from "./artifacts.js";
+
+export interface AttemptCallback {
+  readonly attemptId: string;
+  readonly expectedRevision: number;
+  readonly checkpoint: Checkpoint;
+  readonly artifactTokenId: string;
+  readonly result: Readonly<Record<string, unknown>>;
+  readonly signature: string;
+}
+
+export interface CheckpointValidator {
+  validate(input: AttemptCallback): Promise<void>;
+}
 
 const encoder = new TextEncoder();
 function bytesToHex(bytes: ArrayBuffer): string {
@@ -9,13 +23,22 @@ function bytesToHex(bytes: ArrayBuffer): string {
     .map((value) => value.toString(16).padStart(2, "0"))
     .join("");
 }
-export function callbackPayload(
-  attemptId: string,
-  expectedRevision: number,
-  acceptedHead: string,
-): string {
-  return `${attemptId}\n${expectedRevision}\n${acceptedHead}`;
+
+function stable(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stable);
+  if (value && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+        .map(([key, child]) => [key, stable(child)]),
+    );
+  return value;
 }
+
+export function callbackPayload(input: Omit<AttemptCallback, "signature">) {
+  return JSON.stringify(stable(input));
+}
+
 export async function signCallback(
   secret: string,
   payload: string,
@@ -31,6 +54,7 @@ export async function signCallback(
     await crypto.subtle.sign("HMAC", key, encoder.encode(payload)),
   );
 }
+
 export async function verifyCallback(
   secret: string,
   payload: string,
@@ -43,28 +67,25 @@ export async function verifyCallback(
     mismatch |= expected.charCodeAt(index) ^ signature.charCodeAt(index);
   return mismatch === 0;
 }
+
 export async function acceptCallback(
   repository: RunRepository,
   secret: string,
-  input: {
-    attemptId: string;
-    expectedRevision: number;
-    acceptedHead: string;
-    result: Readonly<Record<string, unknown>>;
-    signature: string;
-  },
+  validator: CheckpointValidator,
+  input: AttemptCallback,
 ): Promise<"completed" | "duplicate" | "stale" | "unauthorized"> {
-  const payload = callbackPayload(
-    input.attemptId,
-    input.expectedRevision,
-    input.acceptedHead,
-  );
-  if (!(await verifyCallback(secret, payload, input.signature)))
+  const { signature, ...unsigned } = input;
+  if (!(await verifyCallback(secret, callbackPayload(unsigned), signature)))
     return "unauthorized";
+  const attempt = await repository.getAttempt(input.attemptId);
+  if (!attempt || attempt.runRevision !== input.expectedRevision)
+    return "stale";
+  if (attempt.state === "completed") return "duplicate";
+  await validator.validate(input);
   return repository.completeAttempt(
     input.attemptId,
     input.expectedRevision,
-    input.acceptedHead,
+    input.checkpoint.outputHead,
     input.result,
   );
 }
@@ -78,10 +99,11 @@ const nextStage: Partial<Record<RunStage, RunStage>> = {
 export async function acceptCallbackAndAdvance(
   repository: RunRepository,
   secret: string,
-  input: Parameters<typeof acceptCallback>[2],
+  validator: CheckpointValidator,
+  input: AttemptCallback,
   enqueue: (wakeup: Wakeup) => Promise<void>,
 ): Promise<Awaited<ReturnType<typeof acceptCallback>>> {
-  const accepted = await acceptCallback(repository, secret, input);
+  const accepted = await acceptCallback(repository, secret, validator, input);
   if (accepted === "unauthorized" || accepted === "stale") return accepted;
   const attempt = await repository.getAttempt(input.attemptId);
   if (!attempt) return "stale";
@@ -98,8 +120,12 @@ export async function acceptCallbackAndAdvance(
     attempt.runId,
     input.expectedRevision,
     stage
-      ? { status: "active", stage }
-      : { status: "succeeded", stage: attempt.stage },
+      ? { status: "active", stage, acceptedHead: input.checkpoint.outputHead }
+      : {
+          status: "succeeded",
+          stage: attempt.stage,
+          acceptedHead: input.checkpoint.outputHead,
+        },
   );
   if (!next) {
     const reconciled = await repository.get(attempt.runId);

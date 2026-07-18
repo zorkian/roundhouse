@@ -8,6 +8,7 @@ const roots = ["apps", "containers", "packages", "scripts"];
 const sourceExtensions = new Set([".js", ".mjs", ".cjs", ".ts", ".tsx", ".pl"]);
 const marker = "SPDX-License-Identifier: Apache-2.0";
 const excludedDirectories = new Set(["dist", "node_modules"]);
+const generatedFiles = new Set(["worker-configuration.d.ts"]);
 const missing = [];
 
 async function inspect(path) {
@@ -18,8 +19,9 @@ async function inspect(path) {
       continue;
     }
     if (
-      entry.name !== "Dockerfile" &&
-      !sourceExtensions.has(extname(entry.name))
+      generatedFiles.has(entry.name) ||
+      (entry.name !== "Dockerfile" &&
+        !sourceExtensions.has(extname(entry.name)))
     )
       continue;
     if (!(await readFile(child, "utf8")).includes(marker)) missing.push(child);

@@ -35,6 +35,7 @@ export interface Attempt {
   readonly role: string;
   readonly state: AttemptState;
   readonly deadlineAt: number;
+  readonly baseCommit: string;
   readonly expectedHead: string;
   readonly acceptedHead?: string;
   readonly result?: Readonly<Record<string, unknown>>;

@@ -368,9 +368,11 @@ Each run gets an isolated Artifacts repository containing:
 - the exact candidate commit reviewed and validated at each cycle; and
 - optional non-secret run metadata attached to commits when useful.
 
-The control plane stores only the Artifacts namespace, repository identity,
-expected base, accepted head, and lifecycle timestamps in D1. It never stores a
-repo token.
+The control plane stores only repository identity, exact base, accepted head,
+and lifecycle timestamps in D1. It never stores a repo token. The current
+binding does not expose commit-graph or tree-diff inspection, so the control
+plane asks a fresh validation container to clone with a separate read token,
+then accepts or rejects the signed checkpoint itself.
 
 Credential rules:
 
@@ -384,6 +386,12 @@ Credential rules:
 - revoke it at completion or cancellation; and
 - verify expected ancestry and policy even though the run repo is untrusted
   agent output.
+
+Tokens are passed as ephemeral `Authorization: Bearer` Git configuration in the
+runner process environment, never embedded in the remote URL. The control
+plane tracks only Cloudflare's immutable token ID long enough to revoke it.
+Recovery first revokes every active token on the isolated run repository, then
+issues a fresh token to a replacement assignment.
 
 Use separate namespaces for development and production. Names use opaque run
 identifiers, not issue titles or user-controlled text. One run repo has one
@@ -790,13 +798,14 @@ Exit gate:
 
 ### Phase 1 — Executable core and Artifacts workspace
 
-Current review cut (branch `codex/v2-phase-1`): the smallest deterministic
-foundation proves revision-bound D1 leases, one immutable attempt per wakeup,
-prompt Container dispatch through the mandatory thin Durable Object, signed
-revision-bound callbacks, replay safety, lease-expiry recovery, and exact
-Artifacts checkpoint resumption through fakes. The seven-table migration and
-all V2-namespaced resource bindings are reproducible in the Worker
-configuration.
+The merged foundation proves revision-bound D1 leases, one immutable attempt
+per wakeup, prompt Container dispatch through the mandatory thin Durable
+Object, replay safety, and lease-expiry recovery. The current Artifacts runtime
+cut adds the production Workers binding adapter, opaque run repositories,
+short-lived token issuance and revocation by immutable ID, authenticated Git
+clone/push, deterministic checkpoint commits, full-payload callback signing,
+fresh-container Git graph/path validation, exact accepted-head handoff, and
+idempotent replacement execution.
 
 The real Artifacts exercise used the new `roundhouse-v2-development` namespace
 and a disposable opaque repository. It established `df1d1fa` as the exact
@@ -809,12 +818,11 @@ returned private-beta error `10400`; a new opaque name worked. The production
 adapter must therefore reconcile create/get by stored opaque identity and must
 not rely on immediate name reuse.
 
-The empty V2 Artifacts namespace is the only live resource retained by this
-cut. Local migration validation, the runner image build, and the
-Worker/Container dry build pass. Live D1, Queue, Worker, Container application,
-route, generated binding types, and deployment checks remain before Phase 1 is
-complete; the real D1 ID must replace the deliberately invalid placeholder. No
-production or V1 resource was changed.
+The V2 development namespace, D1 database, wakeup queue, and dead-letter queue
+are isolated from V1. The configuration carries the real V2 D1 identity and
+uses its V2-only workers.dev origin. Local migration validation, runner syntax,
+typechecking, and the deterministic contract suite pass. No production or V1
+resource was changed.
 
 Actions:
 

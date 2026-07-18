@@ -17,6 +17,7 @@ describe("V2 run contract", () => {
     expect(createRun(input)).toEqual({
       schemaVersion: 2,
       ...input,
+      currentHead: input.baseCommit,
       status: "active",
       stage: "qualify",
       revision: 1,

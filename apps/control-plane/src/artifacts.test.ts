@@ -3,13 +3,14 @@
 
 import { describe, expect, it } from "vitest";
 import {
-  validateCheckpoint,
+  validateCheckpointIdentity,
   type ArtifactAccess,
   type ArtifactRepository,
   type ArtifactsNamespace,
 } from "./artifacts.js";
 
 class FakeRepo implements ArtifactRepository {
+  readonly id: string;
   readonly remote: string;
   readonly tokens = new Map<string, ArtifactAccess>();
   head: string;
@@ -17,19 +18,24 @@ class FakeRepo implements ArtifactRepository {
     readonly name: string,
     readonly base: string,
   ) {
+    this.id = `repo-${name}`;
     this.remote = `https://artifacts.invalid/${name}`;
     this.head = base;
   }
   async createToken(access: ArtifactAccess, _ttlSeconds: number) {
-    const value = `${access}-${this.tokens.size}`;
-    this.tokens.set(value, access);
-    return { value, access, expiresAt: 10_000 };
+    const id = `token-${this.tokens.size}`;
+    this.tokens.set(id, access);
+    return { id, plaintext: `secret-${id}`, access, expiresAt: 10_000 };
   }
-  async revokeToken(value: string) {
-    this.tokens.delete(value);
+  async revokeToken(id: string) {
+    this.tokens.delete(id);
+  }
+  async revokeActiveTokens() {
+    this.tokens.clear();
   }
   clone(token: string) {
-    const access = this.tokens.get(token);
+    const id = token.replace("secret-", "");
+    const access = this.tokens.get(id);
     if (!access) throw new Error("token_revoked");
     const repository = this;
     return {
@@ -43,12 +49,13 @@ class FakeRepo implements ArtifactRepository {
     };
   }
 }
+
 class FakeArtifacts implements ArtifactsNamespace {
   readonly repos = new Map<string, FakeRepo>();
-  async importBase(name: string, _upstream: string, baseCommit: string) {
+  async importBase(name: string, _upstream: string) {
     const existing = this.repos.get(name);
     if (existing) return existing;
-    const repo = new FakeRepo(name, baseCommit);
+    const repo = new FakeRepo(name, "a".repeat(40));
     this.repos.set(name, repo);
     return repo;
   }
@@ -61,66 +68,71 @@ class FakeArtifacts implements ArtifactsNamespace {
 }
 
 describe("Artifacts workspace contract", () => {
-  it("covers import, scoped handoff, reconnection, validation, revocation, idempotency, and cleanup", async () => {
+  it("covers scoped handoff, replacement, validation, revocation, and cleanup", async () => {
     const artifacts = new FakeArtifacts();
     const base = "a".repeat(40),
       head = "b".repeat(40);
     const repo = await artifacts.importBase(
       "v2-run-opaque",
-      "https://github.com/zorkian/roundhouse",
-      base,
+      "https://github.invalid/repo",
     );
     const writer = await repo.createToken("write", 300);
     const reviewer = await repo.createToken("read", 300);
-    expect(writer.access).toBe("write");
-    expect(reviewer.access).toBe("read");
-    const firstContainer = repo.clone(writer.value);
-    expect(firstContainer.head).toBe(base);
-    firstContainer.push(head);
-    expect(repo.clone(reviewer.value).head).toBe(head);
-    const replacementContainer = repo.clone(writer.value);
-    expect(replacementContainer.head).toBe(head);
-    expect(() => repo.clone(reviewer.value).push("c".repeat(40))).toThrow(
-      "read_only_token",
-    );
-    expect((await artifacts.get(repo.name))?.remote).toBe(repo.remote);
-    validateCheckpoint(
+    const first = (repo as FakeRepo).clone(writer.plaintext);
+    expect(first.head).toBe(base);
+    first.push(head);
+    expect((repo as FakeRepo).clone(reviewer.plaintext).head).toBe(head);
+    expect((repo as FakeRepo).clone(writer.plaintext).head).toBe(head);
+    expect(() =>
+      (repo as FakeRepo).clone(reviewer.plaintext).push("c".repeat(40)),
+    ).toThrow("read_only_token");
+    validateCheckpointIdentity(
       {
+        repositoryId: repo.id,
         repository: repo.name,
         baseCommit: base,
-        acceptedHead: head,
+        inputHead: base,
+        outputHead: head,
+        ref: "refs/heads/roundhouse/run",
         changedPaths: ["src/fix.ts"],
       },
       {
+        repositoryId: repo.id,
         repository: repo.name,
         baseCommit: base,
-        previousHead: base,
+        inputHead: base,
+        ref: "refs/heads/roundhouse/run",
         protectedPaths: [".github/workflows"],
       },
-      (ancestor, candidate) => ancestor === base && candidate === head,
     );
     expect(() =>
-      validateCheckpoint(
+      validateCheckpointIdentity(
         {
+          repositoryId: repo.id,
           repository: repo.name,
           baseCommit: base,
-          acceptedHead: head,
+          inputHead: base,
+          outputHead: head,
+          ref: "refs/heads/roundhouse/run",
           changedPaths: [".github/workflows/release.yml"],
         },
         {
+          repositoryId: repo.id,
           repository: repo.name,
           baseCommit: base,
-          previousHead: base,
+          inputHead: base,
+          ref: "refs/heads/roundhouse/run",
           protectedPaths: [".github/workflows"],
         },
-        () => true,
       ),
     ).toThrow("protected_path_changed");
-    expect(await artifacts.importBase(repo.name, "ignored", base)).toBe(repo);
-    await repo.revokeToken(writer.value);
-    await repo.revokeToken(reviewer.value);
-    expect(repo.tokens.size).toBe(0);
-    expect(() => repo.clone(writer.value)).toThrow("token_revoked");
+    expect(await artifacts.importBase(repo.name, "ignored")).toBe(repo);
+    await repo.revokeToken(writer.id);
+    await repo.revokeToken(reviewer.id);
+    expect((repo as FakeRepo).tokens.size).toBe(0);
+    expect(() => (repo as FakeRepo).clone(writer.plaintext)).toThrow(
+      "token_revoked",
+    );
     await artifacts.delete(repo.name);
     expect(await artifacts.get(repo.name)).toBeUndefined();
   });
