@@ -38,6 +38,71 @@ export type CiObservation = {
   conclusion?: string;
 };
 
+export type CiRemediation = {
+  repositoryFullName: string;
+  pullRequestNumber: number;
+  headSha: string;
+  checkRunId: number;
+  disposition:
+    | "diagnosing"
+    | "rerun_requested"
+    | "remediation_started"
+    | "manual_required"
+    | "resolved";
+  attemptCount: number;
+  classification?: string;
+  evidenceSha256?: string;
+  remediationRunId?: string;
+};
+
+export async function readCiRemediation(
+  env: ControlPlaneEnv,
+  input: Pick<
+    CiRemediation,
+    "repositoryFullName" | "pullRequestNumber" | "headSha" | "checkRunId"
+  >,
+): Promise<CiRemediation | null> {
+  const value = await env.DB.prepare(
+    "SELECT repository_full_name, pull_request_number, head_sha, check_run_id, disposition, attempt_count, classification, evidence_sha256, remediation_run_id FROM github_ci_remediations WHERE repository_full_name = ? AND pull_request_number = ? AND head_sha = ? AND check_run_id = ?",
+  )
+    .bind(
+      input.repositoryFullName,
+      input.pullRequestNumber,
+      input.headSha,
+      input.checkRunId,
+    )
+    .first<{
+      repository_full_name: string;
+      pull_request_number: number;
+      head_sha: string;
+      check_run_id: number;
+      disposition: CiRemediation["disposition"];
+      attempt_count: number;
+      classification: string | null;
+      evidence_sha256: string | null;
+      remediation_run_id: string | null;
+    }>();
+  return value
+    ? {
+        repositoryFullName: value.repository_full_name,
+        pullRequestNumber: value.pull_request_number,
+        headSha: value.head_sha,
+        checkRunId: value.check_run_id,
+        disposition: value.disposition,
+        attemptCount: value.attempt_count,
+        ...(value.classification
+          ? { classification: value.classification }
+          : {}),
+        ...(value.evidence_sha256
+          ? { evidenceSha256: value.evidence_sha256 }
+          : {}),
+        ...(value.remediation_run_id
+          ? { remediationRunId: value.remediation_run_id }
+          : {}),
+      }
+    : null;
+}
+
 export async function isRoundhouseReviewCheck(
   env: ControlPlaneEnv,
   value: CiObservation,

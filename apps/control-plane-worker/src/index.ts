@@ -58,6 +58,7 @@ import {
   classifyCiFailure,
   exactHeadIsReady,
   isRoundhouseReviewCheck,
+  readCiRemediation,
   recordCiOutcome,
   recordCiRecovery,
   resolveCiRecoveriesForHead,
@@ -1102,19 +1103,26 @@ async function enqueueRunActionComment(
   const attempt = run.attempts.at(-1);
   if (!attempt || attempt.status !== "succeeded") return;
   const identity = runtimeIdentity(env);
+  const continuation = run.task.continuation;
   await enqueueComment(
     env,
     `run-action:${identity.repositoryFullName}:${run.runId}:${attempt.attemptId}:approval`,
     issueNumber,
     [
-      "## 👀 Your review is needed",
-      "Roundhouse finished the implementation and its configured validation passed.",
+      continuation
+        ? "## 🛑 Remediation needs an authority decision"
+        : "## 👀 Your review is needed",
+      continuation
+        ? "Roundhouse validated the remediation but could not prove that it remains within the approved plan's scope, risk, and publication authority."
+        : "Roundhouse finished the implementation and its configured validation passed.",
       `**[Review the complete patch and validation →](${identity.origin}/runs/${run.runId})**`,
       "Changed files:",
       ...run.implementation.changedFiles.map((path) => `- \`${path}\``),
       `${run.implementation.changedFiles.length} changed files; ${run.implementation.patchBytes} patch bytes.`,
       "Approving opens a **draft pull request** and starts independent Claude review. It does **not** merge the change.",
-      "If the implementation matches the issue, approve the current validated candidate:",
+      continuation
+        ? "Exact human action: review the scope or risk expansion and approve this exact validated remediation candidate if it is authorized:"
+        : "If the implementation matches the issue, approve the current validated candidate:",
       "```text",
       githubCommand(identity, "approve"),
       "```",
@@ -1324,6 +1332,7 @@ async function finalizeRunDelivery(
         deliveryId: `retry_${run.runId}_${run.revision}`,
         expectedRevision: run.revision,
       });
+    run = await publishEligibleContinuationRun(env, run);
     run = await publishEligibleLowRiskRun(env, run);
     if (run.task.source?.kind === "github_issue") {
       await enqueueRunComment(env, run.task.source.issueNumber, run.runId);
@@ -2048,6 +2057,15 @@ async function startReviewRemediation(
         .slice(0, 20_000),
       baseCommit: review.request.headCommit,
       allowedPaths: review.request.allowedPaths,
+      continuation: {
+        kind: "independent_review",
+        sourceRunId: source.runId,
+        sourceRevision: source.revision,
+        sourceHeadCommit: review.request.headCommit,
+        evidenceId: review.request.reviewId,
+        evidenceSha256: review.execution.evidence.sha256,
+        acceptedFindingIds: accepted.map((value) => value.findingId),
+      },
       publication: {
         ...source.task.publication,
         expectedRemoteHead: review.request.headCommit,
@@ -2069,6 +2087,10 @@ async function startReviewRemediation(
 async function startPullRequestFeedbackRemediation(
   env: ControlPlaneEnv,
   feedback: GitHubPullRequestFeedback,
+  continuation?: Extract<
+    NonNullable<SelfDevelopmentTask["continuation"]>,
+    { kind: "repository_ci" }
+  >,
 ): Promise<{ runId: string; state: string; revision: number }> {
   if (feedback.actor !== "zorkian")
     throw new GitHubWebhookError(403, "unauthorized_actor");
@@ -2132,6 +2154,7 @@ async function startPullRequestFeedbackRemediation(
         .slice(0, 20_000),
       baseCommit: current.head_sha,
       allowedPaths: source.task.allowedPaths,
+      ...(continuation ? { continuation } : {}),
       publication: {
         ...source.task.publication,
         expectedRemoteHead: current.head_sha,
@@ -2566,21 +2589,34 @@ async function handleExactCiTarget(
       return;
     }
     const source = await new D1JobStore(env.DB).read(target.runId);
-    const remediation = await startPullRequestFeedbackRemediation(env, {
-      repositoryFullName: target.repositoryFullName,
-      pullRequestNumber: target.pullRequestNumber,
-      actor: "zorkian",
-      sourceId: `check_run:${target.checkRunId}`,
-      sourceUrl: target.detailsUrl,
-      runId: target.runId,
-      revision: source.revision,
-      headCommit: target.headSha,
-      feedback: [
-        `Repository CI Check ${target.name ?? target.checkRunId} failed with conclusion ${target.conclusion}.`,
-        "Bounded GitHub Actions log excerpt:",
-        logs.slice(0, 8192),
-      ].join("\n\n"),
-    });
+    const remediation = await startPullRequestFeedbackRemediation(
+      env,
+      {
+        repositoryFullName: target.repositoryFullName,
+        pullRequestNumber: target.pullRequestNumber,
+        actor: "zorkian",
+        sourceId: `check_run:${target.checkRunId}`,
+        sourceUrl: target.detailsUrl,
+        runId: target.runId,
+        revision: source.revision,
+        headCommit: target.headSha,
+        feedback: [
+          `Repository CI Check ${target.name ?? target.checkRunId} failed with conclusion ${target.conclusion}.`,
+          "Bounded GitHub Actions log excerpt:",
+          logs.slice(0, 8192),
+        ].join("\n\n"),
+      },
+      {
+        kind: "repository_ci",
+        sourceRunId: source.runId,
+        sourceRevision: source.revision,
+        sourceHeadCommit: target.headSha,
+        evidenceId: `check_run:${target.checkRunId}`,
+        evidenceSha256,
+        pullRequestNumber: target.pullRequestNumber,
+        checkRunId: target.checkRunId,
+      },
+    );
     await recordCiRecovery(env, target, {
       disposition: "remediation_started",
       classification,
@@ -4054,12 +4090,13 @@ async function publishGitHubRun(
   });
 }
 
-async function publishEligibleLowRiskRun(
+export async function publishEligibleLowRiskRun(
   env: ControlPlaneEnv,
   value: Awaited<ReturnType<D1JobStore["read"]>>,
 ): Promise<Awaited<ReturnType<D1JobStore["read"]>>> {
   let run = value;
   if (
+    run.task.continuation ||
     !run.task.planning ||
     !run.implementation ||
     !["awaiting_approval", "awaiting_publication"].includes(run.state)
@@ -4109,6 +4146,163 @@ async function publishEligibleLowRiskRun(
     run = await new D1JobStore(env.DB).read(run.runId);
   }
   return run;
+}
+
+async function publishEligibleContinuationRun(
+  env: ControlPlaneEnv,
+  value: Awaited<ReturnType<D1JobStore["read"]>>,
+): Promise<Awaited<ReturnType<D1JobStore["read"]>>> {
+  let run = value;
+  const continuation = run.task.continuation;
+  if (
+    !continuation ||
+    !run.task.planning ||
+    !run.implementation ||
+    !["awaiting_approval", "awaiting_publication"].includes(run.state) ||
+    run.task.baseCommit !== continuation.sourceHeadCommit ||
+    run.task.publication.expectedRemoteHead !== continuation.sourceHeadCommit
+  )
+    return run;
+  const jobs = new D1JobStore(env.DB);
+  const source = await jobs.read(continuation.sourceRunId);
+  const plan = await readPlanById(env, run.task.planning.planId);
+  const riskRank = { low: 0, medium: 1, high: 2 } as const;
+  const same = (left: unknown, right: unknown) =>
+    JSON.stringify(left) === JSON.stringify(right);
+  const samePublicationAuthority =
+    source.task.publication.remote === run.task.publication.remote &&
+    source.task.publication.remoteUrl === run.task.publication.remoteUrl &&
+    source.task.publication.branch === run.task.publication.branch &&
+    source.task.publication.authorName === run.task.publication.authorName &&
+    source.task.publication.authorEmail === run.task.publication.authorEmail;
+  const sameTaskAuthority =
+    source.task.repositoryPath === run.task.repositoryPath &&
+    source.task.validationLevel === run.task.validationLevel &&
+    // ADR 9 makes likely/allowedPaths advisory when pathPolicy exists. A
+    // review continuation deliberately narrows this guidance to reviewed
+    // files; actual changes are authorized below by the immutable pathPolicy.
+    same(source.task.pathPolicy, run.task.pathPolicy) &&
+    same(source.task.planning, run.task.planning) &&
+    same(source.task.bugReproduction, run.task.bugReproduction) &&
+    same(source.task.source, run.task.source) &&
+    samePublicationAuthority;
+  const evidenceMatches = async (): Promise<boolean> => {
+    if (continuation.kind === "independent_review") {
+      const review = await readIndependentReview(env, continuation.evidenceId);
+      const accepted = review?.dispositions
+        .filter((value) => value.disposition === "accepted")
+        .map((value) => value.findingId)
+        .sort();
+      return Boolean(
+        review &&
+        review.status === "remediated" &&
+        review.remediationRunId === run.runId &&
+        review.request.runId === source.runId &&
+        review.request.headCommit === continuation.sourceHeadCommit &&
+        review.request.cycle === 1 &&
+        review.request.repositoryUrl === source.task.publication.remoteUrl &&
+        review.request.branch === source.task.publication.branch &&
+        review.request.patchSha256 === source.implementation?.patchSha256 &&
+        same(
+          [...review.request.allowedPaths].sort(),
+          [...(source.implementation?.changedFiles ?? [])].sort(),
+        ) &&
+        review.execution?.evidence.sha256 === continuation.evidenceSha256 &&
+        same(accepted, [...continuation.acceptedFindingIds].sort()),
+      );
+    }
+    const sourceIdentity = source.task.source;
+    if (
+      !sourceIdentity ||
+      source.publication?.pullRequestUrl !==
+        `https://github.com/${sourceIdentity.owner}/${sourceIdentity.repository}/pull/${continuation.pullRequestNumber}`
+    )
+      return false;
+    const remediation = await readCiRemediation(env, {
+      repositoryFullName: `${sourceIdentity.owner}/${sourceIdentity.repository}`,
+      pullRequestNumber: continuation.pullRequestNumber,
+      headSha: continuation.sourceHeadCommit,
+      checkRunId: continuation.checkRunId,
+    });
+    return Boolean(
+      remediation &&
+      continuation.evidenceId === `check_run:${continuation.checkRunId}` &&
+      remediation.checkRunId === continuation.checkRunId &&
+      remediation.disposition === "remediation_started" &&
+      remediation.attemptCount === 1 &&
+      remediation.classification === "actionable" &&
+      remediation.evidenceSha256 === continuation.evidenceSha256 &&
+      remediation.remediationRunId === run.runId,
+    );
+  };
+  if (
+    source.task.continuation ||
+    !source.approval ||
+    !source.publication ||
+    source.revision !== continuation.sourceRevision ||
+    source.publication.commit !== continuation.sourceHeadCommit ||
+    source.task.planning?.planId !== run.task.planning.planId ||
+    source.task.planning.planSha256 !== run.task.planning.planSha256 ||
+    !sameTaskAuthority ||
+    !continuationChangedFilesAllowed(
+      source.task,
+      run.implementation.changedFiles,
+    ) ||
+    !plan ||
+    plan.status !== "materialized" ||
+    plan.plan.status !== "proposed" ||
+    plan.runId !== source.runId ||
+    plan.approvedBy !== run.task.planning.approvedBy ||
+    !(await evidenceMatches()) ||
+    riskRank[repositoryRisk(run.implementation.changedFiles)] >
+      riskRank[plan.plan.risk]
+  )
+    return run;
+  const actorId = run.task.planning.approvedBy;
+  if (!run.approval) {
+    const evidence = run.evidence
+      .filter((item) => item.approvalEligible !== false)
+      .map(({ evidenceId, objectKey, sha256, size }) => ({
+        evidenceId,
+        objectKey,
+        sha256,
+        size,
+      }));
+    await approveRun(
+      run.runId,
+      {
+        schemaVersion: 1,
+        expectedRevision: run.revision,
+        patchSha256: run.implementation.patchSha256,
+        evidence,
+        approver: actorId,
+      },
+      env,
+      actorId,
+    );
+    run = await jobs.read(run.runId);
+  }
+  if (!run.publication) {
+    await publishGitHubRun(
+      run.runId,
+      { schemaVersion: 1, expectedRevision: run.revision },
+      env,
+      actorId,
+    );
+    run = await jobs.read(run.runId);
+  }
+  return run;
+}
+
+export function continuationChangedFilesAllowed(
+  sourceTask: SelfDevelopmentTask,
+  changedFiles: string[],
+): boolean {
+  return changedFiles.every((path) =>
+    sourceTask.pathPolicy
+      ? repositoryPathAllowed(sourceTask.pathPolicy, path)
+      : sourceTask.allowedPaths.includes(path),
+  );
 }
 
 async function route(

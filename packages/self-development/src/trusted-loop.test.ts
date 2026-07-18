@@ -304,4 +304,49 @@ describe("trusted self-development contracts", () => {
       }).success,
     ).toBe(false);
   });
+
+  it("binds review continuations to exact retained findings", () => {
+    const continuation = {
+      kind: "independent_review" as const,
+      sourceRunId: "run_source",
+      sourceRevision: 7,
+      sourceHeadCommit: "a".repeat(40),
+      evidenceId: `review_${"b".repeat(40)}`,
+      evidenceSha256: "c".repeat(64),
+      acceptedFindingIds: [`finding_${"d".repeat(40)}`],
+    };
+    const schema = selfDevelopmentTaskSchema.shape.continuation;
+    expect(schema.safeParse(continuation).success).toBe(true);
+    expect(
+      schema.safeParse({ ...continuation, acceptedFindingIds: [] }).success,
+    ).toBe(false);
+    expect(
+      schema.safeParse({ ...continuation, evidenceId: "unretained-review" })
+        .success,
+    ).toBe(false);
+  });
+
+  it("binds CI continuations to an exact retained check run", () => {
+    const continuation = {
+      kind: "repository_ci" as const,
+      sourceRunId: "run_source",
+      sourceRevision: 7,
+      sourceHeadCommit: "a".repeat(40),
+      evidenceId: "check_run:42",
+      evidenceSha256: "c".repeat(64),
+      pullRequestNumber: 23,
+      checkRunId: 42,
+    };
+    const schema = selfDevelopmentTaskSchema.shape.continuation;
+    expect(schema.safeParse(continuation).success).toBe(true);
+    expect(schema.safeParse({ ...continuation, checkRunId: 0 }).success).toBe(
+      false,
+    );
+    expect(
+      schema.safeParse({ ...continuation, evidenceId: "comment:42" }).success,
+    ).toBe(false);
+    expect(
+      schema.safeParse({ ...continuation, evidenceId: "check_run:43" }).success,
+    ).toBe(false);
+  });
 });
