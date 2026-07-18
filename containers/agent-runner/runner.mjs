@@ -12,6 +12,8 @@ export const runnerIdentity = Object.freeze({
   schemaVersion: 2,
   service: "roundhouse-v2-agent-runner",
 });
+export const qualificationSandbox = "danger-full-access";
+export const qualificationProviderRetries = 2;
 
 const jsonHeaders = Object.freeze({
   "cache-control": "no-store",
@@ -162,7 +164,7 @@ export async function qualify(assignment, directory, attemptSecret) {
       "--ignore-user-config",
       "--ignore-rules",
       "--sandbox",
-      "read-only",
+      qualificationSandbox,
       "--cd",
       directory,
       "--output-schema",
@@ -184,7 +186,9 @@ export async function qualify(assignment, directory, attemptSecret) {
       "-c",
       `model_providers.roundhouse.env_http_headers=${headers}`,
       "-c",
-      "model_providers.roundhouse.request_max_retries=1",
+      `model_providers.roundhouse.request_max_retries=${qualificationProviderRetries}`,
+      "-c",
+      `model_providers.roundhouse.stream_max_retries=${qualificationProviderRetries}`,
       "-c",
       "features.enable_request_compression=false",
       "-c",

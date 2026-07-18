@@ -499,6 +499,19 @@ human summary.
 
 The runner may not publish to GitHub or decide the next workflow stage.
 
+The Cloudflare Container is the agent sandbox. Codex runs with its inner
+`danger-full-access` mode because nested bubblewrap namespaces are unavailable
+inside the Container runtime. That mode grants no host or control-plane access:
+the process remains non-root in a disposable Container, internet access is
+disabled, outbound requests are intercepted and allowlisted, and qualification
+receives only a read-scoped Artifacts credential. A qualification may change
+its disposable checkout, but it cannot push a durable checkpoint; the control
+plane accepts only the unchanged, independently validated input commit. V2 does
+not add elevated Linux capabilities merely to nest one sandbox inside another.
+Both ordinary request and streaming reconnect limits are explicitly set to two,
+so a model call makes no more than three total attempts including its initial
+request.
+
 ### 6.6 Model routing is policy
 
 The inspected V1 routing work is committed as `23e30bc`. It pinned planning,
