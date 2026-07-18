@@ -110,13 +110,15 @@ export class RoundhouseAttemptContainer extends Container<Cloudflare.Env> {
     if (attempt.deadlineAt <= Date.now())
       return new Response("attempt_deadline_expired", { status: 409 });
 
-    this.allowedHosts = [
-      modelHost,
-      attempt.artifact.hostname,
-      request.headers.get("x-roundhouse-callback-url")
-        ? new URL(request.headers.get("x-roundhouse-callback-url")!).hostname
-        : "",
-    ].filter(Boolean);
+    await this.setAllowedHosts(
+      [
+        modelHost,
+        attempt.artifact.hostname,
+        request.headers.get("x-roundhouse-callback-url")
+          ? new URL(request.headers.get("x-roundhouse-callback-url")!).hostname
+          : "",
+      ].filter(Boolean),
+    );
     await this.startAndWaitForPorts({
       ports: this.defaultPort,
       cancellationOptions: { portReadyTimeoutMS: 30_000 },
