@@ -275,6 +275,7 @@ export class GitHubStageReporter implements AttemptReporter {
   constructor(private readonly github: GitHubApi) {}
 
   async report(run: RunSnapshot, attempt: Attempt): Promise<void> {
+    if (attempt.stage === "implement" && run.status !== "succeeded") return;
     const phase =
       attempt.stage === "reproduce"
         ? "reproduction"

@@ -657,6 +657,37 @@ describe("GitHub intake", () => {
     expect(JSON.stringify(post.mock.calls)).not.toContain("passed");
   });
 
+  it("does not open a pull request for a failed implementation", async () => {
+    const api = github();
+    const run = {
+      ...createRun({
+        id: "run_failed_implementation",
+        repository: "zorkian/roundhouse",
+        issueNumber: 42,
+        baseCommit: "a".repeat(40),
+        profileVersion: "v2",
+      }),
+      status: "failed",
+      stage: "implement",
+      revision: 5,
+    } as const;
+    await new GitHubStageReporter(api).report(run, {
+      id: "run_failed_implementation_rev_4",
+      runId: run.id,
+      runRevision: 4,
+      kind: "agent",
+      stage: "implement",
+      role: "implement",
+      state: "completed",
+      deadlineAt: Date.now() + 1_000,
+      baseCommit: run.baseCommit,
+      expectedHead: run.currentHead,
+      result: { outcome: "ok", checkpoint: run.currentHead },
+    });
+    expect(api.get).not.toHaveBeenCalled();
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
   it("asks plan questions without exposing workflow status", async () => {
     const run = {
       ...createRun({
