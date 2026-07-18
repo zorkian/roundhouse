@@ -255,6 +255,7 @@ function planComment(run: RunSnapshot, attempt: Attempt): string {
 function implementationComment(
   attempt: Attempt,
   pullRequest: { readonly number: number; readonly html_url: string },
+  created: boolean,
 ): string {
   const implementation = attempt.result?.implementation as
     Record<string, unknown> | undefined;
@@ -263,11 +264,59 @@ function implementationComment(
   );
   return [
     `<!-- roundhouse:v2:implementation:${attempt.id} -->`,
-    "## I opened a draft pull request",
+    `## I ${created ? "opened" : "updated"} the draft pull request`,
     "",
     summary,
     "",
     `[View draft pull request #${pullRequest.number}](${pullRequest.html_url})`,
+  ].join("\n");
+}
+
+interface OpenPullRequest {
+  readonly number: number;
+  readonly html_url: string;
+}
+
+async function findOpenPullRequest(
+  github: GitHubApi,
+  run: RunSnapshot,
+): Promise<OpenPullRequest | undefined> {
+  const owner = run.repository.split("/")[0];
+  const head = encodeURIComponent(
+    `${owner}:roundhouse/issue-${run.issueNumber}`,
+  );
+  const pulls = await github.get<readonly OpenPullRequest[]>(
+    `/repos/${run.repository}/pulls?state=open&head=${head}`,
+  );
+  return pulls[0];
+}
+
+function reviewComment(attempt: Attempt): string {
+  const review = attempt.result?.review as Record<string, unknown> | undefined;
+  const clean = review?.status === "clean";
+  const summary = String(
+    review?.summary ?? "The review could not be summarized.",
+  );
+  const findings = Array.isArray(review?.findings)
+    ? review.findings.filter(
+        (finding): finding is Record<string, unknown> =>
+          Boolean(finding) && typeof finding === "object",
+      )
+    : [];
+  return [
+    `<!-- roundhouse:v2:review:${attempt.id} -->`,
+    `## ${clean ? "Review complete" : "Review found changes to make"}`,
+    "",
+    summary,
+    ...(clean
+      ? ["", `Reviewed commit \`${attempt.expectedHead}\`. CI is next.`]
+      : findings.flatMap((finding) => {
+          const file = String(finding.file ?? "").trim();
+          return [
+            "",
+            `- **${String(finding.title ?? "Finding")}**${file ? ` (\`${file}\`)` : ""}: ${String(finding.details ?? "")}`,
+          ];
+        })),
   ].join("\n");
 }
 
@@ -286,7 +335,21 @@ export class GitHubStageReporter implements AttemptReporter {
   constructor(private readonly github: GitHubApi) {}
 
   async report(run: RunSnapshot, attempt: Attempt): Promise<void> {
-    if (attempt.stage === "implement" && run.status !== "succeeded") return;
+    if (attempt.stage === "implement" && run.status === "failed") return;
+    if (attempt.stage === "review") {
+      const pullRequest = await findOpenPullRequest(this.github, run);
+      if (!pullRequest) throw new Error("review_pull_request_missing");
+      const marker = `<!-- roundhouse:v2:review:${attempt.id} -->`;
+      const comments = await this.github.get<readonly { body?: string }[]>(
+        `/repos/${run.repository}/issues/${pullRequest.number}/comments?per_page=100`,
+      );
+      if (comments.some((comment) => comment.body?.includes(marker))) return;
+      await this.github.post(
+        `/repos/${run.repository}/issues/${pullRequest.number}/comments`,
+        { body: reviewComment(attempt).slice(0, 65_000) },
+      );
+      return;
+    }
     const phase =
       attempt.stage === "reproduce"
         ? "reproduction"
@@ -303,24 +366,33 @@ export class GitHubStageReporter implements AttemptReporter {
     if (attempt.stage === "implement") {
       const implementation = attempt.result?.implementation as
         Record<string, unknown> | undefined;
-      const repository = await this.github.get<{ default_branch?: string }>(
-        `/repos/${run.repository}`,
-      );
-      const pullRequest = await this.github.post<{
-        number: number;
-        html_url: string;
-      }>(`/repos/${run.repository}/pulls`, {
-        title: String(
-          implementation?.pullRequestTitle ?? `Resolve #${run.issueNumber}`,
-        ),
-        head: `roundhouse/issue-${run.issueNumber}`,
-        base: repository.default_branch ?? "main",
-        body: pullRequestBody(run, implementation),
-        draft: true,
-      });
+      let pullRequest = await findOpenPullRequest(this.github, run);
+      const created = !pullRequest;
+      if (!pullRequest) {
+        const repository = await this.github.get<{ default_branch?: string }>(
+          `/repos/${run.repository}`,
+        );
+        pullRequest = await this.github.post<OpenPullRequest>(
+          `/repos/${run.repository}/pulls`,
+          {
+            title: String(
+              implementation?.pullRequestTitle ?? `Resolve #${run.issueNumber}`,
+            ),
+            head: `roundhouse/issue-${run.issueNumber}`,
+            base: repository.default_branch ?? "main",
+            body: pullRequestBody(run, implementation),
+            draft: true,
+          },
+        );
+      }
       await this.github.post(
         `/repos/${run.repository}/issues/${run.issueNumber}/comments`,
-        { body: implementationComment(attempt, pullRequest).slice(0, 65_000) },
+        {
+          body: implementationComment(attempt, pullRequest, created).slice(
+            0,
+            65_000,
+          ),
+        },
       );
       return;
     }

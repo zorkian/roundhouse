@@ -57,7 +57,7 @@ export function successorWakeup(
   processed: Wakeup,
 ): Wakeup | undefined {
   return run?.status === "active" &&
-    new Set(["reproduce", "plan", "implement"]).has(run.stage) &&
+    new Set(["reproduce", "plan", "implement", "review"]).has(run.stage) &&
     run.revision === processed.expectedRevision + 1
     ? { runId: run.id, expectedRevision: run.revision }
     : undefined;
@@ -120,32 +120,53 @@ class ContainerDispatcher implements AttemptDispatcher {
       this.callbackSigningSecret,
       attempt.id,
     );
-    const qualificationAttempt = ["reproduce", "plan", "implement"].includes(
-      attempt.stage,
-    )
+    const qualificationAttempt = [
+      "reproduce",
+      "plan",
+      "implement",
+      "review",
+    ].includes(attempt.stage)
       ? await this.runs.latestCompletedAttempt(run.id, "qualify", run.revision)
       : undefined;
-    const reproductionAttempt =
-      attempt.stage === "plan" || attempt.stage === "implement"
-        ? await this.runs.latestCompletedAttempt(
-            run.id,
-            "reproduce",
-            run.revision,
-          )
-        : undefined;
+    const reproductionAttempt = ["plan", "implement", "review"].includes(
+      attempt.stage,
+    )
+      ? await this.runs.latestCompletedAttempt(
+          run.id,
+          "reproduce",
+          run.revision,
+        )
+      : undefined;
     const planAttempt =
-      attempt.stage === "implement"
+      attempt.stage === "implement" || attempt.stage === "review"
         ? await this.runs.latestCompletedAttempt(run.id, "plan", run.revision)
+        : undefined;
+    const implementationAttempt = ["implement", "review"].includes(
+      attempt.stage,
+    )
+      ? await this.runs.latestCompletedAttempt(
+          run.id,
+          "implement",
+          run.revision,
+        )
+      : undefined;
+    const reviewAttempt =
+      attempt.stage === "implement"
+        ? await this.runs.latestCompletedAttempt(run.id, "review", run.revision)
         : undefined;
     const qualification = qualificationAttempt?.result?.qualification;
     const reproduction = reproductionAttempt?.result?.reproduction;
     const plan = planAttempt?.result?.plan;
+    const implementation = implementationAttempt?.result?.implementation;
+    const review = reviewAttempt?.result?.review;
     if (attempt.stage === "reproduce" && !qualification)
       throw new Error("reproduction_qualification_missing");
     if (attempt.stage === "plan" && !reproduction)
       throw new Error("planning_reproduction_missing");
     if (attempt.stage === "implement" && !plan)
       throw new Error("implementation_plan_missing");
+    if (attempt.stage === "review" && !implementation)
+      throw new Error("review_implementation_missing");
     const routingRule =
       attempt.stage === "reproduce"
         ? "reproduction-default-v1"
@@ -153,13 +174,17 @@ class ContainerDispatcher implements AttemptDispatcher {
           ? "planning-default-v1"
           : attempt.stage === "implement"
             ? "implementation-default-v1"
-            : "qualification-default-v1";
+            : attempt.stage === "review"
+              ? "review-default-v1"
+              : "qualification-default-v1";
     const taskType =
       attempt.stage === "plan"
         ? "planning"
         : attempt.stage === "implement"
           ? "implementation"
-          : "validation";
+          : attempt.stage === "review"
+            ? "review"
+            : "validation";
     const assignment = {
       ...attempt,
       baseCommit: attempt.baseCommit,
@@ -167,11 +192,13 @@ class ContainerDispatcher implements AttemptDispatcher {
       issue: run.issue,
       issueNumber: run.issueNumber,
       context:
-        qualification || reproduction || plan
+        qualification || reproduction || plan || implementation || review
           ? {
               ...(qualification ? { qualification } : {}),
               ...(reproduction ? { reproduction } : {}),
               ...(plan ? { plan } : {}),
+              ...(implementation ? { implementation } : {}),
+              ...(review ? { review } : {}),
             }
           : undefined,
       routing: {
