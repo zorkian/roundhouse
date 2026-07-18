@@ -584,6 +584,79 @@ describe("GitHub intake", () => {
     });
   });
 
+  it("opens a draft pull request and gives the issue author a simple link", async () => {
+    const post = vi.fn(async (path: string, _body: unknown) =>
+      path.endsWith("/pulls")
+        ? {
+            number: 73,
+            html_url: "https://github.com/zorkian/roundhouse/pull/73",
+          }
+        : {},
+    );
+    const reporter = new GitHubStageReporter({
+      get: async <T>(path: string) =>
+        (path.endsWith("/comments?per_page=100")
+          ? []
+          : { default_branch: "main" }) as T,
+      post: post as GitHubApi["post"],
+    });
+    const run = {
+      ...createRun({
+        id: "run_implementation",
+        repository: "zorkian/roundhouse",
+        issueNumber: 42,
+        baseCommit: "a".repeat(40),
+        profileVersion: "v2",
+      }),
+      status: "succeeded",
+      stage: "implement",
+      revision: 5,
+      currentHead: "b".repeat(40),
+    } as const;
+    const attempt = {
+      id: "run_implementation_rev_4",
+      runId: run.id,
+      runRevision: 4,
+      kind: "agent",
+      stage: "implement",
+      role: "implement",
+      state: "completed",
+      deadlineAt: Date.now() + 1_000,
+      baseCommit: run.baseCommit,
+      expectedHead: "a".repeat(40),
+      acceptedHead: run.currentHead,
+      result: {
+        implementation: {
+          summary: "Empty input now returns an empty list.",
+          pullRequestTitle: "Handle empty input",
+          pullRequestBody: "Fixes the empty-input behavior described in #42.",
+          validation: [{ command: "pnpm test", exitCode: 0, output: "passed" }],
+        },
+      },
+    } satisfies Attempt;
+
+    await reporter.report(run, attempt);
+
+    expect(post).toHaveBeenNthCalledWith(1, "/repos/zorkian/roundhouse/pulls", {
+      title: "Handle empty input",
+      head: "roundhouse/issue-42",
+      base: "main",
+      body: "Fixes the empty-input behavior described in #42.",
+      draft: true,
+    });
+    expect(post).toHaveBeenNthCalledWith(
+      2,
+      "/repos/zorkian/roundhouse/issues/42/comments",
+      {
+        body: expect.stringContaining(
+          "[View draft pull request #73](https://github.com/zorkian/roundhouse/pull/73)",
+        ),
+      },
+    );
+    expect(JSON.stringify(post.mock.calls)).not.toContain("pnpm test");
+    expect(JSON.stringify(post.mock.calls)).not.toContain("passed");
+  });
+
   it("asks plan questions without exposing workflow status", async () => {
     const run = {
       ...createRun({

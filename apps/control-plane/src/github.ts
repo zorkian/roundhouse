@@ -110,7 +110,7 @@ export class GitHubClient {
       globalThis.fetch(input, init),
   ) {}
 
-  private async installationToken(): Promise<string> {
+  async installationToken(): Promise<string> {
     this.token ??= this.mintInstallationToken();
     return this.token;
   }
@@ -252,6 +252,25 @@ function planComment(run: RunSnapshot, attempt: Attempt): string {
   ].join("\n");
 }
 
+function implementationComment(
+  attempt: Attempt,
+  pullRequest: { readonly number: number; readonly html_url: string },
+): string {
+  const implementation = attempt.result?.implementation as
+    Record<string, unknown> | undefined;
+  const summary = String(
+    implementation?.summary ?? "The requested change is ready for review.",
+  );
+  return [
+    `<!-- roundhouse:v2:implementation:${attempt.id} -->`,
+    "## I opened a draft pull request",
+    "",
+    summary,
+    "",
+    `[View draft pull request #${pullRequest.number}](${pullRequest.html_url})`,
+  ].join("\n");
+}
+
 export class GitHubStageReporter implements AttemptReporter {
   constructor(private readonly github: GitHubApi) {}
 
@@ -261,12 +280,41 @@ export class GitHubStageReporter implements AttemptReporter {
         ? "reproduction"
         : attempt.stage === "plan"
           ? "plan"
-          : "qualification";
+          : attempt.stage === "implement"
+            ? "implementation"
+            : "qualification";
     const marker = `<!-- roundhouse:v2:${phase}:${attempt.id} -->`;
     const comments = await this.github.get<readonly { body?: string }[]>(
       `/repos/${run.repository}/issues/${run.issueNumber}/comments?per_page=100`,
     );
     if (comments.some((comment) => comment.body?.includes(marker))) return;
+    if (attempt.stage === "implement") {
+      const implementation = attempt.result?.implementation as
+        Record<string, unknown> | undefined;
+      const repository = await this.github.get<{ default_branch?: string }>(
+        `/repos/${run.repository}`,
+      );
+      const pullRequest = await this.github.post<{
+        number: number;
+        html_url: string;
+      }>(`/repos/${run.repository}/pulls`, {
+        title: String(
+          implementation?.pullRequestTitle ?? `Resolve #${run.issueNumber}`,
+        ),
+        head: `roundhouse/issue-${run.issueNumber}`,
+        base: repository.default_branch ?? "main",
+        body: String(
+          implementation?.pullRequestBody ??
+            `Implements the change requested in #${run.issueNumber}.`,
+        ),
+        draft: true,
+      });
+      await this.github.post(
+        `/repos/${run.repository}/issues/${run.issueNumber}/comments`,
+        { body: implementationComment(attempt, pullRequest).slice(0, 65_000) },
+      );
+      return;
+    }
     if (attempt.stage === "reproduce") {
       await this.github.post(
         `/repos/${run.repository}/issues/${run.issueNumber}/comments`,

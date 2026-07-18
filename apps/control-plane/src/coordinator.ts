@@ -71,10 +71,22 @@ export function planTransition(attempt: Attempt) {
   return { status: "failed", stage: "plan" } as const;
 }
 
+export function implementationTransition(attempt: Attempt) {
+  const outcome = attempt.result?.implementation;
+  if (!outcome || typeof outcome !== "object" || !attempt.acceptedHead)
+    return { status: "failed", stage: "implement" } as const;
+  return {
+    status: "succeeded",
+    stage: "implement",
+    acceptedHead: attempt.acceptedHead,
+  } as const;
+}
+
 function completedTransition(attempt: Attempt) {
   if (attempt.stage === "qualify") return qualificationTransition(attempt);
   if (attempt.stage === "reproduce") return reproductionTransition(attempt);
   if (attempt.stage === "plan") return planTransition(attempt);
+  if (attempt.stage === "implement") return implementationTransition(attempt);
   return undefined;
 }
 
@@ -93,7 +105,8 @@ export async function coordinate(
     run.status !== "active"
   )
     return "stale";
-  if (!new Set(["qualify", "reproduce", "plan"]).has(run.stage)) return "stale";
+  if (!new Set(["qualify", "reproduce", "plan", "implement"]).has(run.stage))
+    return "stale";
   const attemptId = immutableAttemptId(run.id, run.revision);
   const previous = await repository.getAttempt(attemptId);
   if (previous?.state === "completed") {

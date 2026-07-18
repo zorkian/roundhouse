@@ -57,7 +57,7 @@ export function successorWakeup(
   processed: Wakeup,
 ): Wakeup | undefined {
   return run?.status === "active" &&
-    new Set(["reproduce", "plan"]).has(run.stage) &&
+    new Set(["reproduce", "plan", "implement"]).has(run.stage) &&
     run.revision === processed.expectedRevision + 1
     ? { runId: run.id, expectedRevision: run.revision }
     : undefined;
@@ -92,6 +92,9 @@ function workspaceName(runId: string): string {
 function workspaceRef(runId: string): string {
   return `refs/heads/roundhouse/${runId}`;
 }
+export function githubBranch(issueNumber: number): string {
+  return `roundhouse/issue-${issueNumber}`;
+}
 
 class ContainerDispatcher implements AttemptDispatcher {
   constructor(
@@ -117,45 +120,58 @@ class ContainerDispatcher implements AttemptDispatcher {
       this.callbackSigningSecret,
       attempt.id,
     );
-    const qualificationAttempt =
-      attempt.stage === "reproduce" || attempt.stage === "plan"
-        ? await this.runs.latestCompletedAttempt(
-            run.id,
-            "qualify",
-            run.revision,
-          )
-        : undefined;
+    const qualificationAttempt = ["reproduce", "plan", "implement"].includes(
+      attempt.stage,
+    )
+      ? await this.runs.latestCompletedAttempt(run.id, "qualify", run.revision)
+      : undefined;
     const reproductionAttempt =
-      attempt.stage === "plan"
+      attempt.stage === "plan" || attempt.stage === "implement"
         ? await this.runs.latestCompletedAttempt(
             run.id,
             "reproduce",
             run.revision,
           )
         : undefined;
+    const planAttempt =
+      attempt.stage === "implement"
+        ? await this.runs.latestCompletedAttempt(run.id, "plan", run.revision)
+        : undefined;
     const qualification = qualificationAttempt?.result?.qualification;
     const reproduction = reproductionAttempt?.result?.reproduction;
+    const plan = planAttempt?.result?.plan;
     if (attempt.stage === "reproduce" && !qualification)
       throw new Error("reproduction_qualification_missing");
     if (attempt.stage === "plan" && !reproduction)
       throw new Error("planning_reproduction_missing");
+    if (attempt.stage === "implement" && !plan)
+      throw new Error("implementation_plan_missing");
     const routingRule =
       attempt.stage === "reproduce"
         ? "reproduction-default-v1"
         : attempt.stage === "plan"
           ? "planning-default-v1"
-          : "qualification-default-v1";
-    const taskType = attempt.stage === "plan" ? "planning" : "validation";
+          : attempt.stage === "implement"
+            ? "implementation-default-v1"
+            : "qualification-default-v1";
+    const taskType =
+      attempt.stage === "plan"
+        ? "planning"
+        : attempt.stage === "implement"
+          ? "implementation"
+          : "validation";
     const assignment = {
       ...attempt,
       baseCommit: attempt.baseCommit,
       protectedPaths,
       issue: run.issue,
+      issueNumber: run.issueNumber,
       context:
-        qualification || reproduction
+        qualification || reproduction || plan
           ? {
               ...(qualification ? { qualification } : {}),
               ...(reproduction ? { reproduction } : {}),
+              ...(plan ? { plan } : {}),
             }
           : undefined,
       routing: {
@@ -203,6 +219,7 @@ class ContainerCheckpointValidator implements CheckpointValidator {
     private readonly containers: AttemptNamespace,
     private readonly artifacts: CloudflareArtifactsNamespace,
     private readonly repository: D1RunRepository,
+    private readonly github: GitHubClient,
   ) {}
 
   async validate(input: AttemptCallback): Promise<void> {
@@ -250,6 +267,12 @@ class ContainerCheckpointValidator implements CheckpointValidator {
                 access: token.access,
                 ref: input.checkpoint.ref,
               },
+              publish: {
+                remote: `https://github.com/${run.repository}.git`,
+                hostname: "github.com",
+                token: await this.github.installationToken(),
+                ref: `refs/heads/${githubBranch(run.issueNumber)}`,
+              },
             }),
           }),
         );
@@ -291,6 +314,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
           env.ATTEMPT_CONTAINERS,
           artifacts,
           repository,
+          new GitHubClient(env),
         ),
         input,
       );

@@ -16,6 +16,7 @@ import {
 } from "./callback.js";
 import {
   coordinate,
+  implementationTransition,
   planTransition,
   reproductionTransition,
 } from "./coordinator.js";
@@ -44,7 +45,7 @@ async function callbackFor(
       inputHead: attempt.expectedHead,
       outputHead: head,
       ref: `refs/heads/roundhouse/${attempt.runId}`,
-      changedPaths: [`.roundhouse/checkpoints/${attempt.id}.json`],
+      changedPaths: attempt.stage === "implement" ? ["src/fix.ts"] : [],
     },
     artifactTokenId: `token-${attempt.id}`,
     result:
@@ -66,11 +67,25 @@ async function callbackFor(
                 summary: "Small implementation plan",
               },
             }
-          : {
-              outcome: "ok",
-              checkpoint: head,
-              qualification: { classification: "bug", summary: "Eligible bug" },
-            },
+          : attempt.stage === "implement"
+            ? {
+                outcome: "ok",
+                checkpoint: head,
+                implementation: {
+                  summary: "Implemented the change",
+                  pullRequestTitle: "Fix the behavior",
+                  pullRequestBody: "Implements the requested behavior.",
+                  validation: [],
+                },
+              }
+            : {
+                outcome: "ok",
+                checkpoint: head,
+                qualification: {
+                  classification: "bug",
+                  summary: "Eligible bug",
+                },
+              },
   };
   return {
     ...unsigned,
@@ -344,6 +359,29 @@ describe("single coordinator", () => {
     });
   });
 
+  it("finishes after a validated implementation checkpoint", () => {
+    const head = "b".repeat(40);
+    const attempt = {
+      id: "run_slice_rev_4",
+      runId: input.id,
+      runRevision: 4,
+      kind: "agent",
+      stage: "implement",
+      role: "implement",
+      state: "completed",
+      deadlineAt: 1_000,
+      baseCommit: input.baseCommit,
+      expectedHead: input.baseCommit,
+      acceptedHead: head,
+      result: { implementation: { summary: "Done" } },
+    } satisfies Attempt;
+    expect(implementationTransition(attempt)).toEqual({
+      status: "succeeded",
+      stage: "implement",
+      acceptedHead: head,
+    });
+  });
+
   it("runs qualification, reproduction, and planning before implementation", async () => {
     const store = new MemoryRunRepository();
     await store.create(createRun(input));
@@ -367,7 +405,8 @@ describe("single coordinator", () => {
       );
       if (!dispatched) throw new Error("attempt_not_dispatched");
       expect(dispatched.expectedHead).toBe(previousHead);
-      const outputHead = previousHead;
+      const outputHead =
+        dispatched.stage === "implement" ? "b".repeat(40) : previousHead;
       const callback = await callbackFor(
         dispatched,
         outputHead,
@@ -379,15 +418,15 @@ describe("single coordinator", () => {
       const current = await store.get(input.id);
       if (
         current?.status === "active" &&
-        new Set(["reproduce", "plan"]).has(current.stage)
+        new Set(["reproduce", "plan", "implement"]).has(current.stage)
       )
         wakeups.push({ runId: current.id, expectedRevision: current.revision });
     }
-    expect(stages).toEqual(["qualify", "reproduce", "plan"]);
+    expect(stages).toEqual(["qualify", "reproduce", "plan", "implement"]);
     await expect(store.get(input.id)).resolves.toMatchObject({
-      status: "active",
+      status: "succeeded",
       stage: "implement",
-      revision: 4,
+      revision: 5,
       currentHead: previousHead,
     });
   });
