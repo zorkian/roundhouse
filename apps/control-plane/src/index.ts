@@ -264,7 +264,15 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
           new GitHubQualificationReporter(new GitHubClient(env)),
         );
         message.ack();
-      } catch {
+      } catch (error) {
+        console.error(
+          JSON.stringify({
+            message: "coordination_failed",
+            runId: message.body.runId,
+            expectedRevision: message.body.expectedRevision,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
         message.retry();
       }
     }
