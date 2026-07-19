@@ -99,8 +99,9 @@ export function renderRunDetails(details: RunDetails): string {
   )
     ? "Current behavior"
     : "Reproduction";
-  const currentStage =
-    run.stage === "reproduce" ? investigationHeading : run.stage;
+  const stageLabel = (stage: Attempt["stage"]) =>
+    stage === "reproduce" ? investigationHeading : stage;
+  const currentStage = stageLabel(run.stage);
   const usage = details.usage ?? [];
   const pullRequest = resultFor(attempts, "merge") as
     { pullRequest?: { html_url?: string; number?: number } } | undefined;
@@ -127,7 +128,7 @@ export function renderRunDetails(details: RunDetails): string {
   const stageUsage = runStages
     .map(
       (stage) =>
-        `<dt>${escapeHtml(stage)}</dt><dd>${escapeHtml(usageForStage(stage))}</dd>`,
+        `<dt>${escapeHtml(stageLabel(stage))}</dt><dd>${escapeHtml(usageForStage(stage))}</dd>`,
     )
     .join("");
   const rows = [...attempts]
@@ -138,7 +139,7 @@ export function renderRunDetails(details: RunDetails): string {
     .map(
       (
         attempt,
-      ) => `<details><summary><span class="phase">${escapeHtml(attempt.stage === "reproduce" ? investigationHeading : attempt.stage)}</span><span><span class="label">Started</span>${escapeHtml(timestamp(attempt.createdAt))}</span><span><span class="label">Elapsed</span>${escapeHtml(elapsed(attempt.createdAt, attempt.updatedAt))}</span><span><span class="label">Status</span>${escapeHtml(attempt.state)}</span></summary><div class="attempt-details">
+      ) => `<details><summary><span class="phase">${escapeHtml(stageLabel(attempt.stage))}</span><span><span class="label">Started</span>${escapeHtml(timestamp(attempt.createdAt))}</span><span><span class="label">Elapsed</span>${escapeHtml(elapsed(attempt.createdAt, attempt.updatedAt))}</span><span><span class="label">Status</span>${escapeHtml(attempt.state)}</span></summary><div class="attempt-details">
 <dl><dt>Role</dt><dd>${escapeHtml(attempt.role ?? "Unavailable")}</dd><dt>Revision</dt><dd>${escapeHtml(attempt.runRevision ?? "Unavailable")}</dd><dt>Updated</dt><dd>${escapeHtml(timestamp(attempt.updatedAt))}</dd><dt>Base commit</dt><dd><code>${escapeHtml(attempt.baseCommit ?? "Unavailable")}</code></dd><dt>Expected head</dt><dd><code>${escapeHtml(attempt.expectedHead ?? "Unavailable")}</code></dd><dt>Accepted head</dt><dd><code>${escapeHtml(attempt.acceptedHead ?? "Unavailable")}</code></dd></dl>
 <h4>Model usage</h4><p>${escapeHtml(formatUsage(usage.filter((item) => item.attemptId === attempt.id)))}</p><p>${escapeHtml([...new Set(usage.filter((item) => item.attemptId === attempt.id).map((item) => item.model))].join(", ") || "Model unavailable")}</p><h4>Model routing</h4>${value(attempt.routing)}<h4>Result</h4>${attemptResult(attempt)}${attemptLinks(attempt)}</div></details>`,
     )

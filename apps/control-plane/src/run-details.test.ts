@@ -322,6 +322,8 @@ describe("run details", () => {
     expect(html).toContain('<span class="phase">Current behavior</span>');
     expect(html).not.toContain('<span class="phase">reproduce</span>');
     expect(html).toContain("<dt>Current stage</dt><dd>Current behavior</dd>");
+    expect(html).toContain("<dt>Current behavior</dt>");
+    expect(html).not.toContain("<dt>reproduce</dt>");
     expect(html).toContain("<h2>Current behavior</h2>");
     expect(html).not.toContain("<h2>Reproduction</h2>");
   });
