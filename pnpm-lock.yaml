@@ -36,6 +36,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/core
 
+  apps/model-broker: {}
+
   packages/core: {}
 
 packages:

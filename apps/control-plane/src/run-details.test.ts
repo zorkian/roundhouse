@@ -105,6 +105,19 @@ describe("run details", () => {
       },
       createdAt: 1,
       updatedAt: 2,
+      usage: [
+        {
+          callId: "call-1",
+          attemptId: "implementation",
+          model: "test-model",
+          inputTokens: 100,
+          cachedInputTokens: 40,
+          reasoningTokens: 10,
+          outputTokens: 20,
+          totalTokens: 120,
+          costUsd: 0.01,
+        },
+      ],
       attempts: [
         {
           id: "implementation",
@@ -188,6 +201,8 @@ describe("run details", () => {
     expect(html).toContain("candidate-sha");
     expect(html).toContain("merged-sha");
     expect(html).toContain("test-model");
+    expect(html).toContain("120 tokens");
+    expect(html).toContain("$0.010000");
     expect(html).toContain("npm test");
     expect(html).toContain("&lt;b&gt;bad&lt;/b&gt;");
     expect(html).not.toContain("<img");
@@ -195,7 +210,13 @@ describe("run details", () => {
       "https://github.com/zorkian/roundhouse/pull/99/files",
     );
     expect(html).toContain('<a href="https://example.test">test</a>');
-    expect(html).not.toContain("<section><h2>Qualification</h2>");
+    expect(html).toContain("<section><h2>Qualification</h2>");
+    expect(html).toContain("<section><h2>Implementation and validation</h2>");
+    expect(html).toContain("<section><h2>Review</h2>");
+    expect(html).toContain("<section><h2>CI checks</h2>");
+    expect(html).toContain("<section><h2>Merge</h2>");
+    expect(html).toContain("<section><h2>Commit trace</h2>");
+    expect(html).toContain("<strong>Usage:</strong> 120 tokens");
   });
 
   it("renders attempts chronologically as collapsed timeline rows", () => {
@@ -301,6 +322,79 @@ describe("run details", () => {
     expect(html).toContain('<span class="phase">Current behavior</span>');
     expect(html).not.toContain('<span class="phase">reproduce</span>');
     expect(html).toContain("<dt>Current stage</dt><dd>Current behavior</dd>");
+    expect(html).toContain("<h2>Current behavior</h2>");
+    expect(html).not.toContain("<h2>Reproduction</h2>");
+  });
+
+  it("aggregates retries by workflow step and shows unavailable steps", () => {
+    const html = renderRunDetails({
+      run: {
+        schemaVersion: 2,
+        id: "run_usage",
+        repository: "zorkian/roundhouse",
+        issueNumber: 4,
+        baseCommit: "base",
+        currentHead: "base",
+        profileVersion: "test",
+        status: "active",
+        stage: "implement",
+        revision: 2,
+      },
+      createdAt: 1,
+      updatedAt: 2,
+      attempts: [
+        {
+          id: "implement-1",
+          runId: "run_usage",
+          runRevision: 1,
+          kind: "agent",
+          stage: "implement",
+          role: "developer",
+          state: "failed",
+          deadlineAt: 2,
+          baseCommit: "base",
+          expectedHead: "base",
+          createdAt: 1,
+          updatedAt: 2,
+        },
+        {
+          id: "implement-2",
+          runId: "run_usage",
+          runRevision: 2,
+          kind: "agent",
+          stage: "implement",
+          role: "developer",
+          state: "completed",
+          deadlineAt: 3,
+          baseCommit: "base",
+          expectedHead: "base",
+          createdAt: 2,
+          updatedAt: 3,
+        },
+      ],
+      usage: [
+        {
+          callId: "call-1",
+          attemptId: "implement-1",
+          model: "test-model",
+          totalTokens: 100,
+          costUsd: 0.01,
+        },
+        {
+          callId: "call-2",
+          attemptId: "implement-2",
+          model: "test-model",
+          totalTokens: 250,
+          costUsd: 0.02,
+        },
+      ],
+    });
+
+    expect(html).toContain("<h2>Usage by workflow step</h2>");
+    expect(html).toContain("<dt>implement</dt><dd>350 tokens");
+    expect(html).toContain("$0.030000");
+    expect(html).toContain("<dt>qualify</dt><dd>Usage unavailable</dd>");
+    expect(html).toContain("<dt>merge</dt><dd>Usage unavailable</dd>");
   });
 
   it("identifies missing optional evidence", () => {
