@@ -10,7 +10,7 @@
   "scripts": {
     "build": "tsc -b",
     "check": "prettier --check . && node scripts/check-license-headers.mjs && tsc -b --pretty false && node --check containers/agent-runner/runner.mjs && vitest run",
-    "deploy:development": "wrangler deploy --config apps/model-broker/wrangler.jsonc && wrangler d1 migrations apply roundhouse-v2-development --remote --config apps/control-plane/wrangler.jsonc && wrangler deploy --config apps/control-plane/wrangler.jsonc",
+    "deploy:development": "pnpm build && wrangler deploy --config apps/model-broker/wrangler.jsonc && wrangler d1 migrations apply roundhouse-v2-development --remote --config apps/control-plane/wrangler.jsonc && wrangler deploy --config apps/control-plane/wrangler.jsonc",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "license:check": "node scripts/check-license-headers.mjs",
