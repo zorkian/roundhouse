@@ -71,8 +71,12 @@ validates that checkpoint from a clean clone, promotes the validated commit to
 GitHub, and opens a draft pull request. The reviewer examines the promoted
 candidate commit. A clean review advances it to CI; actionable findings return
 the work to implementation, update the same draft pull request, and review the
-newly promoted commit. Validation commands and output remain durable Roundhouse
-evidence rather than issue or pull-request commentary.
+newly promoted commit. Roundhouse accepts CI only when the clean review, active
+run, pull-request head, and check runs all identify the same commit, then marks
+the draft pull request ready. Immediately before merging, it rechecks those
+exact-head gates and submits the merge for that specific SHA. Validation
+commands and output remain durable Roundhouse evidence rather than issue or
+pull-request commentary.
 
 ## Local checks
 
