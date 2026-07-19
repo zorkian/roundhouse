@@ -102,4 +102,12 @@ describe("dashboard", () => {
     expect(html).toContain("<strong>1</strong> need attention");
     expect(html).toContain("<strong>1</strong> recently finished");
   });
+
+  it("shows a successful closed issue as completed", () => {
+    const html = renderDashboard([
+      summary("succeeded", 299, "Completed work", "closed"),
+    ]);
+    expect(html).toContain('<span class="status succeeded">Completed</span>');
+    expect(html).not.toContain("Closed on GitHub");
+  });
 });
