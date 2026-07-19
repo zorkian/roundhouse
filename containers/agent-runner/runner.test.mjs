@@ -120,6 +120,8 @@ describe("V2 agent runner", () => {
     expect(feature).not.toContain("Attempt to reproduce");
     expect(feature).toContain("install repository-declared dependencies");
     expect(feature).toContain("declared package manager and lockfile");
+    expect(feature).toContain("desired outcome, current behavior");
+    expect(feature).not.toContain("expected behavior, observed behavior");
 
     const maintenance = investigationPrompt({
       context: { qualification: { classification: "maintenance" } },

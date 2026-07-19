@@ -464,7 +464,7 @@ export function investigationPrompt(assignment) {
     JSON.stringify(issue.clarifications ?? []),
     "Qualification:",
     JSON.stringify(qualification),
-    "The summary, expected behavior, observed behavior, and any questions will be posted directly to the issue author. Write them in clear, approachable language. Do not mention internal stages, schemas, statuses, or tell the author how to format a reply.",
+    "The summary, desired outcome, current behavior, and any questions will be posted directly to the issue author. Write them in clear, approachable language. Do not mention internal stages, schemas, statuses, or tell the author how to format a reply.",
     "If the investigation cannot proceed, put each focused question needed to proceed in uncertainties.",
     "Return only the requested structured current-behavior evidence.",
   ].join("\n");
