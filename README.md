@@ -68,8 +68,11 @@ unrestricted natural-language clarification, and evidence-backed planning
 through a private model broker. Its current slice implements the accepted plan
 in an isolated container, records the actual source commit in Artifacts,
 validates that checkpoint from a clean clone, promotes the validated commit to
-GitHub, and opens a draft pull request. Validation commands and output remain
-durable Roundhouse evidence rather than issue or pull-request commentary.
+GitHub, and opens a draft pull request. The reviewer examines the promoted
+candidate commit. A clean review advances it to CI; actionable findings return
+the work to implementation, update the same draft pull request, and review the
+newly promoted commit. Validation commands and output remain durable Roundhouse
+evidence rather than issue or pull-request commentary.
 
 ## Local checks
 
