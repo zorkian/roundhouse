@@ -575,16 +575,23 @@ strategy.
 It asks no question answerable from the issue, repository, or supplied public
 GitHub context.
 
-### 7.2 Reproduction
+### 7.2 Current-behavior investigation
 
 For bugs, a read-oriented attempt executes the smallest safe procedure that can
-demonstrate the report. Installation and network access follow the repository
-profile; they are not improvised by the model.
+demonstrate the report. For features, it establishes whether the requested
+capability already exists and records the present baseline. For maintenance
+work, it inspects the current constraint or implementation that motivates the
+change. These paths share one internal pre-planning stage; they do not create
+separate workflow branches.
 
-A successful reproduction records a regression strategy that validation must
-run after implementation. A change cannot receive the “fix validated”
-recommendation unless that regression passes on the candidate, or a maintainer
-approved an explicit non-reproduction path.
+The attempt may install repository-declared dependencies with the repository's
+declared package manager and lockfile. Its Container can reach the configured
+package registry but not arbitrary internet destinations.
+
+For a bug, a successful reproduction records a regression strategy that
+validation must run after implementation. A change cannot receive the “fix
+validated” recommendation unless that regression passes on the candidate, or
+a maintainer approved an explicit non-reproduction path.
 
 ### 7.3 Planning and risk
 

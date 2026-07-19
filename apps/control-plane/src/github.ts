@@ -253,7 +253,13 @@ function qualificationHeading(classification: string): string {
   return "I’m looking into this";
 }
 
-function reproductionHeading(status: string): string {
+function reproductionHeading(status: string, classification: string): string {
+  if (["feature", "maintenance"].includes(classification)) {
+    if (status === "confirmed") return "I checked the current behavior";
+    if (status === "not_reproduced")
+      return "I couldn’t confirm the current behavior yet";
+    return "I need a little more information";
+  }
   if (status === "confirmed") return "I reproduced this";
   if (status === "not_reproduced") return "I couldn’t reproduce this yet";
   return "I need a little more information";
@@ -263,12 +269,16 @@ function reproductionComment(run: RunSnapshot, attempt: Attempt): string {
   const reproduction = attempt.result?.reproduction as
     Record<string, unknown> | undefined;
   const status = String(reproduction?.status ?? "blocked");
+  const classification = String(attempt.result?.requestClassification ?? "bug");
+  const currentBehavior = ["feature", "maintenance"].includes(classification);
   const summary = String(
     reproduction?.summary ?? "I wasn’t able to summarize what happened.",
   );
   const expected = String(
     reproduction?.expectedBehavior ??
-      "I couldn’t determine the expected behavior.",
+      (currentBehavior
+        ? "I couldn’t determine the requested outcome."
+        : "I couldn’t determine the expected behavior."),
   );
   const observed = String(
     reproduction?.observedBehavior ??
@@ -277,11 +287,11 @@ function reproductionComment(run: RunSnapshot, attempt: Attempt): string {
   const waiting = run.status === "waiting";
   return [
     `<!-- roundhouse:v2:reproduction:${attempt.id} -->`,
-    `## ${reproductionHeading(status)}`,
+    `## ${reproductionHeading(status, classification)}`,
     "",
     summary,
     "",
-    "### Expected",
+    `### ${currentBehavior ? "Requested outcome" : "Expected"}`,
     expected,
     "",
     "### What I found",

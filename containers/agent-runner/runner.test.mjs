@@ -11,11 +11,13 @@ import {
   checkpointWorkspace,
   implementationPrompt,
   implementationSchema,
+  investigationPrompt,
   planSchema,
   prepareWorkspace,
   qualificationSandbox,
   reviewSchema,
   reproductionSchema,
+  requestClassification,
   runnerIdentity,
   runnerResponse,
   validateCheckpoint,
@@ -105,6 +107,41 @@ describe("V2 agent runner", () => {
     });
     expect(prompt).toContain("install repository-declared dependencies");
     expect(prompt).toContain('"conclusion":"failure"');
+  });
+
+  it("investigates each request type and allows declared dependency installation", () => {
+    const feature = investigationPrompt({
+      issue: { title: "Add a dashboard filter", body: "", url: "" },
+      context: { qualification: { classification: "feature" } },
+    });
+    expect(feature).toContain(
+      "Investigate the current behavior for this feature request",
+    );
+    expect(feature).not.toContain("Attempt to reproduce");
+    expect(feature).toContain("install repository-declared dependencies");
+    expect(feature).toContain("declared package manager and lockfile");
+    expect(feature).toContain("desired outcome, current behavior");
+    expect(feature).not.toContain("expected behavior, observed behavior");
+
+    const maintenance = investigationPrompt({
+      context: { qualification: { classification: "maintenance" } },
+    });
+    expect(maintenance).toContain(
+      "Investigate the current behavior for this maintenance request",
+    );
+    expect(maintenance).not.toContain("Attempt to reproduce");
+
+    const bug = investigationPrompt({
+      context: { qualification: { classification: "bug" } },
+    });
+    expect(bug).toContain("Attempt to reproduce this bug report");
+    expect(bug).toContain("configured package registry");
+
+    expect(
+      requestClassification({
+        context: { qualification: { classification: "feature" } },
+      }),
+    ).toBe("feature");
   });
 
   it("returns concrete review findings without arbitrary caps", () => {

@@ -771,6 +771,49 @@ describe("GitHub intake", () => {
     });
   });
 
+  it("describes feature investigation as current behavior rather than reproduction", async () => {
+    const run = {
+      ...createRun({
+        id: "run_feature_investigation",
+        repository: "zorkian/roundhouse",
+        issueNumber: 43,
+        baseCommit: "a".repeat(40),
+        profileVersion: "v2",
+      }),
+      stage: "plan",
+      revision: 3,
+    } as const;
+    const body = await reportedBody(run, {
+      id: "run_feature_investigation_rev_2",
+      runId: run.id,
+      runRevision: 2,
+      kind: "agent",
+      stage: "reproduce",
+      role: "reproduce",
+      state: "completed",
+      deadlineAt: Date.now() + 1_000,
+      baseCommit: run.baseCommit,
+      expectedHead: run.currentHead,
+      result: {
+        requestClassification: "feature",
+        reproduction: {
+          status: "confirmed",
+          summary: "The dashboard does not currently provide this filter.",
+          observedBehavior: "The dashboard shows one unfiltered list.",
+          commands: [],
+          relevantFiles: ["apps/control-plane/src/dashboard.ts"],
+          uncertainties: [],
+        },
+      },
+    });
+    expect(body).toContain("## I checked the current behavior");
+    expect(body).toContain("### Requested outcome");
+    expect(body).toContain("I couldn’t determine the requested outcome.");
+    expect(body).not.toContain("I couldn’t determine the expected behavior.");
+    expect(body).not.toContain("I reproduced this");
+    expect(body).not.toContain("I couldn’t reproduce");
+  });
+
   it("posts a concise evidence-backed plan", async () => {
     const post = vi.fn(async (_path: string, _body: unknown) => undefined);
     const reporter = new GitHubStageReporter({

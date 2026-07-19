@@ -63,7 +63,8 @@ and historical documents remain available from the tag and Git history rather
 than as a parallel legacy tree. Phase 1 is deployed in isolated V2 development
 resources and proves D1-owned lifecycle state, Queue wakeups, thin Container
 Durable Objects, and Artifacts checkpoint handoff. Phase 2 has deployed real
-development GitHub intake, read-only qualification and reproduction,
+development GitHub intake, read-only qualification and current-behavior
+investigation,
 unrestricted natural-language clarification, and evidence-backed planning
 through a private model broker. Its current slice implements the accepted plan
 in an isolated container, records the actual source commit in Artifacts,

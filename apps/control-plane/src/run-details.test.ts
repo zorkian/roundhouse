@@ -269,6 +269,57 @@ describe("run details", () => {
     expect(html).not.toContain("<details open");
   });
 
+  it("labels feature evidence as current behavior", () => {
+    const common = {
+      runId: "run_feature",
+      kind: "agent" as const,
+      state: "completed" as const,
+      deadlineAt: 2,
+      baseCommit: "base",
+      expectedHead: "base",
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const html = renderRunDetails({
+      run: {
+        schemaVersion: 2,
+        id: "run_feature",
+        repository: "zorkian/roundhouse",
+        issueNumber: 3,
+        baseCommit: "base",
+        currentHead: "base",
+        profileVersion: "test",
+        status: "active",
+        stage: "reproduce",
+        revision: 2,
+      },
+      createdAt: 1,
+      updatedAt: 2,
+      attempts: [
+        {
+          ...common,
+          id: "investigation",
+          runRevision: 2,
+          stage: "reproduce",
+          role: "reproduce",
+          result: {
+            requestClassification: "feature",
+            reproduction: {
+              status: "confirmed",
+            },
+          },
+        },
+      ],
+    });
+    expect(html).toContain('<span class="phase">Current behavior</span>');
+    expect(html).not.toContain('<span class="phase">reproduce</span>');
+    expect(html).toContain("<dt>Current stage</dt><dd>Current behavior</dd>");
+    expect(html).toContain("<dt>Current behavior</dt>");
+    expect(html).not.toContain("<dt>reproduce</dt>");
+    expect(html).toContain("<h2>Current behavior</h2>");
+    expect(html).not.toContain("<h2>Reproduction</h2>");
+  });
+
   it("aggregates retries by workflow step and shows unavailable steps", () => {
     const html = renderRunDetails({
       run: {
