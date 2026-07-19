@@ -795,8 +795,8 @@ describe("GitHub intake", () => {
       baseCommit: run.baseCommit,
       expectedHead: run.currentHead,
       result: {
+        requestClassification: "feature",
         reproduction: {
-          classification: "feature",
           status: "confirmed",
           summary: "The dashboard does not currently provide this filter.",
           expectedBehavior: "People can filter runs by repository.",

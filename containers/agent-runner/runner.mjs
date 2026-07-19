@@ -441,10 +441,14 @@ export async function qualify(assignment, directory, attemptSecret) {
   );
 }
 
+export function requestClassification(assignment) {
+  return String(assignment.context?.qualification?.classification ?? "bug");
+}
+
 export function investigationPrompt(assignment) {
   const issue = assignment.issue ?? { title: "", body: "", url: "" };
   const qualification = assignment.context?.qualification ?? {};
-  const classification = String(qualification.classification ?? "bug");
+  const classification = requestClassification(assignment);
   const objective =
     classification === "feature"
       ? "Investigate the current behavior for this feature request in the checked-out repository. Establish whether the requested capability already exists and gather the baseline evidence needed to plan the change. Do not describe this as reproducing a bug."
@@ -466,21 +470,12 @@ export function investigationPrompt(assignment) {
     JSON.stringify(qualification),
     "The summary, desired outcome, current behavior, and any questions will be posted directly to the issue author. Write them in clear, approachable language. Do not mention internal stages, schemas, statuses, or tell the author how to format a reply.",
     "If the investigation cannot proceed, put each focused question needed to proceed in uncertainties.",
-    "Return only the requested structured current-behavior evidence.",
+    "Return only the requested structured investigation evidence.",
   ].join("\n");
 }
 
-export function investigationResult(assignment, evidence) {
-  return {
-    ...evidence,
-    classification: String(
-      assignment.context?.qualification?.classification ?? "bug",
-    ),
-  };
-}
-
 export async function reproduce(assignment, directory, attemptSecret) {
-  const evidence = await structuredAgent(
+  return structuredAgent(
     assignment,
     directory,
     attemptSecret,
@@ -488,7 +483,6 @@ export async function reproduce(assignment, directory, attemptSecret) {
     reproductionSchema,
     investigationPrompt(assignment),
   );
-  return investigationResult(assignment, evidence);
 }
 
 export async function plan(assignment, directory, attemptSecret) {
@@ -808,6 +802,7 @@ async function completeAssignment(assignment, headers) {
               directory,
               attemptSecret,
             ),
+            requestClassification: requestClassification(agentAssignment),
           }
         : assignment.stage === "plan"
           ? { plan: await plan(agentAssignment, directory, attemptSecret) }

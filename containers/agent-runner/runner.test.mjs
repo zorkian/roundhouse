@@ -12,12 +12,12 @@ import {
   implementationPrompt,
   implementationSchema,
   investigationPrompt,
-  investigationResult,
   planSchema,
   prepareWorkspace,
   qualificationSandbox,
   reviewSchema,
   reproductionSchema,
+  requestClassification,
   runnerIdentity,
   runnerResponse,
   validateCheckpoint,
@@ -138,11 +138,10 @@ describe("V2 agent runner", () => {
     expect(bug).toContain("configured package registry");
 
     expect(
-      investigationResult(
-        { context: { qualification: { classification: "feature" } } },
-        { status: "confirmed" },
-      ),
-    ).toEqual({ status: "confirmed", classification: "feature" });
+      requestClassification({
+        context: { qualification: { classification: "feature" } },
+      }),
+    ).toBe("feature");
   });
 
   it("returns concrete review findings without arbitrary caps", () => {

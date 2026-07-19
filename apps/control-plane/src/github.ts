@@ -269,7 +269,7 @@ function reproductionComment(run: RunSnapshot, attempt: Attempt): string {
   const reproduction = attempt.result?.reproduction as
     Record<string, unknown> | undefined;
   const status = String(reproduction?.status ?? "blocked");
-  const classification = String(reproduction?.classification ?? "bug");
+  const classification = String(attempt.result?.requestClassification ?? "bug");
   const summary = String(
     reproduction?.summary ?? "I wasn’t able to summarize what happened.",
   );

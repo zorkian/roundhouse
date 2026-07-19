@@ -290,8 +290,8 @@ describe("run details", () => {
           stage: "reproduce",
           role: "reproduce",
           result: {
+            requestClassification: "feature",
             reproduction: {
-              classification: "feature",
               status: "confirmed",
             },
           },
