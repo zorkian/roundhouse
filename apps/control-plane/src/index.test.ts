@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from "vitest";
-import { RoundhouseAttemptContainer } from "./attempt-container.js";
+import {
+  attemptAllowedHosts,
+  RoundhouseAttemptContainer,
+} from "./attempt-container.js";
 import {
   controlPlaneService,
   handleRequest,
@@ -79,5 +82,26 @@ describe("V2 control plane", () => {
     expect(
       RoundhouseAttemptContainer.outboundByHost?.["model.roundhouse.internal"],
     ).toBeTypeOf("function");
+  });
+
+  it("allows only required attempt services and the package registry", () => {
+    expect(
+      attemptAllowedHosts(
+        {
+          artifact: {
+            remote: "https://artifacts.test/repository.git",
+            hostname: "artifacts.test",
+          },
+          publish: { hostname: "github.com" },
+        },
+        "https://control.test/attempts/callback",
+      ),
+    ).toEqual([
+      "model.roundhouse.internal",
+      "registry.npmjs.org",
+      "artifacts.test",
+      "github.com",
+      "control.test",
+    ]);
   });
 });
