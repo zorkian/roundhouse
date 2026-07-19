@@ -205,14 +205,16 @@ describe("single coordinator", () => {
     expect(dispatches).toBe(2);
   });
 
-  it("leaves an undispatched attempt recoverable after ambiguous dispatch", async () => {
+  it("releases a failed dispatch for the existing queue retry", async () => {
     const store = new MemoryRunRepository();
     await store.create(createRun(input));
+    let dispatches = 0;
     await expect(
       coordinate(
         store,
         {
           submit: async () => {
+            dispatches += 1;
             throw new Error("lost_response");
           },
         },
@@ -222,6 +224,23 @@ describe("single coordinator", () => {
     ).rejects.toThrow("lost_response");
     await expect(store.getAttempt("run_slice_rev_1")).resolves.toMatchObject({
       state: "created",
+    });
+    await expect(
+      coordinate(
+        store,
+        {
+          submit: async () => {
+            dispatches += 1;
+          },
+        },
+        { runId: input.id, expectedRevision: 1 },
+        101,
+      ),
+    ).resolves.toBe("dispatched");
+    expect(dispatches).toBe(2);
+    await expect(store.getAttempt("run_slice_rev_1")).resolves.toMatchObject({
+      state: "dispatched",
+      deadlineAt: 101 + 30 * 60_000,
     });
   });
 
