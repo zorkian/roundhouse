@@ -85,6 +85,19 @@ function gitEnvironment(token) {
   };
 }
 
+function roundhouseGitEnvironment(extra = {}) {
+  return {
+    ...process.env,
+    ...extra,
+    GIT_AUTHOR_NAME: "Roundhouse",
+    GIT_AUTHOR_EMAIL: "roundhouse@invalid",
+    GIT_COMMITTER_NAME: "Roundhouse",
+    GIT_COMMITTER_EMAIL: "roundhouse@invalid",
+    GIT_AUTHOR_DATE: "2000-01-01T00:00:00Z",
+    GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z",
+  };
+}
+
 function command(commandName, args, options = {}) {
   return new Promise((resolveCommand, rejectCommand) => {
     const child = spawn(commandName, args, {
@@ -536,10 +549,9 @@ export async function prepareWorkspace(assignment) {
     assignment.context?.ci?.reason === "base_conflict" &&
     assignment.upstream
   ) {
-    const upstreamEnvironment = {
-      ...process.env,
+    const upstreamEnvironment = roundhouseGitEnvironment({
       GIT_TERMINAL_PROMPT: "0",
-    };
+    });
     await command(
       "git",
       [
@@ -583,15 +595,7 @@ export async function checkpointWorkspace(assignment, directory) {
     cwd: directory,
   });
   if (!staged) throw new Error("implementation_made_no_changes");
-  const deterministicEnvironment = {
-    ...process.env,
-    GIT_AUTHOR_NAME: "Roundhouse",
-    GIT_AUTHOR_EMAIL: "roundhouse@invalid",
-    GIT_COMMITTER_NAME: "Roundhouse",
-    GIT_COMMITTER_EMAIL: "roundhouse@invalid",
-    GIT_AUTHOR_DATE: "2000-01-01T00:00:00Z",
-    GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z",
-  };
+  const deterministicEnvironment = roundhouseGitEnvironment();
   await command(
     "git",
     ["commit", "-m", `Implement issue #${assignment.issueNumber}`],
