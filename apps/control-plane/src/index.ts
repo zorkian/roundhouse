@@ -30,6 +30,7 @@ import { renderRunDetails } from "./run-details.js";
 import { acceptGitHubCheckSuite, GitHubCiAutomation } from "./github-ci.js";
 import {
   acceptGitHubComment,
+  acceptGitHubIssueClosed,
   GitHubClient,
   GitHubStageReporter,
 } from "./github.js";
@@ -428,10 +429,26 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       const enqueue = async (wakeup: Wakeup) => {
         await env.RUN_WAKEUPS.send(wakeup);
       };
-      const outcome =
-        request.headers.get("x-github-event") === "check_suite"
-          ? await acceptGitHubCheckSuite(request, env, repository, enqueue)
-          : await acceptGitHubComment(request, env, repository, enqueue);
+      const event = request.headers.get("x-github-event");
+      let outcome: string;
+      if (event === "check_suite")
+        outcome = await acceptGitHubCheckSuite(
+          request,
+          env,
+          repository,
+          enqueue,
+        );
+      else if (event === "issues") {
+        const closure = await acceptGitHubIssueClosed(request, env, repository);
+        outcome = closure.outcome;
+        if (closure.attemptId)
+          scheduleAttemptContainerDestruction(
+            env.ATTEMPT_CONTAINERS,
+            closure.attemptId,
+            context,
+          );
+      } else
+        outcome = await acceptGitHubComment(request, env, repository, enqueue);
       return json(
         { outcome },
         outcome === "unauthorized" ? 401 : outcome === "ignored" ? 202 : 202,
