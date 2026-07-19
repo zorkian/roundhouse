@@ -269,7 +269,7 @@ describe("run details", () => {
         currentHead: "base",
         profileVersion: "test",
         status: "active",
-        stage: "plan",
+        stage: "reproduce",
         revision: 2,
       },
       createdAt: 1,
@@ -300,6 +300,7 @@ describe("run details", () => {
     });
     expect(html).toContain('<span class="phase">Current behavior</span>');
     expect(html).not.toContain('<span class="phase">reproduce</span>');
+    expect(html).toContain("<dt>Current stage</dt><dd>Current behavior</dd>");
   });
 
   it("identifies missing optional evidence", () => {

@@ -98,6 +98,8 @@ export function renderRunDetails(details: RunDetails): string {
   )
     ? "Current behavior"
     : "Reproduction";
+  const currentStage =
+    run.stage === "reproduce" ? investigationHeading : run.stage;
   const pullRequest = resultFor(attempts, "merge") as
     { pullRequest?: { html_url?: string; number?: number } } | undefined;
   const implementation = resultFor(attempts, "implementation") as
@@ -122,6 +124,6 @@ export function renderRunDetails(details: RunDetails): string {
     .join("");
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Roundhouse run ${escapeHtml(run.repository)}#${escapeHtml(run.issueNumber)}</title><style>body{font:16px system-ui;line-height:1.5;max-width:1000px;margin:2rem auto;padding:0 1rem;color:#202124}h1,h2{line-height:1.2}section{border-top:1px solid #ddd;padding:1rem 0}details{border-top:1px solid #ddd}summary{cursor:pointer;display:grid;grid-template-columns:1.2fr 2fr 1fr 1fr;gap:1rem;padding:1rem;align-items:center}summary:hover{background:#f6f8fa}.phase{font-weight:700}.label{display:block;color:#666;font-size:.75rem;text-transform:uppercase}.attempt-details{padding:0 1rem 1rem 2rem;border-left:3px solid #ddd;margin-left:1rem}dl{display:grid;grid-template-columns:10rem 1fr;gap:.35rem 1rem}dt{font-weight:600}dd{margin:0;overflow-wrap:anywhere}pre{background:#f6f8fa;padding:1rem;overflow:auto;white-space:pre-wrap}.muted{color:#666}code{overflow-wrap:anywhere}@media(max-width:700px){summary{grid-template-columns:1fr 1fr}.phase{grid-column:1/-1}}</style></head><body>
 <p><a href="/">← Dashboard</a></p><h1>Roundhouse run details</h1><p>${escapeHtml(run.repository)} issue ${escapeHtml(run.issueNumber)}</p>
-<dl><dt>Status</dt><dd>${escapeHtml(run.status)}</dd><dt>Current stage</dt><dd>${escapeHtml(run.stage)}</dd><dt>Source issue</dt><dd>${link(run.issue?.url, `Issue #${run.issueNumber}`)}</dd><dt>Pull request</dt><dd>${link(prUrl, pr?.number ? `Pull request #${pr.number}` : "Pull request")}${prUrl ? ` · ${link(`${prUrl}/files`, "Files changed")}` : ""}</dd><dt>Created</dt><dd>${escapeHtml(new Date(details.createdAt).toISOString())}</dd><dt>Updated</dt><dd>${escapeHtml(new Date(details.updatedAt).toISOString())}</dd></dl>
+<dl><dt>Status</dt><dd>${escapeHtml(run.status)}</dd><dt>Current stage</dt><dd>${escapeHtml(currentStage)}</dd><dt>Source issue</dt><dd>${link(run.issue?.url, `Issue #${run.issueNumber}`)}</dd><dt>Pull request</dt><dd>${link(prUrl, pr?.number ? `Pull request #${pr.number}` : "Pull request")}${prUrl ? ` · ${link(`${prUrl}/files`, "Files changed")}` : ""}</dd><dt>Created</dt><dd>${escapeHtml(new Date(details.createdAt).toISOString())}</dd><dt>Updated</dt><dd>${escapeHtml(new Date(details.updatedAt).toISOString())}</dd></dl>
 <section><h2>Issue</h2><h3>${escapeHtml(run.issue?.title ?? "Unavailable")}</h3>${value(run.issue?.body)}</section><section><h2>Timeline</h2>${rows || '<p class="muted">No attempts recorded.</p>'}</section></body></html>`;
 }
