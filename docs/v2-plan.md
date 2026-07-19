@@ -878,6 +878,13 @@ clone/push, deterministic checkpoint commits, full-payload callback signing,
 fresh-container Git graph/path validation, exact accepted-head handoff, and
 idempotent replacement execution.
 
+Attempt leases measure inactivity, not total wall-clock execution. Model calls
+and runner output renew the current lease. Ten minutes without either destroys
+the inactive Container before the same immutable stage is dispatched again.
+Completion callbacks use their own request timeout and remain valid after an
+earlier lease window, so long-running work is not rejected merely for taking
+more than a fixed number of minutes.
+
 The real Artifacts exercise used the new `roundhouse-v2-development` namespace
 and a disposable opaque repository. It established `df1d1fa` as the exact
 base, pushed an accepted checkpoint with a five-minute write token, cloned that

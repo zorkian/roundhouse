@@ -60,9 +60,18 @@ export function completionRequest(
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ ...unsigned, signature }),
-    signal: AbortSignal.timeout(
-      Math.max(1, Math.min(30_000, assignment.deadlineAt - Date.now())),
-    ),
+    signal: AbortSignal.timeout(30_000),
+  });
+}
+
+export function activityRequest(assignment, callbackUrl, attemptSecret) {
+  return new Request(new URL("/attempts/activity", callbackUrl), {
+    method: "POST",
+    headers: {
+      "x-roundhouse-attempt-capability": attemptSecret,
+      "x-roundhouse-attempt-id": assignment.id,
+    },
+    signal: AbortSignal.timeout(30_000),
   });
 }
 
@@ -84,10 +93,21 @@ function command(commandName, args, options = {}) {
       stdio: ["ignore", "pipe", "pipe"],
     });
     const stdout = [];
-    child.stdout.on("data", (chunk) => stdout.push(chunk));
-    child.stderr.resume();
+    let lastActivityAt = 0;
+    let activity = Promise.resolve();
+    const recordActivity = () => {
+      if (!options.onActivity || Date.now() - lastActivityAt < 30_000) return;
+      lastActivityAt = Date.now();
+      activity = activity.then(options.onActivity).catch(() => undefined);
+    };
+    child.stdout.on("data", (chunk) => {
+      stdout.push(chunk);
+      recordActivity();
+    });
+    child.stderr.on("data", recordActivity);
     child.once("error", rejectCommand);
-    child.once("close", (code) => {
+    child.once("close", async (code) => {
+      await activity;
       if (code === 0) resolveCommand(Buffer.concat(stdout).toString().trim());
       else rejectCommand(new Error(`${commandName}_failed_${code}`));
     });
@@ -296,6 +316,18 @@ async function structuredAgent(
         CODEX_HOME: codexHome,
         ROUNDHOUSE_ATTEMPT_CAPABILITY: attemptSecret,
       },
+      onActivity:
+        typeof assignment.activityCallbackUrl === "string"
+          ? async () => {
+              await fetch(
+                activityRequest(
+                  assignment,
+                  assignment.activityCallbackUrl,
+                  attemptSecret,
+                ),
+              );
+            }
+          : undefined,
     },
   );
   return JSON.parse(await readFile(outputPath, "utf8"));
@@ -628,25 +660,42 @@ async function completeAssignment(assignment, headers) {
   if (typeof callbackUrl !== "string" || typeof attemptSecret !== "string")
     return;
   const directory = await prepareWorkspace(assignment);
+  const agentAssignment = { ...assignment, activityCallbackUrl: callbackUrl };
   const evidence =
     assignment.stage === "qualify"
-      ? { qualification: await qualify(assignment, directory, attemptSecret) }
+      ? {
+          qualification: await qualify(
+            agentAssignment,
+            directory,
+            attemptSecret,
+          ),
+        }
       : assignment.stage === "reproduce"
         ? {
-            reproduction: await reproduce(assignment, directory, attemptSecret),
+            reproduction: await reproduce(
+              agentAssignment,
+              directory,
+              attemptSecret,
+            ),
           }
         : assignment.stage === "plan"
-          ? { plan: await plan(assignment, directory, attemptSecret) }
+          ? { plan: await plan(agentAssignment, directory, attemptSecret) }
           : assignment.stage === "implement"
             ? {
                 implementation: await implement(
-                  assignment,
+                  agentAssignment,
                   directory,
                   attemptSecret,
                 ),
               }
             : assignment.stage === "review"
-              ? { review: await review(assignment, directory, attemptSecret) }
+              ? {
+                  review: await review(
+                    agentAssignment,
+                    directory,
+                    attemptSecret,
+                  ),
+                }
               : undefined;
   const checkpoint = await checkpointWorkspace(assignment, directory);
   const result = evidence

@@ -200,3 +200,40 @@ function repositoryContract(label, createRepository) {
 
 repositoryContract("memory", () => new MemoryRunRepository());
 repositoryContract("D1", () => new D1RunRepository(new LocalD1(), () => 100));
+
+it("renews a D1 attempt lease from recorded activity", async () => {
+  const repository = new D1RunRepository(new LocalD1(), () => 100);
+  const run = createRun(input);
+  await repository.create(run);
+  const attempt = {
+    id: "run_contract_rev_1",
+    runId: run.id,
+    runRevision: 1,
+    kind: "agent",
+    stage: "qualify",
+    role: "qualification",
+    state: "created",
+    deadlineAt: 200,
+    baseCommit: run.baseCommit,
+    expectedHead: run.baseCommit,
+  };
+  await repository.claimLease(
+    run.id,
+    1,
+    { attemptId: attempt.id, runRevision: 1, expiresAt: 200 },
+    100,
+  );
+  await repository.createAttempt(attempt);
+  await repository.markDispatched(attempt.id);
+
+  await expect(repository.recordModelCall(attempt.id, 600)).resolves.toBe(true);
+  await expect(repository.expiredLeases(599)).resolves.toEqual([]);
+  await expect(repository.getAttempt(attempt.id)).resolves.toMatchObject({
+    deadlineAt: 600,
+  });
+  await expect(repository.recordActivity(attempt.id, 700)).resolves.toBe(true);
+  await expect(repository.expiredLeases(699)).resolves.toEqual([]);
+  await expect(repository.expiredLeases(700)).resolves.toEqual([
+    { runId: run.id, expectedRevision: 1 },
+  ]);
+});

@@ -9,6 +9,7 @@ import {
 import {
   controlPlaneService,
   handleRequest,
+  recoverExpiredAttempts,
   successorWakeup,
 } from "./index.js";
 
@@ -103,5 +104,26 @@ describe("V2 control plane", () => {
       "github.com",
       "control.test",
     ]);
+  });
+
+  it("destroys an inactive sandbox before redispatching its stage", async () => {
+    const events: string[] = [];
+    const wakeup = { runId: "run_1", expectedRevision: 3 };
+    await recoverExpiredAttempts(
+      {
+        idFromName: (name: string) => name,
+        get: (id: unknown) => ({
+          destroy: async () => {
+            events.push(`destroy:${String(id)}`);
+          },
+          fetch: async () => new Response(),
+        }),
+      },
+      [wakeup],
+      async (next) => {
+        events.push(`enqueue:${next.runId}:${next.expectedRevision}`);
+      },
+    );
+    expect(events).toEqual(["destroy:run_1_rev_3", "enqueue:run_1:3"]);
   });
 });

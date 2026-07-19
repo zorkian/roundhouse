@@ -6,6 +6,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  activityRequest,
   completionRequest,
   checkpointWorkspace,
   implementationPrompt,
@@ -211,6 +212,45 @@ describe("V2 agent runner", () => {
       result: { checkpoint: checkpoint.outputHead },
       signature: expect.stringMatching(/^[a-f0-9]{64}$/),
     });
+  });
+
+  it("reports activity and can complete after the inactivity lease expires", async () => {
+    const assignment = {
+      id: "attempt_slow",
+      runId: "run_1",
+      runRevision: 3,
+      deadlineAt: Date.now() - 1,
+      baseCommit: "a".repeat(40),
+      expectedHead: "a".repeat(40),
+      artifact: { tokenId: "token-id", access: "write" },
+    };
+    const activity = activityRequest(
+      assignment,
+      "https://v2.invalid/attempts/callback",
+      "attempt-secret",
+    );
+    expect(new URL(activity.url).pathname).toBe("/attempts/activity");
+    expect(activity.headers.get("x-roundhouse-attempt-id")).toBe(assignment.id);
+    expect(activity.headers.get("x-roundhouse-attempt-capability")).toBe(
+      "attempt-secret",
+    );
+
+    const completion = completionRequest(
+      assignment,
+      {
+        repositoryId: "repo-id",
+        repository: "v2-run-1",
+        baseCommit: assignment.baseCommit,
+        inputHead: assignment.expectedHead,
+        outputHead: "b".repeat(40),
+        ref: "refs/heads/roundhouse/run_1",
+        changedPaths: ["src/fix.ts"],
+      },
+      "https://v2.invalid/attempts/callback",
+      "attempt-secret",
+    );
+    await new Promise((resolveWait) => setTimeout(resolveWait, 5));
+    expect(completion.signal.aborted).toBe(false);
   });
 
   it("checkpoints the implementation and promotes it from a clean clone", async () => {
