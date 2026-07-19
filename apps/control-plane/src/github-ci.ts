@@ -105,6 +105,15 @@ function checksSucceeded(checks: readonly CheckRun[], head: string): boolean {
   );
 }
 
+function checksCompleted(checks: readonly CheckRun[], head: string): boolean {
+  return (
+    checks.length > 0 &&
+    checks.every(
+      (check) => check.head_sha === head && check.status === "completed",
+    )
+  );
+}
+
 function checkEvidence(checks: readonly CheckRun[]) {
   return checks.map((check) => ({
     name: check.name,
@@ -153,7 +162,9 @@ export class GitHubCiAutomation {
     if (!pull || pull.state !== "open" || pull.head.sha !== run.currentHead)
       return "stale";
     let checks = await checkRuns(this.github, run);
-    if (!checksSucceeded(checks, run.currentHead)) return "pending";
+    if (!checksCompleted(checks, run.currentHead)) return "pending";
+    if (!checksSucceeded(checks, run.currentHead))
+      return this.recordCi(run, pull, checks, "failure", now);
 
     await markReady(this.github, pull);
     pull = await pullRequest(this.github, run);
@@ -179,6 +190,16 @@ export class GitHubCiAutomation {
       return "stale";
     if (!checksSucceeded(checks, run.currentHead)) return "pending";
 
+    return this.recordCi(run, pull, checks, "success", now);
+  }
+
+  private async recordCi(
+    run: RunSnapshot,
+    pull: PullRequest,
+    checks: readonly CheckRun[],
+    status: "success" | "failure",
+    now: number,
+  ): Promise<"recorded" | "stale"> {
     const attempt: Attempt = {
       id: immutableAttemptId(run.id, run.revision),
       runId: run.id,
@@ -198,7 +219,7 @@ export class GitHubCiAutomation {
       run.currentHead,
       {
         ci: {
-          status: "success",
+          status,
           head: run.currentHead,
           pullRequest: { number: pull.number, html_url: pull.html_url },
           checks: checkEvidence(checks),

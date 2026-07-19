@@ -413,6 +413,8 @@ export async function implement(assignment, directory, attemptSecret) {
     JSON.stringify(assignment.context?.implementation ?? {}),
     "Review findings to address:",
     JSON.stringify(assignment.context?.review ?? {}),
+    "Latest CI result to address:",
+    JSON.stringify(assignment.context?.ci ?? {}),
     "Run the relevant validation available in the repository and record each command, exit code, and useful output in validation.",
     "Write a concise pull request title and body for a maintainer. Describe the change and why; do not include validation commands or command output in the pull request body.",
     "Return only the requested structured implementation result.",

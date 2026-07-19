@@ -90,7 +90,7 @@ async function setupCi(reviewStatus: "clean" | "changes_requested" = "clean") {
   return { repository, run: ciRun };
 }
 
-function github(prHead = head) {
+function github(prHead = head, checkConclusion = "success") {
   let draft = true;
   const get = vi.fn(async (path: string) => {
     if (path.includes("/pulls?state="))
@@ -113,7 +113,7 @@ function github(prHead = head) {
           {
             name: "Check",
             status: "completed",
-            conclusion: "success",
+            conclusion: checkConclusion,
             head_sha: head,
             html_url: "https://github.test/check/1",
           },
@@ -205,6 +205,43 @@ describe("GitHub exact-head CI and merge", () => {
     await expect(
       repository.getAttempt(`${run.id}_rev_6`),
     ).resolves.toBeUndefined();
+  });
+
+  it("records exact failed CI and returns the run to implementation", async () => {
+    const { repository, run } = await setupCi();
+    const api = github(head, "failure");
+    const automation = new GitHubCiAutomation(repository, api.api);
+
+    await expect(automation.reconcileCi(run, 100)).resolves.toBe("recorded");
+    expect(api.graphql).not.toHaveBeenCalled();
+    await expect(
+      repository.getAttempt(`${run.id}_rev_6`),
+    ).resolves.toMatchObject({
+      kind: "external",
+      stage: "ci",
+      expectedHead: head,
+      acceptedHead: head,
+      result: {
+        ci: {
+          status: "failure",
+          head,
+          checks: [{ name: "Check", conclusion: "failure" }],
+        },
+      },
+    });
+
+    await coordinate(
+      repository,
+      { submit: async () => undefined },
+      { runId: run.id, expectedRevision: 6 },
+      101,
+    );
+    await expect(repository.get(run.id)).resolves.toMatchObject({
+      status: "active",
+      stage: "implement",
+      revision: 7,
+      currentHead: head,
+    });
   });
 
   it("does not accept successful CI without a clean exact-head review", async () => {
