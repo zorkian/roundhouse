@@ -93,12 +93,18 @@ describe("V2 control plane", () => {
       "Development runs across enrolled repositories",
     );
 
-    const directOrigin = await fetch(
-      new Request("https://direct-worker.invalid/"),
-      uiEnv(dashboardDb()) as never,
-      {} as never,
-    );
-    expect(directOrigin.status).toBe(404);
+    for (const path of [
+      "/",
+      "/runs",
+      "/repositories/zorkian/roundhouse/issues/281",
+    ]) {
+      const directOrigin = await fetch(
+        new Request(`https://direct-worker.invalid${path}`),
+        uiEnv(dashboardDb()) as never,
+        {} as never,
+      );
+      expect(directOrigin.status).toBe(404);
+    }
   });
 
   it("reports a small versioned health contract", async () => {
