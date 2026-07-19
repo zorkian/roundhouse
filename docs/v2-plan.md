@@ -918,11 +918,12 @@ Exit gate:
 ### Phase 2 — Qualification, clarification, reproduction, and planning
 
 The first Phase 2 slice stops deliberately after real qualification. It accepts
-an authorized `/roundhouse start` from a separately signed V2 development
-repository webhook, snapshots the exact default-branch commit, runs one
-read-only qualification through the private AI Gateway model broker, posts one
-reconciled qualification comment, and leaves an eligible run active at
-`reproduce`. The development GitHub App remains the outbound API authority;
+an authorized deployment-configured start command (`/roundhouse-dev start` in
+development and `/roundhouse start` after production promotion) from a
+separately signed repository webhook, snapshots the exact default-branch
+commit, runs one read-only qualification through the private AI Gateway model
+broker, posts one reconciled qualification comment, and leaves an eligible run
+active at `reproduce`. The development GitHub App remains the outbound API authority;
 its existing V1 webhook URL is not redirected during this isolated slice.
 Production App configuration and every V1 resource remain unchanged.
 
