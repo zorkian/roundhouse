@@ -8,9 +8,9 @@ import {
 } from "./attempt-container.js";
 import {
   controlPlaneService,
-  destroyAttemptContainer,
   handleRequest,
   recoverExpiredAttempts,
+  scheduleAttemptContainerDestruction,
   successorWakeup,
 } from "./index.js";
 import worker from "./index.js";
@@ -214,9 +214,10 @@ describe("V2 control plane", () => {
     expect(events).toEqual(["destroy:run_1_rev_3", "enqueue:run_1:3"]);
   });
 
-  it("destroys a completed sandbox by its immutable attempt id", async () => {
+  it("schedules completed sandbox destruction by immutable attempt id", async () => {
     const events: string[] = [];
-    await destroyAttemptContainer(
+    const scheduled: Promise<unknown>[] = [];
+    scheduleAttemptContainerDestruction(
       {
         idFromName: (name: string) => `id:${name}`,
         get: (id: unknown) => ({
@@ -227,7 +228,14 @@ describe("V2 control plane", () => {
         }),
       },
       "run_1_rev_4",
+      {
+        waitUntil: (promise) => {
+          scheduled.push(promise);
+        },
+      },
     );
+    expect(scheduled).toHaveLength(1);
+    await Promise.all(scheduled);
     expect(events).toEqual(["destroy:id:run_1_rev_4"]);
   });
 });

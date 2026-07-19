@@ -89,6 +89,14 @@ export async function destroyAttemptContainer(
   await containers.get(containers.idFromName(attemptId)).destroy();
 }
 
+export function scheduleAttemptContainerDestruction(
+  containers: AttemptNamespace,
+  attemptId: string,
+  context: Pick<ExecutionContext, "waitUntil">,
+): void {
+  context.waitUntil(destroyAttemptContainer(containers, attemptId));
+}
+
 export async function recoverExpiredAttempts(
   containers: AttemptNamespace,
   wakeups: readonly Wakeup[],
@@ -451,8 +459,10 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
             runId: attempt.runId,
             expectedRevision: attempt.runRevision,
           });
-        context.waitUntil(
-          destroyAttemptContainer(env.ATTEMPT_CONTAINERS, input.attemptId),
+        scheduleAttemptContainerDestruction(
+          env.ATTEMPT_CONTAINERS,
+          input.attemptId,
+          context,
         );
       }
       return json(
