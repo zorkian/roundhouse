@@ -12,6 +12,7 @@ import {
   recoverExpiredAttempts,
   scheduleAttemptContainerDestruction,
   successorWakeup,
+  validAttemptProgress,
 } from "./index.js";
 import worker from "./index.js";
 import type { D1Like } from "./d1-store.js";
@@ -265,8 +266,35 @@ describe("V2 control plane", () => {
       async (next) => {
         events.push(`enqueue:${next.runId}:${next.expectedRevision}`);
       },
+      async (attemptId, next) => {
+        events.push(`diagnose:${attemptId}:${next.expectedRevision}`);
+      },
     );
-    expect(events).toEqual(["destroy:run_1_rev_3", "enqueue:run_1:3"]);
+    expect(events).toEqual([
+      "diagnose:run_1_rev_3:3",
+      "destroy:run_1_rev_3",
+      "enqueue:run_1:3",
+    ]);
+  });
+
+  it("accepts only bounded runner progress metadata", () => {
+    expect(
+      validAttemptProgress({
+        phase: "command_output",
+        operation: "codex exec",
+        durationMs: 30_000,
+        stdoutBytes: 128,
+        stderrBytes: 0,
+      }),
+    ).toBe(true);
+    expect(
+      validAttemptProgress({
+        phase: "command_output",
+        operation: "codex exec",
+        output: "raw command output must not be persisted",
+      }),
+    ).toBe(false);
+    expect(validAttemptProgress({ phase: "unknown" })).toBe(false);
   });
 
   it("schedules completed sandbox destruction by immutable attempt id", async () => {

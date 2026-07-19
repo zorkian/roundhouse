@@ -65,6 +65,15 @@ export interface RunSummary {
   readonly usage?: readonly ModelUsage[];
 }
 
+export interface AttemptDiagnosticSnapshot {
+  readonly state: Attempt["state"];
+  readonly deadlineAt: number;
+  readonly updatedAt: number;
+  readonly modelCalls: number;
+  readonly completedModelCalls: number;
+  readonly lastProgress?: Readonly<Record<string, unknown>>;
+}
+
 type UsageRow = {
   call_id: string;
   attempt_id: string;
@@ -257,7 +266,18 @@ export class D1RunRepository implements RunRepository {
         this.now(),
       )
       .run();
-    return (result.meta.changes ?? 0) === 1 ? "created" : "exists";
+    const outcome = (result.meta.changes ?? 0) === 1 ? "created" : "exists";
+    if (outcome === "created")
+      await this.recordAttemptEventBestEffort(
+        usage.attemptId,
+        "model_usage_recorded",
+        {
+          callId: usage.callId,
+          model: usage.model,
+          totalTokens: usage.totalTokens ?? null,
+        },
+      );
+    return outcome;
   }
 
   async transition(
@@ -465,6 +485,73 @@ export class D1RunRepository implements RunRepository {
     return (result.meta.changes ?? 0) === 1;
   }
 
+  async recordAttemptEvent(
+    attemptId: string,
+    kind: string,
+    payload: Readonly<Record<string, unknown>>,
+  ): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        "INSERT INTO events (run_id,attempt_id,kind,payload_json,created_at) SELECT run_id,id,?1,?2,?3 FROM attempts WHERE id=?4",
+      )
+      .bind(kind, JSON.stringify(payload), this.now(), attemptId)
+      .run();
+    return (result.meta.changes ?? 0) === 1;
+  }
+
+  private async recordAttemptEventBestEffort(
+    attemptId: string,
+    kind: string,
+    payload: Readonly<Record<string, unknown>>,
+  ): Promise<void> {
+    try {
+      await this.recordAttemptEvent(attemptId, kind, payload);
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          message: "attempt_diagnostic_record_failed",
+          attemptId,
+          kind,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
+  }
+
+  async attemptDiagnosticSnapshot(
+    attemptId: string,
+  ): Promise<AttemptDiagnosticSnapshot | undefined> {
+    const row = await this.db
+      .prepare(
+        "SELECT a.state,a.deadline_at,a.updated_at,a.model_calls,(SELECT COUNT(*) FROM model_usage u WHERE u.attempt_id=a.id) AS completed_model_calls,(SELECT e.payload_json FROM events e WHERE e.attempt_id=a.id AND e.kind='attempt_progress' ORDER BY e.id DESC LIMIT 1) AS last_progress_json FROM attempts a WHERE a.id=?1",
+      )
+      .bind(attemptId)
+      .first<{
+        state: Attempt["state"];
+        deadline_at: number;
+        updated_at: number;
+        model_calls: number;
+        completed_model_calls: number;
+        last_progress_json: string | null;
+      }>();
+    if (!row) return undefined;
+    return {
+      state: row.state,
+      deadlineAt: row.deadline_at,
+      updatedAt: row.updated_at,
+      modelCalls: row.model_calls,
+      completedModelCalls: row.completed_model_calls,
+      ...(row.last_progress_json
+        ? {
+            lastProgress: JSON.parse(row.last_progress_json) as Record<
+              string,
+              unknown
+            >,
+          }
+        : {}),
+    };
+  }
+
   async setGitHubIssueState(
     runId: string,
     state: "open" | "closed",
@@ -499,15 +586,31 @@ export class D1RunRepository implements RunRepository {
     return (run.meta.changes ?? 0) === 1;
   }
 
-  async recordActivity(attemptId: string, expiresAt: number): Promise<boolean> {
-    return this.renewActivity(attemptId, expiresAt, false);
+  async recordActivity(
+    attemptId: string,
+    expiresAt: number,
+    progress?: Readonly<Record<string, unknown>>,
+  ): Promise<boolean> {
+    const recorded = await this.renewActivity(attemptId, expiresAt, false);
+    if (recorded && progress)
+      await this.recordAttemptEventBestEffort(
+        attemptId,
+        "attempt_progress",
+        progress,
+      );
+    return recorded;
   }
 
   async recordModelCall(
     attemptId: string,
     expiresAt: number,
   ): Promise<boolean> {
-    return this.renewActivity(attemptId, expiresAt, true);
+    const recorded = await this.renewActivity(attemptId, expiresAt, true);
+    if (recorded)
+      await this.recordAttemptEventBestEffort(attemptId, "model_call_started", {
+        expiresAt,
+      });
+    return recorded;
   }
 
   async recordModelRouting(

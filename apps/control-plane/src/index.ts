@@ -116,12 +116,77 @@ export async function recoverExpiredAttempts(
   containers: AttemptNamespace,
   wakeups: readonly Wakeup[],
   enqueue: (wakeup: Wakeup) => Promise<void>,
+  diagnose?: (attemptId: string, wakeup: Wakeup) => Promise<void>,
 ): Promise<void> {
   for (const wakeup of wakeups) {
     const attemptId = immutableAttemptId(wakeup.runId, wakeup.expectedRevision);
+    if (diagnose) await diagnose(attemptId, wakeup);
     await destroyAttemptContainer(containers, attemptId);
     await enqueue(wakeup);
   }
+}
+
+const progressPhases = new Set([
+  "workspace_started",
+  "workspace_ready",
+  "agent_started",
+  "command_started",
+  "command_output",
+  "command_completed",
+  "command_failed",
+  "agent_completed",
+  "checkpoint_started",
+  "checkpoint_completed",
+  "callback_started",
+  "callback_completed",
+]);
+
+export function validAttemptProgress(
+  value: unknown,
+): value is Readonly<Record<string, unknown>> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const progress = value as Record<string, unknown>;
+  const allowed = new Set([
+    "phase",
+    "operation",
+    "durationMs",
+    "stdoutBytes",
+    "stderrBytes",
+    "exitCode",
+    "errorType",
+    "changedPathCount",
+    "status",
+  ]);
+  if (Object.keys(progress).some((key) => !allowed.has(key))) return false;
+  if (typeof progress.phase !== "string" || !progressPhases.has(progress.phase))
+    return false;
+  for (const key of ["operation", "errorType"] as const) {
+    const field = progress[key];
+    if (
+      field !== undefined &&
+      (typeof field !== "string" || field.length > 100)
+    )
+      return false;
+  }
+  for (const key of [
+    "durationMs",
+    "stdoutBytes",
+    "stderrBytes",
+    "changedPathCount",
+    "status",
+  ] as const) {
+    const field = progress[key];
+    if (
+      field !== undefined &&
+      (typeof field !== "number" || !Number.isInteger(field) || field < 0)
+    )
+      return false;
+  }
+  const exitCode = progress.exitCode;
+  return (
+    exitCode === undefined ||
+    (typeof exitCode === "number" && Number.isInteger(exitCode))
+  );
 }
 type RuntimeEnv = Cloudflare.Env & {
   DB: D1Like;
@@ -436,9 +501,21 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
         ))
       )
         return json({ error: "unauthorized" }, 401);
+      let progress: Readonly<Record<string, unknown>> | undefined;
+      if (request.body) {
+        try {
+          const candidate: unknown = await request.json();
+          if (!validAttemptProgress(candidate))
+            return json({ error: "invalid_progress" }, 400);
+          progress = candidate;
+        } catch {
+          return json({ error: "invalid_progress" }, 400);
+        }
+      }
       const recorded = await new D1RunRepository(env.DB).recordActivity(
         attemptId,
         Date.now() + attemptInactivityMilliseconds,
+        progress,
       );
       return recorded
         ? new Response(null, { status: 204 })
@@ -557,11 +634,45 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
   },
   async scheduled(_controller, env) {
     const repository = new D1RunRepository(env.DB);
+    const expiredAt = Date.now();
     await recoverExpiredAttempts(
       env.ATTEMPT_CONTAINERS,
-      await repository.expiredLeases(Date.now()),
+      await repository.expiredLeases(expiredAt),
       async (wakeup) => {
         await env.RUN_WAKEUPS.send(wakeup);
+      },
+      async (attemptId, wakeup) => {
+        try {
+          const snapshot =
+            await repository.attemptDiagnosticSnapshot(attemptId);
+          const payload = {
+            expectedRevision: wakeup.expectedRevision,
+            expiredAt,
+            ...(snapshot ?? {}),
+          };
+          console.error(
+            JSON.stringify({
+              message: "attempt_lease_expired",
+              attemptId,
+              runId: wakeup.runId,
+              ...payload,
+            }),
+          );
+          await repository.recordAttemptEvent(
+            attemptId,
+            "attempt_lease_expired",
+            payload,
+          );
+        } catch (error) {
+          console.error(
+            JSON.stringify({
+              message: "attempt_expiry_diagnostic_failed",
+              attemptId,
+              runId: wakeup.runId,
+              error: error instanceof Error ? error.message : String(error),
+            }),
+          );
+        }
       },
     );
   },

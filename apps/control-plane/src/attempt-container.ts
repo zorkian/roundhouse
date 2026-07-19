@@ -27,6 +27,26 @@ const modelHost = "model.roundhouse.internal";
 const packageRegistryHost = "registry.npmjs.org";
 const containerCa = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
 
+async function recordModelEvent(
+  repository: D1RunRepository,
+  attemptId: string,
+  kind: string,
+  payload: Readonly<Record<string, unknown>>,
+): Promise<void> {
+  try {
+    await repository.recordAttemptEvent(attemptId, kind, payload);
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        message: "model_diagnostic_record_failed",
+        attemptId,
+        kind,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
+  }
+}
+
 export function attemptAllowedHosts(
   attempt: Pick<AttemptAssignment, "artifact" | "publish" | "upstream">,
   callbackUrl?: string | null,
@@ -106,17 +126,36 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
   );
   headers.set("x-roundhouse-complexity", "unknown");
   const requestedUrl = new URL(request.url);
-  const response = await runtime.MODEL_BROKER.fetch(
-    new Request(
-      `https://broker.roundhouse.internal${requestedUrl.pathname}${requestedUrl.search}`,
-      {
-        method: request.method,
-        headers,
-        body: request.body,
-        redirect: "manual",
-      },
-    ),
-  );
+  let response: Response;
+  try {
+    response = await runtime.MODEL_BROKER.fetch(
+      new Request(
+        `https://broker.roundhouse.internal${requestedUrl.pathname}${requestedUrl.search}`,
+        {
+          method: request.method,
+          headers,
+          body: request.body,
+          redirect: "manual",
+        },
+      ),
+    );
+  } catch (error) {
+    await recordModelEvent(repository, attemptId, "model_request_failed", {
+      errorType: error instanceof Error ? error.name : typeof error,
+    });
+    console.error(
+      JSON.stringify({
+        message: "model_request_failed",
+        attemptId,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
+    throw error;
+  }
+  await recordModelEvent(repository, attemptId, "model_response_opened", {
+    status: response.status,
+    hasBody: Boolean(response.body),
+  });
   const routing = {
     model: response.headers.get("x-roundhouse-routing-model"),
     reasoningEffort: response.headers.get("x-roundhouse-routing-effort"),
@@ -124,7 +163,13 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
   };
   if (routing.model && routing.reasoningEffort && routing.rule)
     await repository.recordModelRouting(attemptId, routing);
-  if (!response.body || !response.ok) return response;
+  if (!response.body || !response.ok) {
+    await recordModelEvent(repository, attemptId, "model_response_rejected", {
+      status: response.status,
+      hasBody: Boolean(response.body),
+    });
+    return response;
+  }
   const decoder = new TextDecoder();
   let responseText = "";
   const stream = response.body.pipeThrough(
@@ -153,6 +198,16 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
             );
           }
         }
+        await recordModelEvent(
+          repository,
+          attemptId,
+          "model_response_completed",
+          {
+            status: response.status,
+            usageFound: Boolean(usage),
+            callId: usage?.callId ?? null,
+          },
+        );
       },
     }),
   );

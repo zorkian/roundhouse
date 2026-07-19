@@ -54,6 +54,18 @@ class LocalD1 {
         "utf8",
       ),
     );
+    this.database.exec(
+      readFileSync(
+        new URL("../migrations/0004_github_issue_state.sql", import.meta.url),
+        "utf8",
+      ),
+    );
+    this.database.exec(
+      readFileSync(
+        new URL("../migrations/0005_model_usage.sql", import.meta.url),
+        "utf8",
+      ),
+    );
   }
 
   prepare(sql) {
@@ -231,7 +243,39 @@ it("renews a D1 attempt lease from recorded activity", async () => {
   await expect(repository.getAttempt(attempt.id)).resolves.toMatchObject({
     deadlineAt: 600,
   });
-  await expect(repository.recordActivity(attempt.id, 700)).resolves.toBe(true);
+  await expect(
+    repository.recordActivity(attempt.id, 700, {
+      phase: "command_output",
+      operation: "codex exec",
+      durationMs: 30_000,
+      stdoutBytes: 100,
+      stderrBytes: 0,
+    }),
+  ).resolves.toBe(true);
+  await expect(
+    repository.recordModelUsage({
+      callId: "response_1",
+      attemptId: attempt.id,
+      model: "openai/gpt-5.6-sol",
+      totalTokens: 123,
+    }),
+  ).resolves.toBe("created");
+  await expect(
+    repository.attemptDiagnosticSnapshot(attempt.id),
+  ).resolves.toEqual({
+    state: "dispatched",
+    deadlineAt: 700,
+    updatedAt: 100,
+    modelCalls: 1,
+    completedModelCalls: 1,
+    lastProgress: {
+      phase: "command_output",
+      operation: "codex exec",
+      durationMs: 30_000,
+      stdoutBytes: 100,
+      stderrBytes: 0,
+    },
+  });
   await expect(repository.expiredLeases(699)).resolves.toEqual([]);
   await expect(repository.expiredLeases(700)).resolves.toEqual([
     { runId: run.id, expectedRevision: 1 },
