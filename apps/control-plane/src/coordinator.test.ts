@@ -15,6 +15,7 @@ import {
   type AttemptCallback,
 } from "./callback.js";
 import {
+  attemptInactivityMilliseconds,
   ciTransition,
   coordinate,
   implementationTransition,
@@ -240,7 +241,7 @@ describe("single coordinator", () => {
     expect(dispatches).toBe(2);
     await expect(store.getAttempt("run_slice_rev_1")).resolves.toMatchObject({
       state: "dispatched",
-      deadlineAt: 101 + 30 * 60_000,
+      deadlineAt: 101 + attemptInactivityMilliseconds,
     });
   });
 

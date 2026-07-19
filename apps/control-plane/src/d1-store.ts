@@ -326,13 +326,37 @@ export class D1RunRepository implements RunRepository {
     return (result.meta.changes ?? 0) === 1;
   }
 
-  async recordModelCall(attemptId: string): Promise<void> {
-    await this.db
+  private async renewActivity(
+    attemptId: string,
+    expiresAt: number,
+    countModelCall: boolean,
+  ): Promise<boolean> {
+    const now = this.now();
+    const attempt = await this.db
       .prepare(
-        "UPDATE attempts SET model_calls=model_calls+1,updated_at=?1 WHERE id=?2",
+        `UPDATE attempts SET ${countModelCall ? "model_calls=model_calls+1," : ""}deadline_at=?1,updated_at=?2 WHERE id=?3 AND state IN ('created','dispatched') AND EXISTS (SELECT 1 FROM runs WHERE runs.id=attempts.run_id AND runs.revision=attempts.run_revision AND runs.lease_attempt_id=attempts.id AND runs.lease_revision=attempts.run_revision AND runs.status='active')`,
       )
-      .bind(this.now(), attemptId)
+      .bind(expiresAt, now, attemptId)
       .run();
+    if ((attempt.meta.changes ?? 0) !== 1) return false;
+    const run = await this.db
+      .prepare(
+        "UPDATE runs SET lease_expires_at=?1,updated_at=?2 WHERE lease_attempt_id=?3 AND lease_revision=(SELECT run_revision FROM attempts WHERE id=?3) AND status='active'",
+      )
+      .bind(expiresAt, now, attemptId)
+      .run();
+    return (run.meta.changes ?? 0) === 1;
+  }
+
+  async recordActivity(attemptId: string, expiresAt: number): Promise<boolean> {
+    return this.renewActivity(attemptId, expiresAt, false);
+  }
+
+  async recordModelCall(
+    attemptId: string,
+    expiresAt: number,
+  ): Promise<boolean> {
+    return this.renewActivity(attemptId, expiresAt, true);
   }
 
   async recordModelRouting(

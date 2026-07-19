@@ -4,6 +4,7 @@
 import { Container } from "@cloudflare/containers";
 import type { Attempt } from "@roundhouse/core";
 import { verifyCallback } from "./callback.js";
+import { attemptInactivityMilliseconds } from "./coordinator.js";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
 
 interface AttemptAssignment extends Attempt {
@@ -82,7 +83,11 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
     );
     return new Response("stale_attempt", { status: 409 });
   }
-  await repository.recordModelCall(attemptId);
+  const recorded = await repository.recordModelCall(
+    attemptId,
+    Date.now() + attemptInactivityMilliseconds,
+  );
+  if (!recorded) return new Response("stale_attempt", { status: 409 });
   const headers = new Headers(request.headers);
   headers.delete("authorization");
   headers.delete("x-roundhouse-attempt-capability");

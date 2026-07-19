@@ -17,6 +17,8 @@ export interface AttemptReporter {
   report(run: RunSnapshot, attempt: Attempt): Promise<void>;
 }
 
+export const attemptInactivityMilliseconds = 10 * 60_000;
+
 export function qualificationTransition(attempt: Attempt) {
   const outcome = attempt.result?.qualification;
   if (!outcome || typeof outcome !== "object")
@@ -144,7 +146,7 @@ export async function coordinate(
   dispatcher: AttemptDispatcher,
   wakeup: Wakeup,
   now: number,
-  leaseMilliseconds = 30 * 60_000,
+  leaseMilliseconds = attemptInactivityMilliseconds,
   reporter?: AttemptReporter,
 ): Promise<"dispatched" | "duplicate" | "stale"> {
   const run = await repository.get(wakeup.runId);
