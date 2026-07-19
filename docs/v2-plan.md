@@ -182,7 +182,7 @@ Not in the first V2 release:
 - customer-grade multi-tenancy or billing;
 - a general-purpose workflow engine;
 - a marketplace of reviewer plugins;
-- a dashboard duplicating GitHub's maintainer experience;
+- a dashboard duplicating GitHub's issue, review, or maintainer experience;
 - self-modifying policy, prompts, permissions, or model routing;
 - claims that automated validation proves a change secure or correct.
 
@@ -255,7 +255,9 @@ the V1 orchestration as a compatibility layer.
 - One fixed “Claude review” record shape or a fixed two-cycle review workflow.
 - Infrastructure manifests and evidence logs committed as product
   documentation.
-- V1's operator UI until a real V2 maintainer need cannot be met in GitHub.
+- V1's operator UI. V2 may expose a small read-only operational dashboard for
+  seeing run status and recorded evidence; GitHub remains the place where
+  people interact with issues, reviews, and pull requests.
 - Release/deployment orchestration as a Roundhouse product responsibility.
 
 ## 6. V2 architecture

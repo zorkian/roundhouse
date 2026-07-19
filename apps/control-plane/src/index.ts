@@ -26,6 +26,7 @@ import {
   type CheckpointValidator,
 } from "./callback.js";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
+import { renderDashboard } from "./dashboard.js";
 import { renderRunDetails } from "./run-details.js";
 import { acceptGitHubCheckSuite, GitHubCiAutomation } from "./github-ci.js";
 import {
@@ -44,6 +45,19 @@ function json(value: unknown, status = 200, headers?: HeadersInit): Response {
   return Response.json(value, {
     status,
     headers: { "cache-control": "no-store", ...headers },
+  });
+}
+
+function html(value: string): Response {
+  return new Response(value, {
+    headers: {
+      "cache-control": "no-store",
+      "content-security-policy":
+        "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      "content-type": "text/html; charset=utf-8",
+      "referrer-policy": "no-referrer",
+      "x-content-type-options": "nosniff",
+    },
   });
 }
 
@@ -371,6 +385,12 @@ class ContainerCheckpointValidator implements CheckpointValidator {
 const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
   async fetch(request, env, context) {
     const url = new URL(request.url);
+    if (url.pathname === "/" || url.pathname === "/runs") {
+      if (request.method !== "GET")
+        return json({ error: "method_not_allowed" }, 405, { allow: "GET" });
+      const runs = await new D1RunRepository(env.DB).listRuns();
+      return html(renderDashboard(runs));
+    }
     const detailsMatch = url.pathname.match(
       /^\/repositories\/([^/]+)\/([^/]+)\/issues\/(\d+)$/,
     );
@@ -393,12 +413,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
         Number(issueNumber),
       );
       if (!details) return json({ error: "not_found" }, 404);
-      return new Response(renderRunDetails(details), {
-        headers: {
-          "cache-control": "no-store",
-          "content-type": "text/html; charset=utf-8",
-        },
-      });
+      return html(renderRunDetails(details));
     }
     if (url.pathname === "/attempts/activity") {
       if (request.method !== "POST")
@@ -500,7 +515,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
     );
     const github = new GitHubClient(env);
     const automation = new GitHubCiAutomation(repository, github);
-    const reporter = new GitHubStageReporter(github, env.CONTROL_PLANE_ORIGIN);
+    const reporter = new GitHubStageReporter(github, env.PUBLIC_ORIGIN);
     for (const message of batch.messages) {
       try {
         const run = await repository.get(message.body.runId);
