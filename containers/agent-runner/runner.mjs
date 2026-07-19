@@ -85,6 +85,19 @@ function gitEnvironment(token) {
   };
 }
 
+function roundhouseGitEnvironment(extra = {}) {
+  return {
+    ...process.env,
+    ...extra,
+    GIT_AUTHOR_NAME: "Roundhouse",
+    GIT_AUTHOR_EMAIL: "roundhouse@invalid",
+    GIT_COMMITTER_NAME: "Roundhouse",
+    GIT_COMMITTER_EMAIL: "roundhouse@invalid",
+    GIT_AUTHOR_DATE: "2000-01-01T00:00:00Z",
+    GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z",
+  };
+}
+
 function command(commandName, args, options = {}) {
   return new Promise((resolveCommand, rejectCommand) => {
     const child = spawn(commandName, args, {
@@ -93,6 +106,7 @@ function command(commandName, args, options = {}) {
       stdio: ["ignore", "pipe", "pipe"],
     });
     const stdout = [];
+    const stderr = [];
     let lastActivityAt = 0;
     let activity = Promise.resolve();
     const recordActivity = () => {
@@ -104,12 +118,25 @@ function command(commandName, args, options = {}) {
       stdout.push(chunk);
       recordActivity();
     });
-    child.stderr.on("data", recordActivity);
+    child.stderr.on("data", (chunk) => {
+      stderr.push(chunk);
+      recordActivity();
+    });
     child.once("error", rejectCommand);
     child.once("close", async (code) => {
       await activity;
       if (code === 0) resolveCommand(Buffer.concat(stdout).toString().trim());
-      else rejectCommand(new Error(`${commandName}_failed_${code}`));
+      else {
+        const detail =
+          commandName === "git"
+            ? Buffer.concat(stderr).toString().trim().slice(0, 1_000)
+            : "";
+        rejectCommand(
+          new Error(
+            `${commandName}_${args[0]}_failed_${code}${detail ? `: ${detail}` : ""}`,
+          ),
+        );
+      }
     });
   });
 }
@@ -447,6 +474,11 @@ export function implementationPrompt(assignment) {
     JSON.stringify(assignment.context?.review ?? {}),
     "Latest CI result to address:",
     JSON.stringify(assignment.context?.ci ?? {}),
+    ...(assignment.context?.ci?.reason === "base_conflict"
+      ? [
+          "The pull request conflicts with the current base branch. The workspace has been prepared with that merge in progress. Resolve the conflicts as part of this implementation.",
+        ]
+      : []),
     "Run the relevant validation available in the repository and record each command, exit code, and useful output in validation.",
     "Write a concise pull request title and body for a maintainer. Describe the change and why; do not include validation commands or command output in the pull request body.",
     "Return only the requested structured implementation result.",
@@ -526,6 +558,38 @@ export async function prepareWorkspace(assignment) {
     ],
     { cwd: directory },
   );
+  if (
+    assignment.artifact.access === "write" &&
+    assignment.context?.ci?.reason === "base_conflict" &&
+    assignment.upstream
+  ) {
+    const upstreamEnvironment = roundhouseGitEnvironment({
+      GIT_TERMINAL_PROMPT: "0",
+    });
+    await command(
+      "git",
+      [
+        "fetch",
+        "--no-tags",
+        assignment.upstream.remote,
+        assignment.upstream.branch,
+      ],
+      { cwd: directory, env: upstreamEnvironment },
+    );
+    try {
+      await command("git", ["merge", "--no-commit", "FETCH_HEAD"], {
+        cwd: directory,
+        env: upstreamEnvironment,
+      });
+    } catch (error) {
+      const conflicts = await command(
+        "git",
+        ["diff", "--name-only", "--diff-filter=U"],
+        { cwd: directory },
+      );
+      if (!conflicts) throw error;
+    }
+  }
   return directory;
 }
 
@@ -546,15 +610,7 @@ export async function checkpointWorkspace(assignment, directory) {
     cwd: directory,
   });
   if (!staged) throw new Error("implementation_made_no_changes");
-  const deterministicEnvironment = {
-    ...process.env,
-    GIT_AUTHOR_NAME: "Roundhouse",
-    GIT_AUTHOR_EMAIL: "roundhouse@invalid",
-    GIT_COMMITTER_NAME: "Roundhouse",
-    GIT_COMMITTER_EMAIL: "roundhouse@invalid",
-    GIT_AUTHOR_DATE: "2000-01-01T00:00:00Z",
-    GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z",
-  };
+  const deterministicEnvironment = roundhouseGitEnvironment();
   await command(
     "git",
     ["commit", "-m", `Implement issue #${assignment.issueNumber}`],
@@ -740,6 +796,10 @@ function validAssignment(body) {
     body?.artifact?.tokenId &&
     body?.artifact?.token &&
     ["read", "write"].includes(body?.artifact?.access) &&
+    (!body?.upstream ||
+      (body.upstream.remote?.startsWith("https://") &&
+        body.upstream.hostname &&
+        /^[A-Za-z0-9._\/-]+$/.test(body.upstream.branch ?? ""))) &&
     /^refs\/heads\/[A-Za-z0-9._\/-]+$/.test(body?.artifact?.ref ?? ""),
   );
 }

@@ -39,6 +39,7 @@ interface PullRequest extends OpenPullRequest {
   readonly draft: boolean;
   readonly state: string;
   readonly merged: boolean;
+  readonly mergeable: boolean | null;
   readonly head: { readonly sha: string };
 }
 
@@ -161,6 +162,22 @@ export class GitHubCiAutomation {
     let pull = await pullRequest(this.github, run);
     if (!pull || pull.state !== "open" || pull.head.sha !== run.currentHead)
       return "stale";
+    if (pull.mergeable === false)
+      return this.recordCi(
+        run,
+        pull,
+        [
+          {
+            name: "Pull request base",
+            status: "completed",
+            conclusion: "failure",
+            head_sha: run.currentHead,
+          },
+        ],
+        "failure",
+        now,
+        "base_conflict",
+      );
     let checks = await checkRuns(this.github, run);
     if (!checksCompleted(checks, run.currentHead)) return "pending";
     if (!checksSucceeded(checks, run.currentHead))
@@ -199,6 +216,7 @@ export class GitHubCiAutomation {
     checks: readonly CheckRun[],
     status: "success" | "failure",
     now: number,
+    reason?: "base_conflict",
   ): Promise<"recorded" | "stale"> {
     const attempt: Attempt = {
       id: immutableAttemptId(run.id, run.revision),
@@ -220,6 +238,7 @@ export class GitHubCiAutomation {
       {
         ci: {
           status,
+          ...(reason ? { reason } : {}),
           head: run.currentHead,
           pullRequest: { number: pull.number, html_url: pull.html_url },
           checks: checkEvidence(checks),
