@@ -8,6 +8,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 RUN npm install --global @openai/codex@0.144.6
+RUN corepack enable
 
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin runner
 
