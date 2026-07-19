@@ -579,6 +579,7 @@ export async function prepareWorkspace(assignment) {
     try {
       await command("git", ["merge", "--no-commit", "FETCH_HEAD"], {
         cwd: directory,
+        env: upstreamEnvironment,
       });
     } catch (error) {
       const conflicts = await command(
