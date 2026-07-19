@@ -93,6 +93,24 @@ describe("dashboard", () => {
     expect(html).toContain("0</strong> need attention");
   });
 
+  it("shows issue usage totals", () => {
+    const run: RunSummary = {
+      ...summary("active", 6, "Measured"),
+      usage: [
+        {
+          callId: "call",
+          attemptId: "attempt",
+          model: "model",
+          totalTokens: 1234,
+          costUsd: 0.25,
+        },
+      ],
+    };
+    const html = renderDashboard([run]);
+    expect(html).toContain("1,234 tokens");
+    expect(html).toContain("$0.250000");
+  });
+
   it("moves closed failures to recently finished with a GitHub label", () => {
     const html = renderDashboard([
       summary("failed", 4, "Closed failure", "closed"),

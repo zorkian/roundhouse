@@ -3,6 +3,7 @@
 
 import type { RunStatus } from "@roundhouse/core";
 import type { RunSummary } from "./d1-store.js";
+import { formatUsage } from "./usage.js";
 
 const escapeHtml = (value: unknown) =>
   String(value)
@@ -43,7 +44,7 @@ function renderRun(summary: RunSummary): string {
   const statusClass = closedBeforeCompletion ? "cancelled" : run.status;
   return `<article class="run">
   <div class="run-main"><div class="eyebrow">${escapeHtml(run.repository)} · #${run.issueNumber}</div><h3><a href="${detailsPath(run)}">${escapeHtml(title)}</a></h3><p>${escapeHtml(detail)}</p></div>
-  <div class="run-meta"><span class="status ${statusClass}">${label}</span><time datetime="${new Date(summary.updatedAt).toISOString()}">Updated ${escapeHtml(new Date(summary.updatedAt).toLocaleString("en-US", { timeZone: "UTC", dateStyle: "medium", timeStyle: "short" }))} UTC</time>${github}</div>
+  <div class="run-meta"><span class="status ${statusClass}">${label}</span><span>${escapeHtml(formatUsage(summary.usage ?? []))}</span><time datetime="${new Date(summary.updatedAt).toISOString()}">Updated ${escapeHtml(new Date(summary.updatedAt).toLocaleString("en-US", { timeZone: "UTC", dateStyle: "medium", timeStyle: "short" }))} UTC</time>${github}</div>
 </article>`;
 }
 

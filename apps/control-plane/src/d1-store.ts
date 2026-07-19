@@ -7,6 +7,7 @@ import {
   type Attempt,
   type IssueSnapshot,
   type Lease,
+  type ModelUsage,
   type RunRepository,
   type RunSnapshot,
   type RunStage,
@@ -53,6 +54,7 @@ export interface RunDetails {
     readonly createdAt: number;
     readonly updatedAt: number;
   })[];
+  readonly usage?: readonly ModelUsage[];
 }
 
 export interface RunSummary {
@@ -60,7 +62,35 @@ export interface RunSummary {
   readonly githubIssueState: "open" | "closed";
   readonly createdAt: number;
   readonly updatedAt: number;
+  readonly usage?: readonly ModelUsage[];
 }
+
+type UsageRow = {
+  call_id: string;
+  attempt_id: string;
+  model: string;
+  input_tokens: number | null;
+  cached_input_tokens: number | null;
+  reasoning_tokens: number | null;
+  output_tokens: number | null;
+  total_tokens: number | null;
+  cost_usd: number | null;
+};
+const usageFromRow = (row: UsageRow): ModelUsage => ({
+  callId: row.call_id,
+  attemptId: row.attempt_id,
+  model: row.model,
+  ...(row.input_tokens === null ? {} : { inputTokens: row.input_tokens }),
+  ...(row.cached_input_tokens === null
+    ? {}
+    : { cachedInputTokens: row.cached_input_tokens }),
+  ...(row.reasoning_tokens === null
+    ? {}
+    : { reasoningTokens: row.reasoning_tokens }),
+  ...(row.output_tokens === null ? {} : { outputTokens: row.output_tokens }),
+  ...(row.total_tokens === null ? {} : { totalTokens: row.total_tokens }),
+  ...(row.cost_usd === null ? {} : { costUsd: row.cost_usd }),
+});
 
 function attemptFromRow(row: AttemptRow): Attempt {
   return {
@@ -150,12 +180,18 @@ export class D1RunRepository implements RunRepository {
         updated_at: number;
         github_issue_state: "open" | "closed";
       }>();
-    return (result.results ?? []).map((row) => ({
-      run: JSON.parse(row.document_json) as RunSnapshot,
-      githubIssueState: row.github_issue_state,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    }));
+    return Promise.all(
+      (result.results ?? []).map(async (row) => {
+        const run = JSON.parse(row.document_json) as RunSnapshot;
+        return {
+          run,
+          githubIssueState: row.github_issue_state,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+          usage: await this.usageForRun(run.id),
+        };
+      }),
+    );
   }
 
   async detailsByIssue(
@@ -189,7 +225,39 @@ export class D1RunRepository implements RunRepository {
         createdAt: attempt.created_at,
         updatedAt: attempt.updated_at,
       })),
+      usage: await this.usageForRun(run.id),
     };
+  }
+
+  private async usageForRun(runId: string): Promise<readonly ModelUsage[]> {
+    const result = await this.db
+      .prepare(
+        "SELECT u.call_id,u.attempt_id,u.model,u.input_tokens,u.cached_input_tokens,u.reasoning_tokens,u.output_tokens,u.total_tokens,u.cost_usd FROM model_usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.run_id=?1 ORDER BY u.created_at,u.call_id",
+      )
+      .bind(runId)
+      .all<UsageRow>();
+    return (result.results ?? []).map(usageFromRow);
+  }
+
+  async recordModelUsage(usage: ModelUsage): Promise<"created" | "exists"> {
+    const result = await this.db
+      .prepare(
+        "INSERT OR IGNORE INTO model_usage (call_id,attempt_id,model,input_tokens,cached_input_tokens,reasoning_tokens,output_tokens,total_tokens,cost_usd,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+      )
+      .bind(
+        usage.callId,
+        usage.attemptId,
+        usage.model,
+        usage.inputTokens ?? null,
+        usage.cachedInputTokens ?? null,
+        usage.reasoningTokens ?? null,
+        usage.outputTokens ?? null,
+        usage.totalTokens ?? null,
+        usage.costUsd ?? null,
+        this.now(),
+      )
+      .run();
+    return (result.meta.changes ?? 0) === 1 ? "created" : "exists";
   }
 
   async transition(

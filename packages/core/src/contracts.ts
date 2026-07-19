@@ -47,6 +47,18 @@ export interface Attempt {
   readonly routing?: Readonly<Record<string, unknown>>;
 }
 
+export interface ModelUsage {
+  readonly callId: string;
+  readonly attemptId: string;
+  readonly model: string;
+  readonly inputTokens?: number;
+  readonly cachedInputTokens?: number;
+  readonly reasoningTokens?: number;
+  readonly outputTokens?: number;
+  readonly totalTokens?: number;
+  readonly costUsd?: number;
+}
+
 export interface Approval {
   readonly id: string;
   readonly runId: string;
