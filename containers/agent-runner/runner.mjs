@@ -769,7 +769,7 @@ export async function prepareWorkspace(assignment) {
   return directory;
 }
 
-export async function checkpointWorkspace(assignment, directory) {
+export async function checkpointWorkspace(assignment, directory, onProgress) {
   if (assignment.artifact.access === "read") {
     return {
       repositoryId: assignment.artifact.repositoryId,
@@ -781,9 +781,10 @@ export async function checkpointWorkspace(assignment, directory) {
       changedPaths: [],
     };
   }
-  await command("git", ["add", "--all"], { cwd: directory });
+  const commandOptions = { cwd: directory, onProgress };
+  await command("git", ["add", "--all"], commandOptions);
   const staged = await command("git", ["diff", "--cached", "--name-only"], {
-    cwd: directory,
+    ...commandOptions,
   });
   if (!staged) throw new Error("implementation_made_no_changes");
   const deterministicEnvironment = roundhouseGitEnvironment();
@@ -793,19 +794,21 @@ export async function checkpointWorkspace(assignment, directory) {
     {
       cwd: directory,
       env: deterministicEnvironment,
+      onProgress,
     },
   );
   const outputHead = await command("git", ["rev-parse", "HEAD"], {
-    cwd: directory,
+    ...commandOptions,
   });
   const changed = await command(
     "git",
     ["diff", "--name-only", assignment.expectedHead, outputHead],
-    { cwd: directory },
+    commandOptions,
   );
   await command("git", ["push", "origin", `HEAD:${assignment.artifact.ref}`], {
     cwd: directory,
     env: gitEnvironment(assignment.artifact.token),
+    onProgress,
   });
   return {
     repositoryId: assignment.artifact.repositoryId,
@@ -941,7 +944,17 @@ async function completeAssignment(assignment, headers) {
               : undefined;
   await progress("agent_completed");
   await progress("checkpoint_started");
-  const checkpoint = await checkpointWorkspace(assignment, directory);
+  const checkpoint = await checkpointWorkspace(
+    assignment,
+    directory,
+    (checkpointProgress) =>
+      reportActivity(
+        agentAssignment,
+        callbackUrl,
+        attemptSecret,
+        checkpointProgress,
+      ),
+  );
   await progress("checkpoint_completed", {
     changedPathCount: checkpoint.changedPaths.length,
   });
