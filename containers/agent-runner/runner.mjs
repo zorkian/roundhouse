@@ -386,23 +386,53 @@ export const implementationSchema = Object.freeze({
   },
 });
 
+const reviewProperties = {
+  status: { type: "string", enum: ["clean", "changes_requested"] },
+  summary: { type: "string" },
+  findings: {
+    type: "array",
+    items: {
+      type: "object",
+      additionalProperties: false,
+      required: ["title", "details", "file", "severity"],
+      properties: {
+        title: { type: "string" },
+        details: { type: "string" },
+        file: { type: "string" },
+        severity: {
+          type: "string",
+          enum: ["critical", "high", "medium", "low"],
+        },
+      },
+    },
+  },
+};
+
 export const reviewSchema = Object.freeze({
   type: "object",
   additionalProperties: false,
   required: ["status", "summary", "findings"],
+  properties: reviewProperties,
+});
+
+export const holisticReviewSchema = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: ["status", "summary", "findings", "selections"],
   properties: {
-    status: { type: "string", enum: ["clean", "changes_requested"] },
-    summary: { type: "string" },
-    findings: {
+    ...reviewProperties,
+    selections: {
       type: "array",
+      minItems: 2,
+      maxItems: 2,
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["title", "details", "file"],
+        required: ["role", "applicable", "rationale"],
         properties: {
-          title: { type: "string" },
-          details: { type: "string" },
-          file: { type: "string" },
+          role: { type: "string", enum: ["review-security", "review-data"] },
+          applicable: { type: "boolean" },
+          rationale: { type: "string" },
         },
       },
     },
@@ -694,7 +724,16 @@ export async function review(assignment, directory, attemptSecret) {
     JSON.stringify(assignment.context?.plan ?? {}),
     "Implementation result:",
     JSON.stringify(assignment.context?.implementation ?? {}),
-    "Inspect the change from the base commit to the candidate and the surrounding code. Focus on concrete correctness problems, regressions, and unmet acceptance criteria.",
+    assignment.reviewer?.prompt ??
+      "Inspect the change from the base commit to the candidate and the surrounding code. Focus on concrete correctness problems, regressions, and unmet acceptance criteria.",
+    ...(assignment.role === "review-holistic"
+      ? [
+          "Return a selections entry for both review-security and review-data, including whether each is applicable and why. Keep specialist analysis out of this review.",
+        ]
+      : [
+          "Holistic review selection:",
+          JSON.stringify(assignment.context?.holisticSelection ?? {}),
+        ]),
     "Do not request speculative hardening, policy, limits, retries, broad refactors, or style-only changes.",
     "If there are actionable problems, set status to changes_requested and describe each one precisely. Otherwise set status to clean with an empty findings array.",
     "The summary and findings may be posted to maintainers. Write clear, approachable language without mentioning internal schemas or workflow machinery.",
@@ -705,7 +744,7 @@ export async function review(assignment, directory, attemptSecret) {
     directory,
     attemptSecret,
     "review",
-    reviewSchema,
+    assignment.role === "review-holistic" ? holisticReviewSchema : reviewSchema,
     prompt,
   );
 }

@@ -16,6 +16,7 @@ import {
   type GitHubEnv,
   type OpenPullRequest,
 } from "./github.js";
+import { aggregateReviewAttempts } from "./coordinator.js";
 
 export interface GitHubAutomationRepository extends RunRepository {
   recordGitHubDelivery(
@@ -66,6 +67,21 @@ function exactAttempt(
     attempt.expectedHead === head &&
     attempt.acceptedHead === head &&
     outcome?.status === status,
+  );
+}
+
+async function aggregateReview(
+  repository: RunRepository,
+  run: RunSnapshot,
+): Promise<Attempt | undefined> {
+  const latest = await repository.latestCompletedAttempt(
+    run.id,
+    "review",
+    run.revision,
+  );
+  if (!latest) return undefined;
+  return aggregateReviewAttempts(
+    await repository.attemptsForRevision(run.id, latest.runRevision),
   );
 }
 
@@ -152,11 +168,7 @@ export class GitHubCiAutomation {
     now = Date.now(),
   ): Promise<"recorded" | "pending" | "stale"> {
     if (run.status !== "active" || run.stage !== "ci") return "stale";
-    const review = await this.repository.latestCompletedAttempt(
-      run.id,
-      "review",
-      run.revision,
-    );
+    const review = await aggregateReview(this.repository, run);
     if (!exactAttempt(review, "review", run.currentHead, "clean"))
       return "stale";
     let pull = await pullRequest(this.github, run);
@@ -187,11 +199,7 @@ export class GitHubCiAutomation {
     pull = await pullRequest(this.github, run);
     checks = await checkRuns(this.github, run);
     const current = await this.repository.get(run.id);
-    const currentReview = await this.repository.latestCompletedAttempt(
-      run.id,
-      "review",
-      run.revision,
-    );
+    const currentReview = await aggregateReview(this.repository, run);
     if (
       !current ||
       current.revision !== run.revision ||
@@ -258,7 +266,7 @@ export class GitHubCiAutomation {
     const previous = await this.repository.getAttempt(attemptId);
     if (previous?.state === "completed") return "recorded";
     const [review, ci, pull, checks] = await Promise.all([
-      this.repository.latestCompletedAttempt(run.id, "review", run.revision),
+      aggregateReview(this.repository, run),
       this.repository.latestCompletedAttempt(run.id, "ci", run.revision),
       pullRequest(this.github, run, "all"),
       checkRuns(this.github, run),

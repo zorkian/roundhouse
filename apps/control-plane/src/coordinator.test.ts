@@ -15,6 +15,7 @@ import {
   type AttemptCallback,
 } from "./callback.js";
 import {
+  aggregateReviewAttempts,
   attemptInactivityMilliseconds,
   ciTransition,
   coordinate,
@@ -90,6 +91,22 @@ async function callbackFor(
                     status: "clean",
                     summary: "The candidate is correct",
                     findings: [],
+                    ...(attempt.role === "review-holistic"
+                      ? {
+                          selections: [
+                            {
+                              role: "review-security",
+                              applicable: false,
+                              rationale: "No security changes",
+                            },
+                            {
+                              role: "review-data",
+                              applicable: false,
+                              rationale: "No data changes",
+                            },
+                          ],
+                        }
+                      : {}),
                   },
                 }
               : {
@@ -108,6 +125,181 @@ async function callbackFor(
 }
 
 describe("single coordinator", () => {
+  it("fails a holistic review that omits a specialist decision", async () => {
+    const store = new MemoryRunRepository();
+    const run = {
+      ...createRun(input),
+      revision: 5,
+      stage: "review" as const,
+      currentHead: "b".repeat(40),
+    };
+    await store.create(run);
+    store.attempts.set("holistic", {
+      id: "holistic",
+      runId: input.id,
+      runRevision: 5,
+      kind: "agent",
+      stage: "review",
+      role: "review-holistic",
+      state: "completed",
+      deadlineAt: 1_000,
+      baseCommit: input.baseCommit,
+      expectedHead: run.currentHead,
+      acceptedHead: run.currentHead,
+      result: {
+        review: {
+          status: "clean",
+          summary: "Looks good",
+          findings: [],
+          selections: [
+            {
+              role: "review-security",
+              applicable: false,
+              rationale: "No security changes",
+            },
+          ],
+        },
+      },
+    });
+
+    await expect(
+      coordinate(
+        store,
+        { submit: async () => undefined },
+        { runId: input.id, expectedRevision: 5 },
+        100,
+      ),
+    ).resolves.toBe("dispatched");
+    await expect(store.get(input.id)).resolves.toMatchObject({
+      status: "failed",
+      stage: "review",
+    });
+  });
+
+  it("blocks only findings at a reviewer's configured severities", async () => {
+    const store = new MemoryRunRepository();
+    const run = {
+      ...createRun(input),
+      revision: 5,
+      stage: "review" as const,
+      currentHead: "b".repeat(40),
+    };
+    await store.create(run);
+    const reviewAttempt = (
+      id: string,
+      role: "review-holistic" | "review-security",
+      review: Record<string, unknown>,
+    ): Attempt => ({
+      id,
+      runId: input.id,
+      runRevision: 5,
+      kind: "agent",
+      stage: "review",
+      role,
+      state: "completed",
+      deadlineAt: 1_000,
+      baseCommit: input.baseCommit,
+      expectedHead: run.currentHead,
+      acceptedHead: run.currentHead,
+      result: { review },
+    });
+    store.attempts.set(
+      "holistic",
+      reviewAttempt("holistic", "review-holistic", {
+        status: "clean",
+        findings: [],
+        selections: [
+          {
+            role: "review-security",
+            applicable: true,
+            rationale: "Authorization changed",
+          },
+          {
+            role: "review-data",
+            applicable: false,
+            rationale: "No data changes",
+          },
+        ],
+      }),
+    );
+    store.attempts.set(
+      "security",
+      reviewAttempt("security", "review-security", {
+        status: "clean",
+        findings: [
+          {
+            title: "Minor note",
+            details: "Non-blocking issue",
+            file: "src/auth.ts",
+            severity: "low",
+          },
+          {
+            title: "Authorization bypass",
+            details: "Missing permission check",
+            file: "src/auth.ts",
+            severity: "high",
+          },
+        ],
+      }),
+    );
+
+    await coordinate(
+      store,
+      { submit: async () => undefined },
+      { runId: input.id, expectedRevision: 5 },
+      100,
+    );
+    await expect(store.get(input.id)).resolves.toMatchObject({
+      status: "active",
+      stage: "implement",
+    });
+  });
+
+  it("does not aggregate when any required review is for another head", () => {
+    const currentHead = "b".repeat(40);
+    const staleHead = "c".repeat(40);
+    const reviewAttempt = (
+      role: "review-holistic" | "review-security",
+      expectedHead: string,
+      review: Record<string, unknown>,
+    ): Attempt => ({
+      id: role,
+      runId: input.id,
+      runRevision: 5,
+      kind: "agent",
+      stage: "review",
+      role,
+      state: "completed",
+      deadlineAt: 1_000,
+      baseCommit: input.baseCommit,
+      expectedHead,
+      acceptedHead: expectedHead,
+      result: { review },
+    });
+    const holistic = reviewAttempt("review-holistic", staleHead, {
+      status: "clean",
+      findings: [],
+      selections: [
+        {
+          role: "review-security",
+          applicable: true,
+          rationale: "Authorization changed",
+        },
+        {
+          role: "review-data",
+          applicable: false,
+          rationale: "No data changes",
+        },
+      ],
+    });
+    const security = reviewAttempt("review-security", currentHead, {
+      status: "clean",
+      findings: [],
+    });
+
+    expect(aggregateReviewAttempts([holistic, security])).toBeUndefined();
+  });
+
   it("claims exactly one revision-bound attempt for duplicate wakeups", async () => {
     const store = new MemoryRunRepository();
     await store.create(createRun(input));

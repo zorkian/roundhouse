@@ -44,7 +44,10 @@ class AutomationRepository
   }
 }
 
-async function setupCi(reviewStatus: "clean" | "changes_requested" = "clean") {
+async function setupCi(
+  reviewStatus: "clean" | "changes_requested" = "clean",
+  withNonblockingSpecialist = false,
+) {
   const repository = new AutomationRepository();
   await repository.create(
     createRun({
@@ -72,7 +75,7 @@ async function setupCi(reviewStatus: "clean" | "changes_requested" = "clean") {
     runRevision: reviewRun.revision,
     kind: "agent",
     stage: "review",
-    role: "review",
+    role: "review-holistic",
     state: "created",
     deadlineAt: 1_000,
     baseCommit: reviewRun.baseCommit,
@@ -80,8 +83,58 @@ async function setupCi(reviewStatus: "clean" | "changes_requested" = "clean") {
   };
   await repository.createAttempt(review);
   await repository.completeAttempt(review.id, review.runRevision, head, {
-    review: { status: reviewStatus, summary: "Review result", findings: [] },
+    review: {
+      status: reviewStatus,
+      summary: "Review result",
+      findings:
+        reviewStatus === "changes_requested"
+          ? [
+              {
+                title: "Blocking issue",
+                details: "Must be fixed",
+                file: "src/example.ts",
+                severity: "high",
+              },
+            ]
+          : [],
+      selections: [
+        {
+          role: "review-security",
+          applicable: withNonblockingSpecialist,
+          rationale: withNonblockingSpecialist ? "Security-sensitive" : "None",
+        },
+        { role: "review-data", applicable: false, rationale: "None" },
+      ],
+    },
   });
+  if (withNonblockingSpecialist) {
+    const specialist: Attempt = {
+      ...review,
+      id: `${review.id}_review-security`,
+      role: "review-security",
+      state: "created",
+    };
+    await repository.createAttempt(specialist);
+    await repository.completeAttempt(
+      specialist.id,
+      specialist.runRevision,
+      head,
+      {
+        review: {
+          status: "changes_requested",
+          summary: "Low-severity observation",
+          findings: [
+            {
+              title: "Minor issue",
+              details: "Does not block",
+              file: "src/example.ts",
+              severity: "low",
+            },
+          ],
+        },
+      },
+    );
+  }
   const ciRun = await repository.transition(reviewRun.id, reviewRun.revision, {
     status: "active",
     stage: "ci",
@@ -317,6 +370,14 @@ describe("GitHub exact-head CI and merge", () => {
     ).resolves.toBe("stale");
     expect(api.get).not.toHaveBeenCalled();
     expect(api.graphql).not.toHaveBeenCalled();
+  });
+
+  it("uses the aggregate decision when a specialist has nonblocking findings", async () => {
+    const { repository, run } = await setupCi("clean", true);
+    const api = github();
+    await expect(
+      new GitHubCiAutomation(repository, api.api).reconcileCi(run),
+    ).resolves.toBe("recorded");
   });
 
   it("accepts a signed completed check suite only for the active exact head", async () => {

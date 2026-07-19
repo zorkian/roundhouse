@@ -362,7 +362,7 @@ export class D1RunRepository implements RunRepository {
   async createAttempt(attempt: Attempt): Promise<"created" | "exists"> {
     const result = await this.db
       .prepare(
-        "INSERT OR IGNORE INTO attempts (id,run_id,run_revision,kind,stage,role,state,deadline_at,base_commit,expected_head,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?11)",
+        "INSERT OR IGNORE INTO attempts (id,run_id,run_revision,kind,stage,role,state,deadline_at,base_commit,expected_head,routing_json,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?12)",
       )
       .bind(
         attempt.id,
@@ -375,6 +375,7 @@ export class D1RunRepository implements RunRepository {
         attempt.deadlineAt,
         attempt.baseCommit,
         attempt.expectedHead,
+        attempt.routing ? JSON.stringify(attempt.routing) : null,
         this.now(),
       )
       .run();
@@ -456,6 +457,16 @@ export class D1RunRepository implements RunRepository {
       .bind(runId, stage, beforeRevision)
       .first<AttemptRow>();
     return row ? attemptFromRow(row) : undefined;
+  }
+
+  async attemptsForRevision(runId: string, revision: number) {
+    const result = await this.db
+      .prepare(
+        "SELECT id,run_id,run_revision,kind,stage,role,state,deadline_at,base_commit,expected_head,accepted_head,result_json,routing_json FROM attempts WHERE run_id=?1 AND run_revision=?2 ORDER BY id",
+      )
+      .bind(runId, revision)
+      .all<AttemptRow>();
+    return (result.results ?? []).map(attemptFromRow);
   }
 
   async expiredLeases(now: number): Promise<readonly Wakeup[]> {

@@ -192,7 +192,7 @@ describe("V2 agent runner", () => {
     expect(reviewSchema.properties.findings).not.toHaveProperty("maxItems");
     expect(reviewSchema.properties.findings.items).toMatchObject({
       additionalProperties: false,
-      required: ["title", "details", "file"],
+      required: ["title", "details", "file", "severity"],
     });
   });
 
