@@ -12,6 +12,7 @@ import {
   implementationPrompt,
   implementationSchema,
   investigationPrompt,
+  planningPrompt,
   planSchema,
   prepareWorkspace,
   qualificationSandbox,
@@ -21,6 +22,7 @@ import {
   runnerIdentity,
   runnerResponse,
   validateCheckpoint,
+  webSearchMode,
 } from "./runner.mjs";
 
 const testRoot = resolve(process.cwd(), ".runner-test-workspaces");
@@ -47,6 +49,7 @@ describe("V2 agent runner", () => {
         "observedBehavior",
         "relevantFiles",
         "uncertainties",
+        "sources",
       ]),
     );
     expect(reproductionSchema.properties.commands.items).toMatchObject({
@@ -75,9 +78,18 @@ describe("V2 agent runner", () => {
         "proposedChange",
         "validation",
         "questions",
+        "sources",
       ]),
     );
     expect(planSchema.properties.questions).not.toHaveProperty("maxItems");
+  });
+
+  it("enables hosted research only for read-only analysis stages", () => {
+    expect(webSearchMode("qualification")).toBe("live");
+    expect(webSearchMode("reproduction")).toBe("live");
+    expect(webSearchMode("plan")).toBe("live");
+    expect(webSearchMode("implementation")).toBe("disabled");
+    expect(webSearchMode("review")).toBe("disabled");
   });
 
   it("keeps implementation evidence separate from the pull request text", () => {
@@ -142,6 +154,33 @@ describe("V2 agent runner", () => {
         context: { qualification: { classification: "feature" } },
       }),
     ).toBe("feature");
+  });
+
+  it("treats delegated public research as an answer instead of repeating it", () => {
+    const prompt = planningPrompt({
+      issue: {
+        title: "Choose supported model identifiers",
+        body: "Use supported model identifiers in the configuration.",
+        url: "https://github.com/zorkian/roundhouse/issues/308",
+        clarifications: [
+          {
+            actor: "maintainer",
+            body: "Please look them up in Cloudflare's model catalog and choose the simplest reasonable option.",
+          },
+        ],
+      },
+      context: {
+        qualification: { classification: "feature" },
+        reproduction: { status: "confirmed" },
+      },
+    });
+    expect(prompt).toContain("hosted web search");
+    expect(prompt).toContain("look them up in Cloudflare's model catalog");
+    expect(prompt).toContain(
+      "research instruction, not as an unanswered question",
+    );
+    expect(prompt).toContain("Do not repeat a question");
+    expect(prompt).toContain("official or primary sources");
   });
 
   it("returns concrete review findings without arbitrary caps", () => {

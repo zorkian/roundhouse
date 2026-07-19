@@ -7,6 +7,7 @@ const routingHeaders = [
   "x-roundhouse-task-type",
   "x-roundhouse-complexity",
 ] as const;
+const researchRoles = new Set(["qualify", "reproduce", "plan"]);
 
 export type BrokerEnv = Cloudflare.Env;
 
@@ -64,6 +65,25 @@ function routingResponseHeaders(response: Response, route: BrokerRoute) {
   return headers;
 }
 
+function applyToolPolicy(body: Record<string, unknown>, role: string): void {
+  const tools = Array.isArray(body.tools)
+    ? body.tools.filter(
+        (tool): tool is Record<string, unknown> =>
+          Boolean(tool) && typeof tool === "object",
+      )
+    : [];
+  const withoutWebSearch = tools.filter(
+    (tool) => tool.type !== "web_search" && tool.type !== "web_search_preview",
+  );
+  if (researchRoles.has(role)) {
+    body.tools = [...withoutWebSearch, { type: "web_search" }];
+  } else if (withoutWebSearch.length) {
+    body.tools = withoutWebSearch;
+  } else {
+    delete body.tools;
+  }
+}
+
 export async function brokerRequest(
   request: Request,
   env: BrokerEnv,
@@ -107,6 +127,7 @@ export async function brokerRequest(
       : {}),
     effort: route.reasoningEffort,
   };
+  applyToolPolicy(body, request.headers.get("x-roundhouse-role") ?? "");
 
   let response: Response;
   try {

@@ -244,6 +244,25 @@ function questionLines(value: unknown): readonly string[] {
     : [];
 }
 
+function sourceLines(value: unknown): readonly string[] {
+  if (!Array.isArray(value)) return [];
+  const sources = value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const source = item as Record<string, unknown>;
+    const title = String(source.title ?? "Source")
+      .replace(/[\[\]\r\n]/g, " ")
+      .trim();
+    try {
+      const url = new URL(String(source.url ?? ""));
+      if (!["https:", "http:"].includes(url.protocol)) return [];
+      return [`- [${title || "Source"}](${url.toString()})`];
+    } catch {
+      return [];
+    }
+  });
+  return sources.length ? ["", "### Sources", ...sources] : [];
+}
+
 function qualificationHeading(classification: string): string {
   if (classification === "unclear") return "A few questions before I start";
   if (classification === "duplicate") return "This looks like a duplicate";
@@ -296,6 +315,7 @@ function reproductionComment(run: RunSnapshot, attempt: Attempt): string {
     "",
     "### What I found",
     observed,
+    ...sourceLines(reproduction?.sources),
     ...(waiting ? questionLines(reproduction?.uncertainties) : []),
     ...(waiting ? [] : ["", "I’ll put together a plan for the change next."]),
   ].join("\n");
@@ -323,6 +343,7 @@ function planComment(run: RunSnapshot, attempt: Attempt): string {
     ...(acceptance.length
       ? ["", "### Done when", ...acceptance.map((item) => `- ${item}`)]
       : []),
+    ...sourceLines(plan?.sources),
     ...(waiting ? questionLines(plan?.questions) : []),
     ...(waiting ? [] : ["", "This is ready to be worked on."]),
   ].join("\n");
@@ -583,6 +604,7 @@ export class GitHubStageReporter implements AttemptReporter {
             `## ${qualificationHeading(classification)}`,
             "",
             summary,
+            ...sourceLines(qualification?.sources),
             ...(waiting ? questionLines(qualification?.uncertainties) : []),
             ...(run.stage === "reproduce"
               ? ["", "I’ll check what the project does today."]
