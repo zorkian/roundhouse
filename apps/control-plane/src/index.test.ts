@@ -8,6 +8,7 @@ import {
 } from "./attempt-container.js";
 import {
   controlPlaneService,
+  destroyAttemptContainer,
   handleRequest,
   recoverExpiredAttempts,
   successorWakeup,
@@ -211,5 +212,22 @@ describe("V2 control plane", () => {
       },
     );
     expect(events).toEqual(["destroy:run_1_rev_3", "enqueue:run_1:3"]);
+  });
+
+  it("destroys a completed sandbox by its immutable attempt id", async () => {
+    const events: string[] = [];
+    await destroyAttemptContainer(
+      {
+        idFromName: (name: string) => `id:${name}`,
+        get: (id: unknown) => ({
+          destroy: async () => {
+            events.push(`destroy:${String(id)}`);
+          },
+          fetch: async () => new Response(),
+        }),
+      },
+      "run_1_rev_4",
+    );
+    expect(events).toEqual(["destroy:id:run_1_rev_4"]);
   });
 });
