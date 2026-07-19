@@ -28,6 +28,7 @@ export interface GitHubIntakeRepository {
 export interface GitHubApi {
   get<T>(path: string): Promise<T>;
   post<T>(path: string, body: unknown): Promise<T>;
+  patch?<T>(path: string, body: unknown): Promise<T>;
 }
 
 export interface GitHubAutomationApi extends GitHubApi {
@@ -154,6 +155,10 @@ export class GitHubClient {
 
   async put<T>(path: string, body: unknown): Promise<T> {
     return this.request<T>(path, "PUT", body);
+  }
+
+  async patch<T>(path: string, body: unknown): Promise<T> {
+    return this.request<T>(path, "PATCH", body);
   }
 
   async graphql<T>(
@@ -370,21 +375,43 @@ function reviewComment(attempt: Attempt): string {
 function pullRequestBody(
   run: RunSnapshot,
   implementation?: Record<string, unknown>,
+  detailsUrl?: string,
 ) {
   const summary = String(
     implementation?.pullRequestBody ??
       `Implements the change requested in #${run.issueNumber}.`,
   ).trim();
-  return `${summary}\n\nFixes #${run.issueNumber}`;
+  return `${summary}\n\nFixes #${run.issueNumber}${detailsUrl ? `\n\n[View Roundhouse run details](${detailsUrl})` : ""}`;
 }
 
 export class GitHubStageReporter implements AttemptReporter {
-  constructor(private readonly github: GitHubApi) {}
+  constructor(
+    private readonly github: GitHubApi,
+    private readonly controlPlaneOrigin?: string,
+  ) {}
+
+  private detailsUrl(run: RunSnapshot): string | undefined {
+    if (!this.controlPlaneOrigin) return undefined;
+    return new URL(
+      `/repositories/${run.repository
+        .split("/")
+        .map(encodeURIComponent)
+        .join("/")}/issues/${run.issueNumber}`,
+      this.controlPlaneOrigin,
+    ).toString();
+  }
+
+  private withDetails(run: RunSnapshot, body: string): string {
+    const url = this.detailsUrl(run);
+    const suffix = url ? `\n\n[View Roundhouse run details](${url})` : "";
+    return `${body.slice(0, 65_000 - suffix.length)}${suffix}`;
+  }
 
   async report(run: RunSnapshot, attempt: Attempt): Promise<void> {
     if (attempt.stage === "implement" && run.status === "failed") return;
     if (attempt.stage === "ci") return;
     if (attempt.stage === "merge") {
+      if (run.status !== "succeeded") return;
       const merge = attempt.result?.merge as
         Record<string, unknown> | undefined;
       const pullRequest = merge?.pullRequest as
@@ -397,18 +424,21 @@ export class GitHubStageReporter implements AttemptReporter {
       await this.github.post(
         `/repos/${run.repository}/issues/${run.issueNumber}/comments`,
         {
-          body: [
-            marker,
-            "## Merged",
-            "",
-            "The change passed review and CI and has been merged.",
-            ...(pullRequest?.html_url
-              ? [
-                  "",
-                  `[View pull request #${pullRequest.number}](${pullRequest.html_url})`,
-                ]
-              : []),
-          ].join("\n"),
+          body: this.withDetails(
+            run,
+            [
+              marker,
+              "## Merged",
+              "",
+              "The change passed review and CI and has been merged.",
+              ...(pullRequest?.html_url
+                ? [
+                    "",
+                    `[View pull request #${pullRequest.number}](${pullRequest.html_url})`,
+                  ]
+                : []),
+            ].join("\n"),
+          ),
         },
       );
       return;
@@ -423,7 +453,9 @@ export class GitHubStageReporter implements AttemptReporter {
       if (comments.some((comment) => comment.body?.includes(marker))) return;
       await this.github.post(
         `/repos/${run.repository}/issues/${pullRequest.number}/comments`,
-        { body: reviewComment(attempt).slice(0, 65_000) },
+        {
+          body: this.withDetails(run, reviewComment(attempt)),
+        },
       );
       return;
     }
@@ -457,17 +489,25 @@ export class GitHubStageReporter implements AttemptReporter {
             ),
             head: `roundhouse/issue-${run.issueNumber}`,
             base: repository.default_branch ?? "main",
-            body: pullRequestBody(run, implementation),
+            body: pullRequestBody(run, implementation, this.detailsUrl(run)),
             draft: true,
+          },
+        );
+      }
+      if (this.github.patch) {
+        await this.github.patch(
+          `/repos/${run.repository}/pulls/${pullRequest.number}`,
+          {
+            body: `${pullRequestBody(run, implementation, this.detailsUrl(run))}\n\n[View Files changed](${pullRequest.html_url}/files)`,
           },
         );
       }
       await this.github.post(
         `/repos/${run.repository}/issues/${run.issueNumber}/comments`,
         {
-          body: implementationComment(attempt, pullRequest, created).slice(
-            0,
-            65_000,
+          body: this.withDetails(
+            run,
+            implementationComment(attempt, pullRequest, created),
           ),
         },
       );
@@ -476,14 +516,18 @@ export class GitHubStageReporter implements AttemptReporter {
     if (attempt.stage === "reproduce") {
       await this.github.post(
         `/repos/${run.repository}/issues/${run.issueNumber}/comments`,
-        { body: reproductionComment(run, attempt).slice(0, 65_000) },
+        {
+          body: this.withDetails(run, reproductionComment(run, attempt)),
+        },
       );
       return;
     }
     if (attempt.stage === "plan") {
       await this.github.post(
         `/repos/${run.repository}/issues/${run.issueNumber}/comments`,
-        { body: planComment(run, attempt).slice(0, 65_000) },
+        {
+          body: this.withDetails(run, planComment(run, attempt)),
+        },
       );
       return;
     }
@@ -498,18 +542,19 @@ export class GitHubStageReporter implements AttemptReporter {
     await this.github.post(
       `/repos/${run.repository}/issues/${run.issueNumber}/comments`,
       {
-        body: [
-          marker,
-          `## ${qualificationHeading(classification)}`,
-          "",
-          summary,
-          ...(waiting ? questionLines(qualification?.uncertainties) : []),
-          ...(run.stage === "reproduce"
-            ? ["", "I’ll check what the project does today."]
-            : []),
-        ]
-          .join("\n")
-          .slice(0, 65_000),
+        body: this.withDetails(
+          run,
+          [
+            marker,
+            `## ${qualificationHeading(classification)}`,
+            "",
+            summary,
+            ...(waiting ? questionLines(qualification?.uncertainties) : []),
+            ...(run.stage === "reproduce"
+              ? ["", "I’ll check what the project does today."]
+              : []),
+          ].join("\n"),
+        ),
       },
     );
   }

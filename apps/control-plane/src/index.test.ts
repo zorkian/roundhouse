@@ -12,6 +12,43 @@ import {
   recoverExpiredAttempts,
   successorWakeup,
 } from "./index.js";
+import worker from "./index.js";
+import type { D1Like } from "./d1-store.js";
+
+function detailsDb(found = true): D1Like {
+  return {
+    prepare(sql: string) {
+      const statement = {
+        bind: (..._values: unknown[]) => statement,
+        first: async () =>
+          found
+            ? {
+                document_json: JSON.stringify({
+                  schemaVersion: 2,
+                  id: "run_1",
+                  repository: "zorkian/roundhouse",
+                  issueNumber: 281,
+                  baseCommit: "base",
+                  currentHead: "head",
+                  profileVersion: "v2",
+                  status: "succeeded",
+                  stage: "merge",
+                  revision: 1,
+                }),
+                created_at: 1,
+                updated_at: 2,
+              }
+            : null,
+        run: async () => ({ meta: {} }),
+        all: async () => ({
+          meta: {},
+          results: sql.includes("FROM attempts") ? [] : undefined,
+        }),
+      };
+      return statement as unknown as ReturnType<D1Like["prepare"]>;
+    },
+  };
+}
 
 describe("V2 control plane", () => {
   it("reports a small versioned health contract", async () => {
@@ -74,6 +111,55 @@ describe("V2 control plane", () => {
 
     const mutation = handleRequest(
       new Request("https://v2.invalid/health", { method: "POST" }),
+    );
+    expect(mutation.status).toBe(405);
+    expect(mutation.headers.get("allow")).toBe("GET");
+  });
+
+  it("serves run details and handles unknown, malformed, and non-GET routes", async () => {
+    const fetch = worker.fetch as unknown as (
+      request: Request,
+      env: unknown,
+      context: unknown,
+    ) => Promise<Response>;
+    const html = await fetch(
+      new Request(
+        "https://v2.invalid/repositories/zorkian/roundhouse/issues/281",
+      ),
+      { DB: detailsDb() } as never,
+      {} as never,
+    );
+    expect(html.status).toBe(200);
+    expect(html.headers.get("content-type")).toBe("text/html; charset=utf-8");
+    await expect(html.text()).resolves.toContain("Roundhouse run details");
+
+    const missing = await fetch(
+      new Request(
+        "https://v2.invalid/repositories/zorkian/roundhouse/issues/999",
+      ),
+      { DB: detailsDb(false) } as never,
+      {} as never,
+    );
+    expect(missing.status).toBe(404);
+
+    const malformed = await fetch(
+      new Request(
+        "https://v2.invalid/repositories/%E0%A4%A/roundhouse/issues/281",
+      ),
+      { DB: detailsDb() } as never,
+      {} as never,
+    );
+    expect(malformed.status).toBe(404);
+
+    const mutation = await fetch(
+      new Request(
+        "https://v2.invalid/repositories/zorkian/roundhouse/issues/281",
+        {
+          method: "POST",
+        },
+      ),
+      { DB: detailsDb() } as never,
+      {} as never,
     );
     expect(mutation.status).toBe(405);
     expect(mutation.headers.get("allow")).toBe("GET");

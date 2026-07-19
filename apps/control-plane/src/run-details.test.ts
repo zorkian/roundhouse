@@ -1,0 +1,256 @@
+// Copyright 2026 Mark Smith
+// SPDX-License-Identifier: Apache-2.0
+
+import { describe, expect, it } from "vitest";
+import type { RunDetails } from "./d1-store.js";
+import { D1RunRepository, type D1Like } from "./d1-store.js";
+import { renderRunDetails } from "./run-details.js";
+
+describe("run details", () => {
+  it("assembles the current run and chronological attempts by repository issue", async () => {
+    const calls: { sql: string; values: unknown[] }[] = [];
+    const db: D1Like = {
+      prepare(sql: string) {
+        const call = { sql, values: [] as unknown[] };
+        calls.push(call);
+        const statement = {
+          bind: (...values: unknown[]) => {
+            call.values = values;
+            return statement;
+          },
+          first: async () => ({
+            document_json: JSON.stringify({
+              schemaVersion: 2,
+              id: "current-run",
+              repository: "zorkian/roundhouse",
+              issueNumber: 281,
+              baseCommit: "base",
+              currentHead: "head",
+              profileVersion: "v2",
+              status: "active",
+              stage: "review",
+              revision: 4,
+            }),
+            created_at: 10,
+            updated_at: 20,
+          }),
+          all: async () => ({
+            meta: {},
+            results: [
+              {
+                id: "first",
+                run_id: "current-run",
+                run_revision: 1,
+                kind: "agent",
+                stage: "qualify",
+                role: "qualifier",
+                state: "completed",
+                deadline_at: 9,
+                base_commit: "base",
+                expected_head: "base",
+                accepted_head: null,
+                result_json: '{"qualification":{"summary":"ok"}}',
+                routing_json: '{"provider":"openai","model":"model-a"}',
+                created_at: 11,
+                updated_at: 12,
+              },
+            ],
+          }),
+          run: async () => ({ meta: {} }),
+        };
+        return statement as unknown as ReturnType<D1Like["prepare"]>;
+      },
+    };
+    const details = await new D1RunRepository(db).detailsByIssue(
+      "zorkian/roundhouse",
+      281,
+    );
+    expect(calls[0]?.values).toEqual(["zorkian/roundhouse", 281]);
+    expect(calls[1]?.sql).toContain("ORDER BY created_at ASC,id ASC");
+    expect(calls[1]?.values).toEqual(["current-run"]);
+    expect(details).toMatchObject({
+      run: { id: "current-run" },
+      createdAt: 10,
+      updatedAt: 20,
+      attempts: [
+        {
+          id: "first",
+          createdAt: 11,
+          updatedAt: 12,
+          routing: { provider: "openai", model: "model-a" },
+        },
+      ],
+    });
+  });
+
+  it("renders recorded evidence, commit history, routing, and escaped text", () => {
+    const details: RunDetails = {
+      run: {
+        schemaVersion: 2,
+        id: "run_1",
+        repository: "zorkian/roundhouse",
+        issueNumber: 281,
+        baseCommit: "base-sha",
+        currentHead: "merged-sha",
+        profileVersion: "test",
+        status: "succeeded",
+        stage: "merge",
+        revision: 7,
+        issue: {
+          title: "<script>alert(1)</script>",
+          body: "issue body",
+          url: "https://github.com/zorkian/roundhouse/issues/281",
+          actor: "user",
+        },
+      },
+      createdAt: 1,
+      updatedAt: 2,
+      attempts: [
+        {
+          id: "implementation",
+          runId: "run_1",
+          runRevision: 3,
+          kind: "agent",
+          stage: "implement",
+          role: "developer",
+          state: "completed",
+          deadlineAt: 3,
+          baseCommit: "base-sha",
+          expectedHead: "base-sha",
+          acceptedHead: "candidate-sha",
+          result: {
+            implementation: {
+              summary: "done <img src=x onerror=alert(1)>",
+              validation: [{ command: "npm test", output: "<b>bad</b>" }],
+              pullRequest: {
+                number: 99,
+                html_url: "https://github.com/zorkian/roundhouse/pull/99",
+              },
+            },
+          },
+          routing: { provider: "openai", model: "test-model" },
+          createdAt: 3,
+          updatedAt: 4,
+        },
+        {
+          id: "review",
+          runId: "run_1",
+          runRevision: 4,
+          kind: "agent",
+          stage: "review",
+          role: "reviewer",
+          state: "completed",
+          deadlineAt: 5,
+          baseCommit: "base-sha",
+          expectedHead: "candidate-sha",
+          acceptedHead: "candidate-sha",
+          result: { review: { status: "clean", findings: [] } },
+          createdAt: 5,
+          updatedAt: 6,
+        },
+        {
+          id: "ci",
+          runId: "run_1",
+          runRevision: 5,
+          kind: "external",
+          stage: "ci",
+          role: "github-checks",
+          state: "completed",
+          deadlineAt: 7,
+          baseCommit: "base-sha",
+          expectedHead: "candidate-sha",
+          acceptedHead: "candidate-sha",
+          result: {
+            ci: { checks: [{ name: "test", url: "https://example.test" }] },
+          },
+          createdAt: 7,
+          updatedAt: 8,
+        },
+        {
+          id: "merge",
+          runId: "run_1",
+          runRevision: 6,
+          kind: "external",
+          stage: "merge",
+          role: "github-merge",
+          state: "completed",
+          deadlineAt: 9,
+          baseCommit: "base-sha",
+          expectedHead: "candidate-sha",
+          acceptedHead: "merged-sha",
+          result: { merge: { status: "merged" } },
+          createdAt: 9,
+          updatedAt: 10,
+        },
+      ],
+    };
+    const html = renderRunDetails(details);
+    expect(html).toContain("candidate-sha");
+    expect(html).toContain("merged-sha");
+    expect(html).toContain("test-model");
+    expect(html).toContain("npm test");
+    expect(html).toContain("&lt;b&gt;bad&lt;/b&gt;");
+    expect(html).not.toContain("<img");
+    expect(html).toContain(
+      "https://github.com/zorkian/roundhouse/pull/99/files",
+    );
+  });
+
+  it("identifies missing optional evidence", () => {
+    const html = renderRunDetails({
+      run: {
+        schemaVersion: 2,
+        id: "run_2",
+        repository: "zorkian/roundhouse",
+        issueNumber: 1,
+        baseCommit: "base",
+        currentHead: "base",
+        profileVersion: "test",
+        status: "active",
+        stage: "qualify",
+        revision: 0,
+      },
+      createdAt: 1,
+      updatedAt: 1,
+      attempts: [],
+    });
+    expect(html).toContain("No attempts recorded");
+    expect(html).toContain("Unavailable");
+  });
+
+  it("does not label an unaccepted merge head as merged", () => {
+    const html = renderRunDetails({
+      run: {
+        schemaVersion: 2,
+        id: "run_failed_merge",
+        repository: "zorkian/roundhouse",
+        issueNumber: 2,
+        baseCommit: "base",
+        currentHead: "candidate",
+        profileVersion: "test",
+        status: "failed",
+        stage: "merge",
+        revision: 1,
+      },
+      createdAt: 1,
+      updatedAt: 2,
+      attempts: [
+        {
+          id: "merge",
+          runId: "run_failed_merge",
+          runRevision: 1,
+          kind: "external",
+          stage: "merge",
+          role: "github-merge",
+          state: "failed",
+          deadlineAt: 2,
+          baseCommit: "base",
+          expectedHead: "candidate",
+          createdAt: 1,
+          updatedAt: 2,
+        },
+      ],
+    });
+    expect(html).toContain("<dt>Merged</dt><dd><code>Unavailable</code></dd>");
+  });
+});

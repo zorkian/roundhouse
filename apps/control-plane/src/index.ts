@@ -26,6 +26,7 @@ import {
   type CheckpointValidator,
 } from "./callback.js";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
+import { renderRunDetails } from "./run-details.js";
 import { acceptGitHubCheckSuite, GitHubCiAutomation } from "./github-ci.js";
 import {
   acceptGitHubComment,
@@ -354,6 +355,35 @@ class ContainerCheckpointValidator implements CheckpointValidator {
 const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
   async fetch(request, env) {
     const url = new URL(request.url);
+    const detailsMatch = url.pathname.match(
+      /^\/repositories\/([^/]+)\/([^/]+)\/issues\/(\d+)$/,
+    );
+    if (detailsMatch) {
+      if (request.method !== "GET")
+        return json({ error: "method_not_allowed" }, 405, { allow: "GET" });
+      let repository: string;
+      const owner = detailsMatch[1];
+      const name = detailsMatch[2];
+      const issueNumber = detailsMatch[3];
+      if (!owner || !name || !issueNumber)
+        return json({ error: "not_found" }, 404);
+      try {
+        repository = `${decodeURIComponent(owner)}/${decodeURIComponent(name)}`;
+      } catch {
+        return json({ error: "not_found" }, 404);
+      }
+      const details = await new D1RunRepository(env.DB).detailsByIssue(
+        repository,
+        Number(issueNumber),
+      );
+      if (!details) return json({ error: "not_found" }, 404);
+      return new Response(renderRunDetails(details), {
+        headers: {
+          "cache-control": "no-store",
+          "content-type": "text/html; charset=utf-8",
+        },
+      });
+    }
     if (url.pathname === "/attempts/activity") {
       if (request.method !== "POST")
         return json({ error: "method_not_allowed" }, 405, { allow: "POST" });
@@ -433,7 +463,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
     );
     const github = new GitHubClient(env);
     const automation = new GitHubCiAutomation(repository, github);
-    const reporter = new GitHubStageReporter(github);
+    const reporter = new GitHubStageReporter(github, env.CONTROL_PLANE_ORIGIN);
     for (const message of batch.messages) {
       try {
         const run = await repository.get(message.body.runId);
