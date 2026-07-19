@@ -385,7 +385,12 @@ class ContainerCheckpointValidator implements CheckpointValidator {
 const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
   async fetch(request, env, context) {
     const url = new URL(request.url);
-    if (url.pathname === "/" || url.pathname === "/runs") {
+    const isPublicUiRequest = () =>
+      url.hostname === new URL(env.PUBLIC_ORIGIN).hostname;
+    if (
+      (url.pathname === "/" || url.pathname === "/runs") &&
+      isPublicUiRequest()
+    ) {
       if (request.method !== "GET")
         return json({ error: "method_not_allowed" }, 405, { allow: "GET" });
       const runs = await new D1RunRepository(env.DB).listRuns();
@@ -394,7 +399,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
     const detailsMatch = url.pathname.match(
       /^\/repositories\/([^/]+)\/([^/]+)\/issues\/(\d+)$/,
     );
-    if (detailsMatch) {
+    if (detailsMatch && isPublicUiRequest()) {
       if (request.method !== "GET")
         return json({ error: "method_not_allowed" }, 405, { allow: "GET" });
       let repository: string;

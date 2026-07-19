@@ -65,6 +65,11 @@ function dashboardDb(): D1Like {
   };
 }
 
+const uiEnv = (DB: D1Like) => ({
+  DB,
+  PUBLIC_ORIGIN: "https://v2.invalid",
+});
+
 describe("V2 control plane", () => {
   it("serves the operational dashboard at the root", async () => {
     const fetch = worker.fetch as unknown as (
@@ -74,7 +79,7 @@ describe("V2 control plane", () => {
     ) => Promise<Response>;
     const response = await fetch(
       new Request("https://v2.invalid/"),
-      { DB: dashboardDb() } as never,
+      uiEnv(dashboardDb()) as never,
       {} as never,
     );
     expect(response.status).toBe(200);
@@ -87,6 +92,13 @@ describe("V2 control plane", () => {
     await expect(response.text()).resolves.toContain(
       "Development runs across enrolled repositories",
     );
+
+    const directOrigin = await fetch(
+      new Request("https://direct-worker.invalid/"),
+      uiEnv(dashboardDb()) as never,
+      {} as never,
+    );
+    expect(directOrigin.status).toBe(404);
   });
 
   it("reports a small versioned health contract", async () => {
@@ -164,7 +176,7 @@ describe("V2 control plane", () => {
       new Request(
         "https://v2.invalid/repositories/zorkian/roundhouse/issues/281",
       ),
-      { DB: detailsDb() } as never,
+      uiEnv(detailsDb()) as never,
       {} as never,
     );
     expect(html.status).toBe(200);
@@ -175,7 +187,7 @@ describe("V2 control plane", () => {
       new Request(
         "https://v2.invalid/repositories/zorkian/roundhouse/issues/999",
       ),
-      { DB: detailsDb(false) } as never,
+      uiEnv(detailsDb(false)) as never,
       {} as never,
     );
     expect(missing.status).toBe(404);
@@ -184,7 +196,7 @@ describe("V2 control plane", () => {
       new Request(
         "https://v2.invalid/repositories/%E0%A4%A/roundhouse/issues/281",
       ),
-      { DB: detailsDb() } as never,
+      uiEnv(detailsDb()) as never,
       {} as never,
     );
     expect(malformed.status).toBe(404);
@@ -196,7 +208,7 @@ describe("V2 control plane", () => {
           method: "POST",
         },
       ),
-      { DB: detailsDb() } as never,
+      uiEnv(detailsDb()) as never,
       {} as never,
     );
     expect(mutation.status).toBe(405);
