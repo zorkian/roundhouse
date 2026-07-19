@@ -51,7 +51,44 @@ function detailsDb(found = true): D1Like {
   };
 }
 
+function dashboardDb(): D1Like {
+  return {
+    prepare() {
+      const statement = {
+        bind: (..._values: unknown[]) => statement,
+        first: async () => null,
+        run: async () => ({ meta: {} }),
+        all: async () => ({ meta: {}, results: [] }),
+      };
+      return statement as unknown as ReturnType<D1Like["prepare"]>;
+    },
+  };
+}
+
 describe("V2 control plane", () => {
+  it("serves the operational dashboard at the root", async () => {
+    const fetch = worker.fetch as unknown as (
+      request: Request,
+      env: unknown,
+      context: unknown,
+    ) => Promise<Response>;
+    const response = await fetch(
+      new Request("https://v2.invalid/"),
+      { DB: dashboardDb() } as never,
+      {} as never,
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe(
+      "text/html; charset=utf-8",
+    );
+    expect(response.headers.get("content-security-policy")).toContain(
+      "frame-ancestors 'none'",
+    );
+    await expect(response.text()).resolves.toContain(
+      "Development runs across enrolled repositories",
+    );
+  });
+
   it("reports a small versioned health contract", async () => {
     const response = handleRequest(new Request("https://v2.invalid/health"));
 

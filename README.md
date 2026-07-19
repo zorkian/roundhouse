@@ -76,7 +76,9 @@ run, pull-request head, and check runs all identify the same commit, then marks
 the draft pull request ready. Immediately before merging, it rechecks those
 exact-head gates and submits the merge for that specific SHA. Validation
 commands and output remain durable Roundhouse evidence rather than issue or
-pull-request commentary.
+pull-request commentary. The Access-protected development dashboard at
+`roundhouse-dev.rm-rf.rip` provides a compact operational view of V2 runs and
+links each run to its GitHub issue and recorded details.
 
 ## Local checks
 

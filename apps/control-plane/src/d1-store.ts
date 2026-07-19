@@ -55,6 +55,12 @@ export interface RunDetails {
   })[];
 }
 
+export interface RunSummary {
+  readonly run: RunSnapshot;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+}
+
 function attemptFromRow(row: AttemptRow): Attempt {
   return {
     id: row.id,
@@ -129,6 +135,20 @@ export class D1RunRepository implements RunRepository {
       .bind(runId)
       .first<RunRow>();
     return row ? (JSON.parse(row.document_json) as RunSnapshot) : undefined;
+  }
+
+  async listRuns(limit = 50): Promise<readonly RunSummary[]> {
+    const result = await this.db
+      .prepare(
+        "SELECT document_json,created_at,updated_at FROM runs ORDER BY updated_at DESC LIMIT ?1",
+      )
+      .bind(limit)
+      .all<{ document_json: string; created_at: number; updated_at: number }>();
+    return (result.results ?? []).map((row) => ({
+      run: JSON.parse(row.document_json) as RunSnapshot,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
   }
 
   async detailsByIssue(
