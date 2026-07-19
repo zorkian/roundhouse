@@ -98,11 +98,12 @@ workspace, and runs the test suite.
 
 ## Development deployment
 
-A push to `main` runs the same checks as a pull request. After those checks
-succeed, GitHub Actions uses the `roundhouse-development` environment to deploy
-the development model broker, apply pending development D1 migrations, and
-deploy the control plane and agent container. Pull requests do not deploy, and
-the workflow references only the development configuration and resources.
+When a pull request is merged into `main`, GitHub Actions checks that exact
+landed commit. After those checks succeed, it uses the
+`roundhouse-development` environment to deploy the development model broker,
+apply pending development D1 migrations, and deploy the control plane and agent
+container. Open pull requests run checks but do not deploy, and the workflow
+references only the development configuration and resources.
 
 The same deployment can be run from an authenticated development machine with:
 
