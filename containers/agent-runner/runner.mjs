@@ -106,6 +106,7 @@ function command(commandName, args, options = {}) {
       stdio: ["ignore", "pipe", "pipe"],
     });
     const stdout = [];
+    const stderr = [];
     let lastActivityAt = 0;
     let activity = Promise.resolve();
     const recordActivity = () => {
@@ -117,12 +118,25 @@ function command(commandName, args, options = {}) {
       stdout.push(chunk);
       recordActivity();
     });
-    child.stderr.on("data", recordActivity);
+    child.stderr.on("data", (chunk) => {
+      stderr.push(chunk);
+      recordActivity();
+    });
     child.once("error", rejectCommand);
     child.once("close", async (code) => {
       await activity;
       if (code === 0) resolveCommand(Buffer.concat(stdout).toString().trim());
-      else rejectCommand(new Error(`${commandName}_failed_${code}`));
+      else {
+        const detail =
+          commandName === "git"
+            ? Buffer.concat(stderr).toString().trim().slice(0, 1_000)
+            : "";
+        rejectCommand(
+          new Error(
+            `${commandName}_${args[0]}_failed_${code}${detail ? `: ${detail}` : ""}`,
+          ),
+        );
+      }
     });
   });
 }
