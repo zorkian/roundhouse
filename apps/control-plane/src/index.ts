@@ -245,6 +245,16 @@ class ContainerDispatcher implements AttemptDispatcher {
         access: token.access,
         ref: workspaceRef(attempt.runId),
       },
+      ...(attempt.stage === "implement" &&
+      (ci as Record<string, unknown> | undefined)?.reason === "base_conflict"
+        ? {
+            upstream: {
+              remote: `https://github.com/${run.repository}.git`,
+              hostname: "github.com",
+              branch: "main",
+            },
+          }
+        : {}),
     };
     try {
       const response = await this.containers.get(id).fetch(

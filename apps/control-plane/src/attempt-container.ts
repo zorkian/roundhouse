@@ -14,6 +14,7 @@ interface AttemptAssignment extends Attempt {
   };
   readonly issue?: unknown;
   readonly publish?: { readonly hostname: string };
+  readonly upstream?: { readonly hostname: string };
 }
 
 type AttemptContainerEnv = Cloudflare.Env & {
@@ -27,7 +28,7 @@ const packageRegistryHost = "registry.npmjs.org";
 const containerCa = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
 
 export function attemptAllowedHosts(
-  attempt: Pick<AttemptAssignment, "artifact" | "publish">,
+  attempt: Pick<AttemptAssignment, "artifact" | "publish" | "upstream">,
   callbackUrl?: string | null,
 ): string[] {
   return [
@@ -35,6 +36,7 @@ export function attemptAllowedHosts(
     packageRegistryHost,
     attempt.artifact.hostname,
     attempt.publish?.hostname ?? "",
+    attempt.upstream?.hostname ?? "",
     callbackUrl ? new URL(callbackUrl).hostname : "",
   ].filter(Boolean);
 }

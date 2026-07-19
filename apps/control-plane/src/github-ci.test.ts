@@ -90,7 +90,11 @@ async function setupCi(reviewStatus: "clean" | "changes_requested" = "clean") {
   return { repository, run: ciRun };
 }
 
-function github(prHead = head, checkConclusion = "success") {
+function github(
+  prHead = head,
+  checkConclusion = "success",
+  mergeable: boolean | null = true,
+) {
   let draft = true;
   const get = vi.fn(async (path: string) => {
     if (path.includes("/pulls?state="))
@@ -103,6 +107,7 @@ function github(prHead = head, checkConclusion = "success") {
         draft,
         state: "open",
         merged: false,
+        mergeable,
         merge_commit_sha: null,
         head: { sha: prHead },
       };
@@ -241,6 +246,31 @@ describe("GitHub exact-head CI and merge", () => {
       stage: "implement",
       revision: 7,
       currentHead: head,
+    });
+  });
+
+  it("returns a conflicted exact head to implementation instead of waiting for checks", async () => {
+    const { repository, run } = await setupCi();
+    const api = github(head, "success", false);
+    const automation = new GitHubCiAutomation(repository, api.api);
+
+    await expect(automation.reconcileCi(run, 100)).resolves.toBe("recorded");
+    await expect(
+      repository.getAttempt(`${run.id}_rev_6`),
+    ).resolves.toMatchObject({
+      result: {
+        ci: {
+          status: "failure",
+          reason: "base_conflict",
+          head,
+          checks: [
+            {
+              name: "Pull request base",
+              conclusion: "failure",
+            },
+          ],
+        },
+      },
     });
   });
 

@@ -447,6 +447,11 @@ export function implementationPrompt(assignment) {
     JSON.stringify(assignment.context?.review ?? {}),
     "Latest CI result to address:",
     JSON.stringify(assignment.context?.ci ?? {}),
+    ...(assignment.context?.ci?.reason === "base_conflict"
+      ? [
+          "The pull request conflicts with the current base branch. The workspace has been prepared with that merge in progress. Resolve the conflicts as part of this implementation.",
+        ]
+      : []),
     "Run the relevant validation available in the repository and record each command, exit code, and useful output in validation.",
     "Write a concise pull request title and body for a maintainer. Describe the change and why; do not include validation commands or command output in the pull request body.",
     "Return only the requested structured implementation result.",
@@ -526,6 +531,38 @@ export async function prepareWorkspace(assignment) {
     ],
     { cwd: directory },
   );
+  if (
+    assignment.artifact.access === "write" &&
+    assignment.context?.ci?.reason === "base_conflict" &&
+    assignment.upstream
+  ) {
+    const upstreamEnvironment = {
+      ...process.env,
+      GIT_TERMINAL_PROMPT: "0",
+    };
+    await command(
+      "git",
+      [
+        "fetch",
+        "--no-tags",
+        assignment.upstream.remote,
+        assignment.upstream.branch,
+      ],
+      { cwd: directory, env: upstreamEnvironment },
+    );
+    try {
+      await command("git", ["merge", "--no-commit", "FETCH_HEAD"], {
+        cwd: directory,
+      });
+    } catch (error) {
+      const conflicts = await command(
+        "git",
+        ["diff", "--name-only", "--diff-filter=U"],
+        { cwd: directory },
+      );
+      if (!conflicts) throw error;
+    }
+  }
   return directory;
 }
 
@@ -740,6 +777,10 @@ function validAssignment(body) {
     body?.artifact?.tokenId &&
     body?.artifact?.token &&
     ["read", "write"].includes(body?.artifact?.access) &&
+    (!body?.upstream ||
+      (body.upstream.remote?.startsWith("https://") &&
+        body.upstream.hostname &&
+        /^[A-Za-z0-9._\/-]+$/.test(body.upstream.branch ?? ""))) &&
     /^refs\/heads\/[A-Za-z0-9._\/-]+$/.test(body?.artifact?.ref ?? ""),
   );
 }

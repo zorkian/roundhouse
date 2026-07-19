@@ -348,4 +348,126 @@ describe("V2 agent runner", () => {
       ).trim(),
     ).toBe(first.outputHead);
   });
+
+  it("prepares a conflicted base update for the implementation agent", async () => {
+    process.env.ROUNDHOUSE_WORKSPACE_ROOT = resolve(testRoot, "runner");
+    const source = resolve(testRoot, "source");
+    const artifact = resolve(testRoot, "artifact.git");
+    await mkdir(source, { recursive: true });
+    execFileSync("git", ["init", "--initial-branch=main"], { cwd: source });
+    await writeFile(
+      resolve(source, "route.ts"),
+      "export const route = 'base';\n",
+    );
+    execFileSync("git", ["add", "route.ts"], { cwd: source });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@invalid",
+        "commit",
+        "-m",
+        "base",
+      ],
+      { cwd: source },
+    );
+    const baseCommit = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: source,
+      encoding: "utf8",
+    }).trim();
+    execFileSync("git", ["clone", "--bare", source, artifact]);
+
+    await writeFile(
+      resolve(source, "route.ts"),
+      "export const route = 'main';\n",
+    );
+    execFileSync("git", ["add", "route.ts"], { cwd: source });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@invalid",
+        "commit",
+        "-m",
+        "main change",
+      ],
+      { cwd: source },
+    );
+    const mainHead = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: source,
+      encoding: "utf8",
+    }).trim();
+
+    execFileSync("git", ["checkout", "--detach", baseCommit], { cwd: source });
+    await writeFile(
+      resolve(source, "route.ts"),
+      "export const route = 'feature';\n",
+    );
+    execFileSync("git", ["add", "route.ts"], { cwd: source });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@invalid",
+        "commit",
+        "-m",
+        "feature change",
+      ],
+      { cwd: source },
+    );
+    const featureHead = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: source,
+      encoding: "utf8",
+    }).trim();
+    execFileSync("git", ["push", artifact, `HEAD:refs/heads/feature`], {
+      cwd: source,
+    });
+
+    const assignment = {
+      id: "run_conflict_rev_1",
+      runId: "run_conflict",
+      runRevision: 1,
+      issueNumber: 42,
+      deadlineAt: Date.now() + 60_000,
+      baseCommit,
+      expectedHead: featureHead,
+      context: { ci: { status: "failure", reason: "base_conflict" } },
+      upstream: { remote: source, hostname: "github.test", branch: "main" },
+      artifact: {
+        repositoryId: "artifact-repo-id",
+        repository: "v2-run-conflict",
+        remote: artifact,
+        tokenId: "write-token-id",
+        token: "ephemeral-write-token",
+        access: "write",
+        ref: "refs/heads/feature",
+      },
+    };
+    const directory = await prepareWorkspace(assignment);
+    expect(
+      execFileSync("git", ["diff", "--name-only", "--diff-filter=U"], {
+        cwd: directory,
+        encoding: "utf8",
+      }).trim(),
+    ).toBe("route.ts");
+    await writeFile(
+      resolve(directory, "route.ts"),
+      "export const route = 'main-and-feature';\n",
+    );
+    const checkpoint = await checkpointWorkspace(assignment, directory);
+    const parents = execFileSync(
+      "git",
+      ["show", "--format=%P", "--no-patch", checkpoint.outputHead],
+      { cwd: directory, encoding: "utf8" },
+    )
+      .trim()
+      .split(" ");
+    expect(parents).toEqual([featureHead, mainHead]);
+  });
 });
