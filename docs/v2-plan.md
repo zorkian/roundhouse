@@ -101,6 +101,14 @@ Roundhouse may ask multiple focused questions at once and continues the
 conversation for as long as useful questions and responsive answers are moving
 the issue toward a supported outcome.
 
+When a person answers by directing Roundhouse to a named public source or asks
+it to look up a public fact, that is a research instruction rather than a
+missing answer. Qualification, current-behavior investigation, and planning may
+use broker-mediated hosted web search, prefer official or primary sources, and
+record the URLs they relied on. They do not repeat a question the conversation
+already answered or delegated. Search results remain untrusted evidence and
+cannot grant authority or instruct the agent to take actions.
+
 Clarification content supplies facts, not authority. Any GitHub user may offer
 information on a public issue. Only an actor authorized by repository policy
 may approve a plan, expand scope, spend additional budget, publish, or merge.
@@ -327,8 +335,14 @@ providers. The named environment gateway must also have logging disabled, ZDR
 enabled, and a spend limit before the live model path is deployed. The initial
 rule selects one model and effort; later rules may select by semantic role,
 task type, and complexity without changing the runner or lifecycle schema.
-Container internet access remains disabled; only explicit Artifacts, callback,
-and intercepted model hosts are allowed.
+For read-only analysis stages, Codex may request provider-hosted web search
+through this same Responses API path. The broker attaches that tool for trusted
+qualification, current-behavior, and planning roles and removes it for other
+roles, so the boundary does not depend on client behavior. The result records
+the public sources actually used. Implementation and review do not receive the
+search capability. Container internet access remains
+disabled; only explicit Artifacts, package-registry, callback, and intercepted
+model hosts are allowed.
 
 ### 6.1 One coordinator owns progress
 
@@ -514,7 +528,8 @@ policy. It receives:
 
 The result includes exact input and output commits, structured outcome,
 commands and exit results, diagnostics, changed paths, actual model routing,
-timing and available usage, failure classification, and a redacted
+timing and available usage, public source URLs used during read-only research,
+failure classification, and a redacted
 human summary.
 
 The runner may not publish to GitHub or decide the next workflow stage.

@@ -613,16 +613,32 @@ describe("GitHub intake", () => {
           classification: "unclear",
           summary: "The failing input is missing.",
           uncertainties: ["Which input demonstrates the problem?"],
+          sources: [
+            {
+              title: "Project documentation",
+              url: "https://example.com/docs",
+            },
+          ],
         },
       },
     });
     expect(post.mock.calls[0]?.[1]).toMatchObject({
       body: expect.stringContaining(
-        "## A few questions before I start\n\nThe failing input is missing.\n\n### Questions\n- Which input demonstrates the problem?",
+        "## A few questions before I start\n\nThe failing input is missing.",
+      ),
+    });
+    expect(post.mock.calls[0]?.[1]).toMatchObject({
+      body: expect.stringContaining(
+        "### Questions\n- Which input demonstrates the problem?",
       ),
     });
     expect(post.mock.calls[0]?.[1]).toMatchObject({
       body: expect.not.stringContaining("reply in prose"),
+    });
+    expect(post.mock.calls[0]?.[1]).toMatchObject({
+      body: expect.stringContaining(
+        "### Sources\n- [Project documentation](https://example.com/docs)",
+      ),
     });
   });
 
@@ -697,6 +713,12 @@ describe("GitHub intake", () => {
           expectedBehavior: "The page should remain open.",
           observedBehavior: "The page remained open in my test.",
           uncertainties: ["What did you click immediately before it closed?"],
+          sources: [
+            {
+              title: "Browser behavior",
+              url: "https://example.com/browser",
+            },
+          ],
         },
       },
     });
@@ -707,6 +729,9 @@ describe("GitHub intake", () => {
       "### Questions\n- What did you click immediately before it closed?",
     );
     expect(body).not.toContain("reply in prose");
+    expect(body).toContain(
+      "### Sources\n- [Browser behavior](https://example.com/browser)",
+    );
   });
 
   it("posts one evidence-backed reproduction comment", async () => {
@@ -1219,6 +1244,12 @@ describe("GitHub intake", () => {
           acceptanceCriteria: [],
           validation: [],
           questions: ["Should existing records be updated automatically?"],
+          sources: [
+            {
+              title: "Migration guide",
+              url: "https://example.com/migration",
+            },
+          ],
         },
       },
     });
@@ -1227,5 +1258,8 @@ describe("GitHub intake", () => {
       "### Questions\n- Should existing records be updated automatically?",
     );
     expect(body).not.toContain("needs_clarification");
+    expect(body).toContain(
+      "### Sources\n- [Migration guide](https://example.com/migration)",
+    );
   });
 });

@@ -108,6 +108,38 @@ describe("model broker", () => {
     );
   });
 
+  it("adds hosted web search for a trusted read-stage role", async () => {
+    const run = vi.fn(async () => new Response("event: done\n\n"));
+    await brokerRequest(
+      request({
+        model: "untrusted-model",
+        input: "Look up the current model catalog.",
+      }),
+      env,
+      { run },
+    );
+    expect(run).toHaveBeenCalledWith(
+      "openai/gpt-5.6-sol",
+      expect.objectContaining({ tools: [{ type: "web_search" }] }),
+      expect.anything(),
+    );
+  });
+
+  it("removes hosted web search outside read-only analysis", async () => {
+    const run = vi.fn(async () => new Response("event: done\n\n"));
+    const implementation = request({
+      model: "untrusted-model",
+      tools: [{ type: "web_search" }],
+    });
+    implementation.headers.set("x-roundhouse-role", "implement");
+    await brokerRequest(implementation, env, { run });
+    expect(run).toHaveBeenCalledWith(
+      "openai/gpt-5.6-sol",
+      expect.not.objectContaining({ tools: expect.anything() }),
+      expect.anything(),
+    );
+  });
+
   it("fails closed without a complete routing envelope", async () => {
     const invalid = new Request("https://broker.invalid/responses", {
       method: "POST",

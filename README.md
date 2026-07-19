@@ -66,7 +66,10 @@ Durable Objects, and Artifacts checkpoint handoff. Phase 2 has deployed real
 development GitHub intake, read-only qualification and current-behavior
 investigation,
 unrestricted natural-language clarification, and evidence-backed planning
-through a private model broker. Its current slice implements the accepted plan
+through a private model broker. Read-only analysis stages can use hosted web
+search through that broker when public facts are needed, while the Container
+still has no general internet access; the evidence records the sources used.
+Its current slice implements the accepted plan
 in an isolated container, records the actual source commit in Artifacts,
 validates that checkpoint from a clean clone, promotes the validated commit to
 GitHub, and opens a draft pull request. The reviewer examines the promoted
