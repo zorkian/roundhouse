@@ -103,6 +103,11 @@ export interface RunRepository {
     lease: Lease,
     now: number,
   ): Promise<boolean>;
+  releaseLease(
+    runId: string,
+    expectedRevision: number,
+    attemptId: string,
+  ): Promise<boolean>;
   createAttempt(attempt: Attempt): Promise<"created" | "exists">;
   markDispatched(attemptId: string): Promise<void>;
   completeAttempt(

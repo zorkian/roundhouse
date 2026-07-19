@@ -194,7 +194,12 @@ export async function coordinate(
   const durable = await repository.getAttempt(attemptId);
   if (created === "exists" && durable?.state === "completed")
     return "duplicate";
-  await dispatcher.submit(attempt, run);
+  try {
+    await dispatcher.submit(attempt, run);
+  } catch (error) {
+    await repository.releaseLease(run.id, run.revision, attempt.id);
+    throw error;
+  }
   await repository.markDispatched(attemptId);
   return "dispatched";
 }

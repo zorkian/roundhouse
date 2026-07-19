@@ -60,8 +60,33 @@ export class MemoryRunRepository implements RunRepository {
     return true;
   }
 
+  async releaseLease(
+    runId: string,
+    expectedRevision: number,
+    attemptId: string,
+  ): Promise<boolean> {
+    const lease = this.leases.get(runId);
+    if (
+      !lease ||
+      lease.runRevision !== expectedRevision ||
+      lease.attemptId !== attemptId
+    )
+      return false;
+    this.leases.delete(runId);
+    return true;
+  }
+
   async createAttempt(attempt: Attempt): Promise<"created" | "exists"> {
-    if (this.attempts.has(attempt.id)) return "exists";
+    const existing = this.attempts.get(attempt.id);
+    if (existing) {
+      if (existing.state !== "completed")
+        this.attempts.set(attempt.id, {
+          ...existing,
+          state: "created",
+          deadlineAt: attempt.deadlineAt,
+        });
+      return "exists";
+    }
     this.attempts.set(attempt.id, attempt);
     return "created";
   }

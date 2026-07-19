@@ -186,6 +186,20 @@ export class D1RunRepository implements RunRepository {
     return (result.meta.changes ?? 0) === 1;
   }
 
+  async releaseLease(
+    runId: string,
+    expectedRevision: number,
+    attemptId: string,
+  ): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        "UPDATE runs SET lease_attempt_id=NULL, lease_revision=NULL, lease_expires_at=NULL, updated_at=?1 WHERE id=?2 AND revision=?3 AND lease_attempt_id=?4 AND lease_revision=?3",
+      )
+      .bind(this.now(), runId, expectedRevision, attemptId)
+      .run();
+    return (result.meta.changes ?? 0) === 1;
+  }
+
   async createAttempt(attempt: Attempt): Promise<"created" | "exists"> {
     const result = await this.db
       .prepare(
@@ -205,7 +219,20 @@ export class D1RunRepository implements RunRepository {
         this.now(),
       )
       .run();
-    return (result.meta.changes ?? 0) === 1 ? "created" : "exists";
+    if ((result.meta.changes ?? 0) === 1) return "created";
+    await this.db
+      .prepare(
+        "UPDATE attempts SET state='created', deadline_at=?1, updated_at=?2 WHERE id=?3 AND run_id=?4 AND run_revision=?5 AND state!='completed'",
+      )
+      .bind(
+        attempt.deadlineAt,
+        this.now(),
+        attempt.id,
+        attempt.runId,
+        attempt.runRevision,
+      )
+      .run();
+    return "exists";
   }
 
   async markDispatched(attemptId: string): Promise<void> {

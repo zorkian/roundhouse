@@ -93,6 +93,15 @@ function repositoryContract(label, createRepository) {
           101,
         ),
       ).resolves.toBe(false);
+      await expect(
+        repository.releaseLease(run.id, 1, "different_attempt"),
+      ).resolves.toBe(false);
+      await expect(
+        repository.releaseLease(run.id, 1, lease.attemptId),
+      ).resolves.toBe(true);
+      await expect(repository.claimLease(run.id, 1, lease, 101)).resolves.toBe(
+        true,
+      );
       await expect(repository.expiredLeases(200)).resolves.toEqual([
         { runId: run.id, expectedRevision: 1 },
       ]);
@@ -110,7 +119,13 @@ function repositoryContract(label, createRepository) {
         expectedHead: run.baseCommit,
       };
       await expect(repository.createAttempt(attempt)).resolves.toBe("created");
-      await expect(repository.createAttempt(attempt)).resolves.toBe("exists");
+      await expect(
+        repository.createAttempt({ ...attempt, deadlineAt: 300 }),
+      ).resolves.toBe("exists");
+      await expect(repository.getAttempt(attempt.id)).resolves.toMatchObject({
+        state: "created",
+        deadlineAt: 300,
+      });
       await repository.markDispatched(attempt.id);
       await expect(repository.getAttempt(attempt.id)).resolves.toMatchObject({
         state: "dispatched",
@@ -120,6 +135,13 @@ function repositoryContract(label, createRepository) {
           outcome: "ok",
         }),
       ).resolves.toBe("completed");
+      await expect(
+        repository.createAttempt({ ...attempt, deadlineAt: 400 }),
+      ).resolves.toBe("exists");
+      await expect(repository.getAttempt(attempt.id)).resolves.toMatchObject({
+        state: "completed",
+        deadlineAt: 300,
+      });
       await expect(
         repository.latestCompletedAttempt(run.id, "qualify", 2),
       ).resolves.toMatchObject({ id: attempt.id, runRevision: 1 });
