@@ -298,14 +298,6 @@ describe("run details", () => {
       attempts: [
         {
           ...common,
-          id: "qualification",
-          runRevision: 1,
-          stage: "qualify",
-          role: "qualify",
-          result: { qualification: { classification: "feature" } },
-        },
-        {
-          ...common,
           id: "investigation",
           runRevision: 2,
           stage: "reproduce",

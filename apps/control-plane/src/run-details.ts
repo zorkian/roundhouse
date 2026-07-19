@@ -94,8 +94,12 @@ export function renderRunDetails(details: RunDetails): string {
   const { run, attempts } = details;
   const qualification = resultFor(attempts, "qualification") as
     { classification?: unknown } | undefined;
+  const requestClassification = [...attempts]
+    .reverse()
+    .find((attempt) => attempt.result?.requestClassification !== undefined)
+    ?.result?.requestClassification;
   const investigationHeading = ["feature", "maintenance"].includes(
-    String(qualification?.classification),
+    String(requestClassification ?? qualification?.classification),
   )
     ? "Current behavior"
     : "Reproduction";
