@@ -305,12 +305,26 @@ describe("V2 agent runner", () => {
       assignment,
       "https://v2.invalid/attempts/callback",
       "attempt-secret",
+      {
+        phase: "command_output",
+        operation: "codex exec",
+        durationMs: 30_000,
+        stdoutBytes: 128,
+        stderrBytes: 0,
+      },
     );
     expect(new URL(activity.url).pathname).toBe("/attempts/activity");
     expect(activity.headers.get("x-roundhouse-attempt-id")).toBe(assignment.id);
     expect(activity.headers.get("x-roundhouse-attempt-capability")).toBe(
       "attempt-secret",
     );
+    await expect(activity.json()).resolves.toEqual({
+      phase: "command_output",
+      operation: "codex exec",
+      durationMs: 30_000,
+      stdoutBytes: 128,
+      stderrBytes: 0,
+    });
 
     const completion = completionRequest(
       assignment,

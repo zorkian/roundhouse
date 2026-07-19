@@ -71,15 +71,45 @@ export function completionRequest(
   });
 }
 
-export function activityRequest(assignment, callbackUrl, attemptSecret) {
+export function activityRequest(
+  assignment,
+  callbackUrl,
+  attemptSecret,
+  progress,
+) {
   return new Request(new URL("/attempts/activity", callbackUrl), {
     method: "POST",
     headers: {
+      ...(progress ? { "content-type": "application/json" } : {}),
       "x-roundhouse-attempt-capability": attemptSecret,
       "x-roundhouse-attempt-id": assignment.id,
     },
+    ...(progress ? { body: JSON.stringify(progress) } : {}),
     signal: AbortSignal.timeout(30_000),
   });
+}
+
+async function reportActivity(
+  assignment,
+  callbackUrl,
+  attemptSecret,
+  progress,
+) {
+  try {
+    const response = await fetch(
+      activityRequest(assignment, callbackUrl, attemptSecret, progress),
+    );
+    if (!response.ok)
+      runnerLog("error", "runner_activity_rejected", {
+        phase: progress.phase,
+        status: response.status,
+      });
+  } catch (error) {
+    runnerLog("error", "runner_activity_failed", {
+      phase: progress.phase,
+      errorType: error?.name ?? typeof error,
+    });
+  }
 }
 
 function gitEnvironment(token) {
@@ -136,6 +166,19 @@ function command(commandName, args, options = {}) {
     let stderrBytes = 0;
     let lastActivityAt = 0;
     let activity = Promise.resolve();
+    const queueProgress = (progress) => {
+      if (!options.onProgress) return;
+      activity = activity
+        .then(() => options.onProgress(progress))
+        .catch((error) => {
+          runnerLog("error", "runner_progress_failed", {
+            phase: progress.phase,
+            operation,
+            errorType: error?.name ?? typeof error,
+          });
+        });
+    };
+    queueProgress({ phase: "command_started", operation });
     const recordActivity = () => {
       if (Date.now() - lastActivityAt < 30_000) return;
       lastActivityAt = Date.now();
@@ -145,8 +188,13 @@ function command(commandName, args, options = {}) {
         stdoutBytes,
         stderrBytes,
       });
-      if (options.onActivity)
-        activity = activity.then(options.onActivity).catch(() => undefined);
+      queueProgress({
+        phase: "command_output",
+        operation,
+        durationMs: Date.now() - startedAt,
+        stdoutBytes,
+        stderrBytes,
+      });
     };
     child.stdout.on("data", (chunk) => {
       stdout.push(chunk);
@@ -166,7 +214,15 @@ function command(commandName, args, options = {}) {
         stderrBytes,
         error: error.message,
       });
-      rejectCommand(error);
+      queueProgress({
+        phase: "command_failed",
+        operation,
+        durationMs: Date.now() - startedAt,
+        stdoutBytes,
+        stderrBytes,
+        errorType: error.name,
+      });
+      activity.then(() => rejectCommand(error));
     });
     child.once("close", async (code) => {
       await activity;
@@ -178,6 +234,15 @@ function command(commandName, args, options = {}) {
           stdoutBytes,
           stderrBytes,
         });
+        queueProgress({
+          phase: "command_completed",
+          operation,
+          durationMs: Date.now() - startedAt,
+          exitCode: code,
+          stdoutBytes,
+          stderrBytes,
+        });
+        await activity;
         resolveCommand(Buffer.concat(stdout).toString().trim());
       } else {
         const detail =
@@ -195,6 +260,16 @@ function command(commandName, args, options = {}) {
           stderrBytes,
           error: error.message,
         });
+        queueProgress({
+          phase: "command_failed",
+          operation,
+          durationMs: Date.now() - startedAt,
+          exitCode: code,
+          stdoutBytes,
+          stderrBytes,
+          errorType: "NonZeroExit",
+        });
+        await activity;
         rejectCommand(error);
       }
     });
@@ -421,15 +496,14 @@ async function structuredAgent(
         CODEX_HOME: codexHome,
         ROUNDHOUSE_ATTEMPT_CAPABILITY: attemptSecret,
       },
-      onActivity:
+      onProgress:
         typeof assignment.activityCallbackUrl === "string"
-          ? async () => {
-              await fetch(
-                activityRequest(
-                  assignment,
-                  assignment.activityCallbackUrl,
-                  attemptSecret,
-                ),
+          ? async (progress) => {
+              await reportActivity(
+                assignment,
+                assignment.activityCallbackUrl,
+                attemptSecret,
+                progress,
               );
             }
           : undefined,
@@ -817,8 +891,17 @@ async function completeAssignment(assignment, headers) {
   const attemptSecret = headers["x-roundhouse-attempt-secret"];
   if (typeof callbackUrl !== "string" || typeof attemptSecret !== "string")
     return;
-  const directory = await prepareWorkspace(assignment);
   const agentAssignment = { ...assignment, activityCallbackUrl: callbackUrl };
+  const progress = async (phase, details = {}) => {
+    await reportActivity(agentAssignment, callbackUrl, attemptSecret, {
+      phase,
+      ...details,
+    });
+  };
+  await progress("workspace_started");
+  const directory = await prepareWorkspace(agentAssignment);
+  await progress("workspace_ready");
+  await progress("agent_started");
   const evidence =
     assignment.stage === "qualify"
       ? {
@@ -856,7 +939,12 @@ async function completeAssignment(assignment, headers) {
                   ),
                 }
               : undefined;
+  await progress("agent_completed");
+  await progress("checkpoint_started");
   const checkpoint = await checkpointWorkspace(assignment, directory);
+  await progress("checkpoint_completed", {
+    changedPathCount: checkpoint.changedPaths.length,
+  });
   const result = evidence
     ? {
         outcome: "ok",
@@ -865,6 +953,7 @@ async function completeAssignment(assignment, headers) {
         routing: assignment.routing,
       }
     : undefined;
+  await progress("callback_started");
   const response = await fetch(
     completionRequest(
       assignment,
@@ -875,6 +964,7 @@ async function completeAssignment(assignment, headers) {
     ),
   );
   if (!response.ok) throw new Error(`callback_http_${response.status}`);
+  await progress("callback_completed", { status: response.status });
 }
 
 function response(status, value, headers = {}) {
