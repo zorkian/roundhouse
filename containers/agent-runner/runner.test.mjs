@@ -404,7 +404,12 @@ describe("V2 agent runner", () => {
       resolve(firstDirectory, "README.md"),
       "fake GitHub baseline\nimplemented change\n",
     );
-    const first = await checkpointWorkspace(assignment, firstDirectory);
+    const checkpointProgress = [];
+    const first = await checkpointWorkspace(
+      assignment,
+      firstDirectory,
+      async (progress) => checkpointProgress.push(progress),
+    );
     const replacementDirectory = await prepareWorkspace(assignment);
     await writeFile(
       resolve(replacementDirectory, "README.md"),
@@ -418,6 +423,19 @@ describe("V2 agent runner", () => {
     expect(first.inputHead).toBe(baseCommit);
     expect(first.outputHead).toMatch(/^[a-f0-9]{40}$/);
     expect(first.changedPaths).toEqual(["README.md"]);
+    expect(checkpointProgress).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "command_started",
+          operation: "git add",
+        }),
+        expect.objectContaining({
+          phase: "command_completed",
+          operation: "git push",
+          exitCode: 0,
+        }),
+      ]),
+    );
     const entries = log.mock.calls.map(([entry]) => JSON.parse(entry));
     expect(entries).toEqual(
       expect.arrayContaining([
