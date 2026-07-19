@@ -3,8 +3,10 @@
 
 import {
   createRun,
+  immutableAttemptId,
   type Attempt,
   type RunSnapshot,
+  type RunTransition,
   type Wakeup,
 } from "@roundhouse/core";
 import type { AttemptReporter } from "./coordinator.js";
@@ -17,6 +19,20 @@ export interface GitHubIntakeRepository {
     runId: string,
     expectedRevision: number,
     issue: NonNullable<RunSnapshot["issue"]>,
+  ): Promise<RunSnapshot | undefined>;
+  recordGitHubDelivery(
+    runId: string,
+    deliveryId: string,
+    payload: Readonly<Record<string, unknown>>,
+  ): Promise<boolean>;
+}
+
+export interface GitHubCancellationRepository {
+  get(runId: string): Promise<RunSnapshot | undefined>;
+  transition(
+    runId: string,
+    expectedRevision: number,
+    transition: RunTransition,
   ): Promise<RunSnapshot | undefined>;
   recordGitHubDelivery(
     runId: string,
@@ -63,6 +79,13 @@ interface CommentPayload {
     readonly html_url?: string;
   };
   readonly comment?: { readonly body?: string; readonly html_url?: string };
+}
+
+interface IssuePayload {
+  readonly action?: string;
+  readonly repository?: { readonly full_name?: string };
+  readonly sender?: { readonly login?: string };
+  readonly issue?: { readonly number?: number };
 }
 
 function bytesToBase64Url(bytes: ArrayBuffer | Uint8Array): string {
@@ -677,4 +700,60 @@ export async function acceptGitHubComment(
   if (existing) return "duplicate";
   await enqueue({ runId: id, expectedRevision: run.revision });
   return "accepted";
+}
+
+export async function acceptGitHubIssueClosed(
+  request: Request,
+  env: GitHubEnv,
+  repository: GitHubCancellationRepository,
+): Promise<{
+  readonly outcome: "cancelled" | "duplicate" | "ignored" | "unauthorized";
+  readonly attemptId?: string;
+}> {
+  const deliveryId = request.headers.get("x-github-delivery");
+  const event = request.headers.get("x-github-event");
+  const signature = request.headers.get("x-hub-signature-256") ?? "";
+  if (!deliveryId || event !== "issues") return { outcome: "ignored" };
+  const raw = await request.text();
+  if (
+    !(await verifyGitHubWebhook(
+      raw,
+      signature,
+      env.ROUNDHOUSE_GITHUB_WEBHOOK_SECRET,
+    ))
+  )
+    return { outcome: "unauthorized" };
+  const payload = JSON.parse(raw) as IssuePayload;
+  const issueNumber = payload.issue?.number;
+  if (
+    payload.action !== "closed" ||
+    payload.repository?.full_name !== enrolledRepository.repository ||
+    !issueNumber
+  )
+    return { outcome: "ignored" };
+  const id = runId(issueNumber);
+  const run = await repository.get(id);
+  if (!run) return { outcome: "ignored" };
+  const fresh = await repository.recordGitHubDelivery(id, deliveryId, {
+    event,
+    actor: payload.sender?.login ?? "",
+    issueNumber,
+  });
+  if (!fresh) return { outcome: "duplicate" };
+  if (run.status !== "active" && run.status !== "waiting")
+    return { outcome: "duplicate" };
+  const attemptId =
+    run.status === "active" &&
+    new Set(["qualify", "reproduce", "plan", "implement", "review"]).has(
+      run.stage,
+    )
+      ? immutableAttemptId(run.id, run.revision)
+      : undefined;
+  const cancelled = await repository.transition(run.id, run.revision, {
+    status: "cancelled",
+    stage: run.stage,
+  });
+  return cancelled
+    ? { outcome: "cancelled", ...(attemptId ? { attemptId } : {}) }
+    : { outcome: "duplicate" };
 }

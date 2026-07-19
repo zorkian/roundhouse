@@ -12,6 +12,7 @@ import { describe, expect, it, vi } from "vitest";
 import { signCallback } from "./callback.js";
 import {
   acceptGitHubComment,
+  acceptGitHubIssueClosed,
   GitHubStageReporter,
   verifyGitHubWebhook,
   type GitHubApi,
@@ -116,7 +117,60 @@ async function delivery(
   });
 }
 
+async function closureDelivery(id: string, action = "closed") {
+  const body = JSON.stringify({
+    action,
+    repository: { full_name: "zorkian/roundhouse" },
+    sender: { login: "maintainer" },
+    issue: { number: 42 },
+  });
+  const signature = await signCallback("webhook-secret", body);
+  return new Request("https://roundhouse.invalid/github/webhook", {
+    method: "POST",
+    headers: {
+      "x-github-delivery": id,
+      "x-github-event": "issues",
+      "x-hub-signature-256": `sha256=${signature}`,
+    },
+    body,
+  });
+}
+
 describe("GitHub intake", () => {
+  it("cancels active work when its GitHub issue closes", async () => {
+    const repository = new IntakeRepository();
+    await repository.create(
+      createRun({
+        id: "run_zorkian_roundhouse_issue_42",
+        repository: "zorkian/roundhouse",
+        issueNumber: 42,
+        baseCommit: "a".repeat(40),
+        profileVersion: "v2",
+      }),
+    );
+
+    await expect(
+      acceptGitHubIssueClosed(
+        await closureDelivery("close-42"),
+        env,
+        repository,
+      ),
+    ).resolves.toEqual({
+      outcome: "cancelled",
+      attemptId: "run_zorkian_roundhouse_issue_42_rev_1",
+    });
+    await expect(
+      repository.get("run_zorkian_roundhouse_issue_42"),
+    ).resolves.toMatchObject({ status: "cancelled", revision: 2 });
+    await expect(
+      acceptGitHubIssueClosed(
+        await closureDelivery("close-42"),
+        env,
+        repository,
+      ),
+    ).resolves.toEqual({ outcome: "duplicate" });
+  });
+
   it("links generated issue comments to run details", async () => {
     const run = createRun({
       id: "run_links",
