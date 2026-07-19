@@ -4,7 +4,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   activityRequest,
   completionRequest,
@@ -23,6 +23,7 @@ import {
 
 const testRoot = resolve(process.cwd(), ".runner-test-workspaces");
 afterEach(async () => {
+  vi.restoreAllMocks();
   await rm(testRoot, { recursive: true, force: true });
 });
 
@@ -254,6 +255,7 @@ describe("V2 agent runner", () => {
   });
 
   it("checkpoints the implementation and promotes it from a clean clone", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     process.env.ROUNDHOUSE_WORKSPACE_ROOT = resolve(testRoot, "runner");
     const source = resolve(testRoot, "fake-github"),
       remote = resolve(testRoot, "artifact.git"),
@@ -326,6 +328,21 @@ describe("V2 agent runner", () => {
     expect(first.inputHead).toBe(baseCommit);
     expect(first.outputHead).toMatch(/^[a-f0-9]{40}$/);
     expect(first.changedPaths).toEqual(["README.md"]);
+    const entries = log.mock.calls.map(([entry]) => JSON.parse(entry));
+    expect(entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: "runner_command_started",
+          operation: "git clone",
+        }),
+        expect.objectContaining({
+          message: "runner_command_completed",
+          operation: "git push",
+          exitCode: 0,
+        }),
+      ]),
+    );
+    expect(JSON.stringify(entries)).not.toContain("ephemeral-write-token");
     await expect(
       validateCheckpoint({
         ...assignment,
@@ -350,6 +367,8 @@ describe("V2 agent runner", () => {
   });
 
   it("prepares a conflicted base update for the implementation agent", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
     process.env.ROUNDHOUSE_WORKSPACE_ROOT = resolve(testRoot, "runner");
     const source = resolve(testRoot, "source");
     const artifact = resolve(testRoot, "artifact.git");

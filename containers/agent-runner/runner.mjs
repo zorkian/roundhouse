@@ -3,6 +3,7 @@
 
 import { createServer } from "node:http";
 import { createHmac } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
@@ -19,6 +20,7 @@ const jsonHeaders = Object.freeze({
   "content-type": "application/json; charset=utf-8",
 });
 const acceptedAttempts = new Set();
+const runnerContext = new AsyncLocalStorage();
 function workspaceRoot() {
   return process.env.ROUNDHOUSE_WORKSPACE_ROOT ?? "/home/runner/workspaces";
 }
@@ -98,8 +100,26 @@ function roundhouseGitEnvironment(extra = {}) {
   };
 }
 
+function commandOperation(commandName, args) {
+  return `${commandName}${args[0] ? ` ${args[0]}` : ""}`;
+}
+
+function runnerLog(level, message, fields = {}) {
+  const context = runnerContext.getStore() ?? {};
+  const entry = JSON.stringify({
+    message,
+    ...context,
+    ...fields,
+  });
+  if (level === "error") console.error(entry);
+  else console.log(entry);
+}
+
 function command(commandName, args, options = {}) {
   return new Promise((resolveCommand, rejectCommand) => {
+    const startedAt = Date.now();
+    const operation = commandOperation(commandName, args);
+    runnerLog("info", "runner_command_started", { operation });
     const child = spawn(commandName, args, {
       cwd: options.cwd,
       env: options.env ?? process.env,
@@ -107,35 +127,70 @@ function command(commandName, args, options = {}) {
     });
     const stdout = [];
     const stderr = [];
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
     let lastActivityAt = 0;
     let activity = Promise.resolve();
     const recordActivity = () => {
-      if (!options.onActivity || Date.now() - lastActivityAt < 30_000) return;
+      if (Date.now() - lastActivityAt < 30_000) return;
       lastActivityAt = Date.now();
-      activity = activity.then(options.onActivity).catch(() => undefined);
+      runnerLog("info", "runner_command_activity", {
+        operation,
+        durationMs: Date.now() - startedAt,
+        stdoutBytes,
+        stderrBytes,
+      });
+      if (options.onActivity)
+        activity = activity.then(options.onActivity).catch(() => undefined);
     };
     child.stdout.on("data", (chunk) => {
       stdout.push(chunk);
+      stdoutBytes += chunk.byteLength;
       recordActivity();
     });
     child.stderr.on("data", (chunk) => {
       stderr.push(chunk);
+      stderrBytes += chunk.byteLength;
       recordActivity();
     });
-    child.once("error", rejectCommand);
+    child.once("error", (error) => {
+      runnerLog("error", "runner_command_failed", {
+        operation,
+        durationMs: Date.now() - startedAt,
+        stdoutBytes,
+        stderrBytes,
+        error: error.message,
+      });
+      rejectCommand(error);
+    });
     child.once("close", async (code) => {
       await activity;
-      if (code === 0) resolveCommand(Buffer.concat(stdout).toString().trim());
-      else {
+      if (code === 0) {
+        runnerLog("info", "runner_command_completed", {
+          operation,
+          durationMs: Date.now() - startedAt,
+          exitCode: code,
+          stdoutBytes,
+          stderrBytes,
+        });
+        resolveCommand(Buffer.concat(stdout).toString().trim());
+      } else {
         const detail =
           commandName === "git"
             ? Buffer.concat(stderr).toString().trim().slice(0, 1_000)
             : "";
-        rejectCommand(
-          new Error(
-            `${commandName}_${args[0]}_failed_${code}${detail ? `: ${detail}` : ""}`,
-          ),
+        const error = new Error(
+          `${commandName}_${args[0]}_failed_${code}${detail ? `: ${detail}` : ""}`,
         );
+        runnerLog("error", "runner_command_failed", {
+          operation,
+          durationMs: Date.now() - startedAt,
+          exitCode: code,
+          stdoutBytes,
+          stderrBytes,
+          error: error.message,
+        });
+        rejectCommand(error);
       }
     });
   });
@@ -874,11 +929,22 @@ export function createRunnerServer() {
             "x-roundhouse-attempt-secret":
               request.headers["x-roundhouse-attempt-secret"],
           };
-          setImmediate(() =>
-            completeAssignment(body, headers).catch((error) =>
-              console.error("attempt callback failed", error?.message ?? error),
-            ),
-          );
+          setImmediate(() => {
+            runnerContext.run(
+              { attemptId: body.id, stage: body.stage },
+              async () => {
+                runnerLog("info", "runner_attempt_started");
+                try {
+                  await completeAssignment(body, headers);
+                  runnerLog("info", "runner_attempt_completed");
+                } catch (error) {
+                  runnerLog("error", "runner_attempt_failed", {
+                    error: error?.message ?? String(error),
+                  });
+                }
+              },
+            );
+          });
         }
       }
     });

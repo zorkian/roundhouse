@@ -788,6 +788,15 @@ Initial metrics:
 An operator should diagnose a failed run from its event timeline and attempts
 without inspecting raw D1 tables, Queue messages, or container internals.
 
+Runner containers emit structured attempt and command lifecycle events to
+Cloudflare Logs. Each event identifies the attempt, stage, safe command
+operation, duration, exit status, and stdout/stderr byte counts. Raw command
+output, prompts, credentials, and repository content are not copied into logs.
+Operators can live-tail these events in Cloudflare or use Wrangler SSH for
+direct inspection of a currently running development container. The inactivity
+lease is a crash backstop, not the primary way to determine what a runner is
+doing.
+
 ## 11. Complexity budget
 
 The budget is a simplicity constraint, not a reason to add runtime governors:
