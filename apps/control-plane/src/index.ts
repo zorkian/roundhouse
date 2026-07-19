@@ -20,6 +20,7 @@ import {
   type CheckpointValidator,
 } from "./callback.js";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
+import { acceptGitHubCheckSuite, GitHubCiAutomation } from "./github-ci.js";
 import {
   acceptGitHubComment,
   GitHubClient,
@@ -57,7 +58,9 @@ export function successorWakeup(
   processed: Wakeup,
 ): Wakeup | undefined {
   return run?.status === "active" &&
-    new Set(["reproduce", "plan", "implement", "review"]).has(run.stage) &&
+    new Set(["reproduce", "plan", "implement", "review", "ci", "merge"]).has(
+      run.stage,
+    ) &&
     run.revision === processed.expectedRevision + 1
     ? { runId: run.id, expectedRevision: run.revision }
     : undefined;
@@ -317,14 +320,14 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === "/github/webhook" && request.method === "POST") {
-      const outcome = await acceptGitHubComment(
-        request,
-        env,
-        new D1RunRepository(env.DB),
-        async (wakeup) => {
-          await env.RUN_WAKEUPS.send(wakeup);
-        },
-      );
+      const repository = new D1RunRepository(env.DB);
+      const enqueue = async (wakeup: Wakeup) => {
+        await env.RUN_WAKEUPS.send(wakeup);
+      };
+      const outcome =
+        request.headers.get("x-github-event") === "check_suite"
+          ? await acceptGitHubCheckSuite(request, env, repository, enqueue)
+          : await acceptGitHubComment(request, env, repository, enqueue);
       return json(
         { outcome },
         outcome === "unauthorized" ? 401 : outcome === "ignored" ? 202 : 202,
@@ -369,15 +372,23 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       env.CONTROL_PLANE_ORIGIN,
       repository,
     );
+    const github = new GitHubClient(env);
+    const automation = new GitHubCiAutomation(repository, github);
+    const reporter = new GitHubStageReporter(github);
     for (const message of batch.messages) {
       try {
+        const run = await repository.get(message.body.runId);
+        if (run?.status === "active" && run.stage === "ci")
+          await automation.reconcileCi(run);
+        if (run?.status === "active" && run.stage === "merge")
+          await automation.merge(run);
         await coordinate(
           repository,
           dispatcher,
           message.body,
           Date.now(),
           30 * 60_000,
-          new GitHubStageReporter(new GitHubClient(env)),
+          reporter,
         );
         const next = successorWakeup(
           await repository.get(message.body.runId),

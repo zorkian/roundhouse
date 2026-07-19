@@ -52,6 +52,14 @@ describe("V2 control plane", () => {
       runId: "run_1",
       expectedRevision: 2,
     });
+    expect(successorWakeup({ ...run, stage: "ci" }, processed)).toEqual({
+      runId: "run_1",
+      expectedRevision: 2,
+    });
+    expect(successorWakeup({ ...run, stage: "merge" }, processed)).toEqual({
+      runId: "run_1",
+      expectedRevision: 2,
+    });
     expect(successorWakeup({ ...run, revision: 3 }, processed)).toBeUndefined();
   });
 

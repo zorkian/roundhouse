@@ -93,12 +93,46 @@ export function reviewTransition(attempt: Attempt) {
   return { status: "failed", stage: "review" } as const;
 }
 
+export function ciTransition(attempt: Attempt) {
+  const outcome = attempt.result?.ci as Record<string, unknown> | undefined;
+  if (
+    outcome?.status !== "success" ||
+    outcome.head !== attempt.expectedHead ||
+    !attempt.acceptedHead ||
+    attempt.acceptedHead !== attempt.expectedHead
+  )
+    return { status: "failed", stage: "ci" } as const;
+  return {
+    status: "active",
+    stage: "merge",
+    acceptedHead: attempt.acceptedHead,
+  } as const;
+}
+
+export function mergeTransition(attempt: Attempt) {
+  const outcome = attempt.result?.merge as Record<string, unknown> | undefined;
+  if (
+    outcome?.status !== "merged" ||
+    outcome.head !== attempt.expectedHead ||
+    outcome.mergeCommit !== attempt.acceptedHead ||
+    !attempt.acceptedHead
+  )
+    return { status: "failed", stage: "merge" } as const;
+  return {
+    status: "succeeded",
+    stage: "merge",
+    acceptedHead: attempt.acceptedHead,
+  } as const;
+}
+
 function completedTransition(attempt: Attempt) {
   if (attempt.stage === "qualify") return qualificationTransition(attempt);
   if (attempt.stage === "reproduce") return reproductionTransition(attempt);
   if (attempt.stage === "plan") return planTransition(attempt);
   if (attempt.stage === "implement") return implementationTransition(attempt);
   if (attempt.stage === "review") return reviewTransition(attempt);
+  if (attempt.stage === "ci") return ciTransition(attempt);
+  if (attempt.stage === "merge") return mergeTransition(attempt);
   return undefined;
 }
 
@@ -117,12 +151,6 @@ export async function coordinate(
     run.status !== "active"
   )
     return "stale";
-  if (
-    !new Set(["qualify", "reproduce", "plan", "implement", "review"]).has(
-      run.stage,
-    )
-  )
-    return "stale";
   const attemptId = immutableAttemptId(run.id, run.revision);
   const previous = await repository.getAttempt(attemptId);
   if (previous?.state === "completed") {
@@ -133,6 +161,12 @@ export async function coordinate(
     if (reporter) await reporter.report(next, previous);
     return "dispatched";
   }
+  if (
+    !new Set(["qualify", "reproduce", "plan", "implement", "review"]).has(
+      run.stage,
+    )
+  )
+    return "stale";
   const claimed = await repository.claimLease(
     run.id,
     run.revision,

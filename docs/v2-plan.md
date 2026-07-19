@@ -1028,23 +1028,31 @@ Exit gate:
 - changing the candidate invalidates the previous review naturally because the
   next review is bound to the new commit.
 
-### Phase 5 — Exact-head CI and risk-aware merge
+### Phase 5 — Exact-head CI and merge
 
 Actions:
 
-1. Observe required GitHub checks for the exact published head.
-2. Feed in-scope CI failures back into diagnosis and repair.
-3. Build the final merge-decision package.
-4. Enable automatic merge only for low-risk work.
-5. Bind medium/high final approval to the exact passing head.
-6. Re-read all gates immediately before merge and record the merge commit.
+1. Reconcile GitHub checks when a clean review enters `ci` and when GitHub
+   reports a completed check suite.
+2. Record successful CI only when the reviewed head, run head, pull-request
+   head, and check-run head are identical.
+3. Mark the draft pull request ready after review and CI are clean for that
+   exact commit.
+4. Re-read the clean review, successful checks, pull request, and exact head
+   immediately before a SHA-bound merge.
+5. Record the merge commit and complete the run.
 
 Exit gate:
 
-- low-risk work merges without intervention after all gates;
-- medium/high work cannot merge without final approval;
-- stale CI, review, approval, conflict, or changed head blocks merge;
+- one development issue reaches merge without intervention after clean review
+  and successful CI on the same exact head;
+- stale CI, review, or a changed head cannot authorize merge;
+- the merge commit is durable run evidence;
 - final GitHub status is concise and truthful.
+
+Pending or failed CI remains at `ci` during this prototype slice. Repair policy,
+risk scoring, and additional approval policy wait until production behavior
+provides evidence that they are needed.
 
 ### Phase 6 — Evidence-driven hardening, external pilot, and cutover
 
