@@ -96,6 +96,20 @@ pnpm check
 `pnpm check` verifies formatting and Apache-2.0 headers, typechecks the
 workspace, and runs the test suite.
 
+## Development deployment
+
+A push to `main` runs the same checks as a pull request. After those checks
+succeed, GitHub Actions uses the `roundhouse-development` environment to deploy
+the development model broker, apply pending development D1 migrations, and
+deploy the control plane and agent container. Pull requests do not deploy, and
+the workflow references only the development configuration and resources.
+
+The same deployment can be run from an authenticated development machine with:
+
+```sh
+pnpm deploy:development
+```
+
 ## License
 
 Roundhouse is licensed under the [Apache License 2.0](LICENSE). See
