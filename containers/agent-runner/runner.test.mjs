@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   completionRequest,
   checkpointWorkspace,
+  implementationPrompt,
   implementationSchema,
   planSchema,
   prepareWorkspace,
@@ -88,6 +89,20 @@ describe("V2 agent runner", () => {
     expect(
       implementationSchema.properties.validation.items.properties.output,
     ).not.toHaveProperty("maxLength");
+  });
+
+  it("lets implementation install declared dependencies for validation", () => {
+    const prompt = implementationPrompt({
+      issue: { title: "Format the change", body: "", url: "" },
+      context: {
+        ci: {
+          status: "failure",
+          checks: [{ name: "Check", conclusion: "failure" }],
+        },
+      },
+    });
+    expect(prompt).toContain("install repository-declared dependencies");
+    expect(prompt).toContain('"conclusion":"failure"');
   });
 
   it("returns concrete review findings without arbitrary caps", () => {

@@ -22,7 +22,21 @@ type AttemptContainerEnv = Cloudflare.Env & {
 };
 
 const modelHost = "model.roundhouse.internal";
+const packageRegistryHost = "registry.npmjs.org";
 const containerCa = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
+
+export function attemptAllowedHosts(
+  attempt: Pick<AttemptAssignment, "artifact" | "publish">,
+  callbackUrl?: string | null,
+): string[] {
+  return [
+    modelHost,
+    packageRegistryHost,
+    attempt.artifact.hostname,
+    attempt.publish?.hostname ?? "",
+    callbackUrl ? new URL(callbackUrl).hostname : "",
+  ].filter(Boolean);
+}
 
 async function modelEgress(request: Request, env: Cloudflare.Env) {
   const runtime = env as AttemptContainerEnv;
@@ -120,14 +134,10 @@ export class RoundhouseAttemptContainer extends Container<Cloudflare.Env> {
       return new Response("attempt_deadline_expired", { status: 409 });
 
     await this.setAllowedHosts(
-      [
-        modelHost,
-        attempt.artifact.hostname,
-        attempt.publish?.hostname ?? "",
-        request.headers.get("x-roundhouse-callback-url")
-          ? new URL(request.headers.get("x-roundhouse-callback-url")!).hostname
-          : "",
-      ].filter(Boolean),
+      attemptAllowedHosts(
+        attempt,
+        request.headers.get("x-roundhouse-callback-url"),
+      ),
     );
     await this.startAndWaitForPorts({
       ports: this.defaultPort,
