@@ -270,12 +270,15 @@ function reproductionComment(run: RunSnapshot, attempt: Attempt): string {
     Record<string, unknown> | undefined;
   const status = String(reproduction?.status ?? "blocked");
   const classification = String(attempt.result?.requestClassification ?? "bug");
+  const currentBehavior = ["feature", "maintenance"].includes(classification);
   const summary = String(
     reproduction?.summary ?? "I wasn’t able to summarize what happened.",
   );
   const expected = String(
     reproduction?.expectedBehavior ??
-      "I couldn’t determine the expected behavior.",
+      (currentBehavior
+        ? "I couldn’t determine the requested outcome."
+        : "I couldn’t determine the expected behavior."),
   );
   const observed = String(
     reproduction?.observedBehavior ??
@@ -288,7 +291,7 @@ function reproductionComment(run: RunSnapshot, attempt: Attempt): string {
     "",
     summary,
     "",
-    `### ${["feature", "maintenance"].includes(classification) ? "Requested outcome" : "Expected"}`,
+    `### ${currentBehavior ? "Requested outcome" : "Expected"}`,
     expected,
     "",
     "### What I found",

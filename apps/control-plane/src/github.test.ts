@@ -799,7 +799,6 @@ describe("GitHub intake", () => {
         reproduction: {
           status: "confirmed",
           summary: "The dashboard does not currently provide this filter.",
-          expectedBehavior: "People can filter runs by repository.",
           observedBehavior: "The dashboard shows one unfiltered list.",
           commands: [],
           relevantFiles: ["apps/control-plane/src/dashboard.ts"],
@@ -809,6 +808,8 @@ describe("GitHub intake", () => {
     });
     expect(body).toContain("## I checked the current behavior");
     expect(body).toContain("### Requested outcome");
+    expect(body).toContain("I couldn’t determine the requested outcome.");
+    expect(body).not.toContain("I couldn’t determine the expected behavior.");
     expect(body).not.toContain("I reproduced this");
     expect(body).not.toContain("I couldn’t reproduce");
   });
