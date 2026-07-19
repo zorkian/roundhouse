@@ -91,6 +91,13 @@ function attemptLinks(attempt: Attempt): string {
 
 export function renderRunDetails(details: RunDetails): string {
   const { run, attempts } = details;
+  const qualification = resultFor(attempts, "qualification") as
+    { classification?: unknown } | undefined;
+  const investigationHeading = ["feature", "maintenance"].includes(
+    String(qualification?.classification),
+  )
+    ? "Current behavior"
+    : "Reproduction";
   const pullRequest = resultFor(attempts, "merge") as
     { pullRequest?: { html_url?: string; number?: number } } | undefined;
   const implementation = resultFor(attempts, "implementation") as
@@ -108,7 +115,7 @@ export function renderRunDetails(details: RunDetails): string {
     .map(
       (
         attempt,
-      ) => `<details><summary><span class="phase">${escapeHtml(attempt.stage)}</span><span><span class="label">Started</span>${escapeHtml(timestamp(attempt.createdAt))}</span><span><span class="label">Elapsed</span>${escapeHtml(elapsed(attempt.createdAt, attempt.updatedAt))}</span><span><span class="label">Status</span>${escapeHtml(attempt.state)}</span></summary><div class="attempt-details">
+      ) => `<details><summary><span class="phase">${escapeHtml(attempt.stage === "reproduce" ? investigationHeading : attempt.stage)}</span><span><span class="label">Started</span>${escapeHtml(timestamp(attempt.createdAt))}</span><span><span class="label">Elapsed</span>${escapeHtml(elapsed(attempt.createdAt, attempt.updatedAt))}</span><span><span class="label">Status</span>${escapeHtml(attempt.state)}</span></summary><div class="attempt-details">
 <dl><dt>Role</dt><dd>${escapeHtml(attempt.role ?? "Unavailable")}</dd><dt>Revision</dt><dd>${escapeHtml(attempt.runRevision ?? "Unavailable")}</dd><dt>Updated</dt><dd>${escapeHtml(timestamp(attempt.updatedAt))}</dd><dt>Base commit</dt><dd><code>${escapeHtml(attempt.baseCommit ?? "Unavailable")}</code></dd><dt>Expected head</dt><dd><code>${escapeHtml(attempt.expectedHead ?? "Unavailable")}</code></dd><dt>Accepted head</dt><dd><code>${escapeHtml(attempt.acceptedHead ?? "Unavailable")}</code></dd></dl>
 <h4>Model routing</h4>${value(attempt.routing)}<h4>Result</h4>${attemptResult(attempt)}${attemptLinks(attempt)}</div></details>`,
     )
