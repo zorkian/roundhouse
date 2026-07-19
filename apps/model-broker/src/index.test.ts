@@ -1,7 +1,7 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { brokerRequest, selectRoute, type BrokerEnv } from "./index.js";
 
 const env = {
@@ -10,6 +10,8 @@ const env = {
   ROUTING_MODEL: "openai/gpt-5.6-sol",
   ROUTING_REASONING_EFFORT: "low",
 } satisfies BrokerEnv;
+
+afterEach(() => vi.restoreAllMocks());
 
 function request(body: Record<string, unknown> = { model: "untrusted-model" }) {
   return new Request("https://broker.invalid/responses", {
@@ -167,5 +169,35 @@ describe("model broker", () => {
     await expect(response.json()).resolves.toEqual({
       error: "model_upstream_failed",
     });
+  });
+
+  it("logs an upstream error response without consuming it", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const response = await brokerRequest(request(), env, {
+      run: vi.fn(
+        async () =>
+          new Response('{"error":{"message":"unsupported model"}}', {
+            status: 400,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.text()).resolves.toContain("unsupported model");
+    const entries = log.mock.calls.map(([entry]) => JSON.parse(String(entry)));
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        message: "api_response_opened",
+        api: "workers_ai",
+        status: 400,
+      }),
+    );
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        message: "api_response_body",
+        body: '{"error":{"message":"unsupported model"}}',
+      }),
+    );
   });
 });

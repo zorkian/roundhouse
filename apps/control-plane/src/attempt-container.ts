@@ -6,6 +6,7 @@ import type { Attempt, ModelUsage } from "@roundhouse/core";
 import { verifyCallback } from "./callback.js";
 import { attemptInactivityMilliseconds } from "./coordinator.js";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
+import { captureApiResponse } from "./api-response-log.js";
 
 interface AttemptAssignment extends Attempt {
   readonly artifact: {
@@ -26,6 +27,24 @@ type AttemptContainerEnv = Cloudflare.Env & {
 const modelHost = "model.roundhouse.internal";
 const packageRegistryHost = "registry.npmjs.org";
 const containerCa = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
+const responseLogChunkSize = 4_000;
+
+function logApiResponseBody(
+  fields: Readonly<Record<string, unknown>>,
+  text: string,
+  sequence: { value: number },
+): void {
+  for (let offset = 0; offset < text.length; offset += responseLogChunkSize) {
+    console.log(
+      JSON.stringify({
+        message: "api_response_body",
+        ...fields,
+        sequence: sequence.value++,
+        body: text.slice(offset, offset + responseLogChunkSize),
+      }),
+    );
+  }
+}
 
 async function recordModelEvent(
   repository: D1RunRepository,
@@ -156,6 +175,25 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
     status: response.status,
     hasBody: Boolean(response.body),
   });
+  const responseLogFields = {
+    api: "model_broker",
+    operation: `${request.method} ${requestedUrl.pathname}`,
+    attemptId,
+  };
+  const responseHeaders: Record<string, string> = {};
+  response.headers.forEach((value, name) => {
+    responseHeaders[name] = value;
+  });
+  console.log(
+    JSON.stringify({
+      message: "api_response_opened",
+      ...responseLogFields,
+      status: response.status,
+      statusText: response.statusText,
+      headers: responseHeaders,
+      hasBody: Boolean(response.body),
+    }),
+  );
   const routing = {
     ...attempt.routing,
     model: response.headers.get("x-roundhouse-routing-model"),
@@ -164,28 +202,45 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
   };
   if (routing.model && routing.reasoningEffort && routing.rule)
     await repository.recordModelRouting(attemptId, routing);
-  if (!response.body || !response.ok) {
+  if (!response.ok) {
     await recordModelEvent(repository, attemptId, "model_response_rejected", {
       status: response.status,
       hasBody: Boolean(response.body),
     });
+  }
+  if (!response.body) {
+    console.log(
+      JSON.stringify({
+        message: "api_response_completed",
+        ...responseLogFields,
+        status: response.status,
+        bodyChunks: 0,
+      }),
+    );
     return response;
   }
   const decoder = new TextDecoder();
   let responseText = "";
+  const sequence = { value: 0 };
   const stream = response.body.pipeThrough(
     new TransformStream<Uint8Array, Uint8Array>({
       transform(chunk, controller) {
-        responseText += decoder.decode(chunk, { stream: true });
+        const text = decoder.decode(chunk, { stream: true });
+        responseText += text;
+        logApiResponseBody(responseLogFields, text, sequence);
         controller.enqueue(chunk);
       },
       async flush() {
-        responseText += decoder.decode();
-        const usage = extractModelUsage(
-          responseText,
-          attemptId,
-          routing.model ?? "unknown",
-        );
+        const finalText = decoder.decode();
+        responseText += finalText;
+        logApiResponseBody(responseLogFields, finalText, sequence);
+        const usage = response.ok
+          ? extractModelUsage(
+              responseText,
+              attemptId,
+              routing.model ?? "unknown",
+            )
+          : undefined;
         if (usage) {
           try {
             await repository.recordModelUsage(usage);
@@ -199,15 +254,24 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
             );
           }
         }
-        await recordModelEvent(
-          repository,
-          attemptId,
-          "model_response_completed",
-          {
+        if (response.ok)
+          await recordModelEvent(
+            repository,
+            attemptId,
+            "model_response_completed",
+            {
+              status: response.status,
+              usageFound: Boolean(usage),
+              callId: usage?.callId ?? null,
+            },
+          );
+        console.log(
+          JSON.stringify({
+            message: "api_response_completed",
+            ...responseLogFields,
             status: response.status,
-            usageFound: Boolean(usage),
-            callId: usage?.callId ?? null,
-          },
+            bodyChunks: sequence.value,
+          }),
         );
       },
     }),
@@ -342,11 +406,18 @@ export class RoundhouseAttemptContainer extends Container<Cloudflare.Env> {
       },
     });
     const path = new URL(request.url).pathname;
-    const response = await this.containerFetch(`http://runner${path}`, {
-      method: "POST",
-      headers: request.headers,
-      body: JSON.stringify(attempt),
-    });
+    const response = await captureApiResponse(
+      await this.containerFetch(`http://runner${path}`, {
+        method: "POST",
+        headers: request.headers,
+        body: JSON.stringify(attempt),
+      }),
+      {
+        api: "agent_runner",
+        operation: path,
+        attemptId: attempt.id,
+      },
+    );
     if (path === "/validate") return response;
     return response.ok
       ? Response.json(

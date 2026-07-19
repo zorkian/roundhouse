@@ -99,6 +99,7 @@ async function reportActivity(
     const response = await fetch(
       activityRequest(assignment, callbackUrl, attemptSecret, progress),
     );
+    await logApiResponse(response, "control_plane", "report_activity");
     if (!response.ok)
       runnerLog("error", "runner_activity_rejected", {
         phase: progress.phase,
@@ -148,6 +149,46 @@ function runnerLog(level, message, fields = {}) {
   });
   if (level === "error") console.error(entry);
   else console.log(entry);
+}
+
+function redactApiResponse(value) {
+  if (Array.isArray(value)) return value.map(redactApiResponse);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, child]) => [
+      key,
+      /^(authorization|credential|password|private[_-]?key|secret|signature|token)$/i.test(
+        key,
+      )
+        ? "[REDACTED]"
+        : redactApiResponse(child),
+    ]),
+  );
+}
+
+async function logApiResponse(response, api, operation) {
+  const text = await response.text();
+  let body = text || null;
+  if (text) {
+    try {
+      body = redactApiResponse(JSON.parse(text));
+    } catch {
+      // Preserve non-JSON response text as-is.
+    }
+  }
+  runnerLog("info", "api_response", {
+    api,
+    operation,
+    status: response.status,
+    statusText: response.statusText,
+    headers: Object.fromEntries(
+      [...response.headers].map(([name, value]) => [
+        name,
+        /^(set-cookie)$/i.test(name) ? "[REDACTED]" : value,
+      ]),
+    ),
+    body,
+  });
 }
 
 function command(commandName, args, options = {}) {
@@ -1025,6 +1066,7 @@ async function completeAssignment(assignment, headers) {
       result,
     ),
   );
+  await logApiResponse(response, "control_plane", "complete_attempt");
   if (!response.ok) throw new Error(`callback_http_${response.status}`);
   await progress("callback_completed", { status: response.status });
 }
