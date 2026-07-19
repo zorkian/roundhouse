@@ -15,8 +15,10 @@ import {
   type AttemptCallback,
 } from "./callback.js";
 import {
+  ciTransition,
   coordinate,
   implementationTransition,
+  mergeTransition,
   planTransition,
   reviewTransition,
   reproductionTransition,
@@ -423,6 +425,58 @@ describe("single coordinator", () => {
         },
       }),
     ).toEqual({ status: "active", stage: "implement" });
+  });
+
+  it("requires exact successful CI before merge", () => {
+    const head = "b".repeat(40);
+    const attempt = {
+      id: "run_slice_rev_6",
+      runId: input.id,
+      runRevision: 6,
+      kind: "external",
+      stage: "ci",
+      role: "github-checks",
+      state: "completed",
+      deadlineAt: 1_000,
+      baseCommit: input.baseCommit,
+      expectedHead: head,
+      acceptedHead: head,
+      result: { ci: { status: "success", head } },
+    } satisfies Attempt;
+    expect(ciTransition(attempt)).toEqual({
+      status: "active",
+      stage: "merge",
+      acceptedHead: head,
+    });
+    expect(ciTransition({ ...attempt, acceptedHead: "c".repeat(40) })).toEqual({
+      status: "failed",
+      stage: "ci",
+    });
+  });
+
+  it("records the merge commit as the terminal run head", () => {
+    const mergeCommit = "c".repeat(40);
+    const attempt = {
+      id: "run_slice_rev_7",
+      runId: input.id,
+      runRevision: 7,
+      kind: "external",
+      stage: "merge",
+      role: "github-merge",
+      state: "completed",
+      deadlineAt: 1_000,
+      baseCommit: input.baseCommit,
+      expectedHead: "b".repeat(40),
+      acceptedHead: mergeCommit,
+      result: {
+        merge: { status: "merged", head: "b".repeat(40), mergeCommit },
+      },
+    } satisfies Attempt;
+    expect(mergeTransition(attempt)).toEqual({
+      status: "succeeded",
+      stage: "merge",
+      acceptedHead: mergeCommit,
+    });
   });
 
   it("runs qualification through exact-commit review before CI", async () => {

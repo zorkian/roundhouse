@@ -122,9 +122,14 @@ export class MemoryRunRepository implements RunRepository {
   async expiredLeases(now: number): Promise<readonly Wakeup[]> {
     return [...this.leases.entries()].flatMap(([runId, lease]) =>
       lease.expiresAt <= now &&
-      new Set(["qualify", "reproduce", "plan"]).has(
-        this.runs.get(runId)?.stage ?? "",
-      )
+      new Set([
+        "qualify",
+        "reproduce",
+        "plan",
+        "implement",
+        "review",
+        "merge",
+      ]).has(this.runs.get(runId)?.stage ?? "")
         ? [{ runId, expectedRevision: lease.runRevision }]
         : [],
     );

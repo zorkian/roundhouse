@@ -778,6 +778,60 @@ describe("GitHub intake", () => {
     );
   });
 
+  it("posts a concise completion after the exact-head merge", async () => {
+    const post = vi.fn(async () => ({}));
+    const reporter = new GitHubStageReporter({
+      get: async <T>() => [] as T,
+      post: post as GitHubApi["post"],
+    });
+    const mergeCommit = "d".repeat(40);
+    const run = {
+      ...createRun({
+        id: "run_merge",
+        repository: "zorkian/roundhouse",
+        issueNumber: 42,
+        baseCommit: "a".repeat(40),
+        profileVersion: "v2",
+      }),
+      status: "succeeded",
+      stage: "merge",
+      revision: 8,
+      currentHead: mergeCommit,
+    } as const;
+    await reporter.report(run, {
+      id: "run_merge_rev_7",
+      runId: run.id,
+      runRevision: 7,
+      kind: "external",
+      stage: "merge",
+      role: "github-merge",
+      state: "completed",
+      deadlineAt: Date.now() + 1_000,
+      baseCommit: run.baseCommit,
+      expectedHead: "c".repeat(40),
+      acceptedHead: mergeCommit,
+      result: {
+        merge: {
+          status: "merged",
+          head: "c".repeat(40),
+          mergeCommit,
+          pullRequest: {
+            number: 73,
+            html_url: "https://github.com/zorkian/roundhouse/pull/73",
+          },
+        },
+      },
+    });
+    expect(post).toHaveBeenCalledWith(
+      "/repos/zorkian/roundhouse/issues/42/comments",
+      {
+        body: expect.stringContaining(
+          "The change passed review and CI and has been merged.",
+        ),
+      },
+    );
+  });
+
   it("does not open a pull request for a failed implementation", async () => {
     const api = github();
     const run = {

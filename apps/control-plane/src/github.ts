@@ -30,6 +30,14 @@ export interface GitHubApi {
   post<T>(path: string, body: unknown): Promise<T>;
 }
 
+export interface GitHubAutomationApi extends GitHubApi {
+  put<T>(path: string, body: unknown): Promise<T>;
+  graphql<T>(
+    query: string,
+    variables: Readonly<Record<string, unknown>>,
+  ): Promise<T>;
+}
+
 export const enrolledRepository = Object.freeze({
   repository: "zorkian/roundhouse",
   profileVersion: "roundhouse-v2-development-1",
@@ -142,6 +150,34 @@ export class GitHubClient {
 
   async post<T>(path: string, body: unknown): Promise<T> {
     return this.request<T>(path, "POST", body);
+  }
+
+  async put<T>(path: string, body: unknown): Promise<T> {
+    return this.request<T>(path, "PUT", body);
+  }
+
+  async graphql<T>(
+    query: string,
+    variables: Readonly<Record<string, unknown>>,
+  ): Promise<T> {
+    const response = await this.send("https://api.github.com/graphql", {
+      method: "POST",
+      headers: {
+        accept: "application/vnd.github+json",
+        authorization: `Bearer ${await this.installationToken()}`,
+        "content-type": "application/json",
+        "user-agent": "roundhouse-v2",
+        "x-github-api-version": "2026-03-10",
+      },
+      body: JSON.stringify({ query, variables }),
+    });
+    const value = (await response.json()) as {
+      data?: T;
+      errors?: readonly unknown[];
+    };
+    if (!response.ok || value.errors?.length || !value.data)
+      throw new Error(`github_graphql_${response.status}`);
+    return value.data;
   }
 
   private async request<T>(
@@ -273,24 +309,34 @@ function implementationComment(
   ].join("\n");
 }
 
-interface OpenPullRequest {
+export interface OpenPullRequest {
   readonly number: number;
   readonly html_url: string;
+  readonly node_id?: string;
+  readonly draft?: boolean;
+  readonly state?: string;
+  readonly merged?: boolean;
+  readonly merge_commit_sha?: string | null;
+  readonly head?: { readonly sha?: string };
 }
 
-async function findOpenPullRequest(
+export async function findPullRequest(
   github: GitHubApi,
   run: RunSnapshot,
+  state: "open" | "all" = "open",
 ): Promise<OpenPullRequest | undefined> {
   const owner = run.repository.split("/")[0];
   const head = encodeURIComponent(
     `${owner}:roundhouse/issue-${run.issueNumber}`,
   );
   const pulls = await github.get<readonly OpenPullRequest[]>(
-    `/repos/${run.repository}/pulls?state=open&head=${head}`,
+    `/repos/${run.repository}/pulls?state=${state}&head=${head}`,
   );
   return pulls[0];
 }
+
+const findOpenPullRequest = (github: GitHubApi, run: RunSnapshot) =>
+  findPullRequest(github, run, "open");
 
 function reviewComment(attempt: Attempt): string {
   const review = attempt.result?.review as Record<string, unknown> | undefined;
@@ -337,6 +383,36 @@ export class GitHubStageReporter implements AttemptReporter {
 
   async report(run: RunSnapshot, attempt: Attempt): Promise<void> {
     if (attempt.stage === "implement" && run.status === "failed") return;
+    if (attempt.stage === "ci") return;
+    if (attempt.stage === "merge") {
+      const merge = attempt.result?.merge as
+        Record<string, unknown> | undefined;
+      const pullRequest = merge?.pullRequest as
+        Record<string, unknown> | undefined;
+      const marker = `<!-- roundhouse:v2:merge:${attempt.id} -->`;
+      const comments = await this.github.get<readonly { body?: string }[]>(
+        `/repos/${run.repository}/issues/${run.issueNumber}/comments?per_page=100`,
+      );
+      if (comments.some((comment) => comment.body?.includes(marker))) return;
+      await this.github.post(
+        `/repos/${run.repository}/issues/${run.issueNumber}/comments`,
+        {
+          body: [
+            marker,
+            "## Merged",
+            "",
+            "The change passed review and CI and has been merged.",
+            ...(pullRequest?.html_url
+              ? [
+                  "",
+                  `[View pull request #${pullRequest.number}](${pullRequest.html_url})`,
+                ]
+              : []),
+          ].join("\n"),
+        },
+      );
+      return;
+    }
     if (attempt.stage === "review") {
       const pullRequest = await findOpenPullRequest(this.github, run);
       if (!pullRequest) throw new Error("review_pull_request_missing");
