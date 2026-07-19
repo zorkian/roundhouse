@@ -101,7 +101,7 @@ function checksSucceeded(checks: readonly CheckRun[], head: string): boolean {
       (check) =>
         check.head_sha === head &&
         check.status === "completed" &&
-        check.conclusion === "success",
+        (check.conclusion === "success" || check.conclusion === "skipped"),
     )
   );
 }

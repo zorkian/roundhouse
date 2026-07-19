@@ -94,6 +94,11 @@ function github(
   prHead = head,
   checkConclusion = "success",
   mergeable: boolean | null = true,
+  additionalChecks: readonly {
+    readonly name: string;
+    readonly status: string;
+    readonly conclusion: string | null;
+  }[] = [],
 ) {
   let draft = true;
   const get = vi.fn(async (path: string) => {
@@ -113,7 +118,7 @@ function github(
       };
     if (path.includes("/check-runs?"))
       return {
-        total_count: 1,
+        total_count: 1 + additionalChecks.length,
         check_runs: [
           {
             name: "Check",
@@ -122,6 +127,11 @@ function github(
             head_sha: head,
             html_url: "https://github.test/check/1",
           },
+          ...additionalChecks.map((check, index) => ({
+            ...check,
+            head_sha: head,
+            html_url: `https://github.test/check/${index + 2}`,
+          })),
         ],
       };
     throw new Error(`unexpected_get:${path}`);
@@ -147,9 +157,15 @@ function github(
 }
 
 describe("GitHub exact-head CI and merge", () => {
-  it("records exact successful CI, marks the PR ready, and merges only after both gates", async () => {
+  it("accepts successful and skipped checks through the exact-head CI and merge gates", async () => {
     const { repository, run } = await setupCi();
-    const api = github();
+    const api = github(head, "success", true, [
+      {
+        name: "Deploy development",
+        status: "completed",
+        conclusion: "skipped",
+      },
+    ]);
     const automation = new GitHubCiAutomation(repository, api.api);
 
     await expect(automation.reconcileCi(run, 100)).resolves.toBe("recorded");
@@ -198,6 +214,25 @@ describe("GitHub exact-head CI and merge", () => {
       revision: 8,
       currentHead: mergeCommit,
     });
+  });
+
+  it("waits while an exact-head check is incomplete", async () => {
+    const { repository, run } = await setupCi();
+    const api = github(head, "success", true, [
+      {
+        name: "Deploy development",
+        status: "queued",
+        conclusion: null,
+      },
+    ]);
+
+    await expect(
+      new GitHubCiAutomation(repository, api.api).reconcileCi(run),
+    ).resolves.toBe("pending");
+    expect(api.graphql).not.toHaveBeenCalled();
+    await expect(
+      repository.getAttempt(`${run.id}_rev_6`),
+    ).resolves.toBeUndefined();
   });
 
   it("does not accept CI for a different pull-request head", async () => {
