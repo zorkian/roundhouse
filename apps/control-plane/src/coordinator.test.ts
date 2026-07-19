@@ -467,6 +467,12 @@ describe("single coordinator", () => {
       stage: "merge",
       acceptedHead: head,
     });
+    expect(
+      ciTransition({
+        ...attempt,
+        result: { ci: { status: "failure", head } },
+      }),
+    ).toEqual({ status: "active", stage: "implement" });
     expect(ciTransition({ ...attempt, acceptedHead: "c".repeat(40) })).toEqual({
       status: "failed",
       stage: "ci",

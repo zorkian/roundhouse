@@ -96,11 +96,14 @@ export function reviewTransition(attempt: Attempt) {
 export function ciTransition(attempt: Attempt) {
   const outcome = attempt.result?.ci as Record<string, unknown> | undefined;
   if (
-    outcome?.status !== "success" ||
-    outcome.head !== attempt.expectedHead ||
+    outcome?.head !== attempt.expectedHead ||
     !attempt.acceptedHead ||
     attempt.acceptedHead !== attempt.expectedHead
   )
+    return { status: "failed", stage: "ci" } as const;
+  if (outcome.status === "failure")
+    return { status: "active", stage: "implement" } as const;
+  if (outcome.status !== "success")
     return { status: "failed", stage: "ci" } as const;
   return {
     status: "active",

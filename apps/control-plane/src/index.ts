@@ -157,11 +157,16 @@ class ContainerDispatcher implements AttemptDispatcher {
       attempt.stage === "implement"
         ? await this.runs.latestCompletedAttempt(run.id, "review", run.revision)
         : undefined;
+    const ciAttempt =
+      attempt.stage === "implement"
+        ? await this.runs.latestCompletedAttempt(run.id, "ci", run.revision)
+        : undefined;
     const qualification = qualificationAttempt?.result?.qualification;
     const reproduction = reproductionAttempt?.result?.reproduction;
     const plan = planAttempt?.result?.plan;
     const implementation = implementationAttempt?.result?.implementation;
     const review = reviewAttempt?.result?.review;
+    const ci = ciAttempt?.result?.ci;
     if (attempt.stage === "reproduce" && !qualification)
       throw new Error("reproduction_qualification_missing");
     if (attempt.stage === "plan" && !reproduction)
@@ -195,13 +200,14 @@ class ContainerDispatcher implements AttemptDispatcher {
       issue: run.issue,
       issueNumber: run.issueNumber,
       context:
-        qualification || reproduction || plan || implementation || review
+        qualification || reproduction || plan || implementation || review || ci
           ? {
               ...(qualification ? { qualification } : {}),
               ...(reproduction ? { reproduction } : {}),
               ...(plan ? { plan } : {}),
               ...(implementation ? { implementation } : {}),
               ...(review ? { review } : {}),
+              ...(ci ? { ci } : {}),
             }
           : undefined,
       routing: {
