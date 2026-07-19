@@ -29,6 +29,11 @@ const env = {
 
 class IntakeRepository extends MemoryRunRepository {
   readonly deliveries = new Set<string>();
+  readonly issueStates = new Map<string, "open" | "closed">();
+
+  async setGitHubIssueState(runId: string, state: "open" | "closed") {
+    this.issueStates.set(runId, state);
+  }
 
   async recordGitHubDelivery(
     _runId: string,
@@ -162,6 +167,9 @@ describe("GitHub intake", () => {
     await expect(
       repository.get("run_zorkian_roundhouse_issue_42"),
     ).resolves.toMatchObject({ status: "cancelled", revision: 2 });
+    expect(repository.issueStates.get("run_zorkian_roundhouse_issue_42")).toBe(
+      "closed",
+    );
     await expect(
       acceptGitHubIssueClosed(
         await closureDelivery("close-42"),
@@ -169,6 +177,43 @@ describe("GitHub intake", () => {
         repository,
       ),
     ).resolves.toEqual({ outcome: "duplicate" });
+  });
+
+  it("closes and reopens a failed issue without changing or restarting its run", async () => {
+    const repository = new IntakeRepository();
+    const failed = {
+      ...createRun({
+        id: "run_zorkian_roundhouse_issue_42",
+        repository: "zorkian/roundhouse",
+        issueNumber: 42,
+        baseCommit: "a".repeat(40),
+        profileVersion: "v2",
+      }),
+      status: "failed" as const,
+      stage: "implement" as const,
+      revision: 7,
+    };
+    await repository.create(failed);
+
+    await expect(
+      acceptGitHubIssueClosed(
+        await closureDelivery("close-failed"),
+        env,
+        repository,
+      ),
+    ).resolves.toEqual({ outcome: "closed" });
+    await expect(repository.get(failed.id)).resolves.toEqual(failed);
+    expect(repository.issueStates.get(failed.id)).toBe("closed");
+
+    await expect(
+      acceptGitHubIssueClosed(
+        await closureDelivery("reopen-failed", "reopened"),
+        env,
+        repository,
+      ),
+    ).resolves.toEqual({ outcome: "reopened" });
+    await expect(repository.get(failed.id)).resolves.toEqual(failed);
+    expect(repository.issueStates.get(failed.id)).toBe("open");
   });
 
   it("links generated issue comments to run details", async () => {

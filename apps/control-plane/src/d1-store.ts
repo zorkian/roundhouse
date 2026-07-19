@@ -57,6 +57,7 @@ export interface RunDetails {
 
 export interface RunSummary {
   readonly run: RunSnapshot;
+  readonly githubIssueState: "open" | "closed";
   readonly createdAt: number;
   readonly updatedAt: number;
 }
@@ -140,12 +141,18 @@ export class D1RunRepository implements RunRepository {
   async listRuns(limit = 50): Promise<readonly RunSummary[]> {
     const result = await this.db
       .prepare(
-        "SELECT document_json,created_at,updated_at FROM runs ORDER BY updated_at DESC LIMIT ?1",
+        "SELECT r.document_json,r.created_at,r.updated_at,w.github_issue_state FROM runs r JOIN work_items w ON w.id=r.work_item_id ORDER BY r.updated_at DESC LIMIT ?1",
       )
       .bind(limit)
-      .all<{ document_json: string; created_at: number; updated_at: number }>();
+      .all<{
+        document_json: string;
+        created_at: number;
+        updated_at: number;
+        github_issue_state: "open" | "closed";
+      }>();
     return (result.results ?? []).map((row) => ({
       run: JSON.parse(row.document_json) as RunSnapshot,
+      githubIssueState: row.github_issue_state,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     }));
@@ -388,6 +395,18 @@ export class D1RunRepository implements RunRepository {
       .bind(runId, JSON.stringify(payload), this.now(), deliveryId)
       .run();
     return (result.meta.changes ?? 0) === 1;
+  }
+
+  async setGitHubIssueState(
+    runId: string,
+    state: "open" | "closed",
+  ): Promise<void> {
+    await this.db
+      .prepare(
+        "UPDATE work_items SET github_issue_state=?1 WHERE current_run_id=?2",
+      )
+      .bind(state, runId)
+      .run();
   }
 
   private async renewActivity(

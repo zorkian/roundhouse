@@ -39,6 +39,7 @@ export interface GitHubCancellationRepository {
     deliveryId: string,
     payload: Readonly<Record<string, unknown>>,
   ): Promise<boolean>;
+  setGitHubIssueState(runId: string, state: "open" | "closed"): Promise<void>;
 }
 
 export interface GitHubApi {
@@ -707,7 +708,13 @@ export async function acceptGitHubIssueClosed(
   env: GitHubEnv,
   repository: GitHubCancellationRepository,
 ): Promise<{
-  readonly outcome: "cancelled" | "duplicate" | "ignored" | "unauthorized";
+  readonly outcome:
+    | "cancelled"
+    | "closed"
+    | "reopened"
+    | "duplicate"
+    | "ignored"
+    | "unauthorized";
   readonly attemptId?: string;
 }> {
   const deliveryId = request.headers.get("x-github-delivery");
@@ -726,7 +733,7 @@ export async function acceptGitHubIssueClosed(
   const payload = JSON.parse(raw) as IssuePayload;
   const issueNumber = payload.issue?.number;
   if (
-    payload.action !== "closed" ||
+    (payload.action !== "closed" && payload.action !== "reopened") ||
     payload.repository?.full_name !== enrolledRepository.repository ||
     !issueNumber
   )
@@ -740,8 +747,11 @@ export async function acceptGitHubIssueClosed(
     issueNumber,
   });
   if (!fresh) return { outcome: "duplicate" };
+  const state = payload.action === "closed" ? "closed" : "open";
+  await repository.setGitHubIssueState(run.id, state);
+  if (payload.action === "reopened") return { outcome: "reopened" };
   if (run.status !== "active" && run.status !== "waiting")
-    return { outcome: "duplicate" };
+    return { outcome: "closed" };
   const attemptId =
     run.status === "active" &&
     new Set(["qualify", "reproduce", "plan", "implement", "review"]).has(
