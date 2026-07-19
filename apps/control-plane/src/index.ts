@@ -82,6 +82,21 @@ interface AttemptNamespace {
   get(id: unknown): AttemptStub;
 }
 
+export async function destroyAttemptContainer(
+  containers: AttemptNamespace,
+  attemptId: string,
+): Promise<void> {
+  await containers.get(containers.idFromName(attemptId)).destroy();
+}
+
+export function scheduleAttemptContainerDestruction(
+  containers: AttemptNamespace,
+  attemptId: string,
+  context: Pick<ExecutionContext, "waitUntil">,
+): void {
+  context.waitUntil(destroyAttemptContainer(containers, attemptId));
+}
+
 export async function recoverExpiredAttempts(
   containers: AttemptNamespace,
   wakeups: readonly Wakeup[],
@@ -89,7 +104,7 @@ export async function recoverExpiredAttempts(
 ): Promise<void> {
   for (const wakeup of wakeups) {
     const attemptId = immutableAttemptId(wakeup.runId, wakeup.expectedRevision);
-    await containers.get(containers.idFromName(attemptId)).destroy();
+    await destroyAttemptContainer(containers, attemptId);
     await enqueue(wakeup);
   }
 }
@@ -353,7 +368,7 @@ class ContainerCheckpointValidator implements CheckpointValidator {
 }
 
 const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
-  async fetch(request, env) {
+  async fetch(request, env, context) {
     const url = new URL(request.url);
     const detailsMatch = url.pathname.match(
       /^\/repositories\/([^/]+)\/([^/]+)\/issues\/(\d+)$/,
@@ -444,6 +459,11 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
             runId: attempt.runId,
             expectedRevision: attempt.runRevision,
           });
+        scheduleAttemptContainerDestruction(
+          env.ATTEMPT_CONTAINERS,
+          input.attemptId,
+          context,
+        );
       }
       return json(
         { outcome },
