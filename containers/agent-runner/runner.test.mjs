@@ -451,6 +451,18 @@ describe("V2 agent runner", () => {
       ]),
     );
     expect(JSON.stringify(entries)).not.toContain("ephemeral-write-token");
+    const unchangedDirectory = await prepareWorkspace(assignment);
+    await expect(
+      checkpointWorkspace(assignment, unchangedDirectory),
+    ).resolves.toEqual({
+      repositoryId: assignment.artifact.repositoryId,
+      repository: assignment.artifact.repository,
+      baseCommit: assignment.baseCommit,
+      inputHead: assignment.expectedHead,
+      outputHead: assignment.expectedHead,
+      ref: assignment.artifact.ref,
+      changedPaths: [],
+    });
     await expect(
       validateCheckpoint({
         ...assignment,

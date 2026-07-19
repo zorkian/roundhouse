@@ -786,7 +786,17 @@ export async function checkpointWorkspace(assignment, directory, onProgress) {
   const staged = await command("git", ["diff", "--cached", "--name-only"], {
     ...commandOptions,
   });
-  if (!staged) throw new Error("implementation_made_no_changes");
+  if (!staged) {
+    return {
+      repositoryId: assignment.artifact.repositoryId,
+      repository: assignment.artifact.repository,
+      baseCommit: assignment.baseCommit,
+      inputHead: assignment.expectedHead,
+      outputHead: assignment.expectedHead,
+      ref: assignment.artifact.ref,
+      changedPaths: [],
+    };
+  }
   const deterministicEnvironment = roundhouseGitEnvironment();
   await command(
     "git",
