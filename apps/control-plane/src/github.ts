@@ -151,22 +151,24 @@ export class GitHubClient {
   }
 
   private async mintInstallationToken(): Promise<string> {
-    const response = await this.send(
-      `https://api.github.com/app/installations/${this.env.GITHUB_APP_INSTALLATION_ID}/access_tokens`,
-      {
-        method: "POST",
-        headers: {
-          accept: "application/vnd.github+json",
-          authorization: `Bearer ${await appJwt(this.env)}`,
-          "user-agent": "roundhouse-v2",
-          "x-github-api-version": "2026-03-10",
+    const response = await observeResponse(
+      await this.send(
+        `https://api.github.com/app/installations/${this.env.GITHUB_APP_INSTALLATION_ID}/access_tokens`,
+        {
+          method: "POST",
+          headers: {
+            accept: "application/vnd.github+json",
+            authorization: `Bearer ${await appJwt(this.env)}`,
+            "user-agent": "roundhouse-v2",
+            "x-github-api-version": "2026-03-10",
+          },
         },
+      ),
+      {
+        api: "github",
+        operation: "create_installation_token",
       },
     );
-    await observeResponse(response, {
-      api: "github",
-      operation: "create_installation_token",
-    });
     if (!response.ok)
       throw new Error(`github_installation_token_${response.status}`);
     const value = (await response.json()) as { token?: string };
@@ -194,21 +196,23 @@ export class GitHubClient {
     query: string,
     variables: Readonly<Record<string, unknown>>,
   ): Promise<T> {
-    const response = await this.send("https://api.github.com/graphql", {
-      method: "POST",
-      headers: {
-        accept: "application/vnd.github+json",
-        authorization: `Bearer ${await this.installationToken()}`,
-        "content-type": "application/json",
-        "user-agent": "roundhouse-v2",
-        "x-github-api-version": "2026-03-10",
+    const response = await observeResponse(
+      await this.send("https://api.github.com/graphql", {
+        method: "POST",
+        headers: {
+          accept: "application/vnd.github+json",
+          authorization: `Bearer ${await this.installationToken()}`,
+          "content-type": "application/json",
+          "user-agent": "roundhouse-v2",
+          "x-github-api-version": "2026-03-10",
+        },
+        body: JSON.stringify({ query, variables }),
+      }),
+      {
+        api: "github",
+        operation: "graphql",
       },
-      body: JSON.stringify({ query, variables }),
-    });
-    await observeResponse(response, {
-      api: "github",
-      operation: "graphql",
-    });
+    );
     const value = (await response.json()) as {
       data?: T;
       errors?: readonly unknown[];
@@ -223,21 +227,23 @@ export class GitHubClient {
     method: string,
     body?: unknown,
   ): Promise<T> {
-    const response = await this.send(`https://api.github.com${path}`, {
-      method,
-      headers: {
-        accept: "application/vnd.github+json",
-        authorization: `Bearer ${await this.installationToken()}`,
-        ...(body === undefined ? {} : { "content-type": "application/json" }),
-        "user-agent": "roundhouse-v2",
-        "x-github-api-version": "2026-03-10",
+    const response = await observeResponse(
+      await this.send(`https://api.github.com${path}`, {
+        method,
+        headers: {
+          accept: "application/vnd.github+json",
+          authorization: `Bearer ${await this.installationToken()}`,
+          ...(body === undefined ? {} : { "content-type": "application/json" }),
+          "user-agent": "roundhouse-v2",
+          "x-github-api-version": "2026-03-10",
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+      {
+        api: "github",
+        operation: `${method} ${path}`,
       },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
-    await observeResponse(response, {
-      api: "github",
-      operation: `${method} ${path}`,
-    });
+    );
     if (!response.ok)
       throw new Error(`github_${method.toLowerCase()}_${response.status}`);
     return response.json<T>();
