@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   activityRequest,
   agentRuntime,
+  artifactWriteTokenRequest,
   completionRequest,
   checkpointWorkspace,
   implementationPrompt,
@@ -382,6 +383,27 @@ describe("V2 agent runner", () => {
       artifactTokenId: "token-id",
       result: { checkpoint: checkpoint.outputHead },
       signature: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+  });
+
+  it("requests a fresh artifact writer with the attempt capability", async () => {
+    const assignment = {
+      id: "attempt_checkpoint",
+      artifact: { tokenId: "initial-token" },
+    };
+    const request = artifactWriteTokenRequest(
+      assignment,
+      "https://v2.invalid/attempts/callback",
+      "attempt-secret",
+    );
+    expect(request.method).toBe("POST");
+    expect(new URL(request.url).pathname).toBe("/attempts/artifact-token");
+    expect(request.headers.get("x-roundhouse-attempt-id")).toBe(assignment.id);
+    expect(request.headers.get("x-roundhouse-attempt-capability")).toBe(
+      "attempt-secret",
+    );
+    await expect(request.json()).resolves.toEqual({
+      artifactTokenId: "initial-token",
     });
   });
 

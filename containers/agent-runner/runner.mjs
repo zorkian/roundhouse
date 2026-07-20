@@ -93,6 +93,47 @@ export function activityRequest(
   });
 }
 
+export function artifactWriteTokenRequest(
+  assignment,
+  callbackUrl,
+  attemptSecret,
+) {
+  return new Request(new URL("/attempts/artifact-token", callbackUrl), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-roundhouse-attempt-capability": attemptSecret,
+      "x-roundhouse-attempt-id": assignment.id,
+    },
+    body: JSON.stringify({ artifactTokenId: assignment.artifact.tokenId }),
+    signal: AbortSignal.timeout(30_000),
+  });
+}
+
+async function refreshArtifactWriteToken(
+  assignment,
+  callbackUrl,
+  attemptSecret,
+) {
+  const response = await fetch(
+    artifactWriteTokenRequest(assignment, callbackUrl, attemptSecret),
+  );
+  runnerLog("info", "artifact_write_token_response", {
+    status: response.status,
+  });
+  if (!response.ok)
+    throw new Error(`artifact_write_token_http_${response.status}`);
+  const artifact = await response.json();
+  if (
+    typeof artifact?.tokenId !== "string" ||
+    typeof artifact?.token !== "string" ||
+    artifact.access !== "write"
+  )
+    throw new Error("invalid_artifact_write_token");
+  Object.assign(assignment.artifact, artifact);
+  return assignment.artifact;
+}
+
 async function reportActivity(
   assignment,
   callbackUrl,
@@ -953,7 +994,12 @@ export async function prepareWorkspace(assignment) {
   return directory;
 }
 
-export async function checkpointWorkspace(assignment, directory, onProgress) {
+export async function checkpointWorkspace(
+  assignment,
+  directory,
+  onProgress,
+  refreshWriteToken,
+) {
   if (assignment.artifact.access === "read") {
     return {
       repositoryId: assignment.artifact.repositoryId,
@@ -999,9 +1045,12 @@ export async function checkpointWorkspace(assignment, directory, onProgress) {
     ["diff", "--name-only", assignment.expectedHead, outputHead],
     commandOptions,
   );
+  const writeArtifact = refreshWriteToken
+    ? await refreshWriteToken()
+    : assignment.artifact;
   await command("git", ["push", "origin", `HEAD:${assignment.artifact.ref}`], {
     cwd: directory,
-    env: gitEnvironment(assignment.artifact.token),
+    env: gitEnvironment(writeArtifact.token),
     onProgress,
   });
   return {
@@ -1148,6 +1197,7 @@ async function completeAssignment(assignment, headers) {
         attemptSecret,
         checkpointProgress,
       ),
+    () => refreshArtifactWriteToken(assignment, callbackUrl, attemptSecret),
   );
   await progress("checkpoint_completed", {
     changedPathCount: checkpoint.changedPaths.length,
