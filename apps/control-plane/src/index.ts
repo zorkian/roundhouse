@@ -319,7 +319,6 @@ class ContainerDispatcher implements AttemptDispatcher {
           throw new Error("container_bootstrap_failed");
       } catch (error) {
         await repository.revokeToken(bootstrapToken.id);
-        await this.artifacts.delete(repository.name);
         throw error;
       }
       await repository.revokeToken(bootstrapToken.id);

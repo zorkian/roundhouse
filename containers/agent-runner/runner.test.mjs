@@ -394,7 +394,7 @@ describe("V2 agent runner", () => {
     ).toMatchObject({ status: 400 });
   });
 
-  it("clones the exact source head into an empty artifact", async () => {
+  it("shallow-clones the exact source head into an empty artifact", async () => {
     process.env.ROUNDHOUSE_WORKSPACE_ROOT = resolve(testRoot, "bootstrap");
     const source = resolve(testRoot, "bootstrap-source");
     const artifact = resolve(testRoot, "bootstrap-artifact.git");
@@ -415,11 +415,29 @@ describe("V2 agent runner", () => {
       ],
       { cwd: source },
     );
+    await writeFile(resolve(source, "README.md"), "baseline\ncurrent\n");
+    execFileSync("git", ["add", "README.md"], { cwd: source });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@invalid",
+        "commit",
+        "-m",
+        "current",
+      ],
+      { cwd: source },
+    );
     const head = execFileSync("git", ["rev-parse", "HEAD"], {
       cwd: source,
       encoding: "utf8",
     }).trim();
     execFileSync("git", ["init", "--bare", "--initial-branch=main", artifact]);
+    execFileSync("git", ["config", "receive.shallowUpdate", "true"], {
+      cwd: artifact,
+    });
     await bootstrapWorkspace({
       id: "attempt_bootstrap_git",
       artifact: { remote: artifact, token: "artifact-token" },
@@ -435,6 +453,12 @@ describe("V2 agent runner", () => {
         encoding: "utf8",
       }).trim(),
     ).toBe(head);
+    expect(
+      execFileSync("git", ["rev-list", "--count", "refs/heads/main"], {
+        cwd: artifact,
+        encoding: "utf8",
+      }).trim(),
+    ).toBe("1");
   });
 
   it("builds an attempt-bound asynchronous completion callback", async () => {
