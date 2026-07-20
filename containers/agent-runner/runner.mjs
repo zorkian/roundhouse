@@ -963,7 +963,6 @@ export async function bootstrapWorkspace(assignment) {
     "git",
     [
       "clone",
-      "--depth=1",
       "--branch",
       assignment.source.branch,
       "--no-tags",

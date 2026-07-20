@@ -4,6 +4,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   activityRequest,
@@ -393,7 +394,7 @@ describe("V2 agent runner", () => {
     ).toMatchObject({ status: 400 });
   });
 
-  it("shallow-clones the exact source head into an empty artifact", async () => {
+  it("clones the exact source head into an empty artifact", async () => {
     process.env.ROUNDHOUSE_WORKSPACE_ROOT = resolve(testRoot, "bootstrap");
     const source = resolve(testRoot, "bootstrap-source");
     const artifact = resolve(testRoot, "bootstrap-artifact.git");
@@ -422,7 +423,11 @@ describe("V2 agent runner", () => {
     await bootstrapWorkspace({
       id: "attempt_bootstrap_git",
       artifact: { remote: artifact, token: "artifact-token" },
-      source: { remote: source, branch: "main", head },
+      source: {
+        remote: pathToFileURL(source).toString(),
+        branch: "main",
+        head,
+      },
     });
     expect(
       execFileSync("git", ["rev-parse", "refs/heads/main"], {
