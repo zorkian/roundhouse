@@ -116,6 +116,9 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
   );
   if (!recorded) return new Response("stale_attempt", { status: 409 });
   const route = attempt.routing;
+  // A deployed runtime cannot safely continue an older container that speaks
+  // the removed Responses-only adapter. Reject it so the existing inactivity
+  // recovery destroys that container and redispatches with a fresh native route.
   if (!isModelRoute(route))
     return new Response("model_route_missing", { status: 409 });
   const headers = new Headers(request.headers);

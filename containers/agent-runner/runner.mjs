@@ -478,8 +478,28 @@ export const planSchema = Object.freeze({
   },
 });
 
+export function validModelRoute(route) {
+  return Boolean(
+    route &&
+    typeof route.provider === "string" &&
+    route.provider.length > 0 &&
+    typeof route.model === "string" &&
+    route.model.length > 0 &&
+    [
+      "openai-responses",
+      "openai-completions",
+      "anthropic-messages",
+      "google-generative-ai",
+    ].includes(route.protocol) &&
+    ["off", "minimal", "low", "medium", "high"].includes(route.thinkingLevel) &&
+    typeof route.rule === "string" &&
+    route.rule.length > 0,
+  );
+}
+
 export function piModelConfiguration(assignment, attemptSecret) {
   const route = assignment.routing;
+  if (!validModelRoute(route)) throw new Error("invalid_model_route");
   return {
     providers: {
       [route.provider]: {
@@ -1172,18 +1192,7 @@ function validAssignment(body) {
     body?.artifact?.tokenId &&
     body?.artifact?.token &&
     ["read", "write"].includes(body?.artifact?.access) &&
-    typeof body?.routing?.provider === "string" &&
-    typeof body?.routing?.model === "string" &&
-    [
-      "openai-responses",
-      "openai-completions",
-      "anthropic-messages",
-      "google-generative-ai",
-    ].includes(body?.routing?.protocol) &&
-    ["off", "minimal", "low", "medium", "high"].includes(
-      body?.routing?.thinkingLevel,
-    ) &&
-    typeof body?.routing?.rule === "string" &&
+    validModelRoute(body?.routing) &&
     (!body?.upstream ||
       (body.upstream.remote?.startsWith("https://") &&
         body.upstream.hostname &&

@@ -3,6 +3,7 @@
 
 import {
   immutableAttemptId,
+  isModelRoute,
   reviewerForRole,
   runSchemaVersion,
   type Attempt,
@@ -252,14 +253,7 @@ class ContainerDispatcher implements AttemptDispatcher {
     );
     if (!response.ok) throw new Error(`model_route_http_${response.status}`);
     const route = (await response.json()) as ModelRoute;
-    if (
-      !route?.provider ||
-      !route.model ||
-      !route.protocol ||
-      !route.thinkingLevel ||
-      !route.rule
-    )
-      throw new Error("invalid_model_route");
+    if (!isModelRoute(route)) throw new Error("invalid_model_route");
     await this.runs.recordModelRouting(attempt.id, route);
     return route;
   }

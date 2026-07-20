@@ -23,6 +23,7 @@ import {
   runnerIdentity,
   runnerResponse,
   validateCheckpoint,
+  validModelRoute,
 } from "./runner.mjs";
 
 const testRoot = resolve(process.cwd(), ".runner-test-workspaces");
@@ -65,6 +66,22 @@ describe("V2 agent runner", () => {
       },
       models: [{ id: "moonshotai/kimi-k3", reasoning: true }],
     });
+  });
+
+  it("rejects missing and empty native routes before configuring Pi", () => {
+    expect(validModelRoute(undefined)).toBe(false);
+    expect(
+      validModelRoute({
+        provider: "",
+        model: "openai/gpt-5.6-sol",
+        protocol: "openai-responses",
+        thinkingLevel: "low",
+        rule: "implementation-default-v1",
+      }),
+    ).toBe(false);
+    expect(() => piModelConfiguration({}, "capability")).toThrow(
+      "invalid_model_route",
+    );
   });
 
   it("requires structured reproduction evidence without arbitrary caps", () => {
