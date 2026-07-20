@@ -192,17 +192,21 @@ function applyHostedResearch(
   route: ModelRoute,
   role: string,
 ): void {
+  const existing = tools(body).filter(
+    (tool) =>
+      !String(tool.type).startsWith("web_search") &&
+      tool.type !== "web_search_20250305",
+  );
+  if (existing.length > 0) body.tools = existing;
+  else delete body.tools;
   if (!researchRoles.has(role)) return;
-  const existing = tools(body);
   if (route.protocol === "openai-responses") {
-    if (!existing.some((tool) => String(tool.type).startsWith("web_search")))
-      body.tools = [...existing, { type: "web_search_preview" }];
+    body.tools = [...existing, { type: "web_search_preview" }];
   } else if (route.protocol === "anthropic-messages") {
-    if (!existing.some((tool) => tool.type === "web_search_20250305"))
-      body.tools = [
-        ...existing,
-        { type: "web_search_20250305", name: "web_search" },
-      ];
+    body.tools = [
+      ...existing,
+      { type: "web_search_20250305", name: "web_search" },
+    ];
   }
 }
 

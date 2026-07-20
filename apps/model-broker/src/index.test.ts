@@ -178,6 +178,46 @@ describe("model broker", () => {
     );
   });
 
+  it("removes caller-supplied OpenAI hosted search outside research roles", async () => {
+    const run = vi.fn(async () => new Response("event: done\n\n"));
+    await brokerRequest(
+      modelRequest("openai-responses", "implement", {
+        input: "Implement it",
+        tools: [
+          { type: "function", name: "submit_result" },
+          { type: "web_search_preview" },
+        ],
+      }),
+      env,
+      { run },
+    );
+    expect(run).toHaveBeenCalledWith(
+      "openai/gpt-5.6-sol",
+      expect.objectContaining({
+        tools: [{ type: "function", name: "submit_result" }],
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("removes caller-supplied Anthropic hosted search outside research roles", async () => {
+    const run = vi.fn(async () => Response.json({ id: "msg_1" }));
+    await brokerRequest(
+      modelRequest("anthropic-messages", "review-holistic", {
+        messages: [{ role: "user", content: "Review it" }],
+        max_tokens: 100,
+        tools: [{ type: "web_search_20250305", name: "web_search" }],
+      }),
+      env,
+      { run },
+    );
+    expect(run).toHaveBeenCalledWith(
+      "anthropic/claude-fable-5",
+      expect.not.objectContaining({ tools: expect.anything() }),
+      expect.anything(),
+    );
+  });
+
   it("passes Pi's Moonshot chat payload without synthesizing messages", async () => {
     let sent: Record<string, unknown> | undefined;
     const run = vi.fn(
