@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import { extractModelUsage } from "./attempt-container.js";
-import { formatUsage, totalUsage } from "./usage.js";
+import { formatUsage, formatUsageBreakdown, totalUsage } from "./usage.js";
 
 describe("model usage", () => {
   it("extracts detailed usage and calculates known-model cost", () => {
@@ -62,7 +62,8 @@ describe("model usage", () => {
     const total = totalUsage(calls);
     expect(total).toMatchObject({ inputTokens: 30, totalTokens: 45 });
     expect(total.costUsd).toBeCloseTo(0.3);
-    expect(formatUsage(calls)).toContain("unavailable cached input");
+    expect(formatUsage(calls)).toBe("45 tokens · $0.30");
+    expect(formatUsageBreakdown(calls)).toContain("unavailable cached input");
     expect(formatUsage([])).toBe("Usage unavailable");
   });
 });

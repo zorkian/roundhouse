@@ -188,7 +188,7 @@ describe("V2 control plane", () => {
     );
     expect(html.status).toBe(200);
     expect(html.headers.get("content-type")).toBe("text/html; charset=utf-8");
-    await expect(html.text()).resolves.toContain("Roundhouse run details");
+    await expect(html.text()).resolves.toContain("Issue #281");
 
     const missing = await fetch(
       new Request(

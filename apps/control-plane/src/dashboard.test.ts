@@ -108,7 +108,7 @@ describe("dashboard", () => {
     };
     const html = renderDashboard([run]);
     expect(html).toContain("1,234 tokens");
-    expect(html).toContain("$0.250000");
+    expect(html).toContain("$0.25");
   });
 
   it("moves closed failures to recently finished with a GitHub label", () => {
