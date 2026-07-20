@@ -44,6 +44,24 @@ function isArtifactsError(error: unknown, code: string): boolean {
   );
 }
 
+function artifactsErrorDetails(error: unknown) {
+  if (!error || typeof error !== "object") return { error: String(error) };
+  const value = error as {
+    name?: unknown;
+    message?: unknown;
+    code?: unknown;
+    numericCode?: unknown;
+  };
+  return {
+    errorName: String(value.name ?? "Error"),
+    error: String(value.message ?? error),
+    ...(typeof value.code === "string" ? { code: value.code } : {}),
+    ...(typeof value.numericCode === "number"
+      ? { numericCode: value.numericCode }
+      : {}),
+  };
+}
+
 export interface ArtifactLocation {
   readonly namespace: string;
   readonly remoteOrigin: string;
@@ -125,7 +143,10 @@ export class CloudflareArtifactsNamespace implements ArtifactsNamespace {
     if (existing) return existing;
     try {
       const created = await this.artifacts.import({
-        source: { url: upstream, branch },
+        // A run is bound to the current default-branch head and does not need
+        // the repository's complete historical object graph. Keeping recent
+        // ancestry avoids exhausting the import service on long-lived repos.
+        source: { url: upstream, branch, depth: 100 },
         target: {
           name,
           opts: { description: "Roundhouse V2 run workspace" },
@@ -137,6 +158,14 @@ export class CloudflareArtifactsNamespace implements ArtifactsNamespace {
       await repository.revokeToken(created.token);
       return new CloudflareArtifactRepository(repository, name, this.location);
     } catch (error) {
+      console.error(
+        JSON.stringify({
+          message: "artifact_import_failed",
+          repository: name,
+          upstream,
+          ...artifactsErrorDetails(error),
+        }),
+      );
       // A timed-out import may still have committed. Reconcile by immutable
       // repository name before treating the operation as failed.
       if (!isArtifactsError(error, "ALREADY_EXISTS")) {
