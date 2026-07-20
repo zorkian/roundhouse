@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { reviewerForRole } from "@roundhouse/core";
-import { observeStreamingResponse } from "@roundhouse/response-observer";
+import { observeResponse } from "@roundhouse/response-observer";
 
 const routingHeaders = [
   "x-roundhouse-attempt-id",
@@ -155,22 +155,24 @@ export async function brokerRequest(
       returnRawResponse: true,
     });
   } catch (error) {
+    const attemptId = request.headers.get("x-roundhouse-attempt-id");
     console.error(
       JSON.stringify({
         message: "api_request_failed",
         api: "workers_ai",
         operation: "run_model",
-        attemptId: request.headers.get("x-roundhouse-attempt-id"),
+        ...(attemptId ? { attemptId } : {}),
         model: route.model,
         error: error instanceof Error ? error.message : String(error),
       }),
     );
     return Response.json({ error: "model_upstream_failed" }, { status: 502 });
   }
-  const captured = observeStreamingResponse(response, {
+  const attemptId = request.headers.get("x-roundhouse-attempt-id");
+  const captured = await observeResponse(response, {
     api: "workers_ai",
     operation: "run_model",
-    attemptId: request.headers.get("x-roundhouse-attempt-id") ?? "",
+    ...(attemptId ? { attemptId } : {}),
     model: route.model,
   });
   return new Response(captured.body, {

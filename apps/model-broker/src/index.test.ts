@@ -188,15 +188,10 @@ describe("model broker", () => {
     const entries = log.mock.calls.map(([entry]) => JSON.parse(String(entry)));
     expect(entries).toContainEqual(
       expect.objectContaining({
-        message: "api_response_opened",
+        message: "api_response",
         api: "workers_ai",
         status: 400,
-      }),
-    );
-    expect(entries).toContainEqual(
-      expect.objectContaining({
-        message: "api_response_body",
-        body: '{"error":{"message":"unsupported model"}}',
+        body: { error: { message: "unsupported model" } },
       }),
     );
   });

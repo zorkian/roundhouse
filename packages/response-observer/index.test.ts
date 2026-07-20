@@ -2,7 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it, vi } from "vitest";
-import { observeBufferedResponse, observeStreamingResponse } from "./index.mjs";
+import {
+  observeBufferedResponse,
+  observeResponse,
+  observeStreamingResponse,
+} from "./index.mjs";
 
 describe("API response observer", () => {
   it("observes a buffered response without consuming it", async () => {
@@ -58,6 +62,59 @@ describe("API response observer", () => {
         message: "api_response_body",
         sequence: 0,
         body: "upstream detail",
+      }),
+    );
+  });
+
+  it("redacts a JSON error response instead of logging raw chunks", async () => {
+    const write = vi.fn();
+    const response = await observeResponse(
+      Response.json(
+        { token: "secret-token", error: "bad request" },
+        { status: 400 },
+      ),
+      { api: "workers_ai", operation: "run_model" },
+      { write },
+    );
+
+    await expect(response.json()).resolves.toEqual({
+      token: "secret-token",
+      error: "bad request",
+    });
+    expect(write).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "api_response",
+        body: { token: "[REDACTED]", error: "bad request" },
+      }),
+    );
+    expect(write).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "api_response_body" }),
+    );
+  });
+
+  it("does not make a body logging failure an API failure", async () => {
+    const write = vi.fn();
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.error(new Error("stream failed"));
+        },
+      }),
+      { status: 502 },
+    );
+
+    await expect(
+      observeBufferedResponse(
+        response,
+        { api: "github", operation: "request" },
+        write,
+      ),
+    ).resolves.toBe(response);
+    expect(write).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "api_response_log_failed",
+        status: 502,
+        error: "stream failed",
       }),
     );
   });

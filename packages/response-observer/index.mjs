@@ -53,17 +53,35 @@ export async function observeBufferedResponse(
   response,
   details,
   write = defaultWrite,
+  options = {},
 ) {
-  const text = await response.clone().text();
-  write({
-    message: "api_response",
-    ...details,
-    status: response.status,
-    statusText: response.statusText,
-    headers: headers(response),
-    body: body(text),
-  });
+  try {
+    const text = await response.clone().text();
+    write({
+      message: "api_response",
+      ...details,
+      status: response.status,
+      statusText: response.statusText,
+      headers: headers(response),
+      body: body(text),
+    });
+    options.onText?.(text);
+    await options.onComplete?.();
+  } catch (error) {
+    write({
+      message: "api_response_log_failed",
+      ...details,
+      status: response.status,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
   return response;
+}
+
+export async function observeResponse(response, details, options = {}) {
+  return response.headers.get("content-type")?.includes("text/event-stream")
+    ? observeStreamingResponse(response, details, options)
+    : observeBufferedResponse(response, details, options.write, options);
 }
 
 export function observeStreamingResponse(response, details, options = {}) {

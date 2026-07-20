@@ -5,7 +5,7 @@ import { Container } from "@cloudflare/containers";
 import type { Attempt, ModelUsage } from "@roundhouse/core";
 import {
   observeBufferedResponse,
-  observeStreamingResponse,
+  observeResponse,
 } from "@roundhouse/response-observer";
 import { verifyCallback } from "./callback.js";
 import { attemptInactivityMilliseconds } from "./coordinator.js";
@@ -179,7 +179,7 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
     });
   }
   let responseText = "";
-  return observeStreamingResponse(response, responseLogFields, {
+  return observeResponse(response, responseLogFields, {
     onText(text) {
       if (response.ok) responseText += text;
     },
