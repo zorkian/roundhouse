@@ -12,10 +12,11 @@ RUN corepack enable
 
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin runner
 
-COPY --chown=runner:runner runner.mjs /opt/roundhouse/runner.mjs
+COPY --chown=runner:runner containers/agent-runner/runner.mjs /opt/roundhouse/containers/agent-runner/runner.mjs
+COPY --chown=runner:runner packages/response-observer/index.mjs /opt/roundhouse/packages/response-observer/index.mjs
 
 USER runner
 WORKDIR /home/runner
 EXPOSE 8080
 
-CMD ["node", "/opt/roundhouse/runner.mjs"]
+CMD ["node", "/opt/roundhouse/containers/agent-runner/runner.mjs"]

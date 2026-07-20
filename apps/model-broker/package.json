@@ -5,6 +5,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@roundhouse/core": "workspace:*"
+    "@roundhouse/core": "workspace:*",
+    "@roundhouse/response-observer": "workspace:*"
   }
 }

@@ -36,6 +36,7 @@ import {
   GitHubClient,
   GitHubStageReporter,
 } from "./github.js";
+import { observeResponse } from "@roundhouse/response-observer";
 export { ContainerProxy } from "@cloudflare/containers";
 export { RoundhouseAttemptContainer } from "./attempt-container.js";
 
@@ -396,19 +397,26 @@ class ContainerDispatcher implements AttemptDispatcher {
         : {}),
     };
     try {
-      const response = await this.containers.get(id).fetch(
-        new Request("https://attempt.invalid/assign", {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-roundhouse-attempt-secret": attemptSecret,
-            "x-roundhouse-callback-url": new URL(
-              "/attempts/callback",
-              this.controlPlaneOrigin,
-            ).toString(),
-          },
-          body: JSON.stringify(assignment),
-        }),
+      const response = await observeResponse(
+        await this.containers.get(id).fetch(
+          new Request("https://attempt.invalid/assign", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-roundhouse-attempt-secret": attemptSecret,
+              "x-roundhouse-callback-url": new URL(
+                "/attempts/callback",
+                this.controlPlaneOrigin,
+              ).toString(),
+            },
+            body: JSON.stringify(assignment),
+          }),
+        ),
+        {
+          api: "attempt_container",
+          operation: "assign",
+          attemptId: attempt.id,
+        },
       );
       if (response.status !== 202) throw new Error("container_dispatch_failed");
     } catch (error) {
@@ -450,36 +458,43 @@ class ContainerCheckpointValidator implements CheckpointValidator {
     }
     const token = await artifact.createToken("read", 5 * 60);
     try {
-      const response = await this.containers
-        .get(this.containers.idFromName(`${attempt.id}-validation`))
-        .fetch(
-          new Request("https://attempt.invalid/validate", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              ...attempt,
-              baseCommit: run.baseCommit,
-              protectedPaths,
-              checkpoint: input.checkpoint,
-              artifact: {
-                repositoryId: artifact.id,
-                repository: artifact.name,
-                remote: artifact.remote,
-                hostname: artifact.hostname,
-                tokenId: token.id,
-                token: token.plaintext,
-                access: token.access,
-                ref: input.checkpoint.ref,
-              },
-              publish: {
-                remote: `https://github.com/${run.repository}.git`,
-                hostname: "github.com",
-                token: await this.github.installationToken(),
-                ref: `refs/heads/${githubBranch(run.issueNumber)}`,
-              },
+      const response = await observeResponse(
+        await this.containers
+          .get(this.containers.idFromName(`${attempt.id}-validation`))
+          .fetch(
+            new Request("https://attempt.invalid/validate", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                ...attempt,
+                baseCommit: run.baseCommit,
+                protectedPaths,
+                checkpoint: input.checkpoint,
+                artifact: {
+                  repositoryId: artifact.id,
+                  repository: artifact.name,
+                  remote: artifact.remote,
+                  hostname: artifact.hostname,
+                  tokenId: token.id,
+                  token: token.plaintext,
+                  access: token.access,
+                  ref: input.checkpoint.ref,
+                },
+                publish: {
+                  remote: `https://github.com/${run.repository}.git`,
+                  hostname: "github.com",
+                  token: await this.github.installationToken(),
+                  ref: `refs/heads/${githubBranch(run.issueNumber)}`,
+                },
+              }),
             }),
-          }),
-        );
+          ),
+        {
+          api: "attempt_container",
+          operation: "validate",
+          attemptId: attempt.id,
+        },
+      );
       if (!response.ok) throw new Error("checkpoint_git_validation_failed");
     } finally {
       await Promise.all([

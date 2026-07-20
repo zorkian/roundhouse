@@ -8,6 +8,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { observeResponse } from "../../packages/response-observer/index.mjs";
 
 export const runnerIdentity = Object.freeze({
   schemaVersion: 2,
@@ -96,8 +97,12 @@ async function reportActivity(
   progress,
 ) {
   try {
-    const response = await fetch(
-      activityRequest(assignment, callbackUrl, attemptSecret, progress),
+    const response = await observeResponse(
+      await fetch(
+        activityRequest(assignment, callbackUrl, attemptSecret, progress),
+      ),
+      { api: "control_plane", operation: "report_activity" },
+      { write: writeApiResponseLog },
     );
     if (!response.ok)
       runnerLog("error", "runner_activity_rejected", {
@@ -148,6 +153,11 @@ function runnerLog(level, message, fields = {}) {
   });
   if (level === "error") console.error(entry);
   else console.log(entry);
+}
+
+function writeApiResponseLog(entry) {
+  const { message, ...fields } = entry;
+  runnerLog("info", message, fields);
 }
 
 function command(commandName, args, options = {}) {
@@ -1016,14 +1026,18 @@ async function completeAssignment(assignment, headers) {
       }
     : undefined;
   await progress("callback_started");
-  const response = await fetch(
-    completionRequest(
-      assignment,
-      checkpoint,
-      callbackUrl,
-      attemptSecret,
-      result,
+  const response = await observeResponse(
+    await fetch(
+      completionRequest(
+        assignment,
+        checkpoint,
+        callbackUrl,
+        attemptSecret,
+        result,
+      ),
     ),
+    { api: "control_plane", operation: "complete_attempt" },
+    { write: writeApiResponseLog },
   );
   if (!response.ok) throw new Error(`callback_http_${response.status}`);
   await progress("callback_completed", { status: response.status });
