@@ -562,8 +562,7 @@ models:
   planning: { provider: openai, model: ..., effort: medium }
   implementation: { provider: openai, model: ..., effort: medium }
   reviewers:
-    code-quality:
-      { provider: openai, model: responses-compatible, effort: medium }
+    code-quality: { provider: openai, model: ..., effort: medium }
 ```
 
 The prototype runs Codex over the OpenAI Responses wire protocol, so every

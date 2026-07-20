@@ -79,15 +79,21 @@ describe("model broker", () => {
     });
   });
 
-  it.each(["review-holistic", "review-security", "review-data"])(
+  it.each([
+    ["review-holistic", "review-holistic-v1"],
+    ["review-security", "review-security-v1"],
+    ["review-data", "review-data-v1"],
+  ])(
     "routes the %s role to a Responses-compatible independent model",
-    (role) => {
+    (role, rule) => {
       const review = request();
       review.headers.set("x-roundhouse-role", role);
       review.headers.set("x-roundhouse-task-type", "review");
-      expect(selectRoute(review, env)).toEqual(
-        expect.objectContaining({ model: "openai/gpt-5.4" }),
-      );
+      expect(selectRoute(review, env)).toEqual({
+        model: "openai/gpt-5.4",
+        reasoningEffort: "low",
+        rule,
+      });
     },
   );
 
