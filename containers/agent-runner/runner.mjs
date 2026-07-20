@@ -1016,7 +1016,34 @@ export async function checkpointWorkspace(
   const staged = await command("git", ["diff", "--cached", "--name-only"], {
     ...commandOptions,
   });
-  if (!staged) {
+  const mergeHeadPath = await command(
+    "git",
+    ["rev-parse", "--git-path", "MERGE_HEAD"],
+    commandOptions,
+  );
+  let mergeInProgress = false;
+  try {
+    await readFile(resolve(directory, mergeHeadPath));
+    mergeInProgress = true;
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  if (staged || mergeInProgress) {
+    const deterministicEnvironment = roundhouseGitEnvironment();
+    await command(
+      "git",
+      ["commit", "-m", `Implement issue #${assignment.issueNumber}`],
+      {
+        cwd: directory,
+        env: deterministicEnvironment,
+        onProgress,
+      },
+    );
+  }
+  const outputHead = await command("git", ["rev-parse", "HEAD"], {
+    ...commandOptions,
+  });
+  if (outputHead === assignment.expectedHead) {
     return {
       repositoryId: assignment.artifact.repositoryId,
       repository: assignment.artifact.repository,
@@ -1027,19 +1054,6 @@ export async function checkpointWorkspace(
       changedPaths: [],
     };
   }
-  const deterministicEnvironment = roundhouseGitEnvironment();
-  await command(
-    "git",
-    ["commit", "-m", `Implement issue #${assignment.issueNumber}`],
-    {
-      cwd: directory,
-      env: deterministicEnvironment,
-      onProgress,
-    },
-  );
-  const outputHead = await command("git", ["rev-parse", "HEAD"], {
-    ...commandOptions,
-  });
   const changed = await command(
     "git",
     ["diff", "--name-only", assignment.expectedHead, outputHead],

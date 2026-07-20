@@ -579,6 +579,38 @@ describe("V2 agent runner", () => {
       ref: assignment.artifact.ref,
       changedPaths: [],
     });
+    const committedAssignment = {
+      ...assignment,
+      id: "run_git_rev_2",
+      expectedHead: first.outputHead,
+    };
+    const committedDirectory = await prepareWorkspace(committedAssignment);
+    await writeFile(resolve(committedDirectory, "AGENT.md"), "committed\n");
+    execFileSync("git", ["add", "AGENT.md"], { cwd: committedDirectory });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Agent",
+        "-c",
+        "user.email=agent@invalid",
+        "commit",
+        "-m",
+        "agent-created commit",
+      ],
+      { cwd: committedDirectory },
+    );
+    const committedHead = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: committedDirectory,
+      encoding: "utf8",
+    }).trim();
+    await expect(
+      checkpointWorkspace(committedAssignment, committedDirectory),
+    ).resolves.toMatchObject({
+      inputHead: first.outputHead,
+      outputHead: committedHead,
+      changedPaths: ["AGENT.md"],
+    });
     await expect(
       validateCheckpoint({
         ...assignment,
@@ -713,7 +745,7 @@ describe("V2 agent runner", () => {
     ).toBe("route.ts");
     await writeFile(
       resolve(directory, "route.ts"),
-      "export const route = 'main-and-feature';\n",
+      "export const route = 'feature';\n",
     );
     const checkpoint = await checkpointWorkspace(assignment, directory);
     const parents = execFileSync(
@@ -724,5 +756,6 @@ describe("V2 agent runner", () => {
       .trim()
       .split(" ");
     expect(parents).toEqual([featureHead, mainHead]);
+    expect(checkpoint.changedPaths).toEqual([]);
   });
 });
