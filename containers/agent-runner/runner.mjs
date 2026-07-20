@@ -500,10 +500,16 @@ export function validModelRoute(route) {
 export function piModelConfiguration(assignment, attemptSecret) {
   const route = assignment.routing;
   if (!validModelRoute(route)) throw new Error("invalid_model_route");
+  const basePath =
+    route.protocol === "anthropic-messages"
+      ? ""
+      : route.protocol === "google-generative-ai"
+        ? "/v1beta"
+        : "/v1";
   return {
     providers: {
       [route.provider]: {
-        baseUrl: "http://model.roundhouse.internal/v1",
+        baseUrl: `http://model.roundhouse.internal${basePath}`,
         api: route.protocol,
         apiKey: "roundhouse-internal",
         authHeader: false,
