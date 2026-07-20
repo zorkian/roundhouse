@@ -9,7 +9,6 @@ import {
   type Wakeup,
 } from "@roundhouse/core";
 import {
-  enrolledRepository,
   findPullRequest,
   verifyGitHubWebhook,
   type GitHubAutomationApi,
@@ -46,7 +45,8 @@ interface PullRequest extends OpenPullRequest {
 
 interface CheckSuitePayload {
   readonly action?: string;
-  readonly repository?: { readonly full_name?: string };
+  readonly repository?: { readonly id?: number; readonly full_name?: string };
+  readonly installation?: { readonly id?: number };
   readonly check_suite?: {
     readonly head_branch?: string | null;
     readonly head_sha?: string;
@@ -339,10 +339,11 @@ export class GitHubCiAutomation {
 }
 
 function runIdFromBranch(
+  repositoryId: number,
   branch: string | null | undefined,
 ): string | undefined {
   const match = /^roundhouse\/issue-(\d+)$/.exec(branch ?? "");
-  return match ? `run_zorkian_roundhouse_issue_${match[1]}` : undefined;
+  return match ? `run_${repositoryId}_issue_${match[1]}` : undefined;
 }
 
 export async function acceptGitHubCheckSuite(
@@ -365,16 +366,22 @@ export async function acceptGitHubCheckSuite(
   )
     return "unauthorized";
   const payload = JSON.parse(raw) as CheckSuitePayload;
+  const repositoryName = payload.repository?.full_name;
+  const repositoryId = payload.repository?.id;
   if (
     payload.action !== "completed" ||
-    payload.repository?.full_name !== enrolledRepository.repository
+    !repositoryName ||
+    !repositoryId ||
+    !payload.installation?.id
   )
     return "ignored";
-  const id = runIdFromBranch(payload.check_suite?.head_branch);
+  const id = runIdFromBranch(repositoryId, payload.check_suite?.head_branch);
   const run = id ? await repository.get(id) : undefined;
   if (
     !id ||
     !run ||
+    run.repository !== repositoryName ||
+    run.githubInstallationId !== payload.installation?.id ||
     run.status !== "active" ||
     run.stage !== "ci" ||
     payload.check_suite?.head_sha !== run.currentHead

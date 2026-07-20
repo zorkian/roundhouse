@@ -154,7 +154,7 @@ export class D1RunRepository implements RunRepository {
 
   async create(run: RunSnapshot): Promise<void> {
     const time = this.now();
-    const repositoryId = `repo_${run.repository}`;
+    const repositoryId = `repo_${run.githubRepositoryId ?? run.repository}`;
     const workItemId = `work_${run.id}`;
     await this.db
       .prepare(
@@ -162,9 +162,15 @@ export class D1RunRepository implements RunRepository {
       )
       .bind(
         repositoryId,
-        run.repository,
+        String(run.githubRepositoryId ?? run.repository),
         run.profileVersion,
-        JSON.stringify({ repository: run.repository }),
+        JSON.stringify({
+          repository: run.repository,
+          ...(run.githubInstallationId
+            ? { installationId: run.githubInstallationId }
+            : {}),
+          ...(run.profile ? { profile: run.profile } : {}),
+        }),
         time,
       )
       .run();

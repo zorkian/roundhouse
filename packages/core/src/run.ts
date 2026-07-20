@@ -44,6 +44,8 @@ export interface RunSnapshot {
   readonly schemaVersion: typeof runSchemaVersion;
   readonly id: string;
   readonly repository: string;
+  readonly githubRepositoryId?: number;
+  readonly githubInstallationId?: number;
   readonly issueNumber: number;
   readonly baseCommit: string;
   readonly currentHead: string;
@@ -74,6 +76,8 @@ export interface IssueCommentSnapshot {
 export interface CreateRunInput {
   readonly id: string;
   readonly repository: string;
+  readonly githubRepositoryId?: number;
+  readonly githubInstallationId?: number;
   readonly issueNumber: number;
   readonly baseCommit: string;
   readonly profileVersion: string;
@@ -103,6 +107,10 @@ function assertCreateInput(input: CreateRunInput): void {
     input.repository.length > 200
   )
     throw new Error("invalid_repository");
+  for (const value of [input.githubRepositoryId, input.githubInstallationId]) {
+    if (value !== undefined && (!Number.isSafeInteger(value) || value < 1))
+      throw new Error("invalid_github_identity");
+  }
   if (!Number.isInteger(input.issueNumber) || input.issueNumber < 1)
     throw new Error("invalid_issue_number");
   if (!/^[a-f0-9]{40}$/.test(input.baseCommit))

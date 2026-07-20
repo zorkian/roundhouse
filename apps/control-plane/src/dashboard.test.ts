@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from "vitest";
+import { createRun } from "@roundhouse/core";
 import { renderDashboard } from "./dashboard.js";
 import { D1RunRepository, type D1Like, type RunSummary } from "./d1-store.js";
 
@@ -35,6 +36,45 @@ const summary = (
 });
 
 describe("dashboard", () => {
+  it("persists GitHub repository and installation identity with enrollment metadata", async () => {
+    const calls: { sql: string; values: unknown[] }[] = [];
+    const db: D1Like = {
+      prepare(sql) {
+        const call = { sql, values: [] as unknown[] };
+        calls.push(call);
+        const statement = {
+          bind: (...values: unknown[]) => {
+            call.values = values;
+            return statement;
+          },
+          all: async () => ({ meta: {}, results: [] }),
+          first: async () => null,
+          run: async () => ({ meta: {} }),
+        };
+        return statement as unknown as ReturnType<D1Like["prepare"]>;
+      },
+    };
+    const run = createRun({
+      id: "run_987_issue_42",
+      repository: "zorkian/dreamwidth",
+      githubRepositoryId: 987,
+      githubInstallationId: 654,
+      issueNumber: 42,
+      baseCommit: "a".repeat(40),
+      profileVersion: "profile-hash",
+    });
+    await new D1RunRepository(db).create(run);
+    expect(calls[0]?.values.slice(0, 3)).toEqual([
+      "repo_987",
+      "987",
+      "profile-hash",
+    ]);
+    expect(JSON.parse(String(calls[0]?.values[3]))).toMatchObject({
+      repository: "zorkian/dreamwidth",
+      installationId: 654,
+    });
+  });
+
   it("lists recently updated runs from D1", async () => {
     const calls: { sql: string; values: unknown[] }[] = [];
     const db: D1Like = {

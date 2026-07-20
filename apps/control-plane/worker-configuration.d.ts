@@ -9,7 +9,6 @@ interface __BaseEnv_Env {
   CONTROL_PLANE_ORIGIN: "https://roundhouse-v2-control-plane.default-07f.workers.dev";
   PUBLIC_ORIGIN: "https://roundhouse-dev.rm-rf.rip";
   GITHUB_APP_ID: "4281837";
-  GITHUB_APP_INSTALLATION_ID: "146147681";
   GITHUB_START_COMMAND: "/roundhouse-dev start";
   ATTEMPT_CONTAINERS: DurableObjectNamespace<
     import("./src/index").RoundhouseAttemptContainer

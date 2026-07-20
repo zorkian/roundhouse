@@ -28,11 +28,7 @@ function hasOnlyKeys(value: Record<string, unknown>, keys: string[]): boolean {
 }
 
 function stringList(value: unknown, heading: string): string[] {
-  if (
-    !Array.isArray(value) ||
-    !value.length ||
-    value.some((item) => typeof item !== "string")
-  )
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string"))
     throw new Error(`profile_paths_${heading}_invalid`);
   return [...new Set(value)].sort();
 }

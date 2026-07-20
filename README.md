@@ -88,6 +88,14 @@ pull-request commentary. The Access-protected development dashboard at
 `roundhouse-dev.rm-rf.rip` provides a compact operational view of V2 runs and
 links each run to its GitHub issue and recorded details.
 
+A public repository is enrolled by installing the development GitHub App and
+committing a valid `.roundhouse/profile.yaml` to that repository. Webhook
+intake binds each run to the repository and App installation named by the
+signed delivery; later publication, review, CI, and merge calls mint
+short-lived credentials for that same installation. Repository identity,
+installation identity, and the applied profile snapshot are recorded with the
+run in D1. No repository name or installation ID is configured in the Worker.
+
 ## Local checks
 
 Prerequisites are Git, Node.js 24.18.0, Corepack, and pnpm 10.13.1. CI and the

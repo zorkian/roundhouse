@@ -14,6 +14,7 @@ import { aggregateReviewAttempts } from "./coordinator.js";
 import {
   acceptGitHubComment,
   acceptGitHubIssueClosed,
+  GitHubClient,
   GitHubStageReporter,
   verifyGitHubWebhook,
   type GitHubApi,
@@ -22,7 +23,6 @@ import {
 
 const env = {
   GITHUB_APP_ID: "development-app",
-  GITHUB_APP_INSTALLATION_ID: "development-installation",
   GITHUB_START_COMMAND: "/roundhouse-dev start",
   ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY: "not-used-by-fake",
   ROUNDHOUSE_GITHUB_WEBHOOK_SECRET: "webhook-secret",
@@ -107,20 +107,26 @@ async function delivery(
   command = "/roundhouse-dev start",
   actor = "maintainer",
   type = "User",
+  target = {
+    repository: "zorkian/roundhouse",
+    repositoryId: 123,
+    installationId: 456,
+  },
 ) {
   const body = JSON.stringify({
     action: "created",
-    repository: { full_name: "zorkian/roundhouse" },
+    repository: { id: target.repositoryId, full_name: target.repository },
+    installation: { id: target.installationId },
     sender: { login: actor, type },
     issue: {
       number: 42,
       title: "Qualify this",
       body: "Acceptance details",
-      html_url: "https://github.com/zorkian/roundhouse/issues/42",
+      html_url: `https://github.com/${target.repository}/issues/42`,
     },
     comment: {
       body: command,
-      html_url: `https://github.com/zorkian/roundhouse/issues/42#issuecomment-${id}`,
+      html_url: `https://github.com/${target.repository}/issues/42#issuecomment-${id}`,
     },
   });
   const signature = await signCallback("webhook-secret", body);
@@ -138,7 +144,8 @@ async function delivery(
 async function closureDelivery(id: string, action = "closed") {
   const body = JSON.stringify({
     action,
-    repository: { full_name: "zorkian/roundhouse" },
+    repository: { id: 123, full_name: "zorkian/roundhouse" },
+    installation: { id: 456 },
     sender: { login: "maintainer" },
     issue: { number: 42 },
   });
@@ -159,8 +166,10 @@ describe("GitHub intake", () => {
     const repository = new IntakeRepository();
     await repository.create(
       createRun({
-        id: "run_zorkian_roundhouse_issue_42",
+        id: "run_123_issue_42",
         repository: "zorkian/roundhouse",
+        githubRepositoryId: 123,
+        githubInstallationId: 456,
         issueNumber: 42,
         baseCommit: "a".repeat(40),
         profileVersion: "v2",
@@ -175,14 +184,13 @@ describe("GitHub intake", () => {
       ),
     ).resolves.toEqual({
       outcome: "cancelled",
-      attemptId: "run_zorkian_roundhouse_issue_42_rev_1",
+      attemptId: "run_123_issue_42_rev_1",
     });
-    await expect(
-      repository.get("run_zorkian_roundhouse_issue_42"),
-    ).resolves.toMatchObject({ status: "cancelled", revision: 2 });
-    expect(repository.issueStates.get("run_zorkian_roundhouse_issue_42")).toBe(
-      "closed",
-    );
+    await expect(repository.get("run_123_issue_42")).resolves.toMatchObject({
+      status: "cancelled",
+      revision: 2,
+    });
+    expect(repository.issueStates.get("run_123_issue_42")).toBe("closed");
     await expect(
       acceptGitHubIssueClosed(
         await closureDelivery("close-42"),
@@ -196,8 +204,10 @@ describe("GitHub intake", () => {
     const repository = new IntakeRepository();
     const failed = {
       ...createRun({
-        id: "run_zorkian_roundhouse_issue_42",
+        id: "run_123_issue_42",
         repository: "zorkian/roundhouse",
+        githubRepositoryId: 123,
+        githubInstallationId: 456,
         issueNumber: 42,
         baseCommit: "a".repeat(40),
         profileVersion: "v2",
@@ -388,20 +398,79 @@ describe("GitHub intake", () => {
         github(),
       ),
     ).resolves.toBe("accepted");
-    await expect(
-      repository.get("run_zorkian_roundhouse_issue_42"),
-    ).resolves.toMatchObject(
-      createRun({
-        id: "run_zorkian_roundhouse_issue_42",
-        repository: "zorkian/roundhouse",
-        issueNumber: 42,
-        baseCommit: "a".repeat(40),
-        profileVersion: "roundhouse-v2-development-1",
-      }),
-    );
+    await expect(repository.get("run_123_issue_42")).resolves.toMatchObject({
+      id: "run_123_issue_42",
+      repository: "zorkian/roundhouse",
+      githubRepositoryId: 123,
+      githubInstallationId: 456,
+      issueNumber: 42,
+      baseCommit: "a".repeat(40),
+      profileVersion: expect.stringMatching(/^[a-f0-9]{64}$/),
+      status: "active",
+      stage: "qualify",
+      revision: 1,
+    });
     expect(wakeups).toEqual([
-      { runId: "run_zorkian_roundhouse_issue_42", expectedRevision: 1 },
+      { runId: "run_123_issue_42", expectedRevision: 1 },
     ]);
+  });
+
+  it("binds a run and all enrollment reads to the repository in the webhook", async () => {
+    const repository = new IntakeRepository();
+    const api = github();
+    await expect(
+      acceptGitHubComment(
+        await delivery("dreamwidth", undefined, undefined, undefined, {
+          repository: "zorkian/dreamwidth",
+          repositoryId: 987,
+          installationId: 654,
+        }),
+        env,
+        repository,
+        async () => undefined,
+        api,
+      ),
+    ).resolves.toBe("accepted");
+    await expect(repository.get("run_987_issue_42")).resolves.toMatchObject({
+      repository: "zorkian/dreamwidth",
+      githubRepositoryId: 987,
+      githubInstallationId: 654,
+    });
+    expect(api.get).toHaveBeenCalledWith(
+      "/repos/zorkian/dreamwidth/collaborators/maintainer/permission",
+    );
+    expect(api.get).toHaveBeenCalledWith("/repos/zorkian/dreamwidth");
+    expect(api.get).toHaveBeenCalledWith(
+      `/repos/zorkian/dreamwidth/commits/main`,
+    );
+  });
+
+  it("mints a token for the selected installation", async () => {
+    const key = await crypto.subtle.generateKey(
+      {
+        name: "RSASSA-PKCS1-v1_5",
+        modulusLength: 2048,
+        publicExponent: new Uint8Array([1, 0, 1]),
+        hash: "SHA-256",
+      },
+      true,
+      ["sign", "verify"],
+    );
+    const bytes = new Uint8Array(
+      await crypto.subtle.exportKey("pkcs8", key.privateKey),
+    );
+    const pem = `-----BEGIN PRIVATE KEY-----\n${btoa(String.fromCharCode(...bytes))}\n-----END PRIVATE KEY-----`;
+    const send = vi.fn(async () => Response.json({ token: "short-lived" }));
+    const client = new GitHubClient(
+      { ...env, ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY: pem },
+      654,
+      send,
+    );
+    await expect(client.installationToken()).resolves.toBe("short-lived");
+    expect(send).toHaveBeenCalledWith(
+      "https://api.github.com/app/installations/654/access_tokens",
+      expect.objectContaining({ method: "POST" }),
+    );
   });
 
   it("deduplicates delivery replay and repeated start commands", async () => {
@@ -476,7 +545,7 @@ describe("GitHub intake", () => {
       enqueue,
       github(),
     );
-    const id = "run_zorkian_roundhouse_issue_42";
+    const id = "run_123_issue_42";
     await repository.transition(id, 1, {
       status: "waiting",
       stage: "qualify",
@@ -554,8 +623,10 @@ describe("GitHub intake", () => {
     const repository = new IntakeRepository();
     await repository.create(
       createRun({
-        id: "run_zorkian_roundhouse_issue_42",
+        id: "run_123_issue_42",
         repository: "zorkian/roundhouse",
+        githubRepositoryId: 123,
+        githubInstallationId: 456,
         issueNumber: 42,
         baseCommit: "a".repeat(40),
         profileVersion: "v2",
@@ -567,7 +638,7 @@ describe("GitHub intake", () => {
         },
       }),
     );
-    await repository.transition("run_zorkian_roundhouse_issue_42", 1, {
+    await repository.transition("run_123_issue_42", 1, {
       status: "waiting",
       stage: "qualify",
       waitingReason: "clarification",

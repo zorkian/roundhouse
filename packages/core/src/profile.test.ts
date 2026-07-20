@@ -42,6 +42,32 @@ paths:
     ).toThrow("protected_path_changed");
   });
 
+  it("allows either path list to be empty", async () => {
+    const noProtectedPaths = await parseProfile(
+      `version: 1
+paths:
+  allowed: ["**"]
+  protected: []
+`,
+      commit,
+    );
+    expect(() =>
+      assertPathAllowed(noProtectedPaths, "src/index.ts"),
+    ).not.toThrow();
+
+    const noAllowedPaths = await parseProfile(
+      `version: 1
+paths:
+  allowed: []
+  protected: ["docs/**"]
+`,
+      commit,
+    );
+    expect(() => assertPathAllowed(noAllowedPaths, "src/index.ts")).toThrow(
+      "path_outside_allowlist",
+    );
+  });
+
   it.each([
     `${valid}models: []\n`,
     `version: 1\npaths:\n  allowed: ["**"]\n  protected: []\n  reviewers: []\n`,
