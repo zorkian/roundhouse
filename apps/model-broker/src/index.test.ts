@@ -161,6 +161,13 @@ describe("model broker", () => {
   it("passes native Anthropic input and adds Anthropic hosted research", async () => {
     const run = vi.fn(async () => Response.json({ id: "msg_1" }));
     const body = {
+      system: [
+        {
+          type: "text",
+          text: "Review the change",
+          cache_control: { type: "ephemeral" },
+        },
+      ],
       messages: [{ role: "user", content: "Plan it" }],
       max_tokens: 100,
     };
@@ -171,6 +178,7 @@ describe("model broker", () => {
       "anthropic/claude-opus-4.8",
       {
         ...body,
+        system: "Review the change",
         model: "anthropic/claude-opus-4.8",
         tools: [{ type: "web_search_20250305", name: "web_search" }],
       },
