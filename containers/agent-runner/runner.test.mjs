@@ -96,6 +96,23 @@ describe("V2 agent runner", () => {
     expect(configurationFor("google-generative-ai")).toBe(
       "http://model.roundhouse.internal/v1beta",
     );
+
+    const anthropic = piModelConfiguration(
+      {
+        id: "attempt_1",
+        routing: {
+          provider: "anthropic",
+          model: "anthropic/claude-fable-5",
+          protocol: "anthropic-messages",
+          thinkingLevel: "low",
+          rule: "review-holistic-v1",
+        },
+      },
+      "attempt-capability",
+    );
+    expect(anthropic.providers.anthropic.compat).toEqual({
+      forceAdaptiveThinking: true,
+    });
   });
 
   it("rejects missing and empty native routes before configuring Pi", () => {
