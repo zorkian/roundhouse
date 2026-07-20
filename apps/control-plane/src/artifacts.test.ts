@@ -106,8 +106,8 @@ describe("Artifacts workspace contract", () => {
     let revoked: string | undefined;
     let created = false;
     const repo = {
-      lastPushAt: undefined,
-      source: undefined,
+      lastPushAt: "2026-07-20T00:00:00Z",
+      source: "unexpected-binding-metadata",
       revokeToken: async (token: string) => {
         revoked = token;
         return true;
