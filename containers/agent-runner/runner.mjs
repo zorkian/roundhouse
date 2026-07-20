@@ -97,11 +97,10 @@ async function reportActivity(
   progress,
 ) {
   try {
-    const response = await fetch(
-      activityRequest(assignment, callbackUrl, attemptSecret, progress),
-    );
-    await observeResponse(
-      response,
+    const response = await observeResponse(
+      await fetch(
+        activityRequest(assignment, callbackUrl, attemptSecret, progress),
+      ),
       { api: "control_plane", operation: "report_activity" },
       { write: writeApiResponseLog },
     );
@@ -1027,17 +1026,16 @@ async function completeAssignment(assignment, headers) {
       }
     : undefined;
   await progress("callback_started");
-  const response = await fetch(
-    completionRequest(
-      assignment,
-      checkpoint,
-      callbackUrl,
-      attemptSecret,
-      result,
+  const response = await observeResponse(
+    await fetch(
+      completionRequest(
+        assignment,
+        checkpoint,
+        callbackUrl,
+        attemptSecret,
+        result,
+      ),
     ),
-  );
-  await observeResponse(
-    response,
     { api: "control_plane", operation: "complete_attempt" },
     { write: writeApiResponseLog },
   );
