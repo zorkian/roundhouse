@@ -48,29 +48,29 @@ const defaultRoutes: Readonly<
   Record<string, Pick<ModelRoute, "provider" | "model" | "protocol">>
 > = {
   plan: {
-    provider: "anthropic",
-    model: "anthropic/claude-opus-4.8",
-    protocol: "anthropic-messages",
-  },
-  implement: {
     provider: "openai",
     model: "openai/gpt-5.6-sol",
     protocol: "openai-responses",
   },
+  implement: {
+    provider: "moonshotai",
+    model: "moonshotai/kimi-k3",
+    protocol: "openai-completions",
+  },
   "review-holistic": {
-    provider: "anthropic",
-    model: "anthropic/claude-fable-5",
-    protocol: "anthropic-messages",
+    provider: "openai",
+    model: "openai/gpt-5.6-sol",
+    protocol: "openai-responses",
   },
   "review-security": {
-    provider: "moonshotai",
-    model: "moonshotai/kimi-k3",
-    protocol: "openai-completions",
+    provider: "openai",
+    model: "openai/gpt-5.6-sol",
+    protocol: "openai-responses",
   },
   "review-data": {
-    provider: "moonshotai",
-    model: "moonshotai/kimi-k3",
-    protocol: "openai-completions",
+    provider: "openai",
+    model: "openai/gpt-5.6-sol",
+    protocol: "openai-responses",
   },
 };
 

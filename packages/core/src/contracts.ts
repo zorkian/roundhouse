@@ -138,8 +138,8 @@ export const reviewers = [
   {
     role: "review-holistic",
     label: "Holistic design review",
-    provider: "anthropic",
-    model: "anthropic/claude-fable-5",
+    provider: "openai",
+    model: "openai/gpt-5.6-sol",
     blockingSeverities: ["critical", "high", "medium"],
     prompt:
       "Review the change holistically for design and correctness. Do not perform the specialist reviews. Select which of review-security and review-data should run, and give a rationale for each selection.",
@@ -147,8 +147,8 @@ export const reviewers = [
   {
     role: "review-security",
     label: "Security review",
-    provider: "moonshotai",
-    model: "moonshotai/kimi-k3",
+    provider: "openai",
+    model: "openai/gpt-5.6-sol",
     blockingSeverities: ["critical", "high", "medium"],
     prompt:
       "Perform a focused security review, including authorization, authentication, injection, secrets, trust boundaries, and unsafe input handling.",
@@ -156,8 +156,8 @@ export const reviewers = [
   {
     role: "review-data",
     label: "Data consistency review",
-    provider: "moonshotai",
-    model: "moonshotai/kimi-k3",
+    provider: "openai",
+    model: "openai/gpt-5.6-sol",
     blockingSeverities: ["critical", "high", "medium"],
     prompt:
       "Perform a focused review of data consistency, durability, transactions, schemas, migrations, and backward compatibility.",

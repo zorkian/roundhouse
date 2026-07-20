@@ -17,6 +17,7 @@ function modelRequest(
   protocol: "openai-responses" | "openai-completions" | "anthropic-messages",
   role: string,
   body: Record<string, unknown>,
+  routingEnv: BrokerEnv = env,
 ) {
   const route = resolveRoute(
     {
@@ -24,7 +25,7 @@ function modelRequest(
       taskType: role.startsWith("review") ? "review" : role,
       complexity: "unknown",
     },
-    env,
+    routingEnv,
   );
   const path = {
     "openai-responses": "/v1/responses",
@@ -65,37 +66,37 @@ describe("model broker", () => {
     ],
     [
       "plan",
-      "anthropic",
-      "anthropic/claude-opus-4.8",
-      "anthropic-messages",
+      "openai",
+      "openai/gpt-5.6-sol",
+      "openai-responses",
       "planning-default-v1",
     ],
     [
       "implement",
-      "openai",
-      "openai/gpt-5.6-sol",
-      "openai-responses",
+      "moonshotai",
+      "moonshotai/kimi-k3",
+      "openai-completions",
       "implementation-default-v1",
     ],
     [
       "review-holistic",
-      "anthropic",
-      "anthropic/claude-fable-5",
-      "anthropic-messages",
+      "openai",
+      "openai/gpt-5.6-sol",
+      "openai-responses",
       "review-holistic-v1",
     ],
     [
       "review-security",
-      "moonshotai",
-      "moonshotai/kimi-k3",
-      "openai-completions",
+      "openai",
+      "openai/gpt-5.6-sol",
+      "openai-responses",
       "review-security-v1",
     ],
     [
       "review-data",
-      "moonshotai",
-      "moonshotai/kimi-k3",
-      "openai-completions",
+      "openai",
+      "openai/gpt-5.6-sol",
+      "openai-responses",
       "review-data-v1",
     ],
   ] as const)(
@@ -131,8 +132,8 @@ describe("model broker", () => {
     );
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
-      provider: "anthropic",
-      protocol: "anthropic-messages",
+      provider: "openai",
+      protocol: "openai-responses",
     });
   });
 
@@ -159,6 +160,16 @@ describe("model broker", () => {
   });
 
   it("passes native Anthropic input and adds Anthropic hosted research", async () => {
+    const anthropicEnv = {
+      ...env,
+      ROUTING_ROUTES: JSON.stringify({
+        plan: {
+          provider: "anthropic",
+          model: "anthropic/claude-opus-4.8",
+          protocol: "anthropic-messages",
+        },
+      }),
+    };
     const run = vi.fn(async () => Response.json({ id: "msg_1" }));
     const body = {
       system: [
@@ -171,9 +182,11 @@ describe("model broker", () => {
       messages: [{ role: "user", content: "Plan it" }],
       max_tokens: 100,
     };
-    await brokerRequest(modelRequest("anthropic-messages", "plan", body), env, {
-      run,
-    });
+    await brokerRequest(
+      modelRequest("anthropic-messages", "plan", body, anthropicEnv),
+      anthropicEnv,
+      { run },
+    );
     expect(run).toHaveBeenCalledWith(
       "anthropic/claude-opus-4.8",
       {
@@ -189,7 +202,7 @@ describe("model broker", () => {
   it("removes caller-supplied OpenAI hosted search outside research roles", async () => {
     const run = vi.fn(async () => new Response("event: done\n\n"));
     await brokerRequest(
-      modelRequest("openai-responses", "implement", {
+      modelRequest("openai-responses", "review-holistic", {
         input: "Implement it",
         tools: [
           { type: "function", name: "submit_result" },
@@ -209,14 +222,29 @@ describe("model broker", () => {
   });
 
   it("removes caller-supplied Anthropic hosted search outside research roles", async () => {
+    const anthropicEnv = {
+      ...env,
+      ROUTING_ROUTES: JSON.stringify({
+        "review-holistic": {
+          provider: "anthropic",
+          model: "anthropic/claude-fable-5",
+          protocol: "anthropic-messages",
+        },
+      }),
+    };
     const run = vi.fn(async () => Response.json({ id: "msg_1" }));
     await brokerRequest(
-      modelRequest("anthropic-messages", "review-holistic", {
-        messages: [{ role: "user", content: "Review it" }],
-        max_tokens: 100,
-        tools: [{ type: "web_search_20250305", name: "web_search" }],
-      }),
-      env,
+      modelRequest(
+        "anthropic-messages",
+        "review-holistic",
+        {
+          messages: [{ role: "user", content: "Review it" }],
+          max_tokens: 100,
+          tools: [{ type: "web_search_20250305", name: "web_search" }],
+        },
+        anthropicEnv,
+      ),
+      anthropicEnv,
       { run },
     );
     expect(run).toHaveBeenCalledWith(
@@ -243,7 +271,7 @@ describe("model broker", () => {
       stream_options: { include_usage: true },
     };
     await brokerRequest(
-      modelRequest("openai-completions", "review-security", body),
+      modelRequest("openai-completions", "implement", body),
       env,
       { run },
     );
@@ -276,7 +304,7 @@ describe("model broker", () => {
 
   it("returns the native upstream response and routing headers", async () => {
     const response = await brokerRequest(
-      modelRequest("openai-completions", "review-data", { messages: [] }),
+      modelRequest("openai-responses", "review-data", { input: [] }),
       env,
       { run: vi.fn(async () => Response.json({ id: "chat_1", choices: [] })) },
     );
@@ -286,7 +314,7 @@ describe("model broker", () => {
       choices: [],
     });
     expect(response.headers.get("x-roundhouse-routing-model")).toBe(
-      "moonshotai/kimi-k3",
+      "openai/gpt-5.6-sol",
     );
   });
 
