@@ -89,13 +89,13 @@ describe("model broker", () => {
     ["review-security", "review-security-v1"],
     ["review-data", "review-data-v1"],
   ] as const satisfies readonly (readonly [string, BrokerRoute["rule"]])[])(
-    "routes the %s role to a Responses-compatible independent model",
+    "routes the %s role to the proven Codex-compatible model",
     (role, rule) => {
       const review = request();
       review.headers.set("x-roundhouse-role", role);
       review.headers.set("x-roundhouse-task-type", "review");
       expect(selectRoute(review, env)).toEqual({
-        model: "openai/gpt-5.4",
+        model: "openai/gpt-5.6-sol",
         reasoningEffort: "low",
         rule,
       });
