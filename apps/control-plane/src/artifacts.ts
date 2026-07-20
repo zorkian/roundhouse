@@ -144,9 +144,9 @@ export class CloudflareArtifactsNamespace implements ArtifactsNamespace {
     try {
       const created = await this.artifacts.import({
         // A run is bound to the current default-branch head and does not need
-        // the repository's complete historical object graph. Keeping recent
-        // ancestry avoids exhausting the import service on long-lived repos.
-        source: { url: upstream, branch, depth: 100 },
+        // the repository's historical object graph. The bound base commit and
+        // its tree are the complete baseline needed to create the next commit.
+        source: { url: upstream, branch, depth: 1 },
         target: {
           name,
           opts: { description: "Roundhouse V2 run workspace" },

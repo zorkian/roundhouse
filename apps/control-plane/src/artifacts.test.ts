@@ -125,7 +125,7 @@ describe("Artifacts workspace contract", () => {
       source: {
         url: "https://github.com/example/large-repo.git",
         branch: "main",
-        depth: 100,
+        depth: 1,
       },
     });
   });
