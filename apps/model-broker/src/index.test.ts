@@ -3,7 +3,9 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  adaptRequest,
   brokerRequest,
+  normalizeResponse,
   selectRoute,
   type BrokerEnv,
   type BrokerRoute,
@@ -35,6 +37,7 @@ function request(body: Record<string, unknown> = { model: "untrusted-model" }) {
 describe("model broker", () => {
   it("keeps routing policy behind a semantic envelope", () => {
     expect(selectRoute(request(), env)).toEqual({
+      provider: "openai",
       model: "openai/gpt-5.6-sol",
       reasoningEffort: "low",
       rule: "qualification-default-v1",
@@ -45,6 +48,7 @@ describe("model broker", () => {
     const reproduction = request();
     reproduction.headers.set("x-roundhouse-role", "reproduce");
     expect(selectRoute(reproduction, env)).toEqual({
+      provider: "openai",
       model: "openai/gpt-5.6-sol",
       reasoningEffort: "low",
       rule: "reproduction-default-v1",
@@ -56,7 +60,8 @@ describe("model broker", () => {
     planning.headers.set("x-roundhouse-role", "plan");
     planning.headers.set("x-roundhouse-task-type", "planning");
     expect(selectRoute(planning, env)).toEqual({
-      model: "openai/gpt-5.6-sol",
+      provider: "anthropic",
+      model: "anthropic/claude-opus-4.8",
       reasoningEffort: "low",
       rule: "planning-default-v1",
     });
@@ -67,6 +72,7 @@ describe("model broker", () => {
     implementation.headers.set("x-roundhouse-role", "implement");
     implementation.headers.set("x-roundhouse-task-type", "implementation");
     expect(selectRoute(implementation, env)).toEqual({
+      provider: "openai",
       model: "openai/gpt-5.6-sol",
       reasoningEffort: "low",
       rule: "implementation-default-v1",
@@ -78,6 +84,7 @@ describe("model broker", () => {
     review.headers.set("x-roundhouse-role", "review");
     review.headers.set("x-roundhouse-task-type", "review");
     expect(selectRoute(review, env)).toEqual({
+      provider: "openai",
       model: "openai/gpt-5.6-sol",
       reasoningEffort: "low",
       rule: "review-default-v1",
@@ -85,17 +92,33 @@ describe("model broker", () => {
   });
 
   it.each([
-    ["review-holistic", "review-holistic-v1"],
-    ["review-security", "review-security-v1"],
-    ["review-data", "review-data-v1"],
-  ] as const satisfies readonly (readonly [string, BrokerRoute["rule"]])[])(
+    [
+      "review-holistic",
+      "review-holistic-v1",
+      "anthropic",
+      "anthropic/claude-fable-5",
+    ],
+    [
+      "review-security",
+      "review-security-v1",
+      "moonshotai",
+      "moonshotai/kimi-k3",
+    ],
+    ["review-data", "review-data-v1", "moonshotai", "moonshotai/kimi-k3"],
+  ] as const satisfies readonly (readonly [
+    string,
+    BrokerRoute["rule"],
+    BrokerRoute["provider"],
+    string,
+  ])[])(
     "routes the %s role to the proven Codex-compatible model",
-    (role, rule) => {
+    (role, rule, provider, model) => {
       const review = request();
       review.headers.set("x-roundhouse-role", role);
       review.headers.set("x-roundhouse-task-type", "review");
       expect(selectRoute(review, env)).toEqual({
-        model: "openai/gpt-5.6-sol",
+        provider,
+        model,
         reasoningEffort: "low",
         rule,
       });
@@ -131,6 +154,207 @@ describe("model broker", () => {
     expect(response.headers.get("x-roundhouse-routing-rule")).toBe(
       "qualification-default-v1",
     );
+  });
+
+  it("adapts Responses input to Anthropic Messages", () => {
+    expect(
+      adaptRequest(
+        {
+          instructions: "Be precise.",
+          input: [{ role: "user", content: "Plan this." }],
+          max_output_tokens: 500,
+          tools: [
+            {
+              type: "function",
+              name: "lookup",
+              parameters: { type: "object" },
+            },
+            { type: "web_search" },
+          ],
+        },
+        selectRoute(
+          (() => {
+            const planning = request();
+            planning.headers.set("x-roundhouse-role", "plan");
+            return planning;
+          })(),
+          env,
+        ),
+      ),
+    ).toMatchObject({
+      model: "anthropic/claude-opus-4.8",
+      system: "Be precise.",
+      messages: [{ role: "user", content: "Plan this." }],
+      max_tokens: 500,
+      tools: [
+        { name: "lookup", input_schema: { type: "object" } },
+        { type: "web_search_20250305", name: "web_search" },
+      ],
+    });
+  });
+
+  it("supplies Anthropic's required max_tokens when no limit is requested", () => {
+    const planning = request();
+    planning.headers.set("x-roundhouse-role", "plan");
+    expect(
+      adaptRequest({ input: "Plan this." }, selectRoute(planning, env)),
+    ).toMatchObject({ max_tokens: 8192 });
+  });
+
+  it("requests usage in streamed Moonshot chat responses", () => {
+    const review = request();
+    review.headers.set("x-roundhouse-role", "review-security");
+    expect(
+      adaptRequest(
+        { input: "Review this.", stream: true },
+        selectRoute(review, env),
+      ),
+    ).toMatchObject({
+      stream: true,
+      stream_options: { include_usage: true },
+    });
+  });
+
+  it("normalizes Anthropic messages and usage to a Responses result", async () => {
+    const planning = request();
+    planning.headers.set("x-roundhouse-role", "plan");
+    const response = await normalizeResponse(
+      Response.json({
+        id: "msg_1",
+        model: "claude-opus-4.8",
+        content: [
+          { type: "text", text: "A plan" },
+          { type: "tool_use", id: "tool_1", name: "lookup", input: { q: 1 } },
+        ],
+        stop_reason: "tool_use",
+        usage: {
+          input_tokens: 10,
+          cache_read_input_tokens: 4,
+          cache_creation_input_tokens: 2,
+          output_tokens: 5,
+        },
+      }),
+      selectRoute(planning, env),
+      false,
+    );
+    await expect(response.json()).resolves.toMatchObject({
+      id: "msg_1",
+      status: "completed",
+      completion_reason: "tool_use",
+      output: [
+        {
+          id: "msg_1_message_0",
+          status: "completed",
+          content: [{ type: "output_text", text: "A plan", annotations: [] }],
+        },
+        {
+          id: "tool_1",
+          type: "function_call",
+          status: "completed",
+          call_id: "tool_1",
+          name: "lookup",
+        },
+      ],
+      usage: {
+        input_tokens: 10,
+        input_tokens_details: {
+          cached_tokens: 4,
+          cache_creation_tokens: 2,
+        },
+        output_tokens: 5,
+        total_tokens: 21,
+      },
+    });
+  });
+
+  it("normalizes an Anthropic error event instead of completing partial output", async () => {
+    const planning = request();
+    planning.headers.set("x-roundhouse-role", "plan");
+    const upstream = new Response(
+      [
+        'data: {"type":"message_start","message":{"id":"msg_partial","model":"claude-opus-4.8","usage":{"input_tokens":3}}}',
+        'data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      ].join("\n\n"),
+      { headers: { "content-type": "text/event-stream" } },
+    );
+    const response = await normalizeResponse(
+      upstream,
+      selectRoute(planning, env),
+      false,
+    );
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toMatchObject({
+      error: {
+        type: "model_upstream_error",
+        provider: "anthropic",
+        upstream: { type: "overloaded_error" },
+      },
+    });
+  });
+
+  it("forwards an Anthropic streamed error without a completed event", async () => {
+    const planning = request();
+    planning.headers.set("x-roundhouse-role", "plan");
+    const upstream = new Response(
+      'data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}\n\n',
+      { headers: { "content-type": "text/event-stream" } },
+    );
+    const response = await normalizeResponse(
+      upstream,
+      selectRoute(planning, env),
+      true,
+    );
+    const body = await response.text();
+    expect(body).toContain('"type":"error"');
+    expect(body).not.toContain("response.completed");
+  });
+
+  it("normalizes streamed Moonshot chat output to a Responses event", async () => {
+    const review = request();
+    review.headers.set("x-roundhouse-role", "review-security");
+    const upstream = new Response(
+      [
+        'data: {"id":"chat_1","model":"kimi-k3","choices":[{"delta":{"content":"No "},"finish_reason":null}]}',
+        'data: {"id":"chat_1","model":"kimi-k3","choices":[{"delta":{"content":"issues"},"finish_reason":"stop"}],"usage":{"prompt_tokens":8,"completion_tokens":2,"total_tokens":10}}',
+        "data: [DONE]",
+      ].join("\n\n"),
+      { headers: { "content-type": "text/event-stream" } },
+    );
+    const response = await normalizeResponse(
+      upstream,
+      selectRoute(review, env),
+      true,
+    );
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    const body = await response.text();
+    expect(body).toContain('"type":"response.output_text.delta"');
+    expect(body).toContain('"text":"No issues"');
+  });
+
+  it("normalizes Anthropic refusals as valid response content", async () => {
+    const planning = request();
+    planning.headers.set("x-roundhouse-role", "plan");
+    const response = await normalizeResponse(
+      Response.json({
+        id: "msg_refusal",
+        model: "claude-opus-4.8",
+        content: [{ type: "text", text: "I cannot help with that." }],
+        stop_reason: "refusal",
+        usage: { input_tokens: 3, output_tokens: 5 },
+      }),
+      selectRoute(planning, env),
+      false,
+    );
+    await expect(response.json()).resolves.toMatchObject({
+      status: "completed",
+      output: [
+        {
+          id: "msg_refusal_message_0",
+          status: "completed",
+          content: [{ type: "refusal", refusal: "I cannot help with that." }],
+        },
+      ],
+    });
   });
 
   it("adds hosted web search for a trusted read-stage role", async () => {
