@@ -37,6 +37,7 @@ import {
   GitHubStageReporter,
 } from "./github.js";
 import { observeResponse } from "@roundhouse/response-observer";
+import { aggregatedReview } from "./aggregated-review.js";
 export { ContainerProxy } from "@cloudflare/containers";
 export { RoundhouseAttemptContainer } from "./attempt-container.js";
 
@@ -290,31 +291,7 @@ class ContainerDispatcher implements AttemptDispatcher {
     const reproduction = reproductionAttempt?.result?.reproduction;
     const plan = planAttempt?.result?.plan;
     const implementation = implementationAttempt?.result?.implementation;
-    const review = reviewAttempt
-      ? {
-          status: reviewAttempts.some(
-            (candidate) =>
-              (candidate.result?.review as Record<string, unknown> | undefined)
-                ?.status === "changes_requested",
-          )
-            ? "changes_requested"
-            : "clean",
-          findings: reviewAttempts.flatMap((candidate) => {
-            const result = candidate.result?.review as
-              Record<string, unknown> | undefined;
-            return Array.isArray(result?.findings)
-              ? result.findings.map((finding) => ({
-                  reviewer: candidate.role,
-                  finding,
-                }))
-              : [];
-          }),
-          reviewers: reviewAttempts.map((candidate) => ({
-            role: candidate.role,
-            routing: candidate.routing,
-          })),
-        }
-      : undefined;
+    const review = reviewAttempt ? aggregatedReview(reviewAttempts) : undefined;
     const ci = ciAttempt?.result?.ci;
     const reviewer = reviewerForRole(attempt.role);
     const sameRevisionReviews =
