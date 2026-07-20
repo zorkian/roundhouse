@@ -562,8 +562,15 @@ models:
   planning: { provider: openai, model: ..., effort: medium }
   implementation: { provider: openai, model: ..., effort: medium }
   reviewers:
-    code-quality: { provider: anthropic, model: ..., effort: medium }
+    code-quality: { provider: openai, model: ..., effort: medium }
 ```
+
+The prototype runs Codex over the OpenAI Responses wire protocol, so every
+model selected for a Codex-backed role must support that protocol. Reviewer
+independence currently comes from using a different compatible model family
+than implementation. Supporting Anthropic Messages or another provider-native
+protocol requires a native agent client for that protocol, not a lossy request
+translation layer in the broker.
 
 The resolved policy is snapshotted onto the run. An attempt binds provider,
 model, effort, prompt version, and tool-policy version atomically. Its result

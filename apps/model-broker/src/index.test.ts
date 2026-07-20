@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { brokerRequest, selectRoute, type BrokerEnv } from "./index.js";
+import {
+  brokerRequest,
+  selectRoute,
+  type BrokerEnv,
+  type BrokerRoute,
+} from "./index.js";
 
 const env = {
   AI: {} as Ai,
@@ -78,6 +83,24 @@ describe("model broker", () => {
       rule: "review-default-v1",
     });
   });
+
+  it.each([
+    ["review-holistic", "review-holistic-v1"],
+    ["review-security", "review-security-v1"],
+    ["review-data", "review-data-v1"],
+  ] as const satisfies readonly (readonly [string, BrokerRoute["rule"]])[])(
+    "routes the %s role to a Responses-compatible independent model",
+    (role, rule) => {
+      const review = request();
+      review.headers.set("x-roundhouse-role", role);
+      review.headers.set("x-roundhouse-task-type", "review");
+      expect(selectRoute(review, env)).toEqual({
+        model: "openai/gpt-5.4",
+        reasoningEffort: "low",
+        rule,
+      });
+    },
+  );
 
   it("replaces caller routing and uses a raw ZDR AI Gateway response", async () => {
     const run = vi.fn(async () =>
