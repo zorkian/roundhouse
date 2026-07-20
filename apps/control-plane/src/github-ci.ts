@@ -44,6 +44,31 @@ interface PullRequest extends OpenPullRequest {
   readonly head: { readonly sha: string };
 }
 
+interface PullRequestReview {
+  readonly id: number;
+  readonly user?: { readonly login?: string };
+  readonly state: string;
+  readonly commit_id: string;
+  readonly body?: string | null;
+}
+
+interface PullRequestReviewComment {
+  readonly body: string;
+  readonly path: string;
+  readonly line?: number | null;
+  readonly html_url?: string;
+}
+
+interface CopilotReviewEvidence {
+  readonly status: "pending" | "clean" | "changes_requested";
+  readonly reviewId?: number;
+  readonly commit?: string;
+  readonly summary?: string;
+  readonly findings?: readonly PullRequestReviewComment[];
+}
+
+const copilotReviewer = "copilot-pull-request-reviewer[bot]";
+
 interface CheckSuitePayload {
   readonly action?: string;
   readonly repository?: { readonly full_name?: string };
@@ -108,6 +133,35 @@ async function checkRuns(
     `/repos/${run.repository}/commits/${run.currentHead}/check-runs?filter=latest&per_page=100`,
   );
   return response.total_count > 0 ? response.check_runs : [];
+}
+
+async function copilotReview(
+  github: GitHubAutomationApi,
+  run: RunSnapshot,
+  pull: PullRequest,
+): Promise<CopilotReviewEvidence> {
+  const reviews = await github.get<readonly PullRequestReview[]>(
+    `/repos/${run.repository}/pulls/${pull.number}/reviews?per_page=100`,
+  );
+  const review = [...reviews]
+    .reverse()
+    .find(
+      (candidate) =>
+        candidate.user?.login === copilotReviewer &&
+        candidate.commit_id === run.currentHead &&
+        ["APPROVED", "COMMENTED"].includes(candidate.state),
+    );
+  if (!review) return { status: "pending" };
+  const findings = await github.get<readonly PullRequestReviewComment[]>(
+    `/repos/${run.repository}/pulls/${pull.number}/reviews/${review.id}/comments?per_page=100`,
+  );
+  return {
+    status: findings.length ? "changes_requested" : "clean",
+    reviewId: review.id,
+    commit: review.commit_id,
+    ...(review.body ? { summary: review.body } : {}),
+    ...(findings.length ? { findings } : {}),
+  };
 }
 
 function checksSucceeded(checks: readonly CheckRun[], head: string): boolean {
@@ -198,6 +252,27 @@ export class GitHubCiAutomation {
     await markReady(this.github, pull);
     pull = await pullRequest(this.github, run);
     checks = await checkRuns(this.github, run);
+    if (!pull) return "stale";
+    const externalReview = await copilotReview(this.github, run, pull);
+    if (externalReview.status === "pending") return "pending";
+    if (externalReview.status === "changes_requested")
+      return this.recordCi(
+        run,
+        pull,
+        [
+          ...checks,
+          {
+            name: "Copilot review",
+            status: "completed",
+            conclusion: "failure",
+            head_sha: run.currentHead,
+          },
+        ],
+        "failure",
+        now,
+        "copilot_review",
+        externalReview,
+      );
     const current = await this.repository.get(run.id);
     const currentReview = await aggregateReview(this.repository, run);
     if (
@@ -215,7 +290,15 @@ export class GitHubCiAutomation {
       return "stale";
     if (!checksSucceeded(checks, run.currentHead)) return "pending";
 
-    return this.recordCi(run, pull, checks, "success", now);
+    return this.recordCi(
+      run,
+      pull,
+      checks,
+      "success",
+      now,
+      undefined,
+      externalReview,
+    );
   }
 
   private async recordCi(
@@ -224,7 +307,8 @@ export class GitHubCiAutomation {
     checks: readonly CheckRun[],
     status: "success" | "failure",
     now: number,
-    reason?: "base_conflict",
+    reason?: "base_conflict" | "copilot_review",
+    externalReview?: CopilotReviewEvidence,
   ): Promise<"recorded" | "stale"> {
     const attempt: Attempt = {
       id: immutableAttemptId(run.id, run.revision),
@@ -250,6 +334,7 @@ export class GitHubCiAutomation {
           head: run.currentHead,
           pullRequest: { number: pull.number, html_url: pull.html_url },
           checks: checkEvidence(checks),
+          ...(externalReview ? { copilotReview: externalReview } : {}),
         },
       },
     );
@@ -278,6 +363,8 @@ export class GitHubCiAutomation {
       pull.head.sha !== run.currentHead
     )
       return "stale";
+    if ((await copilotReview(this.github, run, pull)).status !== "clean")
+      return "pending";
     if (
       !pull.merged &&
       (pull.draft || !checksSucceeded(checks, run.currentHead))

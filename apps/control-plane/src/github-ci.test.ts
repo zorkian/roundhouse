@@ -159,6 +159,7 @@ function github(
     readonly status: string;
     readonly conclusion: string | null;
   }[] = [],
+  copilot: "clean" | "pending" | "changes_requested" = "clean",
 ) {
   let draft = true;
   const get = vi.fn(async (path: string) => {
@@ -176,6 +177,29 @@ function github(
         merge_commit_sha: null,
         head: { sha: prHead },
       };
+    if (path.endsWith("/pulls/73/reviews?per_page=100"))
+      return copilot === "pending"
+        ? []
+        : [
+            {
+              id: 900,
+              user: { login: "copilot-pull-request-reviewer[bot]" },
+              state: "COMMENTED",
+              commit_id: prHead,
+              body: "Copilot review summary",
+            },
+          ];
+    if (path.endsWith("/pulls/73/reviews/900/comments?per_page=100"))
+      return copilot === "changes_requested"
+        ? [
+            {
+              body: "Handle this edge case",
+              path: "src/example.ts",
+              line: 10,
+              html_url: "https://github.test/review-comment/1",
+            },
+          ]
+        : [];
     if (path.includes("/check-runs?"))
       return {
         total_count: 1 + additionalChecks.length,
@@ -293,6 +317,48 @@ describe("GitHub exact-head CI and merge", () => {
     await expect(
       repository.getAttempt(`${run.id}_rev_6`),
     ).resolves.toBeUndefined();
+  });
+
+  it("waits for a Copilot review of the exact head", async () => {
+    const { repository, run } = await setupCi();
+    const api = github(head, "success", true, [], "pending");
+
+    await expect(
+      new GitHubCiAutomation(repository, api.api).reconcileCi(run),
+    ).resolves.toBe("pending");
+    expect(api.graphql).toHaveBeenCalled();
+    await expect(
+      repository.getAttempt(`${run.id}_rev_6`),
+    ).resolves.toBeUndefined();
+  });
+
+  it("returns exact-head Copilot findings to implementation", async () => {
+    const { repository, run } = await setupCi();
+    const api = github(head, "success", true, [], "changes_requested");
+
+    await expect(
+      new GitHubCiAutomation(repository, api.api).reconcileCi(run, 100),
+    ).resolves.toBe("recorded");
+    await expect(
+      repository.getAttempt(`${run.id}_rev_6`),
+    ).resolves.toMatchObject({
+      result: {
+        ci: {
+          status: "failure",
+          reason: "copilot_review",
+          copilotReview: {
+            status: "changes_requested",
+            commit: head,
+            findings: [
+              {
+                body: "Handle this edge case",
+                path: "src/example.ts",
+              },
+            ],
+          },
+        },
+      },
+    });
   });
 
   it("does not accept CI for a different pull-request head", async () => {
