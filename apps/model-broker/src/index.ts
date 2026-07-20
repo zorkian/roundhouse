@@ -210,6 +210,27 @@ function applyHostedResearch(
   }
 }
 
+function normalizeNativeRequest(
+  body: Record<string, unknown>,
+  protocol: ModelProtocol,
+): void {
+  if (protocol !== "anthropic-messages" || !Array.isArray(body.system)) return;
+  body.system = body.system
+    .map((block) => {
+      if (typeof block === "string") return block;
+      if (
+        block &&
+        typeof block === "object" &&
+        "text" in block &&
+        typeof block.text === "string"
+      )
+        return block.text;
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 async function resolveRouteRequest(
   request: Request,
   env: BrokerEnv,
@@ -274,6 +295,7 @@ export async function brokerRequest(
     return Response.json({ error: "invalid_json" }, { status: 400 });
   }
   body.model = route.model;
+  normalizeNativeRequest(body, route.protocol);
   applyHostedResearch(
     body,
     route,
