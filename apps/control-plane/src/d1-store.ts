@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import {
+  parseModelRoute,
   resumeRun,
   transitionRun,
   type Attempt,
@@ -115,6 +116,7 @@ const usageFromRow = (row: UsageRow): ModelUsage => ({
 });
 
 function attemptFromRow(row: AttemptRow): Attempt {
+  const routing = parseModelRoute(row.routing_json);
   return {
     id: row.id,
     runId: row.run_id,
@@ -130,11 +132,7 @@ function attemptFromRow(row: AttemptRow): Attempt {
     ...(row.result_json
       ? { result: JSON.parse(row.result_json) as Record<string, unknown> }
       : {}),
-    ...(row.routing_json
-      ? {
-          routing: JSON.parse(row.routing_json) as ModelRoute,
-        }
-      : {}),
+    ...(routing ? { routing } : {}),
   };
 }
 

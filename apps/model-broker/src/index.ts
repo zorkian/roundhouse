@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import {
+  modelThinkingLevels,
   modelProtocols,
   type ModelProtocol,
   type ModelRoute,
@@ -16,7 +17,6 @@ const routeHeaders = {
   rule: "x-roundhouse-routing-rule",
 } as const;
 const researchRoles = new Set(["qualify", "reproduce", "plan"]);
-const thinkingLevels = ["off", "minimal", "low", "medium", "high"] as const;
 
 export type BrokerEnv = Omit<Cloudflare.Env, "ROUTING_ROUTES"> & {
   readonly ROUTING_ROUTES?: string;
@@ -125,7 +125,7 @@ export function resolveRoute(
     !provider ||
     !model ||
     !modelProtocols.includes(protocol) ||
-    !thinkingLevels.includes(thinkingLevel as ModelRoute["thinkingLevel"])
+    !modelThinkingLevels.includes(thinkingLevel as ModelRoute["thinkingLevel"])
   )
     throw new Error("invalid_routing_configuration");
   return {
@@ -149,7 +149,7 @@ function routeFromHeaders(request: Request): ModelRoute {
   if (!modelProtocols.includes(values.protocol as ModelProtocol))
     throw new Error("invalid_route_protocol");
   if (
-    !thinkingLevels.includes(
+    !modelThinkingLevels.includes(
       values.thinkingLevel as ModelRoute["thinkingLevel"],
     )
   )

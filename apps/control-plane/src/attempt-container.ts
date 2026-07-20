@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Container } from "@cloudflare/containers";
-import type { Attempt, ModelRoute, ModelUsage } from "@roundhouse/core";
+import {
+  isModelRoute,
+  type Attempt,
+  type ModelRoute,
+  type ModelUsage,
+} from "@roundhouse/core";
 import { observeResponse } from "@roundhouse/response-observer";
 import { verifyCallback } from "./callback.js";
 import { attemptInactivityMilliseconds } from "./coordinator.js";
@@ -111,7 +116,8 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
   );
   if (!recorded) return new Response("stale_attempt", { status: 409 });
   const route = attempt.routing;
-  if (!route) return new Response("model_route_missing", { status: 409 });
+  if (!isModelRoute(route))
+    return new Response("model_route_missing", { status: 409 });
   const headers = new Headers(request.headers);
   headers.delete("authorization");
   headers.delete("x-api-key");

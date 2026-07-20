@@ -56,12 +56,47 @@ export const modelProtocols = [
 
 export type ModelProtocol = (typeof modelProtocols)[number];
 
+export const modelThinkingLevels = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+] as const;
+
 export interface ModelRoute {
   readonly provider: string;
   readonly model: string;
   readonly protocol: ModelProtocol;
-  readonly thinkingLevel: "off" | "minimal" | "low" | "medium" | "high";
+  readonly thinkingLevel: (typeof modelThinkingLevels)[number];
   readonly rule: string;
+}
+
+export function isModelRoute(value: unknown): value is ModelRoute {
+  if (!value || typeof value !== "object") return false;
+  const route = value as Record<string, unknown>;
+  return (
+    typeof route.provider === "string" &&
+    route.provider.length > 0 &&
+    typeof route.model === "string" &&
+    route.model.length > 0 &&
+    modelProtocols.includes(route.protocol as ModelProtocol) &&
+    modelThinkingLevels.includes(
+      route.thinkingLevel as ModelRoute["thinkingLevel"],
+    ) &&
+    typeof route.rule === "string" &&
+    route.rule.length > 0
+  );
+}
+
+export function parseModelRoute(value: string | null | undefined) {
+  if (!value) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isModelRoute(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export interface ModelUsage {
