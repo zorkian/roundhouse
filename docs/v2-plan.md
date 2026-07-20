@@ -565,11 +565,13 @@ models:
     code-quality: { provider: openai, model: ..., effort: medium }
 ```
 
-The prototype runs Codex over the OpenAI Responses wire protocol, so every
-model selected for a Codex-backed role must support that protocol. Reviewer
-independence currently comes from using a different compatible model family
-than implementation. Supporting Anthropic Messages or another provider-native
-protocol requires a native agent client for that protocol, not a lossy request
+The prototype runs Codex over the OpenAI Responses wire protocol, including
+Codex-specific continuation items such as namespaced tool calls. Every model
+selected for a Codex-backed role must support that complete protocol. The
+current prototype records a temporary reviewer-independence exception and uses
+the proven Codex-compatible implementation model for reviews too. Supporting
+another Responses model, Anthropic Messages, or another provider-native
+protocol requires a native compatible agent client, not a lossy request-history
 translation layer in the broker.
 
 The resolved policy is snapshotted onto the run. An attempt binds provider,
