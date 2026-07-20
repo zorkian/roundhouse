@@ -44,7 +44,6 @@ export { ContainerProxy } from "@cloudflare/containers";
 export { RoundhouseAttemptContainer } from "./attempt-container.js";
 
 export const controlPlaneService = "roundhouse-v2-control-plane";
-const protectedPaths = [".github/workflows"] as const;
 
 function json(value: unknown, status = 200, headers?: HeadersInit): Response {
   return Response.json(value, {
@@ -353,7 +352,7 @@ class ContainerDispatcher implements AttemptDispatcher {
     const assignment = {
       ...attempt,
       baseCommit: attempt.baseCommit,
-      protectedPaths,
+      profile: run.profile,
       issue: run.issue,
       issueNumber: run.issueNumber,
       context:
@@ -441,7 +440,11 @@ class ContainerCheckpointValidator implements CheckpointValidator {
       baseCommit: run.baseCommit,
       inputHead: attempt.expectedHead,
       ref: workspaceRef(run.id),
-      protectedPaths,
+      profile:
+        run.profile ??
+        (() => {
+          throw new Error("run_profile_missing");
+        })(),
     });
     if (attempt.stage !== "implement") {
       try {
@@ -463,7 +466,7 @@ class ContainerCheckpointValidator implements CheckpointValidator {
               body: JSON.stringify({
                 ...attempt,
                 baseCommit: run.baseCommit,
-                protectedPaths,
+                profile: run.profile,
                 checkpoint: input.checkpoint,
                 artifact: {
                   repositoryId: artifact.id,

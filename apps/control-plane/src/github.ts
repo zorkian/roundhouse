@@ -3,6 +3,8 @@
 
 import {
   createRun,
+  parseProfile,
+  profileSourcePath,
   immutableAttemptId,
   type Attempt,
   type RunSnapshot,
@@ -730,12 +732,41 @@ export async function acceptGitHubComment(
   );
   const existing = Boolean(run);
   if (!run) {
-    run = createRun({
+    let profile: Awaited<ReturnType<typeof parseProfile>> | undefined;
+    let profileError: string | undefined;
+    try {
+      const file = await github.get<{
+        content?: string;
+        encoding?: string;
+        name?: string;
+        type?: string;
+      }>(
+        `/repos/${enrolledRepository.repository}/contents/${profileSourcePath}?ref=${encodeURIComponent(commit.sha)}`,
+      );
+      if (
+        file.name !== "profile.yaml" ||
+        file.type !== "file" ||
+        file.encoding !== "base64" ||
+        !file.content
+      )
+        throw new Error("profile_content_missing");
+      const yaml = new TextDecoder().decode(
+        Uint8Array.from(atob(file.content.replaceAll("\n", "")), (value) =>
+          value.charCodeAt(0),
+        ),
+      );
+      profile = await parseProfile(yaml, commit.sha);
+    } catch (error) {
+      profileError = "Repository profile is missing or invalid";
+      console.error("repository_profile_invalid", error);
+    }
+    const created = createRun({
       id,
       repository: enrolledRepository.repository,
       issueNumber,
       baseCommit: commit.sha,
       profileVersion: enrolledRepository.profileVersion,
+      ...(profile ? { profile } : { profileError }),
       issue: {
         title: payload.issue?.title ?? "",
         body: payload.issue?.body ?? "",
@@ -743,6 +774,9 @@ export async function acceptGitHubComment(
         actor,
       },
     });
+    run = profile
+      ? created
+      : { ...created, status: "waiting", waitingReason: "profile_error" };
     await repository.create(run);
   }
   const fresh = await repository.recordGitHubDelivery(id, deliveryId, {
@@ -752,6 +786,7 @@ export async function acceptGitHubComment(
   });
   if (!fresh) return "duplicate";
   if (existing) return "duplicate";
+  if (!run.profile) return "accepted";
   await enqueue({ runId: id, expectedRevision: run.revision });
   return "accepted";
 }

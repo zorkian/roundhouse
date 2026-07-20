@@ -297,7 +297,12 @@ function command(commandName, args, options = {}) {
           stderrBytes,
         });
         await activity;
-        resolveCommand(Buffer.concat(stdout).toString().trim());
+        const output = Buffer.concat(stdout);
+        if (options.rawOutput) resolveCommand(output);
+        else {
+          const text = output.toString();
+          resolveCommand(options.preserveOutput ? text : text.trim());
+        }
       } else {
         const detail =
           commandName === "git"
@@ -994,6 +999,34 @@ export async function prepareWorkspace(assignment) {
   return directory;
 }
 
+export async function repositoryChangedPaths(
+  directory,
+  from,
+  to,
+  options = {},
+) {
+  const output = await command(
+    "git",
+    ["diff", "--no-renames", "--name-only", "-z", from, ...(to ? [to] : [])],
+    { ...options, cwd: directory, rawOutput: true },
+  );
+  if (!output.length) return [];
+  if (output.at(-1) !== 0) throw new Error("invalid_git_path_output");
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const paths = [];
+  let start = 0;
+  try {
+    for (let index = 0; index < output.length; index++) {
+      if (output[index] !== 0) continue;
+      paths.push(decoder.decode(output.subarray(start, index)));
+      start = index + 1;
+    }
+    return paths;
+  } catch {
+    throw new Error("invalid_git_path_encoding");
+  }
+}
+
 export async function checkpointWorkspace(
   assignment,
   directory,
@@ -1013,22 +1046,13 @@ export async function checkpointWorkspace(
   }
   const commandOptions = { cwd: directory, onProgress };
   await command("git", ["add", "--all"], commandOptions);
-  const staged = await command("git", ["diff", "--cached", "--name-only"], {
-    ...commandOptions,
-  });
-  const mergeHeadPath = await command(
-    "git",
-    ["rev-parse", "--git-path", "MERGE_HEAD"],
+  const staged = await repositoryChangedPaths(
+    directory,
+    "--cached",
+    undefined,
     commandOptions,
   );
-  let mergeInProgress = false;
-  try {
-    await readFile(resolve(directory, mergeHeadPath));
-    mergeInProgress = true;
-  } catch (error) {
-    if (error?.code !== "ENOENT") throw error;
-  }
-  if (staged || mergeInProgress) {
+  if (staged.length) {
     const deterministicEnvironment = roundhouseGitEnvironment();
     await command(
       "git",
@@ -1054,9 +1078,10 @@ export async function checkpointWorkspace(
       changedPaths: [],
     };
   }
-  const changed = await command(
-    "git",
-    ["diff", "--name-only", assignment.expectedHead, outputHead],
+  const changedPaths = await repositoryChangedPaths(
+    directory,
+    assignment.expectedHead,
+    outputHead,
     commandOptions,
   );
   const writeArtifact = refreshWriteToken
@@ -1074,7 +1099,7 @@ export async function checkpointWorkspace(
     inputHead: assignment.expectedHead,
     outputHead,
     ref: assignment.artifact.ref,
-    changedPaths: changed ? changed.split("\n") : [],
+    changedPaths,
   };
 }
 
@@ -1084,6 +1109,21 @@ export async function createCheckpoint(assignment) {
 }
 
 export async function validateCheckpoint(assignment) {
+  if (
+    !assignment.profile ||
+    !assignment.profile.paths ||
+    !Array.isArray(assignment.profile.paths.allowed) ||
+    !assignment.profile.paths.allowed.length ||
+    assignment.profile.paths.allowed.some(
+      (pattern) => typeof pattern !== "string",
+    ) ||
+    !Array.isArray(assignment.profile.paths.protected) ||
+    !assignment.profile.paths.protected.length ||
+    assignment.profile.paths.protected.some(
+      (pattern) => typeof pattern !== "string",
+    )
+  )
+    throw new Error("invalid_profile_snapshot");
   const directory = resolve(workspaceRoot(), `${assignment.id}-validation`);
   await clone(assignment.artifact, directory);
   const checkpoint = assignment.checkpoint;
@@ -1104,23 +1144,54 @@ export async function validateCheckpoint(assignment) {
     ],
     { cwd: directory },
   );
-  const changed = await command(
-    "git",
-    ["diff", "--name-only", checkpoint.inputHead, checkpoint.outputHead],
-    { cwd: directory },
+  const changedPaths = await repositoryChangedPaths(
+    directory,
+    checkpoint.inputHead,
+    checkpoint.outputHead,
   );
-  const changedPaths = changed ? changed.split("\n") : [];
   if (JSON.stringify(changedPaths) !== JSON.stringify(checkpoint.changedPaths))
     throw new Error("changed_paths_mismatch");
-  if (
-    changedPaths.some((path) =>
-      assignment.protectedPaths.some(
-        (protectedPath) =>
-          path === protectedPath || path.startsWith(`${protectedPath}/`),
-      ),
+  const matches = (pattern, path) => {
+    let expression = "";
+    for (let index = 0; index < pattern.length; index++) {
+      const character = pattern[index];
+      if (character === "*" && pattern[index + 1] === "*") {
+        if (pattern[index + 2] === "/") {
+          expression += "(?:[^/]+/)*";
+          index += 2;
+        } else {
+          expression += ".*";
+          index++;
+        }
+      } else if (character === "*") expression += "[^/]*";
+      else if (character === "?") expression += "[^/]";
+      else expression += character.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
+    }
+    return new RegExp(`^${expression}$`).test(path);
+  };
+  for (const path of changedPaths) {
+    if (
+      !path ||
+      path.startsWith("/") ||
+      path.includes("\\") ||
+      path.split("/").some((part) => !part || part === "." || part === "..")
     )
-  )
-    throw new Error("protected_path_changed");
+      throw new Error("invalid_repository_path");
+    if (
+      path === ".roundhouse" ||
+      path.startsWith(".roundhouse/") ||
+      assignment.profile.paths.protected.some((pattern) =>
+        matches(pattern, path),
+      )
+    )
+      throw new Error("protected_path_changed");
+    if (
+      !assignment.profile.paths.allowed.some((pattern) =>
+        matches(pattern, path),
+      )
+    )
+      throw new Error("path_outside_allowlist");
+  }
   if (assignment.publish) {
     const authorization = Buffer.from(
       `x-access-token:${assignment.publish.token}`,

@@ -223,6 +223,16 @@ export async function coordinate(
     run.status !== "active"
   )
     return "stale";
+  // Runs persisted before repository profiles were introduced must not be
+  // dispatched under an unknown policy.
+  if (!run.profile) {
+    await repository.transition(run.id, run.revision, {
+      status: "waiting",
+      stage: run.stage,
+      waitingReason: "profile_error",
+    });
+    return "stale";
+  }
   if (run.stage === "review") {
     const current = await repository.attemptsForRevision(run.id, run.revision);
     const holisticRole = "review-holistic" as const;

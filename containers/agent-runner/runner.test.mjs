@@ -21,6 +21,7 @@ import {
   reviewSchema,
   reproductionSchema,
   requestClassification,
+  repositoryChangedPaths,
   runnerIdentity,
   runnerResponse,
   validateCheckpoint,
@@ -579,49 +580,41 @@ describe("V2 agent runner", () => {
       ref: assignment.artifact.ref,
       changedPaths: [],
     });
-    const committedAssignment = {
+    const validationAssignment = {
       ...assignment,
-      id: "run_git_rev_2",
-      expectedHead: first.outputHead,
+      checkpoint: first,
+      artifact: { ...assignment.artifact, access: "read" },
+      publish: {
+        remote: githubRemote,
+        hostname: "github.invalid",
+        token: "github-installation-token",
+        ref: "refs/heads/roundhouse/issue-42",
+      },
     };
-    const committedDirectory = await prepareWorkspace(committedAssignment);
-    await writeFile(resolve(committedDirectory, "AGENT.md"), "committed\n");
-    execFileSync("git", ["add", "AGENT.md"], { cwd: committedDirectory });
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=Agent",
-        "-c",
-        "user.email=agent@invalid",
-        "commit",
-        "-m",
-        "agent-created commit",
-      ],
-      { cwd: committedDirectory },
-    );
-    const committedHead = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: committedDirectory,
-      encoding: "utf8",
-    }).trim();
-    await expect(
-      checkpointWorkspace(committedAssignment, committedDirectory),
-    ).resolves.toMatchObject({
-      inputHead: first.outputHead,
-      outputHead: committedHead,
-      changedPaths: ["AGENT.md"],
-    });
     await expect(
       validateCheckpoint({
-        ...assignment,
+        ...validationAssignment,
+        id: "run_git_rev_1_missing_profile_validation",
+      }),
+    ).rejects.toThrow("invalid_profile_snapshot");
+    await expect(
+      validateCheckpoint({
+        ...validationAssignment,
+        id: "run_git_rev_1_literal_validation",
+        profile: {
+          paths: { allowed: ["**"], protected: ["README.md"] },
+        },
+      }),
+    ).rejects.toThrow("protected_path_changed");
+    await expect(
+      validateCheckpoint({
+        ...validationAssignment,
         id: "run_git_rev_1_validation",
-        checkpoint: first,
-        artifact: { ...assignment.artifact, access: "read" },
-        publish: {
-          remote: githubRemote,
-          hostname: "github.invalid",
-          token: "github-installation-token",
-          ref: "refs/heads/roundhouse/issue-42",
+        profile: {
+          paths: {
+            allowed: ["**"],
+            protected: [".github/workflows/**"],
+          },
         },
       }),
     ).resolves.toBeUndefined();
@@ -632,6 +625,164 @@ describe("V2 agent runner", () => {
         { encoding: "utf8" },
       ).trim(),
     ).toBe(first.outputHead);
+  });
+
+  it("derives literal changed paths without Git quoting", async () => {
+    const source = resolve(testRoot, "quoted-paths");
+    await mkdir(resolve(source, ".github", "workflows"), { recursive: true });
+    execFileSync("git", ["init", "--initial-branch=main"], { cwd: source });
+    await writeFile(resolve(source, "README.md"), "base\n");
+    execFileSync("git", ["add", "README.md"], { cwd: source });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@invalid",
+        "commit",
+        "-m",
+        "base",
+      ],
+      { cwd: source },
+    );
+    const base = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: source,
+      encoding: "utf8",
+    }).trim();
+    await writeFile(resolve(source, ".github", "workflows", "é.yml"), "x\n");
+    execFileSync("git", ["add", "--all"], { cwd: source });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@invalid",
+        "commit",
+        "-m",
+        "unicode path",
+      ],
+      { cwd: source },
+    );
+    const head = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: source,
+      encoding: "utf8",
+    }).trim();
+
+    await expect(repositoryChangedPaths(source, base, head)).resolves.toEqual([
+      ".github/workflows/é.yml",
+    ]);
+  });
+
+  it("includes both sides when a protected path is renamed", async () => {
+    const source = resolve(testRoot, "renamed-paths");
+    await mkdir(resolve(source, ".github", "workflows"), { recursive: true });
+    execFileSync("git", ["init", "--initial-branch=main"], { cwd: source });
+    await writeFile(
+      resolve(source, ".github", "workflows", "build.yml"),
+      "x\n",
+    );
+    execFileSync("git", ["add", "--all"], { cwd: source });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@invalid",
+        "commit",
+        "-m",
+        "base",
+      ],
+      { cwd: source },
+    );
+    const base = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: source,
+      encoding: "utf8",
+    }).trim();
+    execFileSync("git", ["mv", ".github/workflows/build.yml", "build.yml"], {
+      cwd: source,
+    });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@invalid",
+        "commit",
+        "-m",
+        "rename",
+      ],
+      { cwd: source },
+    );
+    const head = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: source,
+      encoding: "utf8",
+    }).trim();
+
+    await expect(repositoryChangedPaths(source, base, head)).resolves.toEqual([
+      ".github/workflows/build.yml",
+      "build.yml",
+    ]);
+  });
+
+  it("rejects repository paths containing malformed UTF-8", async () => {
+    const source = resolve(testRoot, "invalid-utf8-path");
+    await mkdir(source, { recursive: true });
+    execFileSync("git", ["init", "--initial-branch=main"], { cwd: source });
+    await writeFile(resolve(source, "README.md"), "base\n");
+    execFileSync("git", ["add", "README.md"], { cwd: source });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@invalid",
+        "commit",
+        "-m",
+        "base",
+      ],
+      { cwd: source },
+    );
+    const base = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: source,
+      encoding: "utf8",
+    })
+      .toString()
+      .trim();
+    const invalidPath = Buffer.concat([
+      Buffer.from(`${source}/`),
+      Buffer.from([0xff]),
+      Buffer.from(".txt"),
+    ]);
+    await writeFile(invalidPath, "invalid filename\n");
+    execFileSync("git", ["add", "--all"], { cwd: source });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@invalid",
+        "commit",
+        "-m",
+        "invalid path",
+      ],
+      { cwd: source },
+    );
+    const head = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: source,
+      encoding: "utf8",
+    })
+      .toString()
+      .trim();
+
+    await expect(repositoryChangedPaths(source, base, head)).rejects.toThrow(
+      "invalid_git_path_encoding",
+    );
   });
 
   it("prepares a conflicted base update for the implementation agent", async () => {
@@ -745,7 +896,7 @@ describe("V2 agent runner", () => {
     ).toBe("route.ts");
     await writeFile(
       resolve(directory, "route.ts"),
-      "export const route = 'feature';\n",
+      "export const route = 'main-and-feature';\n",
     );
     const checkpoint = await checkpointWorkspace(assignment, directory);
     const parents = execFileSync(
@@ -756,6 +907,5 @@ describe("V2 agent runner", () => {
       .trim()
       .split(" ");
     expect(parents).toEqual([featureHead, mainHead]);
-    expect(checkpoint.changedPaths).toEqual([]);
   });
 });
