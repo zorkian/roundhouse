@@ -1478,11 +1478,12 @@ export function createRunnerServer() {
               reply.end();
             },
             (error) => {
+              const detail = error?.message ?? String(error);
               runnerLog("error", "runner_bootstrap_failed", {
-                error: error?.message ?? String(error),
+                error: detail,
               });
               reply.writeHead(422, jsonHeaders);
-              reply.end(JSON.stringify({ error: "bootstrap_failed" }));
+              reply.end(JSON.stringify({ error: "bootstrap_failed", detail }));
             },
           ),
         );
