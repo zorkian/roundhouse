@@ -35,8 +35,9 @@ import { acceptGitHubCheckSuite, GitHubCiAutomation } from "./github-ci.js";
 import {
   acceptGitHubComment,
   acceptGitHubIssueClosed,
-  GitHubClient,
+  githubClientForRun,
   GitHubStageReporter,
+  type GitHubEnv,
 } from "./github.js";
 import { observeResponse } from "@roundhouse/response-observer";
 import { aggregatedReview } from "./aggregated-review.js";
@@ -196,7 +197,6 @@ type RuntimeEnv = Cloudflare.Env & {
   DB: D1Like;
   CALLBACK_SIGNING_SECRET: string;
   GITHUB_APP_ID: string;
-  GITHUB_APP_INSTALLATION_ID: string;
   ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY: string;
   ROUNDHOUSE_GITHUB_WEBHOOK_SECRET: string;
 };
@@ -425,7 +425,7 @@ class ContainerCheckpointValidator implements CheckpointValidator {
     private readonly containers: AttemptNamespace,
     private readonly artifacts: CloudflareArtifactsNamespace,
     private readonly repository: D1RunRepository,
-    private readonly github: GitHubClient,
+    private readonly githubEnv: GitHubEnv,
   ) {}
 
   async validate(input: AttemptCallback): Promise<void> {
@@ -481,7 +481,10 @@ class ContainerCheckpointValidator implements CheckpointValidator {
                 publish: {
                   remote: `https://github.com/${run.repository}.git`,
                   hostname: "github.com",
-                  token: await this.github.installationToken(),
+                  token: await githubClientForRun(
+                    this.githubEnv,
+                    run,
+                  ).installationToken(),
                   ref: `refs/heads/${githubBranch(run.issueNumber)}`,
                 },
               }),
@@ -683,7 +686,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
           env.ATTEMPT_CONTAINERS,
           artifacts,
           repository,
-          new GitHubClient(env),
+          env,
         ),
         input,
       );
@@ -717,12 +720,13 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       repository,
       env.MODEL_BROKER,
     );
-    const github = new GitHubClient(env);
-    const automation = new GitHubCiAutomation(repository, github);
-    const reporter = new GitHubStageReporter(github, env.PUBLIC_ORIGIN);
     for (const message of batch.messages) {
       try {
         const run = await repository.get(message.body.runId);
+        if (!run) throw new Error("run_not_found");
+        const github = githubClientForRun(env, run);
+        const automation = new GitHubCiAutomation(repository, github);
+        const reporter = new GitHubStageReporter(github, env.PUBLIC_ORIGIN);
         if (run?.status === "active" && run.stage === "ci")
           await automation.reconcileCi(run);
         if (run?.status === "active" && run.stage === "merge")

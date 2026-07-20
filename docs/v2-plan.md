@@ -164,7 +164,12 @@ budget, or material scope boundary requires replanning or approval.
 ## 3. Operating boundary
 
 The first V2 release supports explicitly enrolled public GitHub repositories
-with reviewed repository profiles.
+with reviewed repository profiles. For the prototype, installing the
+Roundhouse GitHub App and committing a valid `.roundhouse/profile.yaml` is the
+complete enrollment action. The signed webhook supplies the repository and
+installation identity; the control plane snapshots both in D1 and mints
+short-lived credentials only for that installation. Adding another repository
+does not require a Roundhouse source or Worker-configuration change.
 
 In scope:
 
@@ -752,7 +757,13 @@ stops the merge.
 ## 8. Repository profile
 
 Enrollment points Roundhouse to one reviewed, versioned profile in the target
-repository. The initial schema contains only:
+repository. The current prototype schema is deliberately limited to version 1
+path policy: `paths.allowed` and `paths.protected`. Either list may be empty;
+an empty allowed list permits no source changes, while an empty protected list
+adds no repository-specific protected paths. Roundhouse always protects the
+`.roundhouse` profile directory itself.
+
+Later observed needs may extend the profile with:
 
 - repository identity and default branch;
 - authorized actor roles;

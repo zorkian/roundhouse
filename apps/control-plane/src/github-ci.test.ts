@@ -22,7 +22,6 @@ const head = "b".repeat(40);
 const mergeCommit = "c".repeat(40);
 const env = {
   GITHUB_APP_ID: "development-app",
-  GITHUB_APP_INSTALLATION_ID: "development-installation",
   GITHUB_START_COMMAND: "/roundhouse-dev start",
   ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY: "not-used-by-fake",
   ROUNDHOUSE_GITHUB_WEBHOOK_SECRET: "webhook-secret",
@@ -51,8 +50,10 @@ async function setupCi(
   const repository = new AutomationRepository();
   await repository.create(
     createRun({
-      id: "run_zorkian_roundhouse_issue_42",
+      id: "run_123_issue_42",
       repository: "zorkian/roundhouse",
+      githubRepositoryId: 123,
+      githubInstallationId: 456,
       issueNumber: 42,
       baseCommit: "a".repeat(40),
       profileVersion: "v2",
@@ -66,7 +67,7 @@ async function setupCi(
     }),
   );
   for (const stage of ["reproduce", "plan", "implement", "review"] as const) {
-    const run = await repository.get("run_zorkian_roundhouse_issue_42");
+    const run = await repository.get("run_123_issue_42");
     if (!run) throw new Error("run_missing");
     await repository.transition(run.id, run.revision, {
       status: "active",
@@ -74,7 +75,7 @@ async function setupCi(
       ...(stage === "review" ? { acceptedHead: head } : {}),
     });
   }
-  const reviewRun = await repository.get("run_zorkian_roundhouse_issue_42");
+  const reviewRun = await repository.get("run_123_issue_42");
   if (!reviewRun) throw new Error("run_missing");
   const review: Attempt = {
     id: `${reviewRun.id}_rev_${reviewRun.revision}`,
@@ -392,7 +393,8 @@ describe("GitHub exact-head CI and merge", () => {
     const wakeups: Wakeup[] = [];
     const body = JSON.stringify({
       action: "completed",
-      repository: { full_name: "zorkian/roundhouse" },
+      repository: { id: 123, full_name: "zorkian/roundhouse" },
+      installation: { id: 456 },
       check_suite: {
         head_branch: "roundhouse/issue-42",
         head_sha: head,

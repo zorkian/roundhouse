@@ -59,14 +59,8 @@ export interface GitHubAutomationApi extends GitHubApi {
   ): Promise<T>;
 }
 
-export const enrolledRepository = Object.freeze({
-  repository: "zorkian/roundhouse",
-  profileVersion: "roundhouse-v2-development-1",
-});
-
 export interface GitHubEnv {
   readonly GITHUB_APP_ID: string;
-  readonly GITHUB_APP_INSTALLATION_ID: string;
   readonly GITHUB_START_COMMAND: string;
   readonly ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY: string;
   readonly ROUNDHOUSE_GITHUB_WEBHOOK_SECRET: string;
@@ -74,7 +68,8 @@ export interface GitHubEnv {
 
 interface CommentPayload {
   readonly action?: string;
-  readonly repository?: { readonly full_name?: string };
+  readonly repository?: { readonly id?: number; readonly full_name?: string };
+  readonly installation?: { readonly id?: number };
   readonly sender?: { readonly login?: string; readonly type?: string };
   readonly issue?: {
     readonly number?: number;
@@ -87,7 +82,8 @@ interface CommentPayload {
 
 interface IssuePayload {
   readonly action?: string;
-  readonly repository?: { readonly full_name?: string };
+  readonly repository?: { readonly id?: number; readonly full_name?: string };
+  readonly installation?: { readonly id?: number };
   readonly sender?: { readonly login?: string };
   readonly issue?: { readonly number?: number };
 }
@@ -143,9 +139,13 @@ export class GitHubClient {
 
   constructor(
     private readonly env: GitHubEnv,
+    private readonly installationId: number,
     private readonly send: typeof fetch = (input, init) =>
       globalThis.fetch(input, init),
-  ) {}
+  ) {
+    if (!Number.isSafeInteger(installationId) || installationId < 1)
+      throw new Error("github_installation_id_missing");
+  }
 
   async installationToken(): Promise<string> {
     this.token ??= this.mintInstallationToken();
@@ -155,7 +155,7 @@ export class GitHubClient {
   private async mintInstallationToken(): Promise<string> {
     const response = await observeResponse(
       await this.send(
-        `https://api.github.com/app/installations/${this.env.GITHUB_APP_INSTALLATION_ID}/access_tokens`,
+        `https://api.github.com/app/installations/${this.installationId}/access_tokens`,
         {
           method: "POST",
           headers: {
@@ -639,8 +639,17 @@ export class GitHubStageReporter implements AttemptReporter {
   }
 }
 
-function runId(issueNumber: number): string {
-  return `run_zorkian_roundhouse_issue_${issueNumber}`;
+function runId(repositoryId: number, issueNumber: number): string {
+  return `run_${repositoryId}_issue_${issueNumber}`;
+}
+
+export function githubClientForRun(
+  env: GitHubEnv,
+  run: Pick<RunSnapshot, "githubInstallationId">,
+): GitHubClient {
+  if (!run.githubInstallationId)
+    throw new Error("run_github_installation_missing");
+  return new GitHubClient(env, run.githubInstallationId);
 }
 
 export async function verifyGitHubWebhook(
@@ -657,7 +666,7 @@ export async function acceptGitHubComment(
   env: GitHubEnv,
   repository: GitHubIntakeRepository,
   enqueue: (wakeup: Wakeup) => Promise<void>,
-  github: GitHubApi = new GitHubClient(env),
+  github?: GitHubApi,
 ): Promise<"accepted" | "duplicate" | "ignored" | "unauthorized"> {
   const deliveryId = request.headers.get("x-github-delivery");
   const event = request.headers.get("x-github-event");
@@ -673,17 +682,29 @@ export async function acceptGitHubComment(
   )
     return "unauthorized";
   const payload = JSON.parse(raw) as CommentPayload;
+  const repositoryName = payload.repository?.full_name;
+  const repositoryId = payload.repository?.id;
+  const installationId = payload.installation?.id;
   if (
     payload.action !== "created" ||
-    payload.repository?.full_name !== enrolledRepository.repository
+    !repositoryName ||
+    !repositoryId ||
+    !installationId
   )
     return "ignored";
+  const api = github ?? new GitHubClient(env, installationId);
   const actor = payload.sender?.login;
   const issueNumber = payload.issue?.number;
   const comment = payload.comment?.body;
   if (!actor || !issueNumber || !comment) return "ignored";
-  const id = runId(issueNumber);
+  const id = runId(repositoryId, issueNumber);
   let run = await repository.get(id);
+  if (
+    run &&
+    (run.repository !== repositoryName ||
+      run.githubInstallationId !== installationId)
+  )
+    return "ignored";
   if (comment.trim() !== env.GITHUB_START_COMMAND) {
     if (
       payload.sender?.type === "Bot" ||
@@ -719,29 +740,29 @@ export async function acceptGitHubComment(
     await enqueue({ runId: id, expectedRevision: run.revision });
     return "accepted";
   }
-  const permission = await github.get<{ permission?: string }>(
-    `/repos/${enrolledRepository.repository}/collaborators/${encodeURIComponent(actor)}/permission`,
+  const permission = await api.get<{ permission?: string }>(
+    `/repos/${repositoryName}/collaborators/${encodeURIComponent(actor)}/permission`,
   );
   if (!new Set(["admin", "maintain", "write"]).has(permission.permission ?? ""))
     return "unauthorized";
-  const repo = await github.get<{ default_branch: string }>(
-    `/repos/${enrolledRepository.repository}`,
+  const repo = await api.get<{ default_branch: string }>(
+    `/repos/${repositoryName}`,
   );
-  const commit = await github.get<{ sha: string }>(
-    `/repos/${enrolledRepository.repository}/commits/${encodeURIComponent(repo.default_branch)}`,
+  const commit = await api.get<{ sha: string }>(
+    `/repos/${repositoryName}/commits/${encodeURIComponent(repo.default_branch)}`,
   );
   const existing = Boolean(run);
   if (!run) {
     let profile: Awaited<ReturnType<typeof parseProfile>> | undefined;
     let profileError: string | undefined;
     try {
-      const file = await github.get<{
+      const file = await api.get<{
         content?: string;
         encoding?: string;
         name?: string;
         type?: string;
       }>(
-        `/repos/${enrolledRepository.repository}/contents/${profileSourcePath}?ref=${encodeURIComponent(commit.sha)}`,
+        `/repos/${repositoryName}/contents/${profileSourcePath}?ref=${encodeURIComponent(commit.sha)}`,
       );
       if (
         file.name !== "profile.yaml" ||
@@ -762,10 +783,12 @@ export async function acceptGitHubComment(
     }
     const created = createRun({
       id,
-      repository: enrolledRepository.repository,
+      repository: repositoryName,
+      githubRepositoryId: repositoryId,
+      githubInstallationId: installationId,
       issueNumber,
       baseCommit: commit.sha,
-      profileVersion: enrolledRepository.profileVersion,
+      profileVersion: profile?.hash ?? commit.sha,
       ...(profile ? { profile } : { profileError }),
       issue: {
         title: payload.issue?.title ?? "",
@@ -820,15 +843,24 @@ export async function acceptGitHubIssueClosed(
     return { outcome: "unauthorized" };
   const payload = JSON.parse(raw) as IssuePayload;
   const issueNumber = payload.issue?.number;
+  const repositoryName = payload.repository?.full_name;
+  const repositoryId = payload.repository?.id;
   if (
     (payload.action !== "closed" && payload.action !== "reopened") ||
-    payload.repository?.full_name !== enrolledRepository.repository ||
+    !repositoryName ||
+    !repositoryId ||
+    !payload.installation?.id ||
     !issueNumber
   )
     return { outcome: "ignored" };
-  const id = runId(issueNumber);
+  const id = runId(repositoryId, issueNumber);
   const run = await repository.get(id);
-  if (!run) return { outcome: "ignored" };
+  if (
+    !run ||
+    run.repository !== repositoryName ||
+    run.githubInstallationId !== payload.installation.id
+  )
+    return { outcome: "ignored" };
   const fresh = await repository.recordGitHubDelivery(id, deliveryId, {
     event,
     actor: payload.sender?.login ?? "",
