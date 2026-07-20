@@ -115,6 +115,80 @@ function usageDisplay(items: RunDetails["usage"]): string {
   return `<span class="usage-hint" tabindex="0" aria-label="${escapeHtml(`${formatUsage(usage)}. ${breakdown}`)}">${escapeHtml(formatUsage(usage))}<span class="usage-breakdown" aria-hidden="true">${escapeHtml(breakdown)}</span></span>`;
 }
 
+function executionDisplay(
+  details: RunDetails,
+  attempt: RunDetails["attempts"][number],
+): string {
+  const starts = (details.events ?? [])
+    .filter(
+      (event) =>
+        event.attemptId === attempt.id &&
+        event.kind === "attempt_progress" &&
+        event.payload.phase === "workspace_started",
+    )
+    .sort((left, right) => left.createdAt - right.createdAt);
+  if (!starts.length) return "";
+  const expiries = (details.events ?? [])
+    .filter(
+      (event) =>
+        event.attemptId === attempt.id &&
+        event.kind === "attempt_lease_expired",
+    )
+    .sort((left, right) => left.createdAt - right.createdAt);
+  const usage = details.usage ?? [];
+  const episodes = starts.map((start, index) => {
+    const nextStart = starts[index + 1]?.createdAt;
+    const expiry = expiries.find(
+      (event) =>
+        event.createdAt >= start.createdAt &&
+        (nextStart === undefined || event.createdAt < nextStart),
+    );
+    const active =
+      !expiry &&
+      index === starts.length - 1 &&
+      details.run.status === "active" &&
+      attempt.state !== "completed" &&
+      attempt.state !== "failed";
+    const end =
+      expiry?.createdAt ??
+      (active ? undefined : (nextStart ?? attempt.updatedAt));
+    // Calls finishing while an interrupted workspace is being torn down still
+    // belong to that execution, up until the replacement workspace starts.
+    const usageEnd = expiry ? (nextStart ?? attempt.updatedAt) : end;
+    const episodeUsage = usage.filter(
+      (item) =>
+        item.attemptId === attempt.id &&
+        item.createdAt !== undefined &&
+        item.createdAt >= start.createdAt &&
+        (usageEnd === undefined ||
+          item.createdAt < usageEnd ||
+          (expiry !== undefined &&
+            nextStart === undefined &&
+            item.createdAt === usageEnd)),
+    );
+    const finalOutcome =
+      attempt.state === "failed"
+        ? "Failed"
+        : details.run.status === "cancelled"
+          ? "Cancelled"
+          : "Completed";
+    const outcome = expiry
+      ? "Interrupted"
+      : active
+        ? index > 0
+          ? "Restarted · In progress"
+          : "In progress"
+        : index > 0
+          ? `Restarted · ${finalOutcome}`
+          : finalOutcome;
+    const models =
+      [...new Set(episodeUsage.map((item) => item.model))].join(", ") ||
+      "Model unavailable";
+    return `<li class="execution"><h5>Execution ${index + 1}</h5><dl><dt>Started</dt><dd>${escapeHtml(timestamp(start.createdAt))}</dd><dt>${active ? "State" : "Ended"}</dt><dd>${active ? "Active" : escapeHtml(timestamp(end))}</dd><dt>Elapsed</dt><dd>${escapeHtml(elapsed(start.createdAt, active ? attempt.updatedAt : end))}</dd><dt>Outcome</dt><dd>${escapeHtml(outcome)}</dd><dt>Model calls</dt><dd>${episodeUsage.length}</dd><dt>Usage</dt><dd>${usageDisplay(episodeUsage)}</dd><dt>Models</dt><dd>${escapeHtml(models)}</dd></dl></li>`;
+  });
+  return `<h4>Executions</h4><ol class="executions">${episodes.join("")}</ol>`;
+}
+
 export function renderRunDetails(details: RunDetails): string {
   const { run, attempts } = details;
   const issueTitle = run.issue?.title?.trim() || `Issue #${run.issueNumber}`;
@@ -152,7 +226,7 @@ export function renderRunDetails(details: RunDetails): string {
         attempt,
       ) => `<details><summary><span><span class="label">Revision</span>${escapeHtml(attempt.runRevision ?? "Unavailable")}</span><span class="phase">${escapeHtml(stageLabel(attempt.stage))}</span><span><span class="label">Started</span>${escapeHtml(timestamp(attempt.createdAt))}</span><span><span class="label">Elapsed</span>${escapeHtml(elapsed(attempt.createdAt, attempt.updatedAt))}</span><span><span class="label">Status</span>${escapeHtml(attempt.state)}</span></summary><div class="attempt-details">
 <dl><dt>Role</dt><dd>${escapeHtml(attempt.role ?? "Unavailable")}</dd><dt>Revision</dt><dd>${escapeHtml(attempt.runRevision ?? "Unavailable")}</dd><dt>Updated</dt><dd>${escapeHtml(timestamp(attempt.updatedAt))}</dd><dt>Base commit</dt><dd><code>${escapeHtml(attempt.baseCommit ?? "Unavailable")}</code></dd><dt>Expected head</dt><dd><code>${escapeHtml(attempt.expectedHead ?? "Unavailable")}</code></dd><dt>Accepted head</dt><dd><code>${escapeHtml(attempt.acceptedHead ?? "Unavailable")}</code></dd></dl>
-<h4>Model usage</h4>${usageTable(usage.filter((item) => item.attemptId === attempt.id))}<h4>Model routing</h4>${value(attempt.routing)}<h4>Result</h4>${attemptResult(attempt)}${attemptLinks(attempt)}</div></details>`,
+${executionDisplay(details, attempt)}<h4>Model usage total</h4><p>${usageDisplay(usage.filter((item) => item.attemptId === attempt.id))}</p>${usageTable(usage.filter((item) => item.attemptId === attempt.id))}<h4>Model routing</h4>${value(attempt.routing)}<h4>Result</h4>${attemptResult(attempt)}${attemptLinks(attempt)}</div></details>`,
     )
     .join("");
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(issueTitle)}</title><style>body{font:16px system-ui;line-height:1.5;max-width:1000px;margin:2rem auto;padding:0 1rem;color:#202124}h1,h2{line-height:1.2}section{border-top:1px solid #ddd;padding:1rem 0}details{border-top:1px solid #ddd}summary{cursor:pointer;display:grid;grid-template-columns:.6fr 1.2fr 2fr 1fr 1fr;gap:1rem;padding:1rem;align-items:center}summary:hover{background:#f6f8fa}.phase{font-weight:700}.label{display:block;color:#666;font-size:.75rem;text-transform:uppercase}.attempt-details{padding:0 1rem 1rem 2rem;border-left:3px solid #ddd;margin-left:1rem}dl{display:grid;grid-template-columns:10rem 1fr;gap:.35rem 1rem}dt{font-weight:600}dd{margin:0;overflow-wrap:anywhere}table{border-collapse:collapse;width:100%}th,td{text-align:left;border-bottom:1px solid #ddd;padding:.4rem}pre{background:#f6f8fa;padding:1rem;overflow:auto;white-space:pre-wrap}.muted{color:#666}code{overflow-wrap:anywhere}.status{display:inline-block;border-radius:999px;padding:.15rem .55rem;font-weight:700}.status.active{background:#e6f0ff;color:#175cd3}.status.waiting{background:#fff4d6;color:#8a5b00}.status.succeeded{background:#e8f7ee;color:#087443}.status.failed{background:#fee9e7;color:#b42318}.status.cancelled{background:#eef1f5;color:#344054}.usage-hint{border-bottom:1px dotted currentColor;cursor:help;display:inline-block;position:relative}.usage-breakdown{background:#202124;border-radius:.25rem;bottom:calc(100% + .35rem);color:#fff;font-size:.875rem;left:0;opacity:0;padding:.4rem .6rem;pointer-events:none;position:absolute;visibility:hidden;white-space:nowrap;z-index:1}.usage-hint:hover .usage-breakdown,.usage-hint:focus .usage-breakdown{opacity:1;visibility:visible}@media(max-width:700px){summary{grid-template-columns:1fr 1fr}.phase{grid-column:auto}}</style></head><body>

@@ -34,29 +34,65 @@ describe("run details", () => {
             created_at: 10,
             updated_at: 20,
           }),
-          all: async () => ({
-            meta: {},
-            results: [
-              {
-                id: "first",
-                run_id: "current-run",
-                run_revision: 1,
-                kind: "agent",
-                stage: "qualify",
-                role: "qualifier",
-                state: "completed",
-                deadline_at: 9,
-                base_commit: "base",
-                expected_head: "base",
-                accepted_head: null,
-                result_json: '{"qualification":{"summary":"ok"}}',
-                routing_json:
-                  '{"provider":"openai","model":"model-a","protocol":"openai-responses","thinkingLevel":"low","rule":"qualification-default-v1"}',
-                created_at: 11,
-                updated_at: 12,
-              },
-            ],
-          }),
+          all: async () => {
+            if (sql.includes("FROM model_usage"))
+              return {
+                meta: {},
+                results: [
+                  {
+                    call_id: "call-1",
+                    attempt_id: "first",
+                    model: "model-a",
+                    provider: "openai",
+                    configured_model: "model-a",
+                    routing_rule: "qualification-default-v1",
+                    input_tokens: null,
+                    cached_input_tokens: null,
+                    cache_creation_input_tokens: null,
+                    reasoning_tokens: null,
+                    output_tokens: null,
+                    total_tokens: 10,
+                    cost_usd: null,
+                    created_at: 15,
+                  },
+                ],
+              };
+            if (sql.includes("FROM events"))
+              return {
+                meta: {},
+                results: [
+                  {
+                    attempt_id: "first",
+                    kind: "attempt_progress",
+                    payload_json: '{"phase":"workspace_started"}',
+                    created_at: 13,
+                  },
+                ],
+              };
+            return {
+              meta: {},
+              results: [
+                {
+                  id: "first",
+                  run_id: "current-run",
+                  run_revision: 1,
+                  kind: "agent",
+                  stage: "qualify",
+                  role: "qualifier",
+                  state: "completed",
+                  deadline_at: 9,
+                  base_commit: "base",
+                  expected_head: "base",
+                  accepted_head: null,
+                  result_json: '{"qualification":{"summary":"ok"}}',
+                  routing_json:
+                    '{"provider":"openai","model":"model-a","protocol":"openai-responses","thinkingLevel":"low","rule":"qualification-default-v1"}',
+                  created_at: 11,
+                  updated_at: 12,
+                },
+              ],
+            };
+          },
           run: async () => ({ meta: {} }),
         };
         return statement as unknown as ReturnType<D1Like["prepare"]>;
@@ -87,7 +123,18 @@ describe("run details", () => {
           },
         },
       ],
+      usage: [{ callId: "call-1", createdAt: 15 }],
+      events: [
+        {
+          attemptId: "first",
+          kind: "attempt_progress",
+          payload: { phase: "workspace_started" },
+          createdAt: 13,
+        },
+      ],
     });
+    expect(calls[2]?.sql).toContain("u.created_at");
+    expect(calls[3]?.sql).toContain("ORDER BY created_at,id");
   });
 
   it("renders summary and expandable attempt details without duplicate sections", () => {
@@ -426,6 +473,204 @@ describe("run details", () => {
     expect(html).toContain("$0.03");
     expect(html).not.toContain("<h2>Usage by workflow step</h2>");
   });
+
+  it("shows recovered executions with separate outcomes and usage", () => {
+    const html = renderRunDetails({
+      run: {
+        schemaVersion: 2,
+        id: "run_recovered",
+        repository: "zorkian/roundhouse",
+        issueNumber: 336,
+        baseCommit: "base",
+        currentHead: "head",
+        profileVersion: "test",
+        status: "succeeded",
+        stage: "implement",
+        revision: 13,
+      },
+      createdAt: 1_000,
+      updatedAt: 9_000,
+      attempts: [
+        {
+          id: "implementation",
+          runId: "run_recovered",
+          runRevision: 13,
+          kind: "agent",
+          stage: "implement",
+          role: "developer",
+          state: "completed",
+          deadlineAt: 10_000,
+          baseCommit: "base",
+          expectedHead: "base",
+          createdAt: 1_000,
+          updatedAt: 9_000,
+        },
+      ],
+      events: [
+        {
+          attemptId: "implementation",
+          kind: "attempt_progress",
+          payload: { phase: "workspace_started" },
+          createdAt: 2_000,
+        },
+        {
+          attemptId: "implementation",
+          kind: "attempt_lease_expired",
+          payload: {},
+          createdAt: 4_000,
+        },
+        {
+          attemptId: "implementation",
+          kind: "attempt_progress",
+          payload: { phase: "workspace_started" },
+          createdAt: 5_000,
+        },
+      ],
+      usage: [
+        {
+          callId: "before",
+          attemptId: "implementation",
+          model: "model-a",
+          totalTokens: 100,
+          costUsd: 0.01,
+          createdAt: 3_000,
+        },
+        {
+          callId: "during-teardown",
+          attemptId: "implementation",
+          model: "model-a",
+          totalTokens: 50,
+          costUsd: 0.005,
+          createdAt: 4_500,
+        },
+        {
+          callId: "after-1",
+          attemptId: "implementation",
+          model: "model-b",
+          totalTokens: 200,
+          costUsd: 0.02,
+          createdAt: 6_000,
+        },
+        {
+          callId: "after-2",
+          attemptId: "implementation",
+          model: "model-b",
+          totalTokens: 300,
+          costUsd: 0.03,
+          createdAt: 7_000,
+        },
+      ],
+    });
+
+    expect(html.match(/class="execution"/g)).toHaveLength(2);
+    expect(html).toContain("Interrupted");
+    expect(html).toContain("Restarted · Completed");
+    expect(html).toContain("2s");
+    expect(html).toContain("4s");
+    expect(html.match(/<dt>Model calls<\/dt><dd>2<\/dd>/g)).toHaveLength(2);
+    expect(html).toContain("150 tokens · $0.01");
+    expect(html).toContain("500 tokens · $0.05");
+    expect(html).toContain("650 tokens · $0.07");
+    expect(html).toContain("<h4>Model usage total</h4>");
+  });
+
+  it("marks a recovered final execution active", () => {
+    const html = renderRunDetails({
+      run: {
+        schemaVersion: 2,
+        id: "active",
+        repository: "zorkian/roundhouse",
+        issueNumber: 336,
+        baseCommit: "base",
+        currentHead: "base",
+        profileVersion: "test",
+        status: "active",
+        stage: "implement",
+        revision: 1,
+      },
+      createdAt: 1,
+      updatedAt: 5,
+      attempts: [
+        {
+          id: "attempt",
+          runId: "active",
+          runRevision: 1,
+          kind: "agent",
+          stage: "implement",
+          role: "developer",
+          state: "dispatched",
+          deadlineAt: 10,
+          baseCommit: "base",
+          expectedHead: "base",
+          createdAt: 1,
+          updatedAt: 5,
+        },
+      ],
+      events: [
+        {
+          attemptId: "attempt",
+          kind: "attempt_progress",
+          payload: { phase: "workspace_started" },
+          createdAt: 2,
+        },
+      ],
+    });
+    expect(html).toContain("In progress");
+    expect(html).toContain("<dt>State</dt><dd>Active</dd>");
+    expect(html).toContain("<dt>Elapsed</dt><dd>3 ms</dd>");
+  });
+
+  it.each([
+    ["failed", "active", "Failed"],
+    ["dispatched", "cancelled", "Cancelled"],
+  ] as const)(
+    "shows a %s execution on a %s run as %s rather than active or completed",
+    (attemptState, runStatus, outcome) => {
+      const html = renderRunDetails({
+        run: {
+          schemaVersion: 2,
+          id: "terminal",
+          repository: "zorkian/roundhouse",
+          issueNumber: 336,
+          baseCommit: "base",
+          currentHead: "base",
+          profileVersion: "test",
+          status: runStatus,
+          stage: "implement",
+          revision: 1,
+        },
+        createdAt: 1,
+        updatedAt: 5,
+        attempts: [
+          {
+            id: "attempt",
+            runId: "terminal",
+            runRevision: 1,
+            kind: "agent",
+            stage: "implement",
+            role: "developer",
+            state: attemptState,
+            deadlineAt: 10,
+            baseCommit: "base",
+            expectedHead: "base",
+            createdAt: 1,
+            updatedAt: 5,
+          },
+        ],
+        events: [
+          {
+            attemptId: "attempt",
+            kind: "attempt_progress",
+            payload: { phase: "workspace_started" },
+            createdAt: 2,
+          },
+        ],
+      });
+
+      expect(html).toContain(`<dt>Outcome</dt><dd>${outcome}</dd>`);
+      expect(html).not.toContain("<dt>State</dt><dd>Active</dd>");
+    },
+  );
 
   it("identifies missing optional evidence", () => {
     const html = renderRunDetails({
