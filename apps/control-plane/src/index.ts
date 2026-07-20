@@ -723,22 +723,10 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
     for (const message of batch.messages) {
       try {
         const run = await repository.get(message.body.runId);
-        if (run?.status === "active" && run.stage === "ci") {
-          const outcome = await automation.reconcileCi(run);
-          if (outcome === "pending") {
-            await env.RUN_WAKEUPS.send(message.body, { delaySeconds: 60 });
-            message.ack();
-            continue;
-          }
-        }
-        if (run?.status === "active" && run.stage === "merge") {
-          const outcome = await automation.merge(run);
-          if (outcome === "pending") {
-            await env.RUN_WAKEUPS.send(message.body, { delaySeconds: 60 });
-            message.ack();
-            continue;
-          }
-        }
+        if (run?.status === "active" && run.stage === "ci")
+          await automation.reconcileCi(run);
+        if (run?.status === "active" && run.stage === "merge")
+          await automation.merge(run);
         await coordinate(
           repository,
           dispatcher,
