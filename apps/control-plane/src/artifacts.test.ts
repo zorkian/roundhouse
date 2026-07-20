@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 import {
   artifactIdentity,
+  CloudflareArtifactsNamespace,
   validateCheckpointIdentity,
   validateReadOnlyCheckpoint,
   type ArtifactAccess,
@@ -98,6 +99,37 @@ class FakeArtifacts implements ArtifactsNamespace {
 }
 
 describe("Artifacts workspace contract", () => {
+  it("imports only the recent history needed by a run", async () => {
+    let imported: Parameters<Artifacts["import"]>[0] | undefined;
+    let created = false;
+    const repo = {
+      revokeToken: async () => true,
+    } as unknown as ArtifactsRepo;
+    const binding = {
+      get: async () => {
+        if (!created)
+          throw Object.assign(new Error("missing"), { code: "NOT_FOUND" });
+        return repo;
+      },
+      import: async (input: Parameters<Artifacts["import"]>[0]) => {
+        imported = input;
+        created = true;
+        return { token: "bootstrap" };
+      },
+    } as unknown as Artifacts;
+    await new CloudflareArtifactsNamespace(binding, {
+      namespace: "development",
+      remoteOrigin: "https://account.artifacts.cloudflare.net",
+    }).importBase("run_1", "https://github.com/example/large-repo.git");
+    expect(imported).toMatchObject({
+      source: {
+        url: "https://github.com/example/large-repo.git",
+        branch: "main",
+        depth: 100,
+      },
+    });
+  });
+
   it("derives one stable repository identity from its configured namespace", () => {
     expect(
       artifactIdentity("run_1", {
