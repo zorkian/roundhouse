@@ -566,8 +566,14 @@ export function piModelConfiguration(assignment, attemptSecret) {
         ...(route.provider === "moonshotai"
           ? {
               compat: {
+                supportsStore: false,
                 supportsDeveloperRole: false,
                 supportsReasoningEffort: false,
+                maxTokensField: "max_tokens",
+                supportsStrictMode: false,
+                thinkingFormat: "deepseek",
+                requiresReasoningContentOnAssistantMessages: true,
+                deferredToolsMode: "kimi",
               },
             }
           : route.protocol === "anthropic-messages"
@@ -579,8 +585,9 @@ export function piModelConfiguration(assignment, attemptSecret) {
             name: route.model,
             reasoning: route.thinkingLevel !== "off",
             input: ["text"],
-            contextWindow: 200_000,
-            maxTokens: 64_000,
+            contextWindow:
+              route.model === "moonshotai/kimi-k3" ? 1_048_576 : 200_000,
+            maxTokens: route.model === "moonshotai/kimi-k3" ? 131_072 : 64_000,
             cost: {
               input: 0,
               output: 0,

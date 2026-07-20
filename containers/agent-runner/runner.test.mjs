@@ -63,10 +63,23 @@ describe("V2 agent runner", () => {
         "x-roundhouse-attempt-capability": "attempt-capability",
       },
       compat: {
+        supportsStore: false,
         supportsDeveloperRole: false,
         supportsReasoningEffort: false,
+        maxTokensField: "max_tokens",
+        supportsStrictMode: false,
+        thinkingFormat: "deepseek",
+        requiresReasoningContentOnAssistantMessages: true,
+        deferredToolsMode: "kimi",
       },
-      models: [{ id: "moonshotai/kimi-k3", reasoning: true }],
+      models: [
+        {
+          id: "moonshotai/kimi-k3",
+          reasoning: true,
+          contextWindow: 1_048_576,
+          maxTokens: 131_072,
+        },
+      ],
     });
   });
 

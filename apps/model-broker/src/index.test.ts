@@ -73,9 +73,9 @@ describe("model broker", () => {
     ],
     [
       "implement",
-      "openai",
-      "openai/gpt-5.6-sol",
-      "openai-responses",
+      "moonshotai",
+      "moonshotai/kimi-k3",
+      "openai-completions",
       "implementation-default-v1",
     ],
     [
