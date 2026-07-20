@@ -79,6 +79,18 @@ describe("model broker", () => {
     });
   });
 
+  it.each(["review-holistic", "review-security", "review-data"])(
+    "routes the %s role to a Responses-compatible independent model",
+    (role) => {
+      const review = request();
+      review.headers.set("x-roundhouse-role", role);
+      review.headers.set("x-roundhouse-task-type", "review");
+      expect(selectRoute(review, env)).toEqual(
+        expect.objectContaining({ model: "openai/gpt-5.4" }),
+      );
+    },
+  );
+
   it("replaces caller routing and uses a raw ZDR AI Gateway response", async () => {
     const run = vi.fn(async () =>
       Promise.resolve(
