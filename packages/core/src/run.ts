@@ -46,6 +46,7 @@ export interface RunSnapshot {
   readonly repository: string;
   readonly githubRepositoryId?: number;
   readonly githubInstallationId?: number;
+  readonly githubDefaultBranch?: string;
   readonly issueNumber: number;
   readonly baseCommit: string;
   readonly currentHead: string;
@@ -78,6 +79,7 @@ export interface CreateRunInput {
   readonly repository: string;
   readonly githubRepositoryId?: number;
   readonly githubInstallationId?: number;
+  readonly githubDefaultBranch?: string;
   readonly issueNumber: number;
   readonly baseCommit: string;
   readonly profileVersion: string;
@@ -111,6 +113,11 @@ function assertCreateInput(input: CreateRunInput): void {
     if (value !== undefined && (!Number.isSafeInteger(value) || value < 1))
       throw new Error("invalid_github_identity");
   }
+  if (
+    input.githubDefaultBranch !== undefined &&
+    !/^[A-Za-z0-9._\/-]+$/.test(input.githubDefaultBranch)
+  )
+    throw new Error("invalid_github_default_branch");
   if (!Number.isInteger(input.issueNumber) || input.issueNumber < 1)
     throw new Error("invalid_issue_number");
   if (!/^[a-f0-9]{40}$/.test(input.baseCommit))

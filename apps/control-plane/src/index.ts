@@ -267,20 +267,62 @@ class ContainerDispatcher implements AttemptDispatcher {
             ? "review"
             : "validation";
     const route = await this.resolveModelRoute(attempt, taskType);
-    const repository = await this.artifacts.importBase(
+    const repository = await this.artifacts.ensure(
       workspaceName(attempt.runId),
-      `https://github.com/${run.repository}.git`,
     );
     // Recovery invalidates every token from an interrupted container before a
     // replacement receives a fresh, short-lived credential.
     await repository.revokeActiveTokens();
-    const access = attempt.stage === "implement" ? "write" : "read";
-    const token = await repository.createToken(access, 30 * 60);
     const id = this.containers.idFromName(attempt.id);
     const attemptSecret = await signCallback(
       this.callbackSigningSecret,
       attempt.id,
     );
+    if (repository.empty) {
+      const bootstrapToken = await repository.createToken("write", 30 * 60);
+      try {
+        const response = await observeResponse(
+          await this.containers.get(id).fetch(
+            new Request("https://attempt.invalid/bootstrap", {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                "x-roundhouse-attempt-secret": attemptSecret,
+              },
+              body: JSON.stringify({
+                ...attempt,
+                artifact: {
+                  repositoryId: repository.id,
+                  repository: repository.name,
+                  remote: repository.remote,
+                  hostname: repository.hostname,
+                  tokenId: bootstrapToken.id,
+                  token: bootstrapToken.plaintext,
+                  access: bootstrapToken.access,
+                },
+                source: {
+                  remote: `https://github.com/${run.repository}.git`,
+                  hostname: "github.com",
+                  branch: run.githubDefaultBranch ?? "main",
+                  head: run.baseCommit,
+                },
+              }),
+            }),
+          ),
+          {
+            api: "attempt_container",
+            operation: "bootstrap",
+            attemptId: attempt.id,
+          },
+        );
+        if (response.status !== 204)
+          throw new Error("container_bootstrap_failed");
+      } finally {
+        await repository.revokeToken(bootstrapToken.id);
+      }
+    }
+    const access = attempt.stage === "implement" ? "write" : "read";
+    const token = await repository.createToken(access, 30 * 60);
     const qualificationAttempt = [
       "reproduce",
       "plan",

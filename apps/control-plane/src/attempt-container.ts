@@ -19,6 +19,7 @@ interface AttemptAssignment extends Attempt {
     readonly hostname: string;
   };
   readonly issue?: unknown;
+  readonly source?: { readonly hostname: string };
   readonly publish?: { readonly hostname: string };
   readonly upstream?: { readonly hostname: string };
 }
@@ -53,7 +54,10 @@ async function recordModelEvent(
 }
 
 export function attemptAllowedHosts(
-  attempt: Pick<AttemptAssignment, "artifact" | "publish" | "upstream">,
+  attempt: Pick<
+    AttemptAssignment,
+    "artifact" | "publish" | "source" | "upstream"
+  >,
   callbackUrl?: string | null,
 ): string[] {
   return [
@@ -61,6 +65,7 @@ export function attemptAllowedHosts(
     packageRegistryHost,
     attempt.artifact.hostname,
     attempt.publish?.hostname ?? "",
+    attempt.source?.hostname ?? "",
     attempt.upstream?.hostname ?? "",
     callbackUrl ? new URL(callbackUrl).hostname : "",
   ].filter(Boolean);
@@ -410,7 +415,7 @@ export class RoundhouseAttemptContainer extends Container<Cloudflare.Env> {
         attemptId: attempt.id,
       },
     );
-    if (path === "/validate") return response;
+    if (path === "/bootstrap" || path === "/validate") return response;
     return response.ok
       ? Response.json(
           { accepted: true, attemptId: attempt.id },

@@ -9,6 +9,7 @@ import {
   activityRequest,
   agentRuntime,
   artifactWriteTokenRequest,
+  bootstrapWorkspace,
   completionRequest,
   checkpointWorkspace,
   implementationPrompt,
@@ -361,6 +362,74 @@ describe("V2 agent runner", () => {
         duplicate: true,
       }),
     });
+  });
+
+  it("accepts a source bootstrap only with an exact HTTPS contract", () => {
+    const bootstrap = {
+      id: "attempt_bootstrap",
+      deadlineAt: Date.now() + 60_000,
+      artifact: {
+        remote: "https://artifacts.invalid/run.git",
+        hostname: "artifacts.invalid",
+        tokenId: "token-id",
+        token: "secret-token",
+        access: "write",
+      },
+      source: {
+        remote: "https://github.com/example/repo.git",
+        hostname: "github.com",
+        branch: "main",
+        head: "a".repeat(40),
+      },
+    };
+    expect(runnerResponse("POST", "/bootstrap", bootstrap)).toMatchObject({
+      status: 202,
+    });
+    expect(
+      runnerResponse("POST", "/bootstrap", {
+        ...bootstrap,
+        source: { ...bootstrap.source, hostname: "elsewhere.invalid" },
+      }),
+    ).toMatchObject({ status: 400 });
+  });
+
+  it("shallow-clones the exact source head into an empty artifact", async () => {
+    process.env.ROUNDHOUSE_WORKSPACE_ROOT = resolve(testRoot, "bootstrap");
+    const source = resolve(testRoot, "bootstrap-source");
+    const artifact = resolve(testRoot, "bootstrap-artifact.git");
+    await mkdir(source, { recursive: true });
+    execFileSync("git", ["init", "--initial-branch=main"], { cwd: source });
+    await writeFile(resolve(source, "README.md"), "baseline\n");
+    execFileSync("git", ["add", "README.md"], { cwd: source });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@invalid",
+        "commit",
+        "-m",
+        "baseline",
+      ],
+      { cwd: source },
+    );
+    const head = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: source,
+      encoding: "utf8",
+    }).trim();
+    execFileSync("git", ["init", "--bare", "--initial-branch=main", artifact]);
+    await bootstrapWorkspace({
+      id: "attempt_bootstrap_git",
+      artifact: { remote: artifact, token: "artifact-token" },
+      source: { remote: source, branch: "main", head },
+    });
+    expect(
+      execFileSync("git", ["rev-parse", "refs/heads/main"], {
+        cwd: artifact,
+        encoding: "utf8",
+      }).trim(),
+    ).toBe(head);
   });
 
   it("builds an attempt-bound asynchronous completion callback", async () => {

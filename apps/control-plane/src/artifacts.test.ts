@@ -42,6 +42,7 @@ class FakeRepo implements ArtifactRepository {
   readonly id: string;
   readonly remote: string;
   readonly hostname: string;
+  readonly empty = false;
   readonly tokens = new Map<string, ArtifactAccess>();
   head: string;
   constructor(
@@ -83,7 +84,7 @@ class FakeRepo implements ArtifactRepository {
 
 class FakeArtifacts implements ArtifactsNamespace {
   readonly repos = new Map<string, FakeRepo>();
-  async importBase(name: string, _upstream: string) {
+  async ensure(name: string) {
     const existing = this.repos.get(name);
     if (existing) return existing;
     const repo = new FakeRepo(name, "a".repeat(40));
@@ -99,11 +100,17 @@ class FakeArtifacts implements ArtifactsNamespace {
 }
 
 describe("Artifacts workspace contract", () => {
-  it("imports only the recent history needed by a run", async () => {
-    let imported: Parameters<Artifacts["import"]>[0] | undefined;
+  it("creates an empty workspace and revokes its initial secret", async () => {
+    let createInput:
+      { name: string; opts?: Parameters<Artifacts["create"]>[1] } | undefined;
+    let revoked: string | undefined;
     let created = false;
     const repo = {
-      revokeToken: async () => true,
+      lastPushAt: null,
+      revokeToken: async (token: string) => {
+        revoked = token;
+        return true;
+      },
     } as unknown as ArtifactsRepo;
     const binding = {
       get: async () => {
@@ -111,23 +118,28 @@ describe("Artifacts workspace contract", () => {
           throw Object.assign(new Error("missing"), { code: "NOT_FOUND" });
         return repo;
       },
-      import: async (input: Parameters<Artifacts["import"]>[0]) => {
-        imported = input;
+      create: async (
+        name: string,
+        opts?: Parameters<Artifacts["create"]>[1],
+      ) => {
+        createInput = { name, opts };
         created = true;
         return { token: "bootstrap" };
       },
     } as unknown as Artifacts;
-    await new CloudflareArtifactsNamespace(binding, {
+    const workspace = await new CloudflareArtifactsNamespace(binding, {
       namespace: "development",
       remoteOrigin: "https://account.artifacts.cloudflare.net",
-    }).importBase("run_1", "https://github.com/example/large-repo.git");
-    expect(imported).toMatchObject({
-      source: {
-        url: "https://github.com/example/large-repo.git",
-        branch: "main",
-        depth: 1,
+    }).ensure("run_1");
+    expect(createInput).toEqual({
+      name: "run_1",
+      opts: {
+        description: "Roundhouse V2 run workspace",
+        setDefaultBranch: "main",
       },
     });
+    expect(revoked).toBe("bootstrap");
+    expect(workspace.empty).toBe(true);
   });
 
   it("derives one stable repository identity from its configured namespace", () => {
@@ -149,10 +161,7 @@ describe("Artifacts workspace contract", () => {
     const artifacts = new FakeArtifacts();
     const base = "a".repeat(40),
       head = "b".repeat(40);
-    const repo = await artifacts.importBase(
-      "v2-run-opaque",
-      "https://github.invalid/repo",
-    );
+    const repo = await artifacts.ensure("v2-run-opaque");
     const writer = await repo.createToken("write", 300);
     const reviewer = await repo.createToken("read", 300);
     expect(repo.hostname).toBe("artifacts.invalid");
@@ -204,7 +213,7 @@ describe("Artifacts workspace contract", () => {
         },
       ),
     ).toThrow("protected_path_changed");
-    expect(await artifacts.importBase(repo.name, "ignored")).toBe(repo);
+    expect(await artifacts.ensure(repo.name)).toBe(repo);
     await repo.revokeToken(writer.id);
     await repo.revokeToken(reviewer.id);
     expect((repo as FakeRepo).tokens.size).toBe(0);
