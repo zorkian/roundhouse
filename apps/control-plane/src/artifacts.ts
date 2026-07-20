@@ -86,13 +86,15 @@ class CloudflareArtifactRepository implements ArtifactRepository {
     private readonly repository: ArtifactsRepo,
     name: string,
     location: ArtifactLocation,
+    empty?: boolean,
   ) {
     const identity = artifactIdentity(name, location);
     this.id = identity.id;
     this.name = identity.name;
     this.remote = identity.remote;
     this.hostname = identity.hostname;
-    this.empty = repository.source == null && repository.lastPushAt == null;
+    this.empty =
+      empty ?? (repository.source == null && repository.lastPushAt == null);
   }
 
   async createToken(access: ArtifactAccess, ttlSeconds: number) {
@@ -149,7 +151,12 @@ export class CloudflareArtifactsNamespace implements ArtifactsNamespace {
       // dispatch issues its own short-lived, purpose-specific token instead.
       const repository = await this.ready(name);
       await repository.revokeToken(created.token);
-      return new CloudflareArtifactRepository(repository, name, this.location);
+      return new CloudflareArtifactRepository(
+        repository,
+        name,
+        this.location,
+        true,
+      );
     } catch (error) {
       console.error(
         JSON.stringify({
