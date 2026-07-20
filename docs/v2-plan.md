@@ -289,13 +289,15 @@ GitHub webhook/comment/check
           +------> Artifacts (one durable Git repo per run)
           |
           +------> agent Container (one stage attempt)
+          |       - embedded Pi coding agent
           |               |
           |               v
           |       trusted outbound handler
           |               |
           |               v
           |       private model-broker Worker
-          |       - task/complexity routing
+          |       - role/task routing
+          |       - native provider protocol
           |       - AI Gateway binding
           |               |
           |               v
@@ -320,26 +322,33 @@ docs/v2-plan.md           this document
 The precise folders may change once, during transition, if the resulting
 boundary is smaller. They must not proliferate into one package per stage.
 
-The agent calls a virtual model hostname with a dummy bearer credential and an
-attempt-bound capability. Cloudflare Container outbound interception verifies
-that capability and the live D1 attempt, enforces the request budget, replaces
-container-supplied routing metadata, and forwards through a private
+Before dispatch, the control plane asks the broker to resolve a semantic role
+and task envelope, records the resulting provider, model, native protocol,
+thinking level, and rule on the attempt, and includes that immutable route in
+the assignment. Pi calls a virtual model hostname with a dummy credential and
+an attempt-bound capability. Cloudflare Container outbound interception
+verifies that capability and the live D1 attempt, replaces container-supplied
+routing metadata with the recorded route, and forwards through a private
 [service binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/).
 The broker uses a Workers AI binding to call third-party models through
 [AI Gateway Unified Billing](https://developers.cloudflare.com/ai-gateway/features/unified-billing/).
 Cloudflare supplies provider authentication; Roundhouse stores neither a
-vendor API key nor a model-subscription token. The broker requests raw
-Responses output so it can stream the protocol unchanged, disables Gateway
-request logging and caching per request, and requires ZDR for supported
+vendor API key nor a model-subscription token. The broker passes Pi's native
+OpenAI Responses, OpenAI Chat Completions, Anthropic Messages, or Google
+Generative AI request through without translating conversation history, and
+returns the provider-native response unchanged. It disables Gateway request
+logging and caching per request and requires ZDR for supported
 providers. The named environment gateway must also have logging disabled, ZDR
 enabled, and a spend limit before the live model path is deployed. The initial
-rule selects one model and effort; later rules may select by semantic role,
-task type, and complexity without changing the runner or lifecycle schema.
-For read-only analysis stages, Codex may request provider-hosted web search
-through this same Responses API path. The broker attaches that tool for trusted
+rule selects a provider, model, native protocol, and thinking level; later rules
+may select by semantic role, task type, and complexity without changing the
+runner or lifecycle schema.
+For read-only analysis stages, the broker attaches the provider's hosted web
+search tool for trusted
 qualification, current-behavior, and planning roles and removes it for other
-roles, so the boundary does not depend on client behavior. The result records
-the public sources actually used. Implementation and review do not receive the
+roles, so the boundary does not depend on client behavior. Pi consumes the
+provider's final answer through the same native stream. The result records the
+public sources actually used. Implementation and review do not receive the
 search capability. Container internet access remains
 disabled; only explicit Artifacts, package-registry, callback, and intercepted
 model hosts are allowed.
@@ -534,17 +543,17 @@ human summary.
 
 The runner may not publish to GitHub or decide the next workflow stage.
 
-The Cloudflare Container is the agent sandbox. Codex runs with its inner
-`danger-full-access` mode because nested bubblewrap namespaces are unavailable
-inside the Container runtime. That mode grants no host or control-plane access:
-the process remains non-root in a disposable Container, internet access is
-disabled, outbound requests are intercepted and allowlisted, and qualification
-and other read-only stages receive only a read-scoped Artifacts credential. A
-read-only attempt may change its disposable checkout, but it cannot push a
-durable checkpoint; the control plane accepts only the unchanged, independently
+The Cloudflare Container is the agent sandbox. Pi runs directly inside it with
+the tools appropriate to the stage rather than trying to create a nested Linux
+sandbox. Pi does not load repository-provided extensions, skills, or agent
+instructions. The process remains non-root in a disposable Container, internet
+access is disabled, outbound requests are intercepted and allowlisted, and
+qualification and other read-only stages receive read-only agent tools plus a
+read-scoped Artifacts credential. A read-only attempt cannot push a durable
+checkpoint; the control plane accepts only the unchanged, independently
 validated input commit. V2 does not add elevated Linux capabilities merely to
-nest one sandbox inside another and does not override the model client's normal
-behavior with speculative retry counts.
+nest one sandbox inside another and disables Pi's internal retry loops rather
+than introducing unobserved retry policy.
 
 ### 6.6 Model routing is policy
 
@@ -565,14 +574,13 @@ models:
     code-quality: { provider: openai, model: ..., effort: medium }
 ```
 
-The prototype runs Codex over the OpenAI Responses wire protocol, including
-Codex-specific continuation items such as namespaced tool calls. Every model
-selected for a Codex-backed role must support that complete protocol. The
-current prototype records a temporary reviewer-independence exception and uses
-the proven Codex-compatible implementation model for reviews too. Supporting
-another Responses model, Anthropic Messages, or another provider-native
-protocol requires a native compatible agent client, not a lossy request-history
-translation layer in the broker.
+The prototype embeds Pi as the provider-neutral coding harness. The route binds
+each model to one native protocol: OpenAI Responses, OpenAI Chat Completions,
+Anthropic Messages, or Google Generative AI. Pi owns provider-specific message
+and tool encoding. The broker authorizes the recorded route, supplies hosted
+research where the role permits it, invokes AI Gateway Unified Billing, logs
+the response, and otherwise passes native request and response bodies through.
+It does not maintain a lossy request-history translation layer.
 
 The resolved policy is snapshotted onto the run. An attempt binds provider,
 model, effort, prompt version, and tool-policy version atomically. Its result
@@ -979,11 +987,12 @@ Production App configuration and every V1 resource remain unchanged.
 
 The deterministic implementation includes raw webhook signature verification,
 maintainer authorization, delivery and repeated-command deduplication, a
-read-only Codex runner, private service-binding routing, and coordinator-owned
-qualification transitions. The development AI Gateway uses its existing
-account-level spend control. Streaming, structured-output, tool-call, and
-controlled GitHub qualification proofs pass. Subscription-token fallback is
-not part of this design.
+read-only agent runner, private service-binding routing, and coordinator-owned
+qualification transitions. The current runner embeds Pi; the original slice
+used Codex before the provider-native migration. The development AI Gateway
+uses its existing account-level spend control. Streaming, structured-output,
+tool-call, and controlled GitHub qualification proofs pass. Subscription-token
+fallback is not part of this design.
 
 The second slice consumes that durable qualification in a separate read-only
 reproduction attempt. It records commands, observed and expected behavior,
@@ -1006,7 +1015,7 @@ concisely and advances to `implement`, while a plan needing information uses
 the same prose clarification path.
 
 The fourth slice gives the implementation attempt a short-lived Artifacts
-write token and lets Codex edit and validate the checked-out repository inside
+write token and lets the embedded coding agent edit and validate the checked-out repository inside
 the Cloudflare Container sandbox. The runner commits only the actual source
 change to Artifacts. A separate clean container clones that exact checkpoint,
 verifies its ancestry, changed-path declaration, and protected paths, then uses
@@ -1219,3 +1228,4 @@ This compact log replaces standalone ADRs.
 | 2026-07-18 | Use AI Gateway Unified Billing; do not deploy model-subscription credentials.         |
 | 2026-07-18 | Build the functional prototype first; harden only from observed operational evidence. |
 | 2026-07-18 | Accept clarification as ordinary issue prose with no command or round count.          |
+| 2026-07-19 | Embed Pi and keep provider-native protocols across the container/broker boundary.     |

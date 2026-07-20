@@ -7,10 +7,14 @@ RUN apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install --global @openai/codex
 RUN corepack enable
 
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin runner
+
+WORKDIR /opt/roundhouse
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY containers/agent-runner/package.json containers/agent-runner/package.json
+RUN pnpm install --filter @roundhouse/agent-runner --prod --frozen-lockfile
 
 COPY --chown=runner:runner containers/agent-runner/runner.mjs /opt/roundhouse/containers/agent-runner/runner.mjs
 COPY --chown=runner:runner packages/response-observer/index.mjs /opt/roundhouse/packages/response-observer/index.mjs

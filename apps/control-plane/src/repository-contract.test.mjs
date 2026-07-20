@@ -267,7 +267,7 @@ it("renews a D1 attempt lease from recorded activity", async () => {
   await expect(
     repository.recordActivity(attempt.id, 700, {
       phase: "command_output",
-      operation: "codex exec",
+      operation: "pi agent",
       durationMs: 30_000,
       stdoutBytes: 100,
       stderrBytes: 0,
@@ -301,7 +301,7 @@ it("renews a D1 attempt lease from recorded activity", async () => {
     completedModelCalls: 2,
     lastProgress: {
       phase: "command_output",
-      operation: "codex exec",
+      operation: "pi agent",
       durationMs: 30_000,
       stdoutBytes: 100,
       stderrBytes: 0,

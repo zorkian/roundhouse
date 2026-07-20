@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Container } from "@cloudflare/containers";
-import type { Attempt, ModelUsage } from "@roundhouse/core";
+import {
+  isModelRoute,
+  type Attempt,
+  type ModelRoute,
+  type ModelUsage,
+} from "@roundhouse/core";
 import { observeResponse } from "@roundhouse/response-observer";
 import { verifyCallback } from "./callback.js";
 import { attemptInactivityMilliseconds } from "./coordinator.js";
@@ -110,8 +115,15 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
     Date.now() + attemptInactivityMilliseconds,
   );
   if (!recorded) return new Response("stale_attempt", { status: 409 });
+  const route = attempt.routing;
+  // A deployed runtime cannot safely continue an older container that speaks
+  // the removed Responses-only adapter. Reject it so the existing inactivity
+  // recovery destroys that container and redispatches with a fresh native route.
+  if (!isModelRoute(route))
+    return new Response("model_route_missing", { status: 409 });
   const headers = new Headers(request.headers);
   headers.delete("authorization");
+  headers.delete("x-api-key");
   headers.delete("x-roundhouse-attempt-capability");
   headers.set("x-roundhouse-role", attempt.role);
   headers.set(
@@ -125,6 +137,11 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
           : "validation",
   );
   headers.set("x-roundhouse-complexity", "unknown");
+  headers.set("x-roundhouse-routing-provider", route.provider);
+  headers.set("x-roundhouse-routing-model", route.model);
+  headers.set("x-roundhouse-routing-protocol", route.protocol);
+  headers.set("x-roundhouse-routing-thinking-level", route.thinkingLevel);
+  headers.set("x-roundhouse-routing-rule", route.rule);
   const requestedUrl = new URL(request.url);
   let response: Response;
   try {
@@ -161,15 +178,6 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
     operation: `${request.method} ${requestedUrl.pathname}`,
     attemptId,
   };
-  const routing = {
-    ...attempt.routing,
-    model: response.headers.get("x-roundhouse-routing-model"),
-    provider: response.headers.get("x-roundhouse-routing-provider"),
-    reasoningEffort: response.headers.get("x-roundhouse-routing-effort"),
-    rule: response.headers.get("x-roundhouse-routing-rule"),
-  };
-  if (routing.model && routing.reasoningEffort && routing.rule)
-    await repository.recordModelRouting(attemptId, routing);
   if (!response.ok) {
     await recordModelEvent(repository, attemptId, "model_response_rejected", {
       status: response.status,
@@ -183,15 +191,11 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
     },
     async onComplete() {
       const usage = response.ok
-        ? extractModelUsage(
-            responseText,
-            attemptId,
-            routing.model ?? "unknown",
-            {
-              provider: routing.provider ?? undefined,
-              routingRule: routing.rule ?? undefined,
-            },
-          )
+        ? extractModelUsage(responseText, attemptId, route.model, {
+            provider: route.provider,
+            protocol: route.protocol,
+            routingRule: route.rule,
+          })
         : undefined;
       if (usage) {
         try {
@@ -233,7 +237,11 @@ export function extractModelUsage(
   text: string,
   attemptId: string,
   routedModel: string,
-  routing: { provider?: string; routingRule?: string } = {},
+  routing: {
+    provider?: string;
+    protocol?: ModelRoute["protocol"];
+    routingRule?: string;
+  } = {},
 ): ModelUsage | undefined {
   const candidates = text.trim().startsWith("{")
     ? [text]
@@ -243,44 +251,75 @@ export function extractModelUsage(
         .map((line) => line.slice(5).trim())
         .filter((line) => line !== "[DONE]");
   let response: Record<string, unknown> | undefined;
+  let callId: string | undefined;
+  let model = routedModel;
+  let inputTokens: number | undefined;
+  let cachedInputTokens: number | undefined;
+  let cacheCreationInputTokens: number | undefined;
+  let reasoningTokens: number | undefined;
+  let outputTokens: number | undefined;
+  let totalTokens: number | undefined;
+  let directCost: number | undefined;
+  const number = (value: unknown) =>
+    typeof value === "number" && Number.isFinite(value) ? value : undefined;
   for (const candidate of candidates) {
     try {
       const event = JSON.parse(candidate) as Record<string, unknown>;
       const value =
         event.type === "response.completed" ? event.response : event;
-      if (
-        value &&
-        typeof value === "object" &&
-        (value as Record<string, unknown>).usage
-      )
-        response = value as Record<string, unknown>;
+      if (!value || typeof value !== "object") continue;
+      const current = value as Record<string, unknown>;
+      if (event.type === "message_start" && event.message) {
+        response = event.message as Record<string, unknown>;
+      } else if (current.usage) {
+        response = current;
+      }
+      const identity =
+        event.type === "message_start" && event.message
+          ? (event.message as Record<string, unknown>)
+          : current;
+      if (typeof identity.id === "string") callId = identity.id;
+      if (typeof identity.model === "string") model = identity.model;
+      const usage = (current.usage ?? identity.usage) as
+        Record<string, unknown> | undefined;
+      if (!usage) continue;
+      const inputDetails = (usage.input_tokens_details ??
+        usage.prompt_tokens_details ??
+        {}) as Record<string, unknown>;
+      const outputDetails = (usage.output_tokens_details ??
+        usage.completion_tokens_details ??
+        {}) as Record<string, unknown>;
+      inputTokens =
+        number(usage.input_tokens ?? usage.prompt_tokens) ?? inputTokens;
+      cachedInputTokens =
+        number(
+          inputDetails.cached_tokens ??
+            usage.cache_read_input_tokens ??
+            usage.prompt_cache_hit_tokens,
+        ) ?? cachedInputTokens;
+      cacheCreationInputTokens =
+        number(
+          inputDetails.cache_creation_tokens ??
+            inputDetails.cache_write_tokens ??
+            usage.cache_creation_input_tokens,
+        ) ?? cacheCreationInputTokens;
+      outputTokens =
+        number(usage.output_tokens ?? usage.completion_tokens) ?? outputTokens;
+      reasoningTokens =
+        number(outputDetails.reasoning_tokens) ?? reasoningTokens;
+      totalTokens = number(usage.total_tokens) ?? totalTokens;
+      directCost = number(usage.cost_usd ?? usage.cost) ?? directCost;
     } catch {
       /* ignore non-JSON stream fields */
     }
   }
   if (!response) return undefined;
-  const usage = response.usage as Record<string, unknown>;
-  const inputDetails = (usage.input_tokens_details ?? {}) as Record<
-    string,
-    unknown
-  >;
-  const outputDetails = (usage.output_tokens_details ?? {}) as Record<
-    string,
-    unknown
-  >;
-  const number = (value: unknown) =>
-    typeof value === "number" && Number.isFinite(value) ? value : undefined;
-  const inputTokens = number(usage.input_tokens),
-    cachedInputTokens = number(inputDetails.cached_tokens),
-    cacheCreationInputTokens = number(inputDetails.cache_creation_tokens),
-    outputTokens = number(usage.output_tokens),
-    reasoningTokens = number(outputDetails.reasoning_tokens),
-    totalTokens = number(usage.total_tokens);
-  const model =
-    typeof response.model === "string" ? response.model : routedModel;
-  const directCost = number(
-    usage.cost_usd ?? usage.cost ?? response.cost_usd ?? response.cost,
-  );
+  directCost = directCost ?? number(response.cost_usd ?? response.cost);
+  totalTokens =
+    totalTokens ??
+    (inputTokens !== undefined && outputTokens !== undefined
+      ? inputTokens + outputTokens
+      : undefined);
   const rate = prices[model] ?? prices[routedModel];
   const costUsd =
     directCost ??
@@ -293,14 +332,16 @@ export function extractModelUsage(
           outputTokens * rate[2]) /
         1_000_000
       : undefined);
-  const callId = typeof response.id === "string" ? response.id : undefined;
+  callId =
+    callId ?? (typeof response.id === "string" ? response.id : undefined);
   if (!callId) return undefined;
   return {
     callId,
     attemptId,
     model,
     configuredModel: routedModel,
-    ...routing,
+    ...(routing.provider ? { provider: routing.provider } : {}),
+    ...(routing.routingRule ? { routingRule: routing.routingRule } : {}),
     ...(inputTokens === undefined ? {} : { inputTokens }),
     ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
     ...(cacheCreationInputTokens === undefined

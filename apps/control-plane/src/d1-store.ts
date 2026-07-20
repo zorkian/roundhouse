@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import {
+  parseModelRoute,
   resumeRun,
   transitionRun,
   type Attempt,
   type IssueSnapshot,
   type Lease,
   type ModelUsage,
+  type ModelRoute,
   type RunRepository,
   type RunSnapshot,
   type RunStage,
@@ -114,6 +116,7 @@ const usageFromRow = (row: UsageRow): ModelUsage => ({
 });
 
 function attemptFromRow(row: AttemptRow): Attempt {
+  const routing = parseModelRoute(row.routing_json);
   return {
     id: row.id,
     runId: row.run_id,
@@ -129,11 +132,7 @@ function attemptFromRow(row: AttemptRow): Attempt {
     ...(row.result_json
       ? { result: JSON.parse(row.result_json) as Record<string, unknown> }
       : {}),
-    ...(row.routing_json
-      ? {
-          routing: JSON.parse(row.routing_json) as Record<string, unknown>,
-        }
-      : {}),
+    ...(routing ? { routing } : {}),
   };
 }
 
@@ -642,7 +641,7 @@ export class D1RunRepository implements RunRepository {
 
   async recordModelRouting(
     attemptId: string,
-    routing: Readonly<Record<string, unknown>>,
+    routing: ModelRoute,
   ): Promise<void> {
     await this.db
       .prepare("UPDATE attempts SET routing_json=?1,updated_at=?2 WHERE id=?3")
