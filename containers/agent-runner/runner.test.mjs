@@ -7,6 +7,7 @@ import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   activityRequest,
+  agentRuntime,
   completionRequest,
   checkpointWorkspace,
   implementationPrompt,
@@ -14,15 +15,14 @@ import {
   investigationPrompt,
   planningPrompt,
   planSchema,
+  piModelConfiguration,
   prepareWorkspace,
-  qualificationSandbox,
   reviewSchema,
   reproductionSchema,
   requestClassification,
   runnerIdentity,
   runnerResponse,
   validateCheckpoint,
-  webSearchMode,
 } from "./runner.mjs";
 
 const testRoot = resolve(process.cwd(), ".runner-test-workspaces");
@@ -33,7 +33,38 @@ afterEach(async () => {
 
 describe("V2 agent runner", () => {
   it("uses the Container rather than an unavailable nested sandbox", () => {
-    expect(qualificationSandbox).toBe("danger-full-access");
+    expect(agentRuntime).toBe("pi");
+  });
+
+  it("configures Pi for the persisted native route without exposing a provider key", () => {
+    const configuration = piModelConfiguration(
+      {
+        id: "attempt_1",
+        routing: {
+          provider: "moonshotai",
+          model: "moonshotai/kimi-k3",
+          protocol: "openai-completions",
+          thinkingLevel: "low",
+          rule: "review-security-v1",
+        },
+      },
+      "attempt-capability",
+    );
+    expect(configuration.providers.moonshotai).toMatchObject({
+      baseUrl: "http://model.roundhouse.internal/v1",
+      api: "openai-completions",
+      apiKey: "roundhouse-internal",
+      authHeader: false,
+      headers: {
+        "x-roundhouse-attempt-id": "attempt_1",
+        "x-roundhouse-attempt-capability": "attempt-capability",
+      },
+      compat: {
+        supportsDeveloperRole: false,
+        supportsReasoningEffort: false,
+      },
+      models: [{ id: "moonshotai/kimi-k3", reasoning: true }],
+    });
   });
 
   it("requires structured reproduction evidence without arbitrary caps", () => {
@@ -82,14 +113,6 @@ describe("V2 agent runner", () => {
       ]),
     );
     expect(planSchema.properties.questions).not.toHaveProperty("maxItems");
-  });
-
-  it("enables hosted research only for read-only analysis stages", () => {
-    expect(webSearchMode("qualification")).toBe("live");
-    expect(webSearchMode("reproduction")).toBe("live");
-    expect(webSearchMode("plan")).toBe("live");
-    expect(webSearchMode("implementation")).toBe("disabled");
-    expect(webSearchMode("review")).toBe("disabled");
   });
 
   it("keeps implementation evidence separate from the pull request text", () => {
@@ -226,6 +249,13 @@ describe("V2 agent runner", () => {
       deadlineAt: Date.now() + 60_000,
       baseCommit: "a".repeat(40),
       expectedHead: "a".repeat(40),
+      routing: {
+        provider: "openai",
+        model: "openai/gpt-5.6-sol",
+        protocol: "openai-responses",
+        thinkingLevel: "low",
+        rule: "implementation-default-v1",
+      },
       artifact: {
         repositoryId: "repo-id",
         repository: "v2-run-1",
@@ -307,7 +337,7 @@ describe("V2 agent runner", () => {
       "attempt-secret",
       {
         phase: "command_output",
-        operation: "codex exec",
+        operation: "pi agent",
         durationMs: 30_000,
         stdoutBytes: 128,
         stderrBytes: 0,
@@ -320,7 +350,7 @@ describe("V2 agent runner", () => {
     );
     await expect(activity.json()).resolves.toEqual({
       phase: "command_output",
-      operation: "codex exec",
+      operation: "pi agent",
       durationMs: 30_000,
       stdoutBytes: 128,
       stderrBytes: 0,

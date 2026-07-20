@@ -8,6 +8,7 @@ import {
   type IssueSnapshot,
   type Lease,
   type ModelUsage,
+  type ModelRoute,
   type RunRepository,
   type RunSnapshot,
   type RunStage,
@@ -131,7 +132,7 @@ function attemptFromRow(row: AttemptRow): Attempt {
       : {}),
     ...(row.routing_json
       ? {
-          routing: JSON.parse(row.routing_json) as Record<string, unknown>,
+          routing: JSON.parse(row.routing_json) as ModelRoute,
         }
       : {}),
   };
@@ -642,7 +643,7 @@ export class D1RunRepository implements RunRepository {
 
   async recordModelRouting(
     attemptId: string,
-    routing: Readonly<Record<string, unknown>>,
+    routing: ModelRoute,
   ): Promise<void> {
     await this.db
       .prepare("UPDATE attempts SET routing_json=?1,updated_at=?2 WHERE id=?3")

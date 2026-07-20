@@ -88,6 +88,41 @@ describe("model usage", () => {
     });
   });
 
+  it("extracts usage from a native Anthropic message stream", () => {
+    const usage = extractModelUsage(
+      [
+        'data: {"type":"message_start","message":{"id":"msg_1","model":"anthropic/claude-opus-4.8","usage":{"input_tokens":10,"cache_read_input_tokens":4,"cache_creation_input_tokens":2}}}',
+        'data: {"type":"message_delta","usage":{"output_tokens":5}}',
+      ].join("\n\n"),
+      "attempt_anthropic",
+      "anthropic/claude-opus-4.8",
+      { provider: "anthropic", protocol: "anthropic-messages" },
+    );
+    expect(usage).toMatchObject({
+      callId: "msg_1",
+      inputTokens: 10,
+      cachedInputTokens: 4,
+      cacheCreationInputTokens: 2,
+      outputTokens: 5,
+      totalTokens: 15,
+    });
+  });
+
+  it("extracts usage from a native Chat Completions stream", () => {
+    const usage = extractModelUsage(
+      'data: {"id":"chat_1","model":"moonshotai/kimi-k3","choices":[],"usage":{"prompt_tokens":8,"completion_tokens":2,"total_tokens":10}}\n\ndata: [DONE]\n',
+      "attempt_moonshot",
+      "moonshotai/kimi-k3",
+      { provider: "moonshotai", protocol: "openai-completions" },
+    );
+    expect(usage).toMatchObject({
+      callId: "chat_1",
+      inputTokens: 8,
+      outputTokens: 2,
+      totalTokens: 10,
+    });
+  });
+
   it("aggregates retries once per stored call and preserves unavailable fields", () => {
     const calls = [
       {

@@ -6,6 +6,7 @@ import {
   reviewerForRole,
   runSchemaVersion,
   type Attempt,
+  type ModelRoute,
   type RunSnapshot,
   type Wakeup,
 } from "@roundhouse/core";
@@ -224,9 +225,55 @@ class ContainerDispatcher implements AttemptDispatcher {
     private readonly callbackSigningSecret: string,
     private readonly controlPlaneOrigin: string,
     private readonly runs: D1RunRepository,
+    private readonly modelBroker: Fetcher,
   ) {}
 
+  private async resolveModelRoute(
+    attempt: Attempt,
+    taskType: string,
+  ): Promise<ModelRoute> {
+    const response = await observeResponse(
+      await this.modelBroker.fetch(
+        new Request("https://broker.roundhouse.internal/route", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            role: attempt.role,
+            taskType,
+            complexity: "unknown",
+          }),
+        }),
+      ),
+      {
+        api: "model_broker",
+        operation: "resolve_route",
+        attemptId: attempt.id,
+      },
+    );
+    if (!response.ok) throw new Error(`model_route_http_${response.status}`);
+    const route = (await response.json()) as ModelRoute;
+    if (
+      !route?.provider ||
+      !route.model ||
+      !route.protocol ||
+      !route.thinkingLevel ||
+      !route.rule
+    )
+      throw new Error("invalid_model_route");
+    await this.runs.recordModelRouting(attempt.id, route);
+    return route;
+  }
+
   async submit(attempt: Attempt, run: RunSnapshot): Promise<void> {
+    const taskType =
+      attempt.stage === "plan"
+        ? "planning"
+        : attempt.stage === "implement"
+          ? "implementation"
+          : attempt.stage === "review"
+            ? "review"
+            : "validation";
+    const route = await this.resolveModelRoute(attempt, taskType);
     const repository = await this.artifacts.importBase(
       workspaceName(attempt.runId),
       `https://github.com/${run.repository}.git`,
@@ -309,24 +356,6 @@ class ContainerDispatcher implements AttemptDispatcher {
       throw new Error("implementation_plan_missing");
     if (attempt.stage === "review" && !implementation)
       throw new Error("review_implementation_missing");
-    const routingRule =
-      attempt.stage === "reproduce"
-        ? "reproduction-default-v1"
-        : attempt.stage === "plan"
-          ? "planning-default-v1"
-          : attempt.stage === "implement"
-            ? "implementation-default-v1"
-            : attempt.stage === "review"
-              ? "review-default-v1"
-              : "qualification-default-v1";
-    const taskType =
-      attempt.stage === "plan"
-        ? "planning"
-        : attempt.stage === "implement"
-          ? "implementation"
-          : attempt.stage === "review"
-            ? "review"
-            : "validation";
     const assignment = {
       ...attempt,
       baseCommit: attempt.baseCommit,
@@ -345,12 +374,7 @@ class ContainerDispatcher implements AttemptDispatcher {
               ...(ci ? { ci } : {}),
             }
           : undefined,
-      routing: {
-        role: attempt.role,
-        taskType,
-        complexity: "unknown",
-        rule: routingRule,
-      },
+      routing: route,
       ...(reviewer ? { reviewer } : {}),
       artifact: {
         repositoryId: repository.id,
@@ -629,6 +653,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       env.CALLBACK_SIGNING_SECRET,
       env.CONTROL_PLANE_ORIGIN,
       repository,
+      env.MODEL_BROKER,
     );
     const github = new GitHubClient(env);
     const automation = new GitHubCiAutomation(repository, github);

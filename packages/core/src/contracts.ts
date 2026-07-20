@@ -44,7 +44,24 @@ export interface Attempt {
   readonly expectedHead: string;
   readonly acceptedHead?: string;
   readonly result?: Readonly<Record<string, unknown>>;
-  readonly routing?: Readonly<Record<string, unknown>>;
+  readonly routing?: ModelRoute;
+}
+
+export const modelProtocols = [
+  "openai-responses",
+  "openai-completions",
+  "anthropic-messages",
+  "google-generative-ai",
+] as const;
+
+export type ModelProtocol = (typeof modelProtocols)[number];
+
+export interface ModelRoute {
+  readonly provider: string;
+  readonly model: string;
+  readonly protocol: ModelProtocol;
+  readonly thinkingLevel: "off" | "minimal" | "low" | "medium" | "high";
+  readonly rule: string;
 }
 
 export interface ModelUsage {

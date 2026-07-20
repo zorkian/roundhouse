@@ -360,12 +360,6 @@ async function dispatchReview(
     deadlineAt: now + leaseMilliseconds,
     baseCommit: run.baseCommit,
     expectedHead: run.currentHead,
-    routing: {
-      provider: reviewers.find((reviewer) => reviewer.role === role)!.provider,
-      configuredModel: reviewers.find((reviewer) => reviewer.role === role)!
-        .model,
-      rule: `${role}-v1`,
-    },
   };
   await repository.createAttempt(attempt);
   try {
