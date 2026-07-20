@@ -117,4 +117,33 @@ describe("API response observer", () => {
       }),
     );
   });
+
+  it("does not let a writer or callback break a response", async () => {
+    const throwingWrite = () => {
+      throw new Error("log sink failed");
+    };
+    const buffered = await observeResponse(
+      Response.json({ ok: true }),
+      { api: "github", operation: "request" },
+      { write: throwingWrite },
+    );
+    const response = await observeResponse(
+      new Response("event: done\n\n", {
+        headers: { "content-type": "Text/Event-Stream; Charset=UTF-8" },
+      }),
+      { api: "workers_ai", operation: "run_model" },
+      {
+        write: throwingWrite,
+        onText() {
+          throw new Error("text observer failed");
+        },
+        onComplete() {
+          throw new Error("completion observer failed");
+        },
+      },
+    );
+
+    await expect(buffered.json()).resolves.toEqual({ ok: true });
+    await expect(response.text()).resolves.toBe("event: done\n\n");
+  });
 });

@@ -38,6 +38,23 @@ function defaultWrite(entry) {
   console.log(JSON.stringify(entry));
 }
 
+function safeWrite(write, entry) {
+  try {
+    write(entry);
+  } catch {
+    // Diagnostics must never change the observed API call.
+  }
+}
+
+function failedEntry(response, details, error) {
+  return {
+    message: "api_response_log_failed",
+    ...details,
+    status: response.status,
+    error: error instanceof Error ? error.message : String(error),
+  };
+}
+
 function openedEntry(response, details) {
   return {
     message: "api_response_opened",
@@ -55,40 +72,44 @@ async function observeBufferedResponse(
   write = defaultWrite,
   options = {},
 ) {
+  let text;
   try {
-    const text = await response.clone().text();
-    write({
-      message: "api_response",
-      ...details,
-      status: response.status,
-      statusText: response.statusText,
-      headers: headers(response),
-      body: body(text),
-    });
+    text = await response.clone().text();
+  } catch (error) {
+    safeWrite(write, failedEntry(response, details, error));
+    return response;
+  }
+  safeWrite(write, {
+    message: "api_response",
+    ...details,
+    status: response.status,
+    statusText: response.statusText,
+    headers: headers(response),
+    body: body(text),
+  });
+  try {
     options.onText?.(text);
     await options.onComplete?.();
   } catch (error) {
-    write({
-      message: "api_response_log_failed",
-      ...details,
-      status: response.status,
-      error: error instanceof Error ? error.message : String(error),
-    });
+    safeWrite(write, failedEntry(response, details, error));
   }
   return response;
 }
 
 export async function observeResponse(response, details, options = {}) {
-  return response.headers.get("content-type")?.includes("text/event-stream")
+  return response.headers
+    .get("content-type")
+    ?.toLowerCase()
+    .includes("text/event-stream")
     ? observeEventStream(response, details, options)
     : observeBufferedResponse(response, details, options.write, options);
 }
 
 function observeEventStream(response, details, options = {}) {
   const write = options.write ?? defaultWrite;
-  write(openedEntry(response, details));
+  safeWrite(write, openedEntry(response, details));
   if (!response.body) {
-    write({
+    safeWrite(write, {
       message: "api_response_completed",
       ...details,
       status: response.status,
@@ -99,9 +120,14 @@ function observeEventStream(response, details, options = {}) {
   const decoder = new TextDecoder();
   let sequence = 0;
   const writeText = (text) => {
-    options.onText?.(text);
+    if (!text) return;
+    try {
+      options.onText?.(text);
+    } catch (error) {
+      safeWrite(write, failedEntry(response, details, error));
+    }
     for (let offset = 0; offset < text.length; offset += responseLogChunkSize) {
-      write({
+      safeWrite(write, {
         message: "api_response_body",
         ...details,
         sequence: sequence++,
@@ -117,8 +143,12 @@ function observeEventStream(response, details, options = {}) {
       },
       async flush() {
         writeText(decoder.decode());
-        await options.onComplete?.();
-        write({
+        try {
+          await options.onComplete?.();
+        } catch (error) {
+          safeWrite(write, failedEntry(response, details, error));
+        }
+        safeWrite(write, {
           message: "api_response_completed",
           ...details,
           status: response.status,
