@@ -107,7 +107,7 @@ describe("Artifacts workspace contract", () => {
     let created = false;
     const repo = {
       lastPushAt: undefined,
-      source: null,
+      source: undefined,
       revokeToken: async (token: string) => {
         revoked = token;
         return true;
