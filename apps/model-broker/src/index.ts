@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { reviewerForRole } from "@roundhouse/core";
+import { observeStreamingResponse } from "@roundhouse/response-observer";
 
 const routingHeaders = [
   "x-roundhouse-attempt-id",
@@ -10,7 +11,6 @@ const routingHeaders = [
   "x-roundhouse-complexity",
 ] as const;
 const researchRoles = new Set(["qualify", "reproduce", "plan"]);
-const responseLogChunkSize = 4_000;
 
 export type BrokerEnv = Cloudflare.Env;
 
@@ -77,81 +77,6 @@ function routingResponseHeaders(response: Response, route: BrokerRoute) {
   headers.set("x-roundhouse-routing-effort", route.reasoningEffort);
   headers.set("x-roundhouse-routing-rule", route.rule);
   return headers;
-}
-
-function responseHeaders(response: Response): Record<string, string> {
-  const headers: Record<string, string> = {};
-  response.headers.forEach((value, name) => {
-    headers[name] = /^(set-cookie)$/i.test(name) ? "[REDACTED]" : value;
-  });
-  return headers;
-}
-
-function logBodyText(
-  fields: Readonly<Record<string, unknown>>,
-  text: string,
-  sequence: { value: number },
-): void {
-  for (let offset = 0; offset < text.length; offset += responseLogChunkSize) {
-    console.log(
-      JSON.stringify({
-        message: "api_response_body",
-        ...fields,
-        sequence: sequence.value++,
-        body: text.slice(offset, offset + responseLogChunkSize),
-      }),
-    );
-  }
-}
-
-function captureUpstreamResponse(
-  response: Response,
-  route: BrokerRoute,
-  attemptId: string,
-): Response {
-  const fields = {
-    api: "workers_ai",
-    operation: "run_model",
-    attemptId,
-    model: route.model,
-  };
-  console.log(
-    JSON.stringify({
-      message: "api_response_opened",
-      ...fields,
-      status: response.status,
-      statusText: response.statusText,
-      headers: responseHeaders(response),
-      hasBody: Boolean(response.body),
-    }),
-  );
-  if (!response.body) return response;
-  const decoder = new TextDecoder();
-  const sequence = { value: 0 };
-  const stream = response.body.pipeThrough(
-    new TransformStream<Uint8Array, Uint8Array>({
-      transform(chunk, controller) {
-        logBodyText(fields, decoder.decode(chunk, { stream: true }), sequence);
-        controller.enqueue(chunk);
-      },
-      flush() {
-        logBodyText(fields, decoder.decode(), sequence);
-        console.log(
-          JSON.stringify({
-            message: "api_response_completed",
-            ...fields,
-            status: response.status,
-            bodyChunks: sequence.value,
-          }),
-        );
-      },
-    }),
-  );
-  return new Response(stream, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
 }
 
 function applyToolPolicy(body: Record<string, unknown>, role: string): void {
@@ -242,11 +167,12 @@ export async function brokerRequest(
     );
     return Response.json({ error: "model_upstream_failed" }, { status: 502 });
   }
-  const captured = captureUpstreamResponse(
-    response,
-    route,
-    request.headers.get("x-roundhouse-attempt-id") ?? "",
-  );
+  const captured = observeStreamingResponse(response, {
+    api: "workers_ai",
+    operation: "run_model",
+    attemptId: request.headers.get("x-roundhouse-attempt-id") ?? "",
+    model: route.model,
+  });
   return new Response(captured.body, {
     status: captured.status,
     statusText: captured.statusText,

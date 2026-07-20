@@ -35,14 +35,22 @@ importers:
       '@roundhouse/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@roundhouse/response-observer':
+        specifier: workspace:*
+        version: link:../../packages/response-observer
 
   apps/model-broker:
     dependencies:
       '@roundhouse/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@roundhouse/response-observer':
+        specifier: workspace:*
+        version: link:../../packages/response-observer
 
   packages/core: {}
+
+  packages/response-observer: {}
 
 packages:
 

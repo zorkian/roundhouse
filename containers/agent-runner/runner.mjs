@@ -8,6 +8,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { observeBufferedResponse } from "../../packages/response-observer/index.mjs";
 
 export const runnerIdentity = Object.freeze({
   schemaVersion: 2,
@@ -99,7 +100,11 @@ async function reportActivity(
     const response = await fetch(
       activityRequest(assignment, callbackUrl, attemptSecret, progress),
     );
-    await logApiResponse(response, "control_plane", "report_activity");
+    await observeBufferedResponse(
+      response,
+      { api: "control_plane", operation: "report_activity" },
+      writeApiResponseLog,
+    );
     if (!response.ok)
       runnerLog("error", "runner_activity_rejected", {
         phase: progress.phase,
@@ -151,44 +156,9 @@ function runnerLog(level, message, fields = {}) {
   else console.log(entry);
 }
 
-function redactApiResponse(value) {
-  if (Array.isArray(value)) return value.map(redactApiResponse);
-  if (!value || typeof value !== "object") return value;
-  return Object.fromEntries(
-    Object.entries(value).map(([key, child]) => [
-      key,
-      /^(authorization|credential|password|private[_-]?key|secret|signature|token)$/i.test(
-        key,
-      )
-        ? "[REDACTED]"
-        : redactApiResponse(child),
-    ]),
-  );
-}
-
-async function logApiResponse(response, api, operation) {
-  const text = await response.text();
-  let body = text || null;
-  if (text) {
-    try {
-      body = redactApiResponse(JSON.parse(text));
-    } catch {
-      // Preserve non-JSON response text as-is.
-    }
-  }
-  runnerLog("info", "api_response", {
-    api,
-    operation,
-    status: response.status,
-    statusText: response.statusText,
-    headers: Object.fromEntries(
-      [...response.headers].map(([name, value]) => [
-        name,
-        /^(set-cookie)$/i.test(name) ? "[REDACTED]" : value,
-      ]),
-    ),
-    body,
-  });
+function writeApiResponseLog(entry) {
+  const { message, ...fields } = entry;
+  runnerLog("info", message, fields);
 }
 
 function command(commandName, args, options = {}) {
@@ -1066,7 +1036,11 @@ async function completeAssignment(assignment, headers) {
       result,
     ),
   );
-  await logApiResponse(response, "control_plane", "complete_attempt");
+  await observeBufferedResponse(
+    response,
+    { api: "control_plane", operation: "complete_attempt" },
+    writeApiResponseLog,
+  );
   if (!response.ok) throw new Error(`callback_http_${response.status}`);
   await progress("callback_completed", { status: response.status });
 }

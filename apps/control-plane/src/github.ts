@@ -11,7 +11,7 @@ import {
 } from "@roundhouse/core";
 import type { AttemptReporter } from "./coordinator.js";
 import { verifyCallback } from "./callback.js";
-import { readJsonApiResponse } from "./api-response-log.js";
+import { observeBufferedResponse } from "@roundhouse/response-observer";
 
 export interface GitHubIntakeRepository {
   get(runId: string): Promise<RunSnapshot | undefined>;
@@ -163,12 +163,13 @@ export class GitHubClient {
         },
       },
     );
-    const value = await readJsonApiResponse<{ token?: string }>(response, {
+    await observeBufferedResponse(response, {
       api: "github",
       operation: "create_installation_token",
     });
     if (!response.ok)
       throw new Error(`github_installation_token_${response.status}`);
+    const value = (await response.json()) as { token?: string };
     if (!value.token) throw new Error("github_installation_token_missing");
     return value.token;
   }
@@ -204,10 +205,14 @@ export class GitHubClient {
       },
       body: JSON.stringify({ query, variables }),
     });
-    const value = await readJsonApiResponse<{
+    await observeBufferedResponse(response, {
+      api: "github",
+      operation: "graphql",
+    });
+    const value = (await response.json()) as {
       data?: T;
       errors?: readonly unknown[];
-    }>(response, { api: "github", operation: "graphql" });
+    };
     if (!response.ok || value.errors?.length || !value.data)
       throw new Error(`github_graphql_${response.status}`);
     return value.data;
@@ -229,13 +234,13 @@ export class GitHubClient {
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-    const value = await readJsonApiResponse<T>(response, {
+    await observeBufferedResponse(response, {
       api: "github",
       operation: `${method} ${path}`,
     });
     if (!response.ok)
       throw new Error(`github_${method.toLowerCase()}_${response.status}`);
-    return value;
+    return response.json<T>();
   }
 }
 

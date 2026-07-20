@@ -36,7 +36,7 @@ import {
   GitHubClient,
   GitHubStageReporter,
 } from "./github.js";
-import { captureApiResponse } from "./api-response-log.js";
+import { observeBufferedResponse } from "@roundhouse/response-observer";
 export { ContainerProxy } from "@cloudflare/containers";
 export { RoundhouseAttemptContainer } from "./attempt-container.js";
 
@@ -397,7 +397,7 @@ class ContainerDispatcher implements AttemptDispatcher {
         : {}),
     };
     try {
-      const response = await captureApiResponse(
+      const response = await observeBufferedResponse(
         await this.containers.get(id).fetch(
           new Request("https://attempt.invalid/assign", {
             method: "POST",
@@ -458,7 +458,7 @@ class ContainerCheckpointValidator implements CheckpointValidator {
     }
     const token = await artifact.createToken("read", 5 * 60);
     try {
-      const response = await captureApiResponse(
+      const response = await observeBufferedResponse(
         await this.containers
           .get(this.containers.idFromName(`${attempt.id}-validation`))
           .fetch(
