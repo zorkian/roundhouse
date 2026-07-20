@@ -786,6 +786,7 @@ export async function acceptGitHubComment(
       repository: repositoryName,
       githubRepositoryId: repositoryId,
       githubInstallationId: installationId,
+      githubDefaultBranch: repo.default_branch,
       issueNumber,
       baseCommit: commit.sha,
       profileVersion: profile?.hash ?? commit.sha,

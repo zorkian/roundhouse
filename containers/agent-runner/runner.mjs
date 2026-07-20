@@ -955,6 +955,32 @@ async function clone(artifact, directory) {
   });
 }
 
+export async function bootstrapWorkspace(assignment) {
+  const directory = resolve(workspaceRoot(), `${assignment.id}-bootstrap`);
+  await rm(directory, { recursive: true, force: true });
+  await mkdir(workspaceRoot(), { recursive: true });
+  await command(
+    "git",
+    [
+      "clone",
+      "--depth=1",
+      "--branch",
+      assignment.source.branch,
+      "--no-tags",
+      assignment.source.remote,
+      directory,
+    ],
+    { env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
+  );
+  const head = await command("git", ["rev-parse", "HEAD"], { cwd: directory });
+  if (head !== assignment.source.head) throw new Error("source_head_changed");
+  await command(
+    "git",
+    ["push", assignment.artifact.remote, "HEAD:refs/heads/main"],
+    { cwd: directory, env: gitEnvironment(assignment.artifact.token) },
+  );
+}
+
 export async function prepareWorkspace(assignment) {
   const directory = resolve(workspaceRoot(), assignment.id);
   await clone(assignment.artifact, directory);
@@ -1351,6 +1377,31 @@ function validAssignment(body) {
   );
 }
 
+function validBootstrap(body) {
+  if (
+    !body?.id ||
+    !Number.isInteger(body?.deadlineAt) ||
+    body?.artifact?.access !== "write" ||
+    !body?.artifact?.remote?.startsWith("https://") ||
+    !body?.artifact?.hostname ||
+    !body?.artifact?.tokenId ||
+    !body?.artifact?.token ||
+    !body?.source?.remote?.startsWith("https://") ||
+    !body?.source?.hostname ||
+    !/^[A-Za-z0-9._\/-]+$/.test(body?.source?.branch ?? "") ||
+    !/^[a-f0-9]{40}$/.test(body?.source?.head ?? "")
+  )
+    return false;
+  try {
+    return (
+      new URL(body.artifact.remote).hostname === body.artifact.hostname &&
+      new URL(body.source.remote).hostname === body.source.hostname
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function runnerResponse(method, rawUrl, body) {
   const path = new URL(rawUrl, "http://runner.invalid").pathname;
   if (path === "/health") {
@@ -1366,6 +1417,13 @@ export function runnerResponse(method, rawUrl, body) {
     const duplicate = acceptedAttempts.has(body.id);
     acceptedAttempts.add(body.id);
     return response(202, { accepted: true, attemptId: body.id, duplicate });
+  }
+  if (path === "/bootstrap") {
+    if (method !== "POST")
+      return response(405, { error: "method_not_allowed" }, { allow: "POST" });
+    if (!validBootstrap(body))
+      return response(400, { error: "invalid_bootstrap" });
+    return response(202, { accepted: true, attemptId: body.id });
   }
   if (path === "/validate") {
     if (method !== "POST")
@@ -1403,6 +1461,31 @@ export function createRunnerServer() {
             reply.writeHead(422, jsonHeaders);
             reply.end(JSON.stringify({ error: "invalid_checkpoint" }));
           },
+        );
+        return;
+      }
+      if (request.url === "/bootstrap" && request.method === "POST" && body) {
+        if (!validBootstrap(body)) {
+          const invalid = response(400, { error: "invalid_bootstrap" });
+          reply.writeHead(invalid.status, invalid.headers);
+          reply.end(invalid.body);
+          return;
+        }
+        runnerContext.run({ attemptId: body.id, stage: "bootstrap" }, () =>
+          bootstrapWorkspace(body).then(
+            () => {
+              runnerLog("info", "runner_bootstrap_completed");
+              reply.writeHead(204, jsonHeaders);
+              reply.end();
+            },
+            (error) => {
+              runnerLog("error", "runner_bootstrap_failed", {
+                error: error?.message ?? String(error),
+              });
+              reply.writeHead(422, jsonHeaders);
+              reply.end(JSON.stringify({ error: "bootstrap_failed" }));
+            },
+          ),
         );
         return;
       }

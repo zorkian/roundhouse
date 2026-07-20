@@ -17,6 +17,7 @@ export interface ArtifactRepository {
   readonly name: string;
   readonly remote: string;
   readonly hostname: string;
+  readonly empty: boolean;
   createToken(
     access: ArtifactAccess,
     ttlSeconds: number,
@@ -26,11 +27,7 @@ export interface ArtifactRepository {
 }
 
 export interface ArtifactsNamespace {
-  importBase(
-    name: string,
-    upstream: string,
-    branch?: string,
-  ): Promise<ArtifactRepository>;
+  ensure(name: string): Promise<ArtifactRepository>;
   get(name: string): Promise<ArtifactRepository | undefined>;
   delete(name: string): Promise<void>;
 }
@@ -83,6 +80,7 @@ class CloudflareArtifactRepository implements ArtifactRepository {
   readonly name: string;
   readonly remote: string;
   readonly hostname: string;
+  readonly empty: boolean;
 
   constructor(
     private readonly repository: ArtifactsRepo,
@@ -94,6 +92,7 @@ class CloudflareArtifactRepository implements ArtifactRepository {
     this.name = identity.name;
     this.remote = identity.remote;
     this.hostname = identity.hostname;
+    this.empty = repository.lastPushAt === null;
   }
 
   async createToken(access: ArtifactAccess, ttlSeconds: number) {
@@ -135,39 +134,30 @@ export class CloudflareArtifactsNamespace implements ArtifactsNamespace {
         await new Promise((resolve) => setTimeout(resolve, 1_000));
       }
     }
-    throw new Error("artifact_import_timeout");
+    throw new Error("artifact_repository_not_ready");
   }
 
-  async importBase(name: string, upstream: string, branch = "main") {
+  async ensure(name: string) {
     const existing = await this.get(name);
     if (existing) return existing;
     try {
-      const created = await this.artifacts.import({
-        // A run is bound to the current default-branch head and does not need
-        // the repository's historical object graph. The bound base commit and
-        // its tree are the complete baseline needed to create the next commit.
-        source: { url: upstream, branch, depth: 1 },
-        target: {
-          name,
-          opts: { description: "Roundhouse V2 run workspace" },
-        },
+      const created = await this.artifacts.create(name, {
+        description: "Roundhouse V2 run workspace",
+        setDefaultBranch: "main",
       });
-      // Import returns a bootstrap secret. It is never handed to a runner.
-      // Revoke it immediately, then issue narrowly scoped attempt tokens.
+      // Creation returns an initial secret. It is never handed to a runner;
+      // dispatch issues its own short-lived, purpose-specific token instead.
       const repository = await this.ready(name);
       await repository.revokeToken(created.token);
       return new CloudflareArtifactRepository(repository, name, this.location);
     } catch (error) {
       console.error(
         JSON.stringify({
-          message: "artifact_import_failed",
+          message: "artifact_repository_create_failed",
           repository: name,
-          upstream,
           ...artifactsErrorDetails(error),
         }),
       );
-      // A timed-out import may still have committed. Reconcile by immutable
-      // repository name before treating the operation as failed.
       if (!isArtifactsError(error, "ALREADY_EXISTS")) {
         const reconciled = await this.get(name);
         if (reconciled) return reconciled;
