@@ -68,6 +68,36 @@ describe("V2 agent runner", () => {
     });
   });
 
+  it("uses the base path expected by each native provider SDK", () => {
+    const configurationFor = (protocol) =>
+      piModelConfiguration(
+        {
+          id: "attempt_1",
+          routing: {
+            provider: "provider",
+            model: "provider/model",
+            protocol,
+            thinkingLevel: "low",
+            rule: "test-v1",
+          },
+        },
+        "attempt-capability",
+      ).providers.provider.baseUrl;
+
+    expect(configurationFor("openai-responses")).toBe(
+      "http://model.roundhouse.internal/v1",
+    );
+    expect(configurationFor("openai-completions")).toBe(
+      "http://model.roundhouse.internal/v1",
+    );
+    expect(configurationFor("anthropic-messages")).toBe(
+      "http://model.roundhouse.internal",
+    );
+    expect(configurationFor("google-generative-ai")).toBe(
+      "http://model.roundhouse.internal/v1beta",
+    );
+  });
+
   it("rejects missing and empty native routes before configuring Pi", () => {
     expect(validModelRoute(undefined)).toBe(false);
     expect(
