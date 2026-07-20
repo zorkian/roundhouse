@@ -524,7 +524,9 @@ export function piModelConfiguration(assignment, attemptSecret) {
                 supportsReasoningEffort: false,
               },
             }
-          : {}),
+          : route.protocol === "anthropic-messages"
+            ? { compat: { forceAdaptiveThinking: true } }
+            : {}),
         models: [
           {
             id: route.model,
