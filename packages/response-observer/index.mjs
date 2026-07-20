@@ -2,9 +2,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
 const responseLogChunkSize = 4_000;
-const secretField =
-  /^(authorization|credential|password|private[_-]?key|secret|signature|token)$/i;
+const secretFields = new Set([
+  "authorization",
+  "credential",
+  "credentials",
+  "password",
+  "privatekey",
+  "secret",
+  "clientsecret",
+  "signature",
+  "token",
+  "accesstoken",
+  "refreshtoken",
+  "idtoken",
+  "apikey",
+]);
 const secretHeader = /^(authorization|proxy-authorization|set-cookie)$/i;
+
+function isSecretField(name) {
+  return secretFields.has(name.replaceAll(/[-_]/g, "").toLowerCase());
+}
 
 function redact(value) {
   if (Array.isArray(value)) return value.map(redact);
@@ -12,7 +29,7 @@ function redact(value) {
   return Object.fromEntries(
     Object.entries(value).map(([key, child]) => [
       key,
-      secretField.test(key) ? "[REDACTED]" : redact(child),
+      isSecretField(key) ? "[REDACTED]" : redact(child),
     ]),
   );
 }
@@ -105,20 +122,28 @@ export async function observeResponse(response, details, options = {}) {
     : observeBufferedResponse(response, details, options.write, options);
 }
 
-function observeEventStream(response, details, options = {}) {
+async function observeEventStream(response, details, options = {}) {
   const write = options.write ?? defaultWrite;
   safeWrite(write, openedEntry(response, details));
-  if (!response.body) {
+  let sequence = 0;
+  const complete = async () => {
+    try {
+      await options.onComplete?.();
+    } catch (error) {
+      safeWrite(write, failedEntry(response, details, error));
+    }
     safeWrite(write, {
       message: "api_response_completed",
       ...details,
       status: response.status,
-      bodyChunks: 0,
+      bodyChunks: sequence,
     });
+  };
+  if (!response.body) {
+    await complete();
     return response;
   }
   const decoder = new TextDecoder();
-  let sequence = 0;
   const writeText = (text) => {
     if (!text) return;
     try {
@@ -143,17 +168,7 @@ function observeEventStream(response, details, options = {}) {
       },
       async flush() {
         writeText(decoder.decode());
-        try {
-          await options.onComplete?.();
-        } catch (error) {
-          safeWrite(write, failedEntry(response, details, error));
-        }
-        safeWrite(write, {
-          message: "api_response_completed",
-          ...details,
-          status: response.status,
-          bodyChunks: sequence,
-        });
+        await complete();
       },
     }),
   );

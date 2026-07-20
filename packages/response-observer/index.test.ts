@@ -8,7 +8,13 @@ describe("API response observer", () => {
   it("observes a buffered response without consuming it", async () => {
     const write = vi.fn();
     const response = new Response(
-      JSON.stringify({ token: "secret-token", value: "kept" }),
+      JSON.stringify({
+        access_token: "access-token",
+        refreshToken: "refresh-token",
+        nested: { client_secret: "client-secret", apiKey: "api-key" },
+        input_tokens: 42,
+        value: "kept",
+      }),
       {
         status: 201,
         headers: {
@@ -25,7 +31,10 @@ describe("API response observer", () => {
     );
 
     await expect(observed.json()).resolves.toEqual({
-      token: "secret-token",
+      access_token: "access-token",
+      refreshToken: "refresh-token",
+      nested: { client_secret: "client-secret", apiKey: "api-key" },
+      input_tokens: 42,
       value: "kept",
     });
     expect(write).toHaveBeenCalledWith(
@@ -37,7 +46,16 @@ describe("API response observer", () => {
           "content-type": "text/plain;charset=UTF-8",
           "x-request-id": "request-1",
         },
-        body: { token: "[REDACTED]", value: "kept" },
+        body: {
+          access_token: "[REDACTED]",
+          refreshToken: "[REDACTED]",
+          nested: {
+            client_secret: "[REDACTED]",
+            apiKey: "[REDACTED]",
+          },
+          input_tokens: 42,
+          value: "kept",
+        },
       }),
     );
   });
@@ -145,5 +163,19 @@ describe("API response observer", () => {
 
     await expect(buffered.json()).resolves.toEqual({ ok: true });
     await expect(response.text()).resolves.toBe("event: done\n\n");
+  });
+
+  it("completes observation for a bodyless event stream", async () => {
+    const onComplete = vi.fn();
+    const response = await observeResponse(
+      new Response(null, {
+        headers: { "content-type": "text/event-stream" },
+      }),
+      { api: "workers_ai", operation: "run_model" },
+      { onComplete },
+    );
+
+    expect(response.body).toBeNull();
+    expect(onComplete).toHaveBeenCalledOnce();
   });
 });
