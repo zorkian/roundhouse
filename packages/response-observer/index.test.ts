@@ -2,11 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it, vi } from "vitest";
-import {
-  observeBufferedResponse,
-  observeResponse,
-  observeStreamingResponse,
-} from "./index.mjs";
+import { observeResponse } from "./index.mjs";
 
 describe("API response observer", () => {
   it("observes a buffered response without consuming it", async () => {
@@ -22,10 +18,10 @@ describe("API response observer", () => {
       },
     );
 
-    const observed = await observeBufferedResponse(
+    const observed = await observeResponse(
       response,
       { api: "github", operation: "create_installation_token" },
-      write,
+      { write },
     );
 
     await expect(observed.json()).resolves.toEqual({
@@ -49,8 +45,11 @@ describe("API response observer", () => {
   it("observes an ordered stream without buffering or consuming it", async () => {
     const write = vi.fn();
     const onText = vi.fn();
-    const response = observeStreamingResponse(
-      new Response("upstream detail", { status: 400 }),
+    const response = await observeResponse(
+      new Response("upstream detail", {
+        status: 400,
+        headers: { "content-type": "text/event-stream" },
+      }),
       { api: "workers_ai", operation: "run_model" },
       { write, onText },
     );
@@ -104,10 +103,10 @@ describe("API response observer", () => {
     );
 
     await expect(
-      observeBufferedResponse(
+      observeResponse(
         response,
         { api: "github", operation: "request" },
-        write,
+        { write },
       ),
     ).resolves.toBe(response);
     expect(write).toHaveBeenCalledWith(

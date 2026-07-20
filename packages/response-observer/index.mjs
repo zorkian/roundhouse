@@ -49,7 +49,7 @@ function openedEntry(response, details) {
   };
 }
 
-export async function observeBufferedResponse(
+async function observeBufferedResponse(
   response,
   details,
   write = defaultWrite,
@@ -80,11 +80,11 @@ export async function observeBufferedResponse(
 
 export async function observeResponse(response, details, options = {}) {
   return response.headers.get("content-type")?.includes("text/event-stream")
-    ? observeStreamingResponse(response, details, options)
+    ? observeEventStream(response, details, options)
     : observeBufferedResponse(response, details, options.write, options);
 }
 
-export function observeStreamingResponse(response, details, options = {}) {
+function observeEventStream(response, details, options = {}) {
   const write = options.write ?? defaultWrite;
   write(openedEntry(response, details));
   if (!response.body) {

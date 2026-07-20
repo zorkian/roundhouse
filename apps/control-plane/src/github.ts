@@ -11,7 +11,7 @@ import {
 } from "@roundhouse/core";
 import type { AttemptReporter } from "./coordinator.js";
 import { verifyCallback } from "./callback.js";
-import { observeBufferedResponse } from "@roundhouse/response-observer";
+import { observeResponse } from "@roundhouse/response-observer";
 
 export interface GitHubIntakeRepository {
   get(runId: string): Promise<RunSnapshot | undefined>;
@@ -163,7 +163,7 @@ export class GitHubClient {
         },
       },
     );
-    await observeBufferedResponse(response, {
+    await observeResponse(response, {
       api: "github",
       operation: "create_installation_token",
     });
@@ -205,7 +205,7 @@ export class GitHubClient {
       },
       body: JSON.stringify({ query, variables }),
     });
-    await observeBufferedResponse(response, {
+    await observeResponse(response, {
       api: "github",
       operation: "graphql",
     });
@@ -234,7 +234,7 @@ export class GitHubClient {
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-    await observeBufferedResponse(response, {
+    await observeResponse(response, {
       api: "github",
       operation: `${method} ${path}`,
     });

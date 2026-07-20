@@ -25,16 +25,3 @@ export function observeResponse(
   details: ApiResponseDetails,
   options?: ApiResponseObserverOptions,
 ): Promise<Response>;
-
-export function observeBufferedResponse(
-  response: Response,
-  details: ApiResponseDetails,
-  write?: ApiResponseLogWriter,
-  options?: Omit<ApiResponseObserverOptions, "write">,
-): Promise<Response>;
-
-export function observeStreamingResponse(
-  response: Response,
-  details: ApiResponseDetails,
-  options?: ApiResponseObserverOptions,
-): Response;

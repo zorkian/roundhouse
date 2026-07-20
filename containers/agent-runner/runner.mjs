@@ -8,7 +8,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { observeBufferedResponse } from "../../packages/response-observer/index.mjs";
+import { observeResponse } from "../../packages/response-observer/index.mjs";
 
 export const runnerIdentity = Object.freeze({
   schemaVersion: 2,
@@ -100,10 +100,10 @@ async function reportActivity(
     const response = await fetch(
       activityRequest(assignment, callbackUrl, attemptSecret, progress),
     );
-    await observeBufferedResponse(
+    await observeResponse(
       response,
       { api: "control_plane", operation: "report_activity" },
-      writeApiResponseLog,
+      { write: writeApiResponseLog },
     );
     if (!response.ok)
       runnerLog("error", "runner_activity_rejected", {
@@ -1036,10 +1036,10 @@ async function completeAssignment(assignment, headers) {
       result,
     ),
   );
-  await observeBufferedResponse(
+  await observeResponse(
     response,
     { api: "control_plane", operation: "complete_attempt" },
-    writeApiResponseLog,
+    { write: writeApiResponseLog },
   );
   if (!response.ok) throw new Error(`callback_http_${response.status}`);
   await progress("callback_completed", { status: response.status });

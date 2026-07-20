@@ -3,10 +3,7 @@
 
 import { Container } from "@cloudflare/containers";
 import type { Attempt, ModelUsage } from "@roundhouse/core";
-import {
-  observeBufferedResponse,
-  observeResponse,
-} from "@roundhouse/response-observer";
+import { observeResponse } from "@roundhouse/response-observer";
 import { verifyCallback } from "./callback.js";
 import { attemptInactivityMilliseconds } from "./coordinator.js";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
@@ -338,7 +335,7 @@ export class RoundhouseAttemptContainer extends Container<Cloudflare.Env> {
       },
     });
     const path = new URL(request.url).pathname;
-    const response = await observeBufferedResponse(
+    const response = await observeResponse(
       await this.containerFetch(`http://runner${path}`, {
         method: "POST",
         headers: request.headers,
