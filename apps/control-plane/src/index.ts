@@ -317,9 +317,12 @@ class ContainerDispatcher implements AttemptDispatcher {
         );
         if (response.status !== 204)
           throw new Error("container_bootstrap_failed");
-      } finally {
+      } catch (error) {
         await repository.revokeToken(bootstrapToken.id);
+        await this.artifacts.delete(repository.name);
+        throw error;
       }
+      await repository.revokeToken(bootstrapToken.id);
     }
     const access = attempt.stage === "implement" ? "write" : "read";
     const token = await repository.createToken(access, 30 * 60);
