@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from "vitest";
-import { createRun, transitionRun } from "./run.js";
+import { createRun, resumeRun, transitionRun } from "./run.js";
 
 const input = {
   id: "run_01",
@@ -80,5 +80,74 @@ describe("V2 run contract", () => {
     expect(() =>
       transitionRun(completed, 2, { status: "active", stage: "qualify" }),
     ).toThrow("run_is_terminal");
+  });
+});
+
+describe("resumeRun", () => {
+  const issue = {
+    title: "Report",
+    body: "Details",
+    url: "https://github.com/zorkian/roundhouse/issues/246",
+    actor: "reporter",
+    clarifications: [{ actor: "citizen", body: "More context" }],
+  };
+
+  it("resumes a clarification wait at the same stage", () => {
+    const waiting = transitionRun(createRun(input), 1, {
+      status: "waiting",
+      stage: "reproduce",
+      waitingReason: "clarification",
+    });
+    expect(resumeRun(waiting, 2, issue)).toMatchObject({
+      status: "active",
+      stage: "reproduce",
+      revision: 3,
+      issue,
+    });
+    expect(resumeRun(waiting, 2, issue).waitingReason).toBeUndefined();
+  });
+
+  it("reopens a succeeded no-change qualification on the same run", () => {
+    const concluded = transitionRun(createRun(input), 1, {
+      status: "succeeded",
+      stage: "qualify",
+    });
+    expect(resumeRun(concluded, 2, issue)).toMatchObject({
+      status: "active",
+      stage: "qualify",
+      revision: 3,
+      issue,
+    });
+  });
+
+  it.each([
+    [{ status: "succeeded", stage: "merge" }],
+    [{ status: "failed", stage: "qualify" }],
+    [{ status: "cancelled", stage: "qualify" }],
+    [
+      {
+        status: "waiting",
+        stage: "plan",
+        waitingReason: "plan_approval",
+      },
+    ],
+  ])("rejects an unrelated run state %o", (state) => {
+    const run = transitionRun(
+      createRun(input),
+      1,
+      state as Parameters<typeof transitionRun>[2],
+    );
+    expect(() => resumeRun(run, 2, issue)).toThrow("run_not_resumable");
+  });
+
+  it("rejects an active run and a stale revision", () => {
+    expect(() => resumeRun(createRun(input), 1, issue)).toThrow(
+      "run_not_resumable",
+    );
+    const concluded = transitionRun(createRun(input), 1, {
+      status: "succeeded",
+      stage: "qualify",
+    });
+    expect(() => resumeRun(concluded, 1, issue)).toThrow("stale_run_revision");
   });
 });
