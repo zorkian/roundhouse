@@ -96,6 +96,7 @@ function parseV2(value: Record<string, unknown>): Omit<
   canonical: string;
 } {
   const rules = stringList(value.paths, "rules");
+  if (!rules.length) throw new Error("profile_paths_rules_invalid");
   for (const rule of rules)
     validatePattern(rule.startsWith("!") ? rule.slice(1) : rule);
   return {

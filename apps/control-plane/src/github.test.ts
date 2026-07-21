@@ -532,7 +532,7 @@ describe("GitHub intake", () => {
   });
 
   it("does not acknowledge a run whose repository profile is missing", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementationOnce(() => undefined);
     const repository = new IntakeRepository();
     const enqueue = vi.fn();
     const api: GitHubApi = {
@@ -559,6 +559,34 @@ describe("GitHub intake", () => {
     });
     expect(api.post).not.toHaveBeenCalled();
     expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("queues a new run when acknowledgement posting fails", async () => {
+    vi.spyOn(console, "error").mockImplementationOnce(() => undefined);
+    const repository = new IntakeRepository();
+    const enqueue = vi.fn();
+    const api: GitHubApi = {
+      get: github().get,
+      post: vi.fn(async () => {
+        throw new Error("github_post_failed");
+      }) as GitHubApi["post"],
+    };
+
+    await expect(
+      acceptGitHubComment(
+        await delivery("delivery-ack-failed"),
+        env,
+        repository,
+        enqueue,
+        api,
+      ),
+    ).resolves.toBe("accepted");
+
+    expect(api.post).toHaveBeenCalledTimes(1);
+    expect(enqueue).toHaveBeenCalledWith({
+      runId: "run_123_issue_42",
+      expectedRevision: 1,
+    });
   });
 
   it("deduplicates delivery replay and repeated start commands", async () => {
