@@ -23,6 +23,11 @@ export interface GitHubIntakeRepository {
     expectedRevision: number,
     issue: NonNullable<RunSnapshot["issue"]>,
   ): Promise<RunSnapshot | undefined>;
+  latestCompletedAttempt(
+    runId: string,
+    stage: RunSnapshot["stage"],
+    beforeRevision: number,
+  ): Promise<Attempt | undefined>;
   recordGitHubDelivery(
     runId: string,
     deliveryId: string,
@@ -741,6 +746,29 @@ async function postIntakeComment(
   }
 }
 
+const noChangeQualifications = new Set([
+  "duplicate",
+  "already_satisfied",
+  "unsupported",
+]);
+
+async function concludedNoChangeQualification(
+  repository: GitHubIntakeRepository,
+  run: RunSnapshot,
+): Promise<boolean> {
+  if (run.status !== "succeeded" || run.stage !== "qualify") return false;
+  const attempt = await repository.latestCompletedAttempt(
+    run.id,
+    "qualify",
+    run.revision,
+  );
+  const qualification = attempt?.result?.qualification;
+  if (!qualification || typeof qualification !== "object") return false;
+  return noChangeQualifications.has(
+    String((qualification as Record<string, unknown>).classification),
+  );
+}
+
 export async function acceptGitHubComment(
   request: Request,
   env: GitHubEnv,
@@ -790,11 +818,13 @@ export async function acceptGitHubComment(
     if (
       payload.sender?.type === "Bot" ||
       comment.includes("<!-- roundhouse:v2:") ||
-      !run?.issue ||
-      run.status !== "waiting" ||
-      run.waitingReason !== "clarification"
+      !run?.issue
     )
       return "ignored";
+    const resumable =
+      (run.status === "waiting" && run.waitingReason === "clarification") ||
+      (await concludedNoChangeQualification(repository, run));
+    if (!resumable) return "ignored";
     const fresh = await repository.recordGitHubDelivery(id, deliveryId, {
       event,
       actor,
@@ -897,7 +927,25 @@ export async function acceptGitHubComment(
     issueNumber,
   });
   if (!fresh) return "duplicate";
-  if (existing) return "duplicate";
+  if (existing) {
+    const resumableBudget =
+      run.status === "waiting" && run.waitingReason === "budget";
+    if (
+      run.issue &&
+      (resumableBudget ||
+        (await concludedNoChangeQualification(repository, run)))
+    ) {
+      const resumed = await repository.resumeClarification(
+        id,
+        run.revision,
+        run.issue,
+      );
+      if (!resumed) return "duplicate";
+      await enqueue({ runId: id, expectedRevision: resumed.revision });
+      return "accepted";
+    }
+    return "duplicate";
+  }
   if (!run.profile) {
     await postIntakeComment(
       api,

@@ -1,9 +1,11 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
+import { createRun, MemoryRunRepository, type Attempt } from "@roundhouse/core";
 import { describe, expect, it } from "vitest";
 import {
   attemptAllowedHosts,
+  pauseForModelBudget,
   RoundhouseAttemptContainer,
 } from "./attempt-container.js";
 import {
@@ -18,29 +20,48 @@ import worker from "./index.js";
 import type { D1Like } from "./d1-store.js";
 
 function detailsDb(found = true): D1Like {
+  // Multi-repository enrollment stores the numeric GitHub repository ID in
+  // github_id and keeps the owner/name in the profile metadata, so the stub
+  // only matches when the query looks the name up in that metadata.
+  const enrolledGithubId = "1297678423";
+  const enrolledRepository = "zorkian/roundhouse";
+  const enrolledIssueNumber = 281;
   return {
     prepare(sql: string) {
+      let values: unknown[] = [];
       const statement = {
-        bind: (..._values: unknown[]) => statement,
-        first: async () =>
-          found
-            ? {
-                document_json: JSON.stringify({
-                  schemaVersion: 2,
-                  id: "run_1",
-                  repository: "zorkian/roundhouse",
-                  issueNumber: 281,
-                  baseCommit: "base",
-                  currentHead: "head",
-                  profileVersion: "v2",
-                  status: "succeeded",
-                  stage: "merge",
-                  revision: 1,
-                }),
-                created_at: 1,
-                updated_at: 2,
-              }
-            : null,
+        bind: (...bound: unknown[]) => {
+          values = bound;
+          return statement;
+        },
+        first: async () => {
+          const [repository, issueNumber] = values;
+          const matchesRepository = sql.includes("github_id")
+            ? repository === enrolledGithubId
+            : repository === enrolledRepository;
+          if (
+            !found ||
+            !matchesRepository ||
+            issueNumber !== enrolledIssueNumber
+          )
+            return null;
+          return {
+            document_json: JSON.stringify({
+              schemaVersion: 2,
+              id: "run_1",
+              repository: "zorkian/roundhouse",
+              issueNumber: 281,
+              baseCommit: "base",
+              currentHead: "head",
+              profileVersion: "v2",
+              status: "succeeded",
+              stage: "merge",
+              revision: 1,
+            }),
+            created_at: 1,
+            updated_at: 2,
+          };
+        },
         run: async () => ({ meta: {} }),
         all: async () => ({
           meta: {},
@@ -247,6 +268,46 @@ describe("V2 control plane", () => {
       "github.com",
       "control.test",
     ]);
+  });
+
+  it("stops an account-limited attempt in the budget waiting state", async () => {
+    const repository = new MemoryRunRepository();
+    const run = createRun({
+      id: "run_budget",
+      repository: "zorkian/roundhouse",
+      issueNumber: 370,
+      baseCommit: "a".repeat(40),
+      profileVersion: "v2",
+    });
+    await repository.create(run);
+    const attempt = {
+      id: "run_budget_rev_1",
+      runId: run.id,
+      runRevision: run.revision,
+      kind: "agent",
+      stage: "qualify",
+      role: "qualify",
+      state: "dispatched",
+      deadlineAt: Date.now() + 60_000,
+      baseCommit: run.baseCommit,
+      expectedHead: run.currentHead,
+    } satisfies Attempt;
+    await repository.createAttempt(attempt);
+
+    await expect(pauseForModelBudget(repository, attempt)).resolves.toBe(true);
+    await expect(repository.get(run.id)).resolves.toMatchObject({
+      status: "waiting",
+      stage: "qualify",
+      revision: 2,
+      waitingReason: "budget",
+    });
+    await expect(repository.getAttempt(attempt.id)).resolves.toMatchObject({
+      state: "failed",
+      result: {
+        failure: { reason: "budget", source: "model_provider" },
+      },
+    });
+    await expect(pauseForModelBudget(repository, attempt)).resolves.toBe(false);
   });
 
   it("destroys an inactive sandbox before redispatching its stage", async () => {

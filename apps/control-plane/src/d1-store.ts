@@ -236,7 +236,7 @@ export class D1RunRepository implements RunRepository {
   ): Promise<RunDetails | undefined> {
     const row = await this.db
       .prepare(
-        "SELECT r.document_json,r.created_at,r.updated_at FROM repositories p JOIN work_items w ON w.repository_id=p.id JOIN runs r ON r.id=w.current_run_id WHERE p.github_id=?1 AND w.issue_number=?2",
+        "SELECT r.document_json,r.created_at,r.updated_at FROM repositories p JOIN work_items w ON w.repository_id=p.id JOIN runs r ON r.id=w.current_run_id WHERE json_extract(p.profile_json,'$.repository')=?1 AND w.issue_number=?2",
       )
       .bind(repository, issueNumber)
       .first<{
@@ -471,7 +471,7 @@ export class D1RunRepository implements RunRepository {
     if (attempt.state === "completed") return "duplicate";
     const updated = await this.db
       .prepare(
-        "UPDATE attempts SET state='completed', accepted_head=?1, result_json=?2, updated_at=?3 WHERE id=?4 AND run_revision=?5 AND state!='completed' AND EXISTS (SELECT 1 FROM runs WHERE id=attempts.run_id AND revision=?5)",
+        "UPDATE attempts SET state='completed', accepted_head=?1, result_json=?2, updated_at=?3 WHERE id=?4 AND run_revision=?5 AND state IN ('created','dispatched') AND EXISTS (SELECT 1 FROM runs WHERE id=attempts.run_id AND revision=?5)",
       )
       .bind(
         acceptedHead,
@@ -489,6 +489,24 @@ export class D1RunRepository implements RunRepository {
       .bind(attempt.runId, attemptId, expectedRevision)
       .run();
     return "completed";
+  }
+
+  async failAttempt(
+    attemptId: string,
+    expectedRevision: number,
+    result: Readonly<Record<string, unknown>>,
+  ): Promise<"failed" | "duplicate" | "stale"> {
+    const attempt = await this.getAttempt(attemptId);
+    if (!attempt || attempt.runRevision !== expectedRevision) return "stale";
+    if (attempt.state === "failed") return "duplicate";
+    if (attempt.state === "completed") return "stale";
+    const updated = await this.db
+      .prepare(
+        "UPDATE attempts SET state='failed', result_json=?1, updated_at=?2 WHERE id=?3 AND run_revision=?4 AND state IN ('created','dispatched')",
+      )
+      .bind(JSON.stringify(result), this.now(), attemptId, expectedRevision)
+      .run();
+    return (updated.meta.changes ?? 0) === 1 ? "failed" : "stale";
   }
 
   async getAttempt(attemptId: string): Promise<Attempt | undefined> {

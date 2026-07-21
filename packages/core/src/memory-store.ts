@@ -108,6 +108,7 @@ export class MemoryRunRepository implements RunRepository {
     const run = attempt && this.runs.get(attempt.runId);
     if (!attempt) return "stale";
     if (attempt.state === "completed") return "duplicate";
+    if (attempt.state === "failed") return "stale";
     if (
       !run ||
       run.revision !== expectedRevision ||
@@ -122,6 +123,19 @@ export class MemoryRunRepository implements RunRepository {
     });
     this.leases.delete(attempt.runId);
     return "completed";
+  }
+
+  async failAttempt(
+    attemptId: string,
+    expectedRevision: number,
+    result: Readonly<Record<string, unknown>>,
+  ): Promise<"failed" | "duplicate" | "stale"> {
+    const attempt = this.attempts.get(attemptId);
+    if (!attempt || attempt.runRevision !== expectedRevision) return "stale";
+    if (attempt.state === "failed") return "duplicate";
+    if (attempt.state === "completed") return "stale";
+    this.attempts.set(attemptId, { ...attempt, state: "failed", result });
+    return "failed";
   }
 
   async getAttempt(attemptId: string): Promise<Attempt | undefined> {

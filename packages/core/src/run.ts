@@ -178,13 +178,19 @@ export function resumeRun(
   expectedRevision: number,
   issue: IssueSnapshot,
 ): RunSnapshot {
-  if (run.status !== "waiting" || run.waitingReason !== "clarification")
-    throw new Error("run_not_waiting_for_clarification");
+  if (run.revision !== expectedRevision) throw new Error("stale_run_revision");
+  const resumable =
+    (run.status === "waiting" &&
+      (run.waitingReason === "clarification" ||
+        run.waitingReason === "budget")) ||
+    (run.status === "succeeded" && run.stage === "qualify");
+  if (!resumable) throw new Error("run_not_resumable");
+  const { waitingReason: _waitingReason, ...current } = run;
   return {
-    ...transitionRun(run, expectedRevision, {
-      status: "active",
-      stage: run.stage,
-    }),
+    ...current,
+    status: "active",
+    stage: run.stage,
+    revision: run.revision + 1,
     issue,
   };
 }

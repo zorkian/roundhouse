@@ -47,6 +47,7 @@ async function callbackFor(
   attempt: Attempt,
   head: string,
   secret: string,
+  classification = "bug",
 ): Promise<AttemptCallback> {
   const unsigned = {
     attemptId: attempt.id,
@@ -121,8 +122,11 @@ async function callbackFor(
                   outcome: "ok",
                   checkpoint: head,
                   qualification: {
-                    classification: "bug",
-                    summary: "Eligible bug",
+                    classification,
+                    summary:
+                      classification === "bug"
+                        ? "Eligible bug"
+                        : "No change needed",
                   },
                 },
   };
@@ -1017,6 +1021,75 @@ describe("single coordinator", () => {
       stage: "reproduce",
       revision: 2,
     });
+  });
+
+  it("requalifies a reopened no-change conclusion on a distinct attempt", async () => {
+    const store = new MemoryRunRepository();
+    await store.create(createRun(input));
+    await coordinate(
+      store,
+      { submit: async () => undefined },
+      { runId: input.id, expectedRevision: 1 },
+      100,
+    );
+    const first = await store.getAttempt("run_slice_rev_1");
+    if (!first) throw new Error("missing_attempt");
+    await acceptCallback(
+      store,
+      "reopen-secret",
+      validator,
+      await callbackFor(first, input.baseCommit, "reopen-secret", "duplicate"),
+    );
+    await expect(
+      coordinate(
+        store,
+        { submit: async () => undefined },
+        { runId: input.id, expectedRevision: 1 },
+        200,
+      ),
+    ).resolves.toBe("dispatched");
+    await expect(store.get(input.id)).resolves.toMatchObject({
+      status: "succeeded",
+      stage: "qualify",
+      revision: 2,
+    });
+
+    const reopened = await store.resumeClarification(input.id, 2, {
+      title: "Report",
+      body: "Details",
+      url: "https://github.com/zorkian/roundhouse/issues/1",
+      actor: "reporter",
+      clarifications: [{ actor: "citizen", body: "This is not a duplicate." }],
+    });
+    if (!reopened) throw new Error("reopen_failed");
+
+    const submitted: Attempt[] = [];
+    await expect(
+      coordinate(
+        store,
+        {
+          submit: async (attempt) => {
+            submitted.push(attempt);
+          },
+        },
+        { runId: input.id, expectedRevision: 3 },
+        300,
+      ),
+    ).resolves.toBe("dispatched");
+    expect(submitted).toHaveLength(1);
+    expect(submitted[0]).toMatchObject({
+      id: "run_slice_rev_3",
+      runRevision: 3,
+      stage: "qualify",
+    });
+
+    // The prior completed attempt remains queryable behind the new revision.
+    await expect(store.getAttempt("run_slice_rev_1")).resolves.toMatchObject({
+      state: "completed",
+    });
+    await expect(
+      store.latestCompletedAttempt(input.id, "qualify", 3),
+    ).resolves.toMatchObject({ id: "run_slice_rev_1", runRevision: 1 });
   });
 
   it("does not hold workflow progress behind GitHub reporting", async () => {
