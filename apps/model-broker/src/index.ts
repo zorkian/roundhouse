@@ -171,15 +171,22 @@ function responseHeaders(response: Response, route: ModelRoute): Headers {
   return headers;
 }
 
-async function workersAiStopReason(
+async function cloudflareStopReason(
   response: Response,
 ): Promise<"budget" | undefined> {
   if (response.status !== 429) return undefined;
   try {
     const body = (await response.clone().json()) as {
       errors?: readonly { code?: unknown }[];
+      error?: readonly { code?: unknown }[];
+      internalCode?: unknown;
     };
-    return body.errors?.some((error) => String(error.code) === "3036")
+    const codes = [
+      body.internalCode,
+      ...(body.errors ?? []).map((error) => error.code),
+      ...(body.error ?? []).map((error) => error.code),
+    ];
+    return codes.some((code) => ["3036", "2041"].includes(String(code)))
       ? "budget"
       : undefined;
   } catch {
@@ -356,7 +363,7 @@ export async function brokerRequest(
     return Response.json({ error: "model_upstream_failed" }, { status: 502 });
   }
   const attemptId = request.headers.get("x-roundhouse-attempt-id");
-  const stopReason = await workersAiStopReason(response);
+  const stopReason = await cloudflareStopReason(response);
   const captured = await observeResponse(response, {
     api: "workers_ai",
     operation: "run_model",
