@@ -703,6 +703,64 @@ describe("run details", () => {
     expect(html).toContain("Unavailable");
   });
 
+  it("renders the applied profile snapshot for each schema version", () => {
+    const base = {
+      schemaVersion: 2 as const,
+      repository: "zorkian/roundhouse",
+      issueNumber: 9,
+      baseCommit: "base",
+      currentHead: "base",
+      profileVersion: "test",
+      status: "active" as const,
+      stage: "qualify" as const,
+      revision: 1,
+    };
+    const v2 = renderRunDetails({
+      run: {
+        ...base,
+        id: "run_profile_v2",
+        profile: {
+          sourcePath: ".roundhouse/profile.yaml",
+          sourceCommit: "c".repeat(40),
+          version: 2,
+          hash: "f".repeat(64),
+          paths: ["!.github/workflows/**", "**"],
+        },
+      },
+      createdAt: 1,
+      updatedAt: 2,
+      attempts: [],
+    });
+    expect(v2).toContain("<dt>Schema version</dt><dd>2</dd>");
+    expect(v2).toContain("<dt>Path rules</dt>");
+    expect(v2).toContain("<code>**</code>");
+    expect(v2).toContain("<code>!.github/workflows/**</code>");
+    expect(v2).not.toContain("Allowed paths");
+    expect(v2).not.toContain("Protected paths");
+
+    const v1 = renderRunDetails({
+      run: {
+        ...base,
+        id: "run_profile_v1",
+        profile: {
+          sourcePath: ".roundhouse/profile.yaml",
+          sourceCommit: "c".repeat(40),
+          version: 1,
+          hash: "e".repeat(64),
+          paths: { allowed: ["**"], protected: [".github/workflows/**"] },
+        },
+      },
+      createdAt: 1,
+      updatedAt: 2,
+      attempts: [],
+    });
+    expect(v1).toContain("<dt>Schema version</dt><dd>1</dd>");
+    expect(v1).toContain("<dt>Allowed paths</dt>");
+    expect(v1).toContain("<dt>Protected paths</dt>");
+    expect(v1).toContain(".github/workflows/**");
+    expect(v1).not.toContain("Path rules");
+  });
+
   it("does not label an unaccepted merge head as merged", () => {
     const html = renderRunDetails({
       run: {
