@@ -566,7 +566,142 @@ describe("GitHub intake", () => {
     ]);
   });
 
-  it("does not acknowledge a run whose repository profile is missing", async () => {
+  function profileErrorApi(
+    comments: { body: string }[],
+    profile: "missing" | "invalid",
+  ): GitHubApi {
+    return {
+      get: vi.fn(async (path: string) => {
+        if (path.includes("/collaborators/")) return { permission: "write" };
+        if (path.endsWith("/commits/main")) return { sha: "a".repeat(40) };
+        if (path.includes("/contents/")) {
+          if (profile === "missing") throw new Error("github_get_404");
+          return {
+            name: "profile.yaml",
+            type: "file",
+            encoding: "base64",
+            content: btoa("version: 2\n"),
+          };
+        }
+        if (path.includes("/comments")) return comments;
+        return { default_branch: "main" };
+      }) as GitHubApi["get"],
+      post: vi.fn(async (_path: string, body: unknown) => {
+        comments.push({
+          body: String((body as { body?: unknown }).body ?? ""),
+        });
+        return {};
+      }) as GitHubApi["post"],
+    };
+  }
+
+  it("explains when a missing repository profile blocks the start", async () => {
+    vi.spyOn(console, "error").mockImplementationOnce(() => undefined);
+    const repository = new IntakeRepository();
+    const enqueue = vi.fn();
+    const comments: { body: string }[] = [];
+    const api = profileErrorApi(comments, "missing");
+    await expect(
+      acceptGitHubComment(
+        await delivery("delivery-no-profile"),
+        env,
+        repository,
+        enqueue,
+        api,
+        "https://roundhouse.example",
+      ),
+    ).resolves.toBe("accepted");
+    await expect(repository.get("run_123_issue_42")).resolves.toMatchObject({
+      status: "waiting",
+      waitingReason: "profile_error",
+    });
+    expect(api.post).toHaveBeenCalledTimes(1);
+    expect(api.post).toHaveBeenCalledWith(
+      "/repos/zorkian/roundhouse/issues/42/comments",
+      {
+        body: expect.stringContaining(
+          "Roundhouse cannot start because `.roundhouse/profile.yaml` is missing or invalid.",
+        ),
+      },
+    );
+    expect(comments[0]?.body).toContain(
+      "<!-- roundhouse:v2:profile-error:run_123_issue_42:1 -->",
+    );
+    expect(comments[0]?.body).toContain(
+      "[View Roundhouse run details](https://roundhouse.example/repositories/zorkian/roundhouse/issues/42)",
+    );
+    expect(enqueue).not.toHaveBeenCalled();
+    await expect(
+      acceptGitHubComment(
+        await delivery("delivery-no-profile"),
+        env,
+        repository,
+        enqueue,
+        api,
+        "https://roundhouse.example",
+      ),
+    ).resolves.toBe("duplicate");
+    expect(api.post).toHaveBeenCalledTimes(1);
+  });
+
+  it("explains when an invalid repository profile blocks the start", async () => {
+    vi.spyOn(console, "error").mockImplementationOnce(() => undefined);
+    const repository = new IntakeRepository();
+    const enqueue = vi.fn();
+    const comments: { body: string }[] = [];
+    const api = profileErrorApi(comments, "invalid");
+    await expect(
+      acceptGitHubComment(
+        await delivery("delivery-bad-profile"),
+        env,
+        repository,
+        enqueue,
+        api,
+      ),
+    ).resolves.toBe("accepted");
+    await expect(repository.get("run_123_issue_42")).resolves.toMatchObject({
+      status: "waiting",
+      waitingReason: "profile_error",
+    });
+    expect(api.post).toHaveBeenCalledTimes(1);
+    expect(comments[0]?.body).toContain(
+      "Roundhouse cannot start because `.roundhouse/profile.yaml` is missing or invalid.",
+    );
+    expect(comments[0]?.body).toContain(
+      "<!-- roundhouse:v2:profile-error:run_123_issue_42:1 -->",
+    );
+    expect(comments[0]?.body).not.toContain("View Roundhouse run details");
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("does not repeat the profile error comment when its marker is already posted", async () => {
+    vi.spyOn(console, "error").mockImplementationOnce(() => undefined);
+    const repository = new IntakeRepository();
+    const enqueue = vi.fn();
+    const comments = [
+      {
+        body: "<!-- roundhouse:v2:profile-error:run_123_issue_42:1 -->\n## I can’t start on this yet",
+      },
+    ];
+    const api = profileErrorApi(comments, "missing");
+    await expect(
+      acceptGitHubComment(
+        await delivery("delivery-no-profile-repeat"),
+        env,
+        repository,
+        enqueue,
+        api,
+      ),
+    ).resolves.toBe("accepted");
+    await expect(repository.get("run_123_issue_42")).resolves.toMatchObject({
+      status: "waiting",
+      waitingReason: "profile_error",
+    });
+    expect(api.post).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("does not repeat the profile error comment when its marker is beyond the first page", async () => {
     vi.spyOn(console, "error").mockImplementationOnce(() => undefined);
     const repository = new IntakeRepository();
     const enqueue = vi.fn();
@@ -575,13 +710,24 @@ describe("GitHub intake", () => {
         if (path.includes("/collaborators/")) return { permission: "write" };
         if (path.endsWith("/commits/main")) return { sha: "a".repeat(40) };
         if (path.includes("/contents/")) throw new Error("github_get_404");
+        if (path.includes("/comments")) {
+          return path.endsWith("page=1")
+            ? Array.from({ length: 100 }, (_, index) => ({
+                body: `older comment ${index}`,
+              }))
+            : [
+                {
+                  body: "<!-- roundhouse:v2:profile-error:run_123_issue_42:1 -->\n## I can’t start on this yet",
+                },
+              ];
+        }
         return { default_branch: "main" };
       }) as GitHubApi["get"],
       post: vi.fn(async () => ({})) as GitHubApi["post"],
     };
     await expect(
       acceptGitHubComment(
-        await delivery("delivery-no-profile"),
+        await delivery("delivery-no-profile-paged"),
         env,
         repository,
         enqueue,
@@ -728,7 +874,19 @@ describe("GitHub intake", () => {
   it("resumes repeated clarification from ordinary citizen prose", async () => {
     const repository = new IntakeRepository();
     const wakeups: Wakeup[] = [];
+    const order: string[] = [];
+    const record = repository.recordGitHubDelivery.bind(repository);
+    repository.recordGitHubDelivery = async (runId, deliveryId, payload) => {
+      order.push("delivery");
+      return record(runId, deliveryId, payload);
+    };
+    const resume = repository.resumeClarification.bind(repository);
+    repository.resumeClarification = async (runId, revision, issue) => {
+      order.push("resume");
+      return resume(runId, revision, issue);
+    };
     const enqueue = async (wakeup: Wakeup) => {
+      order.push("enqueue");
       wakeups.push(wakeup);
     };
     await acceptGitHubComment(
@@ -744,12 +902,22 @@ describe("GitHub intake", () => {
       stage: "qualify",
       waitingReason: "clarification",
     });
+    const comments: { body: string }[] = [];
     const noPermissionCheck: GitHubApi = {
-      get: vi.fn(async () => {
-        throw new Error("prose_must_not_require_repository_permission");
-      }),
-      post: vi.fn(async () => ({})) as GitHubApi["post"],
+      get: vi.fn(async (path: string) => {
+        if (path.includes("/collaborators/"))
+          throw new Error("prose_must_not_require_repository_permission");
+        return comments;
+      }) as GitHubApi["get"],
+      post: vi.fn(async (_path: string, body: unknown) => {
+        order.push("comment");
+        comments.push({
+          body: String((body as { body?: unknown }).body ?? ""),
+        });
+        return {};
+      }) as GitHubApi["post"],
     };
+    order.length = 0;
     await expect(
       acceptGitHubComment(
         await delivery(
@@ -761,8 +929,10 @@ describe("GitHub intake", () => {
         repository,
         enqueue,
         noPermissionCheck,
+        "https://roundhouse.example",
       ),
     ).resolves.toBe("accepted");
+    expect(order).toEqual(["delivery", "resume", "enqueue", "comment"]);
     await expect(repository.get(id)).resolves.toMatchObject({
       status: "active",
       stage: "qualify",
@@ -776,6 +946,31 @@ describe("GitHub intake", () => {
         ],
       },
     });
+    expect(comments).toHaveLength(1);
+    expect(comments[0]?.body).toContain(
+      "<!-- roundhouse:v2:clarification:run_123_issue_42:3 -->",
+    );
+    expect(comments[0]?.body).toContain(
+      "Thanks — I’ve added this information and I’m taking another look.",
+    );
+    expect(comments[0]?.body).toContain(
+      "[View Roundhouse run details](https://roundhouse.example/repositories/zorkian/roundhouse/issues/42)",
+    );
+    await expect(
+      acceptGitHubComment(
+        await delivery(
+          "delivery-answer-1",
+          "It happens when the input is empty.",
+          "random-citizen",
+        ),
+        env,
+        repository,
+        enqueue,
+        noPermissionCheck,
+        "https://roundhouse.example",
+      ),
+    ).resolves.toBe("ignored");
+    expect(comments).toHaveLength(1);
     await repository.transition(id, 3, {
       status: "waiting",
       stage: "qualify",
@@ -805,10 +1000,72 @@ describe("GitHub intake", () => {
         ],
       },
     });
+    expect(comments).toHaveLength(2);
+    expect(comments[1]?.body).toContain(
+      "<!-- roundhouse:v2:clarification:run_123_issue_42:5 -->",
+    );
+    expect(comments[1]?.body).toContain(
+      "Thanks — I’ve added this information and I’m taking another look.",
+    );
+    expect(comments[1]?.body).not.toContain("View Roundhouse run details");
     expect(wakeups).toEqual([
       { runId: id, expectedRevision: 1 },
       { runId: id, expectedRevision: 3 },
       { runId: id, expectedRevision: 5 },
+    ]);
+  });
+
+  it("does not repeat the clarification acknowledgment when its marker is already posted", async () => {
+    const repository = new IntakeRepository();
+    const wakeups: Wakeup[] = [];
+    await acceptGitHubComment(
+      await delivery("delivery-start"),
+      env,
+      repository,
+      async (wakeup) => {
+        wakeups.push(wakeup);
+      },
+      github(),
+    );
+    const id = "run_123_issue_42";
+    await repository.transition(id, 1, {
+      status: "waiting",
+      stage: "qualify",
+      waitingReason: "clarification",
+    });
+    const comments = [
+      {
+        body: "<!-- roundhouse:v2:clarification:run_123_issue_42:3 -->\nThanks — I’ve added this information and I’m taking another look.",
+      },
+    ];
+    const api: GitHubApi = {
+      get: vi.fn(async () => comments) as GitHubApi["get"],
+      post: vi.fn(async () => ({})) as GitHubApi["post"],
+    };
+    await expect(
+      acceptGitHubComment(
+        await delivery(
+          "delivery-answer-repeat",
+          "It happens when the input is empty.",
+          "random-citizen",
+        ),
+        env,
+        repository,
+        async (wakeup) => {
+          wakeups.push(wakeup);
+        },
+        api,
+      ),
+    ).resolves.toBe("accepted");
+    await expect(repository.get(id)).resolves.toMatchObject({
+      status: "active",
+      stage: "qualify",
+      revision: 3,
+    });
+    expect(api.post).not.toHaveBeenCalled();
+    expect(wakeups).toEqual([
+      { runId: id, expectedRevision: 1 },
+      { runId: id, expectedRevision: 3 },
     ]);
   });
 
@@ -1464,7 +1721,7 @@ describe("GitHub intake", () => {
     );
     const reporter = new GitHubStageReporter({
       get: async <T>(path: string) =>
-        (path.endsWith("/comments?per_page=100")
+        (path.includes("/comments")
           ? []
           : path.includes("/pulls?state=open")
             ? []
@@ -1529,7 +1786,7 @@ describe("GitHub intake", () => {
   });
 
   it("updates the same draft pull request after review findings", async () => {
-    const post = vi.fn(async () => ({}));
+    const post = vi.fn(async (_path: string, _body: unknown) => ({}));
     const reporter = new GitHubStageReporter({
       get: async <T>(path: string) =>
         (path.includes("/pulls?state=open")
@@ -1589,7 +1846,7 @@ describe("GitHub intake", () => {
   });
 
   it("posts a concise review bound to the exact candidate commit", async () => {
-    const post = vi.fn(async () => ({}));
+    const post = vi.fn(async (_path: string, _body: unknown) => ({}));
     const reporter = new GitHubStageReporter({
       get: async <T>(path: string) =>
         (path.includes("/pulls?state=open")
@@ -1779,7 +2036,7 @@ describe("GitHub intake", () => {
   });
 
   it("posts a concise completion after the exact-head merge", async () => {
-    const post = vi.fn(async () => ({}));
+    const post = vi.fn(async (_path: string, _body: unknown) => ({}));
     const reporter = new GitHubStageReporter({
       get: async <T>() => [] as T,
       post: post as GitHubApi["post"],
@@ -1898,6 +2155,402 @@ describe("GitHub intake", () => {
     });
     expect(api.get).not.toHaveBeenCalled();
     expect(api.post).not.toHaveBeenCalled();
+  });
+
+  it("posts an implementation start on the issue once the attempt is dispatched", async () => {
+    const post = vi.fn(async (_path: string, _body: unknown) => ({}));
+    const reporter = new GitHubStageReporter(
+      {
+        get: async <T>() => [] as T,
+        post: post as GitHubApi["post"],
+      },
+      "https://roundhouse.example",
+    );
+    const run = createRun({
+      id: "run_implementation_started",
+      repository: "zorkian/roundhouse",
+      issueNumber: 42,
+      baseCommit: "a".repeat(40),
+      profileVersion: "v2",
+    });
+    await reporter.reportStarted(run, {
+      id: "run_implementation_started_rev_4",
+      runId: run.id,
+      runRevision: 4,
+      kind: "agent",
+      stage: "implement",
+      role: "implement",
+      state: "dispatched",
+      deadlineAt: Date.now() + 1_000,
+      baseCommit: run.baseCommit,
+      expectedHead: run.currentHead,
+    });
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledWith(
+      "/repos/zorkian/roundhouse/issues/42/comments",
+      {
+        body: expect.stringContaining(
+          "## Implementation started\n\nI’m working on the proposed change now.",
+        ),
+      },
+    );
+    expect(post.mock.calls[0]?.[1]).toMatchObject({
+      body: expect.stringContaining(
+        "<!-- roundhouse:v2:implementation-started:run_implementation_started_rev_4 -->",
+      ),
+    });
+    expect(post.mock.calls[0]?.[1]).toMatchObject({
+      body: expect.stringContaining(
+        "[View Roundhouse run details](https://roundhouse.example/repositories/zorkian/roundhouse/issues/42)",
+      ),
+    });
+  });
+
+  it("does not repeat an implementation start that is already posted", async () => {
+    const post = vi.fn(async (_path: string, _body: unknown) => ({}));
+    const reporter = new GitHubStageReporter({
+      get: async <T>() =>
+        [
+          {
+            body: "<!-- roundhouse:v2:implementation-started:run_implementation_started_rev_4 -->\n## Implementation started",
+          },
+        ] as T,
+      post: post as GitHubApi["post"],
+    });
+    const run = createRun({
+      id: "run_implementation_started",
+      repository: "zorkian/roundhouse",
+      issueNumber: 42,
+      baseCommit: "a".repeat(40),
+      profileVersion: "v2",
+    });
+    await reporter.reportStarted(run, {
+      id: "run_implementation_started_rev_4",
+      runId: run.id,
+      runRevision: 4,
+      kind: "agent",
+      stage: "implement",
+      role: "implement",
+      state: "dispatched",
+      deadlineAt: Date.now() + 1_000,
+      baseCommit: run.baseCommit,
+      expectedHead: run.currentHead,
+    });
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("finds an implementation start marker beyond the first comment page", async () => {
+    const post = vi.fn(async (_path: string, _body: unknown) => ({}));
+    const get = vi.fn(async (path: string) =>
+      path.endsWith("page=1")
+        ? Array.from({ length: 100 }, (_, index) => ({
+            body: `older comment ${index}`,
+          }))
+        : [
+            {
+              body: "<!-- roundhouse:v2:implementation-started:run_implementation_started_rev_4 -->\n## Implementation started",
+            },
+          ],
+    );
+    const reporter = new GitHubStageReporter({
+      get: get as GitHubApi["get"],
+      post: post as GitHubApi["post"],
+    });
+    const run = createRun({
+      id: "run_implementation_started",
+      repository: "zorkian/roundhouse",
+      issueNumber: 42,
+      baseCommit: "a".repeat(40),
+      profileVersion: "v2",
+    });
+    await reporter.reportStarted(run, {
+      id: "run_implementation_started_rev_4",
+      runId: run.id,
+      runRevision: 4,
+      kind: "agent",
+      stage: "implement",
+      role: "implement",
+      state: "dispatched",
+      deadlineAt: Date.now() + 1_000,
+      baseCommit: run.baseCommit,
+      expectedHead: run.currentHead,
+    });
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("checks every comment page before posting an implementation start", async () => {
+    const post = vi.fn(async (_path: string, _body: unknown) => ({}));
+    const get = vi.fn(async (path: string) =>
+      path.endsWith("page=1")
+        ? Array.from({ length: 100 }, (_, index) => ({
+            body: `older comment ${index}`,
+          }))
+        : [{ body: "an unrelated new comment" }],
+    );
+    const reporter = new GitHubStageReporter({
+      get: get as GitHubApi["get"],
+      post: post as GitHubApi["post"],
+    });
+    const run = createRun({
+      id: "run_implementation_started",
+      repository: "zorkian/roundhouse",
+      issueNumber: 42,
+      baseCommit: "a".repeat(40),
+      profileVersion: "v2",
+    });
+    await reporter.reportStarted(run, {
+      id: "run_implementation_started_rev_4",
+      runId: run.id,
+      runRevision: 4,
+      kind: "agent",
+      stage: "implement",
+      role: "implement",
+      state: "dispatched",
+      deadlineAt: Date.now() + 1_000,
+      baseCommit: run.baseCommit,
+      expectedHead: run.currentHead,
+    });
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledWith(
+      "/repos/zorkian/roundhouse/issues/42/comments",
+      {
+        body: expect.stringContaining(
+          "<!-- roundhouse:v2:implementation-started:run_implementation_started_rev_4 -->",
+        ),
+      },
+    );
+  });
+
+  it("posts a holistic review start on the pull request", async () => {
+    const post = vi.fn(async (_path: string, _body: unknown) => ({}));
+    const reporter = new GitHubStageReporter(
+      {
+        get: async <T>(path: string) =>
+          (path.includes("/pulls?state=open")
+            ? [
+                {
+                  number: 73,
+                  html_url: "https://github.com/zorkian/roundhouse/pull/73",
+                },
+              ]
+            : []) as T,
+        post: post as GitHubApi["post"],
+      },
+      "https://roundhouse.example",
+    );
+    const run = {
+      ...createRun({
+        id: "run_review_started",
+        repository: "zorkian/roundhouse",
+        issueNumber: 42,
+        baseCommit: "a".repeat(40),
+        profileVersion: "v2",
+      }),
+      stage: "review",
+      revision: 5,
+      currentHead: "b".repeat(40),
+    } as const;
+    await reporter.reportStarted(run, {
+      id: "run_review_started_rev_5_review-holistic",
+      runId: run.id,
+      runRevision: 5,
+      kind: "agent",
+      stage: "review",
+      role: "review-holistic",
+      state: "dispatched",
+      deadlineAt: Date.now() + 1_000,
+      baseCommit: run.baseCommit,
+      expectedHead: run.currentHead,
+    });
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledWith(
+      "/repos/zorkian/roundhouse/issues/73/comments",
+      {
+        body: expect.stringContaining(
+          "## Review started\n\nI’m reviewing the proposed change now.",
+        ),
+      },
+    );
+    expect(post.mock.calls[0]?.[1]).toMatchObject({
+      body: expect.stringContaining(
+        "<!-- roundhouse:v2:review-started:run_review_started_rev_5_review-holistic -->",
+      ),
+    });
+    expect(post.mock.calls[0]?.[1]).toMatchObject({
+      body: expect.stringContaining(
+        "[View Roundhouse run details](https://roundhouse.example/repositories/zorkian/roundhouse/issues/42)",
+      ),
+    });
+  });
+
+  it("does not repeat a holistic review start that is already posted", async () => {
+    const post = vi.fn(async (_path: string, _body: unknown) => ({}));
+    const reporter = new GitHubStageReporter({
+      get: async <T>(path: string) =>
+        (path.includes("/pulls?state=open")
+          ? [
+              {
+                number: 73,
+                html_url: "https://github.com/zorkian/roundhouse/pull/73",
+              },
+            ]
+          : [
+              {
+                body: "<!-- roundhouse:v2:review-started:run_review_started_rev_5_review-holistic -->\n## Review started",
+              },
+            ]) as T,
+      post: post as GitHubApi["post"],
+    });
+    const run = {
+      ...createRun({
+        id: "run_review_started",
+        repository: "zorkian/roundhouse",
+        issueNumber: 42,
+        baseCommit: "a".repeat(40),
+        profileVersion: "v2",
+      }),
+      stage: "review",
+      revision: 5,
+      currentHead: "b".repeat(40),
+    } as const;
+    await reporter.reportStarted(run, {
+      id: "run_review_started_rev_5_review-holistic",
+      runId: run.id,
+      runRevision: 5,
+      kind: "agent",
+      stage: "review",
+      role: "review-holistic",
+      state: "dispatched",
+      deadlineAt: Date.now() + 1_000,
+      baseCommit: run.baseCommit,
+      expectedHead: run.currentHead,
+    });
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("finds a review start marker beyond the first pull request comment page", async () => {
+    const post = vi.fn(async (_path: string, _body: unknown) => ({}));
+    const get = vi.fn(async (path: string) => {
+      if (path.includes("/pulls?state=open"))
+        return [
+          {
+            number: 73,
+            html_url: "https://github.com/zorkian/roundhouse/pull/73",
+          },
+        ];
+      return path.endsWith("page=1")
+        ? Array.from({ length: 100 }, (_, index) => ({
+            body: `older comment ${index}`,
+          }))
+        : [
+            {
+              body: "<!-- roundhouse:v2:review-started:run_review_started_rev_5_review-holistic -->\n## Review started",
+            },
+          ];
+    });
+    const reporter = new GitHubStageReporter({
+      get: get as GitHubApi["get"],
+      post: post as GitHubApi["post"],
+    });
+    const run = {
+      ...createRun({
+        id: "run_review_started",
+        repository: "zorkian/roundhouse",
+        issueNumber: 42,
+        baseCommit: "a".repeat(40),
+        profileVersion: "v2",
+      }),
+      stage: "review",
+      revision: 5,
+      currentHead: "b".repeat(40),
+    } as const;
+    await reporter.reportStarted(run, {
+      id: "run_review_started_rev_5_review-holistic",
+      runId: run.id,
+      runRevision: 5,
+      kind: "agent",
+      stage: "review",
+      role: "review-holistic",
+      state: "dispatched",
+      deadlineAt: Date.now() + 1_000,
+      baseCommit: run.baseCommit,
+      expectedHead: run.currentHead,
+    });
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("does not post a review start for specialist reviewers", async () => {
+    const get = vi.fn(async () => []);
+    const post = vi.fn(async (_path: string, _body: unknown) => ({}));
+    const reporter = new GitHubStageReporter({
+      get: get as GitHubApi["get"],
+      post: post as GitHubApi["post"],
+    });
+    const run = {
+      ...createRun({
+        id: "run_specialist_started",
+        repository: "zorkian/roundhouse",
+        issueNumber: 42,
+        baseCommit: "a".repeat(40),
+        profileVersion: "v2",
+      }),
+      stage: "review",
+      revision: 5,
+      currentHead: "b".repeat(40),
+    } as const;
+    for (const role of ["review-security", "review-data"] as const) {
+      await reporter.reportStarted(run, {
+        id: `run_specialist_started_rev_5_${role}`,
+        runId: run.id,
+        runRevision: 5,
+        kind: "agent",
+        stage: "review",
+        role,
+        state: "dispatched",
+        deadlineAt: Date.now() + 1_000,
+        baseCommit: run.baseCommit,
+        expectedHead: run.currentHead,
+      });
+    }
+    expect(get).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("fails the review start when the pull request is missing", async () => {
+    const post = vi.fn(async (_path: string, _body: unknown) => ({}));
+    const reporter = new GitHubStageReporter({
+      get: async <T>() => [] as T,
+      post: post as GitHubApi["post"],
+    });
+    const run = {
+      ...createRun({
+        id: "run_review_started_missing_pr",
+        repository: "zorkian/roundhouse",
+        issueNumber: 42,
+        baseCommit: "a".repeat(40),
+        profileVersion: "v2",
+      }),
+      stage: "review",
+      revision: 5,
+      currentHead: "b".repeat(40),
+    } as const;
+    await expect(
+      reporter.reportStarted(run, {
+        id: "run_review_started_missing_pr_rev_5_review-holistic",
+        runId: run.id,
+        runRevision: 5,
+        kind: "agent",
+        stage: "review",
+        role: "review-holistic",
+        state: "dispatched",
+        deadlineAt: Date.now() + 1_000,
+        baseCommit: run.baseCommit,
+        expectedHead: run.currentHead,
+      }),
+    ).rejects.toThrow("review_pull_request_missing");
+    expect(post).not.toHaveBeenCalled();
   });
 
   it("asks plan questions without exposing workflow status", async () => {
