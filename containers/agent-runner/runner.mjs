@@ -1120,11 +1120,16 @@ export async function checkpointWorkspace(
   const writeArtifact = refreshWriteToken
     ? await refreshWriteToken()
     : assignment.artifact;
-  await command("git", ["push", "origin", `HEAD:${assignment.artifact.ref}`], {
-    cwd: directory,
-    env: gitEnvironment(writeArtifact.token),
-    onProgress,
-  });
+  // A recovered attempt may replace an earlier checkpoint on its private ref.
+  await command(
+    "git",
+    ["push", "--force", "origin", `HEAD:${assignment.artifact.ref}`],
+    {
+      cwd: directory,
+      env: gitEnvironment(writeArtifact.token),
+      onProgress,
+    },
+  );
   return {
     repositoryId: assignment.artifact.repositoryId,
     repository: assignment.artifact.repository,
