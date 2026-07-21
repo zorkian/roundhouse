@@ -260,6 +260,27 @@ it("preserves the explicit path profile through D1 persistence", async () => {
   });
 });
 
+it("resolves D1 run details by repository name for numeric GitHub enrollment", async () => {
+  const repository = new D1RunRepository(new LocalD1(), () => 100);
+  const run = createRun({
+    ...input,
+    id: "run_details_lookup",
+    githubRepositoryId: 1297678423,
+  });
+  await repository.create(run);
+
+  const details = await repository.detailsByIssue("zorkian/roundhouse", 42);
+  expect(details?.run).toEqual(run);
+  expect(details?.createdAt).toBe(100);
+  expect(details?.attempts).toEqual([]);
+  await expect(
+    repository.detailsByIssue("zorkian/roundhouse", 43),
+  ).resolves.toBeUndefined();
+  await expect(
+    repository.detailsByIssue("unknown/repository", 42),
+  ).resolves.toBeUndefined();
+});
+
 it("renews a D1 attempt lease from recorded activity", async () => {
   const repository = new D1RunRepository(new LocalD1(), () => 100);
   const run = createRun(input);

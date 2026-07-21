@@ -236,7 +236,7 @@ export class D1RunRepository implements RunRepository {
   ): Promise<RunDetails | undefined> {
     const row = await this.db
       .prepare(
-        "SELECT r.document_json,r.created_at,r.updated_at FROM repositories p JOIN work_items w ON w.repository_id=p.id JOIN runs r ON r.id=w.current_run_id WHERE p.github_id=?1 AND w.issue_number=?2",
+        "SELECT r.document_json,r.created_at,r.updated_at FROM repositories p JOIN work_items w ON w.repository_id=p.id JOIN runs r ON r.id=w.current_run_id WHERE json_extract(p.profile_json,'$.repository')=?1 AND w.issue_number=?2",
       )
       .bind(repository, issueNumber)
       .first<{

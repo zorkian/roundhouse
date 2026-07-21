@@ -8,6 +8,12 @@ import { renderRunDetails } from "./run-details.js";
 
 describe("run details", () => {
   it("assembles the current run and chronological attempts by repository issue", async () => {
+    // Multi-repository enrollment stores the numeric GitHub repository ID in
+    // github_id and keeps the owner/name in the profile metadata, so the
+    // stub only matches when the query looks the name up in that metadata.
+    const enrolledGithubId = "1297678423";
+    const enrolledRepository = "zorkian/roundhouse";
+    const enrolledIssueNumber = 281;
     const calls: { sql: string; values: unknown[] }[] = [];
     const db: D1Like = {
       prepare(sql: string) {
@@ -18,22 +24,30 @@ describe("run details", () => {
             call.values = values;
             return statement;
           },
-          first: async () => ({
-            document_json: JSON.stringify({
-              schemaVersion: 2,
-              id: "current-run",
-              repository: "zorkian/roundhouse",
-              issueNumber: 281,
-              baseCommit: "base",
-              currentHead: "head",
-              profileVersion: "v2",
-              status: "active",
-              stage: "review",
-              revision: 4,
-            }),
-            created_at: 10,
-            updated_at: 20,
-          }),
+          first: async () => {
+            const [repository, issueNumber] = call.values;
+            const matchesRepository = sql.includes("github_id")
+              ? repository === enrolledGithubId
+              : repository === enrolledRepository;
+            if (!matchesRepository || issueNumber !== enrolledIssueNumber)
+              return null;
+            return {
+              document_json: JSON.stringify({
+                schemaVersion: 2,
+                id: "current-run",
+                repository: "zorkian/roundhouse",
+                issueNumber: 281,
+                baseCommit: "base",
+                currentHead: "head",
+                profileVersion: "v2",
+                status: "active",
+                stage: "review",
+                revision: 4,
+              }),
+              created_at: 10,
+              updated_at: 20,
+            };
+          },
           all: async () => {
             if (sql.includes("FROM model_usage"))
               return {
@@ -102,6 +116,8 @@ describe("run details", () => {
       "zorkian/roundhouse",
       281,
     );
+    expect(calls[0]?.sql).toContain("profile_json");
+    expect(calls[0]?.sql).not.toContain("github_id");
     expect(calls[0]?.values).toEqual(["zorkian/roundhouse", 281]);
     expect(calls[1]?.sql).toContain("ORDER BY created_at ASC,id ASC");
     expect(calls[1]?.values).toEqual(["current-run"]);
@@ -135,6 +151,13 @@ describe("run details", () => {
     });
     expect(calls[2]?.sql).toContain("u.created_at");
     expect(calls[3]?.sql).toContain("ORDER BY created_at,id");
+
+    await expect(
+      new D1RunRepository(db).detailsByIssue("zorkian/roundhouse", 282),
+    ).resolves.toBeUndefined();
+    await expect(
+      new D1RunRepository(db).detailsByIssue("unknown/repository", 281),
+    ).resolves.toBeUndefined();
   });
 
   it("renders summary and expandable attempt details without duplicate sections", () => {
