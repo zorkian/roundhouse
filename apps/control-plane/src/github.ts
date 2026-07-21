@@ -815,7 +815,7 @@ export async function acceptGitHubComment(
     await api.post(`/repos/${repositoryName}/issues/${issueNumber}/comments`, {
       body: [
         `<!-- roundhouse:v2:acknowledgement:${id} -->`,
-        "Roundhouse has started working on this. If this repository is being set up for the first time, the workspace may take about a minute to get ready.",
+        "Roundhouse has started working on this.",
       ].join("\n"),
     });
   } catch (error) {
