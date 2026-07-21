@@ -1,4 +1,6 @@
-version: 2
+version: 1
 paths:
-  - "**"
-  - "!.github/workflows/**"
+  allowed:
+    - "**"
+  protected:
+    - ".github/workflows/**"

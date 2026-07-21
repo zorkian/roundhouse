@@ -31,14 +31,11 @@ describe("trusted checkpoint path validation", () => {
     ref: "refs/heads/roundhouse/run-1",
   };
 
-  it.each([
-    [
-      "version 1",
+  it("applies the explicit allowed and protected path policy", async () => {
+    const profile = await parseProfile(
       'version: 1\npaths:\n  allowed: ["**"]\n  protected: [".github/workflows/**"]\n',
-    ],
-    ["version 2", 'version: 2\npaths: ["**", "!.github/workflows/**"]\n'],
-  ])("applies %s profile snapshots", async (_label, yaml) => {
-    const profile = await parseProfile(yaml, "a".repeat(40));
+      "a".repeat(40),
+    );
     expect(() =>
       validateCheckpointIdentity(checkpoint(["src/fix.ts"]), {
         ...identity,
@@ -57,19 +54,6 @@ describe("trusted checkpoint path validation", () => {
         profile,
       }),
     ).toThrow("protected_path_changed");
-  });
-
-  it("requires a version 2 positive rule to match", async () => {
-    const profile = await parseProfile(
-      'version: 2\npaths: ["src/**"]\n',
-      "a".repeat(40),
-    );
-    expect(() =>
-      validateCheckpointIdentity(checkpoint(["docs/readme.md"]), {
-        ...identity,
-        profile,
-      }),
-    ).toThrow("path_outside_allowlist");
   });
 });
 

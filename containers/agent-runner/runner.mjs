@@ -1146,23 +1146,14 @@ export async function createCheckpoint(assignment) {
 }
 
 function validProfileSnapshot(profile) {
-  if (!profile || !profile.paths) return false;
-  if (profile.version === 2)
-    return (
-      Array.isArray(profile.paths) &&
-      profile.paths.length > 0 &&
-      profile.paths.every((rule) => typeof rule === "string")
-    );
-  if (profile.version === 1)
-    return (
-      Array.isArray(profile.paths.allowed) &&
-      profile.paths.allowed.length > 0 &&
-      profile.paths.allowed.every((pattern) => typeof pattern === "string") &&
-      Array.isArray(profile.paths.protected) &&
-      profile.paths.protected.length > 0 &&
-      profile.paths.protected.every((pattern) => typeof pattern === "string")
-    );
-  return false;
+  return (
+    profile?.version === 1 &&
+    profile.paths &&
+    Array.isArray(profile.paths.allowed) &&
+    profile.paths.allowed.every((pattern) => typeof pattern === "string") &&
+    Array.isArray(profile.paths.protected) &&
+    profile.paths.protected.every((pattern) => typeof pattern === "string")
+  );
 }
 
 export async function validateCheckpoint(assignment) {
@@ -1221,20 +1212,9 @@ export async function validateCheckpoint(assignment) {
       path.split("/").some((part) => !part || part === "." || part === "..")
     )
       throw new Error("invalid_repository_path");
-    if (path === ".roundhouse" || path.startsWith(".roundhouse/"))
-      throw new Error("protected_path_changed");
-    if (assignment.profile.version === 2) {
-      let editable = false;
-      for (const rule of assignment.profile.paths) {
-        if (rule.startsWith("!")) {
-          if (matches(rule.slice(1), path))
-            throw new Error("protected_path_changed");
-        } else if (matches(rule, path)) editable = true;
-      }
-      if (!editable) throw new Error("path_outside_allowlist");
-      continue;
-    }
     if (
+      path === ".roundhouse" ||
+      path.startsWith(".roundhouse/") ||
       assignment.profile.paths.protected.some((pattern) =>
         matches(pattern, path),
       )

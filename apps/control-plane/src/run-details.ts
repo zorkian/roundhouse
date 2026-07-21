@@ -216,15 +216,8 @@ export function renderRunDetails(details: RunDetails): string {
   const pr =
     pullRequest?.pullRequest ?? implementation?.pullRequest ?? ci?.pullRequest;
   const prUrl = pr?.html_url;
-  const profileRules = run.profile
-    ? run.profile.version === 2
-      ? `<dt>Path rules</dt><dd><ul>${run.profile.paths
-          .map((rule) => `<li><code>${escapeHtml(rule)}</code></li>`)
-          .join("")}</ul></dd>`
-      : `<dt>Allowed paths</dt><dd>${value(run.profile.paths.allowed)}</dd><dt>Protected paths</dt><dd>${value(run.profile.paths.protected)}</dd>`
-    : "";
   const profileSection = run.profile
-    ? `<section><h2>Repository profile</h2><dl><dt>Source path</dt><dd><code>${escapeHtml(run.profile.sourcePath)}</code></dd><dt>Source commit</dt><dd><code>${escapeHtml(run.profile.sourceCommit)}</code></dd><dt>Schema version</dt><dd>${escapeHtml(run.profile.version)}</dd><dt>Profile hash</dt><dd><code>${escapeHtml(run.profile.hash)}</code></dd>${profileRules}</dl></section>`
+    ? `<section><h2>Repository profile</h2><dl><dt>Source path</dt><dd><code>${escapeHtml(run.profile.sourcePath)}</code></dd><dt>Source commit</dt><dd><code>${escapeHtml(run.profile.sourceCommit)}</code></dd><dt>Schema version</dt><dd>${escapeHtml(run.profile.version)}</dd><dt>Profile hash</dt><dd><code>${escapeHtml(run.profile.hash)}</code></dd><dt>Allowed paths</dt><dd>${value(run.profile.paths.allowed)}</dd><dt>Protected paths</dt><dd>${value(run.profile.paths.protected)}</dd></dl></section>`
     : `<section><h2>Repository profile</h2><p class="muted">${escapeHtml(run.profileError ?? "No profile snapshot is available for this run.")}</p></section>`;
   const rows = [...attempts]
     .sort(

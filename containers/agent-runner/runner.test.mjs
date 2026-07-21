@@ -730,7 +730,7 @@ describe("V2 agent runner", () => {
         id: "run_git_rev_1_unknown_version_validation",
         profile: {
           version: 3,
-          paths: ["**"],
+          paths: { allowed: ["**"], protected: [] },
         },
       }),
     ).rejects.toThrow("invalid_profile_snapshot");
@@ -747,33 +747,13 @@ describe("V2 agent runner", () => {
     await expect(
       validateCheckpoint({
         ...validationAssignment,
-        id: "run_git_rev_1_v2_literal_validation",
+        id: "run_git_rev_1_empty_allowlist_validation",
         profile: {
-          version: 2,
-          paths: ["**", "!README.md"],
-        },
-      }),
-    ).rejects.toThrow("protected_path_changed");
-    await expect(
-      validateCheckpoint({
-        ...validationAssignment,
-        id: "run_git_rev_1_v2_missing_positive_validation",
-        profile: {
-          version: 2,
-          paths: ["src/**"],
+          version: 1,
+          paths: { allowed: [], protected: [] },
         },
       }),
     ).rejects.toThrow("path_outside_allowlist");
-    await expect(
-      validateCheckpoint({
-        ...validationAssignment,
-        id: "run_git_rev_1_v2_validation",
-        profile: {
-          version: 2,
-          paths: ["**", "!.github/workflows/**"],
-        },
-      }),
-    ).resolves.toBeUndefined();
     await expect(
       validateCheckpoint({
         ...validationAssignment,
@@ -782,7 +762,7 @@ describe("V2 agent runner", () => {
           version: 1,
           paths: {
             allowed: ["**"],
-            protected: [".github/workflows/**"],
+            protected: [],
           },
         },
       }),

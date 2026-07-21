@@ -234,50 +234,29 @@ function repositoryContract(label, createRepository) {
 repositoryContract("memory", () => new MemoryRunRepository());
 repositoryContract("D1", () => new D1RunRepository(new LocalD1(), () => 100));
 
-it("preserves versioned profile snapshots through D1 persistence", async () => {
+it("preserves the explicit path profile through D1 persistence", async () => {
   const commit = "a".repeat(40);
   const v1 = await parseProfile(
     'version: 1\npaths:\n  allowed: ["**"]\n  protected: [".github/workflows/**"]\n',
     commit,
   );
-  const v2 = await parseProfile(
-    'version: 2\npaths:\n  - "**"\n  - "!.github/workflows/**"\n',
-    commit,
-  );
   const repository = new D1RunRepository(new LocalD1(), () => 100);
-  const first = createRun({
+  const run = createRun({
     ...input,
     id: "run_profile_v1",
     profileVersion: v1.hash,
     profile: v1,
   });
-  const second = createRun({
-    ...input,
-    id: "run_profile_v2",
-    issueNumber: 43,
-    profileVersion: v2.hash,
-    profile: v2,
-  });
-  await repository.create(first);
-  await repository.create(second);
+  await repository.create(run);
 
-  await expect(repository.get(first.id)).resolves.toEqual(first);
-  await expect(repository.get(second.id)).resolves.toEqual(second);
-  const reloadedV1 = await repository.get(first.id);
-  expect(reloadedV1.profile).toMatchObject({
+  await expect(repository.get(run.id)).resolves.toEqual(run);
+  const reloaded = await repository.get(run.id);
+  expect(reloaded.profile).toMatchObject({
     version: 1,
     sourcePath: ".roundhouse/profile.yaml",
     sourceCommit: commit,
     hash: v1.hash,
     paths: { allowed: ["**"], protected: [".github/workflows/**"] },
-  });
-  const reloadedV2 = await repository.get(second.id);
-  expect(reloadedV2.profile).toMatchObject({
-    version: 2,
-    sourcePath: ".roundhouse/profile.yaml",
-    sourceCommit: commit,
-    hash: v2.hash,
-    paths: ["!.github/workflows/**", "**"],
   });
 });
 

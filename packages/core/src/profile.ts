@@ -5,26 +5,16 @@ import { parseDocument } from "yaml";
 
 export const profileSourcePath = ".roundhouse/profile.yaml" as const;
 
-interface AppliedProfileBase {
+export interface AppliedProfile {
   readonly sourcePath: typeof profileSourcePath;
   readonly sourceCommit: string;
-  readonly hash: string;
-}
-
-export interface AppliedProfileV1 extends AppliedProfileBase {
   readonly version: 1;
+  readonly hash: string;
   readonly paths: {
     readonly allowed: readonly string[];
     readonly protected: readonly string[];
   };
 }
-
-export interface AppliedProfileV2 extends AppliedProfileBase {
-  readonly version: 2;
-  readonly paths: readonly string[];
-}
-
-export type AppliedProfile = AppliedProfileV1 | AppliedProfileV2;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -55,57 +45,6 @@ function validatePattern(pattern: string): void {
     throw new Error("profile_path_pattern_invalid");
 }
 
-async function hashCanonical(canonical: string): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(canonical),
-  );
-  return [...new Uint8Array(digest)]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-function parseV1(value: Record<string, unknown>): Omit<
-  AppliedProfileV1,
-  "sourcePath" | "sourceCommit" | "hash"
-> & {
-  canonical: string;
-} {
-  if (
-    !isRecord(value.paths) ||
-    !hasOnlyKeys(value.paths, ["allowed", "protected"])
-  )
-    throw new Error("profile_schema_invalid");
-  const allowed = stringList(value.paths.allowed, "allowed");
-  const protectedPaths = stringList(value.paths.protected, "protected");
-  [...allowed, ...protectedPaths].forEach(validatePattern);
-  return {
-    version: 1,
-    paths: { allowed, protected: protectedPaths },
-    canonical: JSON.stringify({
-      version: 1,
-      paths: { allowed, protected: protectedPaths },
-    }),
-  };
-}
-
-function parseV2(value: Record<string, unknown>): Omit<
-  AppliedProfileV2,
-  "sourcePath" | "sourceCommit" | "hash"
-> & {
-  canonical: string;
-} {
-  const rules = stringList(value.paths, "rules");
-  if (!rules.length) throw new Error("profile_paths_rules_invalid");
-  for (const rule of rules)
-    validatePattern(rule.startsWith("!") ? rule.slice(1) : rule);
-  return {
-    version: 2,
-    paths: rules,
-    canonical: JSON.stringify({ version: 2, paths: rules }),
-  };
-}
-
 export async function parseProfile(
   yaml: string,
   sourceCommit: string,
@@ -113,21 +52,34 @@ export async function parseProfile(
   const document = parseDocument(yaml, { uniqueKeys: true });
   if (document.errors.length) throw new Error("profile_yaml_invalid");
   const value: unknown = document.toJS();
-  if (!isRecord(value) || !hasOnlyKeys(value, ["paths", "version"]))
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["paths", "version"]) ||
+    value.version !== 1 ||
+    !isRecord(value.paths) ||
+    !hasOnlyKeys(value.paths, ["allowed", "protected"])
+  )
     throw new Error("profile_schema_invalid");
-  const parsed =
-    value.version === 1
-      ? parseV1(value)
-      : value.version === 2
-        ? parseV2(value)
-        : undefined;
-  if (!parsed) throw new Error("profile_schema_invalid");
-  const { canonical, ...profile } = parsed;
+  const allowed = stringList(value.paths.allowed, "allowed");
+  const protectedPaths = stringList(value.paths.protected, "protected");
+  [...allowed, ...protectedPaths].forEach(validatePattern);
+  const canonical = JSON.stringify({
+    version: 1,
+    paths: { allowed, protected: protectedPaths },
+  });
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(canonical),
+  );
+  const hash = [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
   return {
     sourcePath: profileSourcePath,
     sourceCommit,
-    ...profile,
-    hash: await hashCanonical(canonical),
+    version: 1,
+    hash,
+    paths: { allowed, protected: protectedPaths },
   };
 }
 
@@ -166,20 +118,11 @@ export function assertPathAllowed(
   candidate: string,
 ): void {
   const path = normalizeRepositoryPath(candidate);
-  if (path === ".roundhouse" || path.startsWith(".roundhouse/"))
-    throw new Error("protected_path_changed");
-  if (profile.version === 2) {
-    let editable = false;
-    for (const rule of profile.paths) {
-      if (rule.startsWith("!")) {
-        if (matches(rule.slice(1), path))
-          throw new Error("protected_path_changed");
-      } else if (matches(rule, path)) editable = true;
-    }
-    if (!editable) throw new Error("path_outside_allowlist");
-    return;
-  }
-  if (profile.paths.protected.some((pattern) => matches(pattern, path)))
+  if (
+    path === ".roundhouse" ||
+    path.startsWith(".roundhouse/") ||
+    profile.paths.protected.some((pattern) => matches(pattern, path))
+  )
     throw new Error("protected_path_changed");
   if (!profile.paths.allowed.some((pattern) => matches(pattern, path)))
     throw new Error("path_outside_allowlist");
