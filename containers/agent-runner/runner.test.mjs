@@ -648,6 +648,20 @@ describe("V2 agent runner", () => {
       replacementDirectory,
     );
     expect(replacement).toEqual(first);
+    const recoveredDirectory = await prepareWorkspace(assignment);
+    await writeFile(
+      resolve(recoveredDirectory, "README.md"),
+      "fake GitHub baseline\nrefined implementation\n",
+    );
+    const recovered = await checkpointWorkspace(assignment, recoveredDirectory);
+    expect(recovered.outputHead).not.toBe(first.outputHead);
+    expect(recovered.changedPaths).toEqual(["README.md"]);
+    expect(
+      execFileSync("git", ["rev-parse", assignment.artifact.ref], {
+        cwd: remote,
+        encoding: "utf8",
+      }).trim(),
+    ).toBe(recovered.outputHead);
     expect(first.inputHead).toBe(baseCommit);
     expect(first.outputHead).toMatch(/^[a-f0-9]{40}$/);
     expect(first.changedPaths).toEqual(["README.md"]);
