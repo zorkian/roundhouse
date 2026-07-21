@@ -180,7 +180,8 @@ export function resumeRun(
 ): RunSnapshot {
   if (run.revision !== expectedRevision) throw new Error("stale_run_revision");
   const resumable =
-    (run.status === "waiting" && run.waitingReason === "clarification") ||
+    (run.status === "waiting" &&
+      ["clarification", "budget"].includes(String(run.waitingReason))) ||
     (run.status === "succeeded" && run.stage === "qualify");
   if (!resumable) throw new Error("run_not_resumable");
   const { waitingReason: _waitingReason, ...current } = run;

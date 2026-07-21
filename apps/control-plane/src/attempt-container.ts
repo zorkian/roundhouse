@@ -4,9 +4,11 @@
 import { Container } from "@cloudflare/containers";
 import {
   isModelRoute,
+  modelStopReasonHeader,
   type Attempt,
   type ModelRoute,
   type ModelUsage,
+  type RunRepository,
 } from "@roundhouse/core";
 import { observeResponse } from "@roundhouse/response-observer";
 import { verifyCallback } from "./callback.js";
@@ -51,6 +53,38 @@ async function recordModelEvent(
       }),
     );
   }
+}
+
+export async function pauseForModelBudget(
+  repository: RunRepository,
+  attempt: Attempt,
+): Promise<boolean> {
+  const run = await repository.get(attempt.runId);
+  if (
+    !run ||
+    run.status !== "active" ||
+    run.revision !== attempt.runRevision ||
+    run.stage !== attempt.stage
+  )
+    return false;
+  const waiting = await repository.transition(run.id, run.revision, {
+    status: "waiting",
+    stage: run.stage,
+    waitingReason: "budget",
+  });
+  if (!waiting) return false;
+  const failed = await repository.failAttempt(attempt.id, attempt.runRevision, {
+    failure: { reason: "budget", source: "model_provider" },
+  });
+  if (failed !== "failed" && failed !== "duplicate")
+    console.error(
+      JSON.stringify({
+        message: "budget_attempt_failure_record_failed",
+        attemptId: attempt.id,
+        outcome: failed,
+      }),
+    );
+  return true;
 }
 
 export function attemptAllowedHosts(
@@ -189,6 +223,25 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
       hasBody: Boolean(response.body),
     });
   }
+  if (response.headers.get(modelStopReasonHeader) === "budget") {
+    const paused = await pauseForModelBudget(repository, attempt);
+    if (paused)
+      await recordModelEvent(
+        repository,
+        attemptId,
+        "attempt_waiting_for_budget",
+        {
+          status: response.status,
+        },
+      );
+  }
+  const responseHeaders = new Headers(response.headers);
+  responseHeaders.delete(modelStopReasonHeader);
+  response = new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: responseHeaders,
+  });
   let responseText = "";
   return observeResponse(response, responseLogFields, {
     onText(text) {

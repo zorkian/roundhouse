@@ -660,6 +660,47 @@ describe("GitHub intake", () => {
     expect(api.post).toHaveBeenCalledTimes(1);
   });
 
+  it("lets a maintainer restart work after model budget is available", async () => {
+    const repository = new IntakeRepository();
+    const wakeups: Wakeup[] = [];
+    const enqueue = async (wakeup: Wakeup) => {
+      wakeups.push(wakeup);
+    };
+    const api = github();
+    await acceptGitHubComment(
+      await delivery("delivery-budget-start"),
+      env,
+      repository,
+      enqueue,
+      api,
+    );
+    const id = "run_123_issue_42";
+    await repository.transition(id, 1, {
+      status: "waiting",
+      stage: "implement",
+      waitingReason: "budget",
+    });
+
+    await expect(
+      acceptGitHubComment(
+        await delivery("delivery-budget-resume"),
+        env,
+        repository,
+        enqueue,
+        api,
+      ),
+    ).resolves.toBe("accepted");
+    await expect(repository.get(id)).resolves.toMatchObject({
+      status: "active",
+      stage: "implement",
+      revision: 3,
+    });
+    expect(wakeups).toEqual([
+      { runId: id, expectedRevision: 1 },
+      { runId: id, expectedRevision: 3 },
+    ]);
+  });
+
   it("rejects near-match commands and actors without write permission", async () => {
     const repository = new IntakeRepository();
     const enqueue = vi.fn();
