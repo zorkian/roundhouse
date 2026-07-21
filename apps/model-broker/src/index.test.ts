@@ -337,7 +337,7 @@ describe("model broker", () => {
           Response.json(
             {
               success: false,
-              errors: [{ code: 3036, message: "Account limited" }],
+              errors: [{ code: "3036", message: "Account limited" }],
             },
             { status: 429 },
           ),

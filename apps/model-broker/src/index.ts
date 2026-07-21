@@ -179,7 +179,7 @@ async function workersAiStopReason(
     const body = (await response.clone().json()) as {
       errors?: readonly { code?: unknown }[];
     };
-    return body.errors?.some((error) => error.code === 3036)
+    return body.errors?.some((error) => String(error.code) === "3036")
       ? "budget"
       : undefined;
   } catch {
