@@ -175,6 +175,7 @@ describe("version 2 repository profiles", () => {
   });
 
   it.each([
+    `version: 2\npaths: []\n`,
     `version: 2\npaths: "src/**"\n`,
     `version: 2\npaths:\n  allowed: ["**"]\n`,
     `version: 2\npaths: ["!"]\n`,
