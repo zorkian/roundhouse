@@ -716,7 +716,6 @@ async function structuredAgent(
     sessionManager: SessionManager.inMemory(directory),
     settingsManager: SettingsManager.inMemory({
       quietStartup: true,
-      retry: { enabled: false, provider: { maxRetries: 0 } },
     }),
   });
   const unsubscribe = session.subscribe((event) => {
