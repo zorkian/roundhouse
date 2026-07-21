@@ -328,6 +328,48 @@ describe("model broker", () => {
     );
   });
 
+  it("marks an exhausted Workers AI account as a budget stop", async () => {
+    const response = await brokerRequest(
+      modelRequest("openai-completions", "implement", { messages: [] }),
+      env,
+      {
+        run: vi.fn(async () =>
+          Response.json(
+            {
+              success: false,
+              errors: [{ code: "3036", message: "Account limited" }],
+            },
+            { status: 429 },
+          ),
+        ),
+      },
+    );
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-roundhouse-model-stop-reason")).toBe(
+      "budget",
+    );
+  });
+
+  it("leaves transient Workers AI capacity errors retryable", async () => {
+    const response = await brokerRequest(
+      modelRequest("openai-completions", "implement", { messages: [] }),
+      env,
+      {
+        run: vi.fn(async () =>
+          Response.json(
+            {
+              success: false,
+              errors: [{ code: 3040, message: "Out of capacity" }],
+            },
+            { status: 429 },
+          ),
+        ),
+      },
+    );
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-roundhouse-model-stop-reason")).toBeNull();
+  });
+
   it("does not leak binding failures", async () => {
     const response = await brokerRequest(
       modelRequest("openai-responses", "qualify", { input: "hello" }),

@@ -840,7 +840,13 @@ export async function acceptGitHubComment(
   });
   if (!fresh) return "duplicate";
   if (existing) {
-    if (run.issue && (await concludedNoChangeQualification(repository, run))) {
+    const resumableBudget =
+      run.status === "waiting" && run.waitingReason === "budget";
+    if (
+      run.issue &&
+      (resumableBudget ||
+        (await concludedNoChangeQualification(repository, run)))
+    ) {
       const resumed = await repository.resumeClarification(
         id,
         run.revision,

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import {
+  modelStopReasonHeader,
   modelThinkingLevels,
   modelProtocols,
   type ModelProtocol,
@@ -168,6 +169,22 @@ function responseHeaders(response: Response, route: ModelRoute): Headers {
   for (const [key, header] of Object.entries(routeHeaders))
     headers.set(header, String(route[key as keyof ModelRoute]));
   return headers;
+}
+
+async function workersAiStopReason(
+  response: Response,
+): Promise<"budget" | undefined> {
+  if (response.status !== 429) return undefined;
+  try {
+    const body = (await response.clone().json()) as {
+      errors?: readonly { code?: unknown }[];
+    };
+    return body.errors?.some((error) => String(error.code) === "3036")
+      ? "budget"
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function endpointProtocol(pathname: string): ModelProtocol | undefined {
@@ -339,16 +356,19 @@ export async function brokerRequest(
     return Response.json({ error: "model_upstream_failed" }, { status: 502 });
   }
   const attemptId = request.headers.get("x-roundhouse-attempt-id");
+  const stopReason = await workersAiStopReason(response);
   const captured = await observeResponse(response, {
     api: "workers_ai",
     operation: "run_model",
     ...(attemptId ? { attemptId } : {}),
     model: route.model,
   });
+  const headers = responseHeaders(captured, route);
+  if (stopReason) headers.set(modelStopReasonHeader, stopReason);
   return new Response(captured.body, {
     status: captured.status,
     statusText: captured.statusText,
-    headers: responseHeaders(captured, route),
+    headers,
   });
 }
 

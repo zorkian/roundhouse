@@ -107,6 +107,21 @@ describe("resumeRun", () => {
     expect(resumeRun(waiting, 2, issue).waitingReason).toBeUndefined();
   });
 
+  it("resumes a budget wait at the same stage", () => {
+    const waiting = transitionRun(createRun(input), 1, {
+      status: "waiting",
+      stage: "implement",
+      waitingReason: "budget",
+    });
+    expect(resumeRun(waiting, 2, issue)).toMatchObject({
+      status: "active",
+      stage: "implement",
+      revision: 3,
+      issue,
+    });
+    expect(resumeRun(waiting, 2, issue).waitingReason).toBeUndefined();
+  });
+
   it("reopens a succeeded no-change qualification on the same run", () => {
     const concluded = transitionRun(createRun(input), 1, {
       status: "succeeded",

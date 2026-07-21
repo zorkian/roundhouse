@@ -388,6 +388,42 @@ function repositoryContract(label, createRepository) {
         issue: { clarifications: [{ actor: "citizen", body: "More context" }] },
       });
     });
+
+    it("records an attempt failure without accepting later completion", async () => {
+      const repository = createRepository();
+      const run = createRun({ ...input, id: "run_failed_attempt" });
+      await repository.create(run);
+      const attempt = {
+        id: "run_failed_attempt_rev_1",
+        runId: run.id,
+        runRevision: 1,
+        kind: "agent",
+        stage: "implement",
+        role: "implement",
+        state: "dispatched",
+        deadlineAt: 200,
+        baseCommit: run.baseCommit,
+        expectedHead: run.baseCommit,
+      };
+      await repository.createAttempt(attempt);
+      await expect(
+        repository.failAttempt(attempt.id, 1, {
+          failure: { reason: "budget", source: "model_provider" },
+        }),
+      ).resolves.toBe("failed");
+      await expect(repository.getAttempt(attempt.id)).resolves.toMatchObject({
+        state: "failed",
+        result: {
+          failure: { reason: "budget", source: "model_provider" },
+        },
+      });
+      await expect(repository.failAttempt(attempt.id, 1, {})).resolves.toBe(
+        "duplicate",
+      );
+      await expect(
+        repository.completeAttempt(attempt.id, 1, run.baseCommit, {}),
+      ).resolves.toBe("stale");
+    });
   });
 }
 

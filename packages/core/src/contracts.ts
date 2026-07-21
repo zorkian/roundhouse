@@ -53,6 +53,7 @@ export const modelProtocols = [
   "anthropic-messages",
   "google-generative-ai",
 ] as const;
+export const modelStopReasonHeader = "x-roundhouse-model-stop-reason";
 
 export type ModelProtocol = (typeof modelProtocols)[number];
 
@@ -220,6 +221,11 @@ export interface RunRepository {
     acceptedHead: string,
     result: Readonly<Record<string, unknown>>,
   ): Promise<"completed" | "duplicate" | "stale">;
+  failAttempt(
+    attemptId: string,
+    expectedRevision: number,
+    result: Readonly<Record<string, unknown>>,
+  ): Promise<"failed" | "duplicate" | "stale">;
   getAttempt(attemptId: string): Promise<Attempt | undefined>;
   latestCompletedAttempt(
     runId: string,
