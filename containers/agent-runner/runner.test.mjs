@@ -462,6 +462,7 @@ describe("V2 agent runner", () => {
   });
 
   it("builds an attempt-bound asynchronous completion callback", async () => {
+    const timeout = vi.spyOn(AbortSignal, "timeout");
     const assignment = {
       id: "attempt_callback",
       runId: "run_1",
@@ -488,6 +489,7 @@ describe("V2 agent runner", () => {
     );
     expect(request.method).toBe("POST");
     expect(new URL(request.url).pathname).toBe("/attempts/callback");
+    expect(timeout).not.toHaveBeenCalled();
     await expect(request.json()).resolves.toMatchObject({
       attemptId: assignment.id,
       expectedRevision: 3,

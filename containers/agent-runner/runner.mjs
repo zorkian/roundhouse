@@ -71,7 +71,6 @@ export function completionRequest(
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ ...unsigned, signature }),
-    signal: AbortSignal.timeout(30_000),
   });
 }
 
