@@ -178,13 +178,18 @@ async function cloudflareStopReason(
   try {
     const body = (await response.clone().json()) as {
       errors?: readonly { code?: unknown }[];
-      error?: readonly { code?: unknown }[];
+      error?: unknown;
       internalCode?: unknown;
     };
+    const gatewayErrorCodes = Array.isArray(body.error)
+      ? body.error.map((error: { code?: unknown }) => error.code)
+      : body.error && typeof body.error === "object"
+        ? [(body.error as { code?: unknown }).code]
+        : [];
     const codes = [
       body.internalCode,
       ...(body.errors ?? []).map((error) => error.code),
-      ...(body.error ?? []).map((error) => error.code),
+      ...gatewayErrorCodes,
     ];
     return codes.some((code) => ["3036", "2041"].includes(String(code)))
       ? "budget"

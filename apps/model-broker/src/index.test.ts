@@ -373,6 +373,27 @@ describe("model broker", () => {
     );
   });
 
+  it("accepts a single AI Gateway error object", async () => {
+    const response = await brokerRequest(
+      modelRequest("openai-completions", "implement", { messages: [] }),
+      env,
+      {
+        run: vi.fn(async () =>
+          Response.json(
+            {
+              success: false,
+              error: { code: 2041, message: "Spend limit exceeded" },
+            },
+            { status: 429 },
+          ),
+        ),
+      },
+    );
+    expect(response.headers.get("x-roundhouse-model-stop-reason")).toBe(
+      "budget",
+    );
+  });
+
   it("leaves transient Workers AI capacity errors retryable", async () => {
     const response = await brokerRequest(
       modelRequest("openai-completions", "implement", { messages: [] }),
