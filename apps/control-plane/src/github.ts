@@ -481,6 +481,27 @@ function runDetailsUrl(
   ).toString();
 }
 
+interface ListedComment {
+  readonly body?: string;
+}
+
+// GitHub lists comments oldest first, so a marker on a busy thread can sit
+// beyond the first page. Page through every comment before deciding whether
+// a marker is already posted.
+async function listComments(
+  github: GitHubApi,
+  path: string,
+): Promise<readonly ListedComment[]> {
+  const comments: ListedComment[] = [];
+  for (let page = 1; ; page += 1) {
+    const batch = await github.get<readonly ListedComment[]>(
+      `${path}?per_page=100&page=${page}`,
+    );
+    comments.push(...batch);
+    if (batch.length < 100) return comments;
+  }
+}
+
 export class GitHubStageReporter implements AttemptReporter {
   constructor(
     private readonly github: GitHubApi,
@@ -500,8 +521,9 @@ export class GitHubStageReporter implements AttemptReporter {
   async reportStarted(run: RunSnapshot, attempt: Attempt): Promise<void> {
     if (attempt.stage === "implement") {
       const marker = `<!-- roundhouse:v2:implementation-started:${attempt.id} -->`;
-      const comments = await this.github.get<readonly { body?: string }[]>(
-        `/repos/${run.repository}/issues/${run.issueNumber}/comments?per_page=100`,
+      const comments = await listComments(
+        this.github,
+        `/repos/${run.repository}/issues/${run.issueNumber}/comments`,
       );
       if (comments.some((comment) => comment.body?.includes(marker))) return;
       await this.github.post(
@@ -525,8 +547,9 @@ export class GitHubStageReporter implements AttemptReporter {
     const pullRequest = await findOpenPullRequest(this.github, run);
     if (!pullRequest) throw new Error("review_pull_request_missing");
     const marker = `<!-- roundhouse:v2:review-started:${attempt.id} -->`;
-    const comments = await this.github.get<readonly { body?: string }[]>(
-      `/repos/${run.repository}/issues/${pullRequest.number}/comments?per_page=100`,
+    const comments = await listComments(
+      this.github,
+      `/repos/${run.repository}/issues/${pullRequest.number}/comments`,
     );
     if (comments.some((comment) => comment.body?.includes(marker))) return;
     await this.github.post(
@@ -555,8 +578,9 @@ export class GitHubStageReporter implements AttemptReporter {
       const pullRequest = merge?.pullRequest as
         Record<string, unknown> | undefined;
       const marker = `<!-- roundhouse:v2:merge:${attempt.id} -->`;
-      const comments = await this.github.get<readonly { body?: string }[]>(
-        `/repos/${run.repository}/issues/${run.issueNumber}/comments?per_page=100`,
+      const comments = await listComments(
+        this.github,
+        `/repos/${run.repository}/issues/${run.issueNumber}/comments`,
       );
       if (comments.some((comment) => comment.body?.includes(marker))) return;
       await this.github.post(
@@ -585,8 +609,9 @@ export class GitHubStageReporter implements AttemptReporter {
       const pullRequest = await findOpenPullRequest(this.github, run);
       if (!pullRequest) throw new Error("review_pull_request_missing");
       const marker = `<!-- roundhouse:v2:review:${attempt.id} -->`;
-      const comments = await this.github.get<readonly { body?: string }[]>(
-        `/repos/${run.repository}/issues/${pullRequest.number}/comments?per_page=100`,
+      const comments = await listComments(
+        this.github,
+        `/repos/${run.repository}/issues/${pullRequest.number}/comments`,
       );
       if (comments.some((comment) => comment.body?.includes(marker))) return;
       await this.github.post(
@@ -606,8 +631,9 @@ export class GitHubStageReporter implements AttemptReporter {
             ? "implementation"
             : "qualification";
     const marker = `<!-- roundhouse:v2:${phase}:${attempt.id} -->`;
-    const comments = await this.github.get<readonly { body?: string }[]>(
-      `/repos/${run.repository}/issues/${run.issueNumber}/comments?per_page=100`,
+    const comments = await listComments(
+      this.github,
+      `/repos/${run.repository}/issues/${run.issueNumber}/comments`,
     );
     if (comments.some((comment) => comment.body?.includes(marker))) return;
     if (attempt.stage === "implement") {
@@ -730,8 +756,9 @@ async function postIntakeComment(
 ): Promise<void> {
   const tag = `<!-- roundhouse:v2:${marker} -->`;
   try {
-    const comments = await github.get<readonly { body?: string }[]>(
-      `/repos/${run.repository}/issues/${run.issueNumber}/comments?per_page=100`,
+    const comments = await listComments(
+      github,
+      `/repos/${run.repository}/issues/${run.issueNumber}/comments`,
     );
     if (comments.some((comment) => comment.body?.includes(tag))) return;
     const details = runDetailsUrl(run, controlPlaneOrigin);
