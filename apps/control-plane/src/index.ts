@@ -85,9 +85,15 @@ export function successorWakeup(
   processed: Wakeup,
 ): Wakeup | undefined {
   return run?.status === "active" &&
-    new Set(["reproduce", "plan", "implement", "review", "ci", "merge"]).has(
-      run.stage,
-    ) &&
+    new Set([
+      "reproduce",
+      "plan",
+      "implement",
+      "review",
+      "integrate",
+      "ci",
+      "merge",
+    ]).has(run.stage) &&
     run.revision === processed.expectedRevision + 1
     ? { runId: run.id, expectedRevision: run.revision }
     : undefined;
@@ -259,6 +265,37 @@ export function githubBranch(issueNumber: number): string {
   return `roundhouse/issue-${issueNumber}`;
 }
 
+// The conflict details a conflict-resolution or integration-delta review
+// needs may live several revisions back (for example after a failed delta
+// review), so scan revisions until the conflicted integration is found.
+async function conflictedIntegrationOutcome(
+  runs: D1RunRepository,
+  run: RunSnapshot,
+): Promise<Record<string, unknown> | undefined> {
+  const latest = await runs.latestCompletedAttempt(
+    run.id,
+    "integrate",
+    run.revision,
+  );
+  const latestOutcome = latest?.result?.integration as
+    Record<string, unknown> | undefined;
+  if (latestOutcome?.status === "conflict") return latestOutcome;
+  for (let revision = run.revision - 1; revision >= 1; revision -= 1) {
+    const attempts = await runs.attemptsForRevision(run.id, revision);
+    for (const attempt of attempts) {
+      const outcome = attempt.result?.integration as
+        Record<string, unknown> | undefined;
+      if (
+        attempt.stage === "integrate" &&
+        attempt.state === "completed" &&
+        outcome?.status === "conflict"
+      )
+        return outcome;
+    }
+  }
+  return undefined;
+}
+
 class ContainerDispatcher implements AttemptDispatcher {
   constructor(
     private readonly containers: AttemptNamespace,
@@ -302,12 +339,18 @@ class ContainerDispatcher implements AttemptDispatcher {
     const taskType =
       attempt.stage === "plan"
         ? "planning"
-        : attempt.stage === "implement"
+        : attempt.stage === "implement" ||
+            attempt.role === "conflict-resolution"
           ? "implementation"
-          : attempt.stage === "review"
+          : attempt.stage === "review" || attempt.role === "review-integration"
             ? "review"
             : "validation";
-    const route = await this.resolveModelRoute(attempt, taskType);
+    // Mechanical integration is a no-model operation; only conflict
+    // resolution routes to an implementation model.
+    const route =
+      attempt.role === "integrate"
+        ? undefined
+        : await this.resolveModelRoute(attempt, taskType);
     const repository = await this.artifacts.ensure(
       workspaceName(attempt.runId),
     );
@@ -364,7 +407,11 @@ class ContainerDispatcher implements AttemptDispatcher {
       }
       await repository.revokeToken(bootstrapToken.id);
     }
-    const access = attempt.stage === "implement" ? "write" : "read";
+    const access =
+      ["implement", "integrate"].includes(attempt.stage) &&
+      attempt.role !== "review-integration"
+        ? "write"
+        : "read";
     const token = await repository.createToken(access, 30 * 60);
     const qualificationAttempt = [
       "reproduce",
@@ -397,7 +444,7 @@ class ContainerDispatcher implements AttemptDispatcher {
         )
       : undefined;
     const reviewAttempt =
-      attempt.stage === "implement"
+      attempt.stage === "implement" || attempt.role === "conflict-resolution"
         ? await this.runs.latestCompletedAttempt(run.id, "review", run.revision)
         : undefined;
     const reviewAttempts = reviewAttempt
@@ -412,12 +459,51 @@ class ContainerDispatcher implements AttemptDispatcher {
       attempt.stage === "implement"
         ? await this.runs.latestCompletedAttempt(run.id, "ci", run.revision)
         : undefined;
+    const conflictedOutcome = [
+      "conflict-resolution",
+      "review-integration",
+    ].includes(attempt.role)
+      ? await conflictedIntegrationOutcome(this.runs, run)
+      : undefined;
     const qualification = qualificationAttempt?.result?.qualification;
     const reproduction = reproductionAttempt?.result?.reproduction;
     const plan = planAttempt?.result?.plan;
     const implementation = implementationAttempt?.result?.implementation;
     const review = reviewAttempt ? aggregatedReview(reviewAttempts) : undefined;
     const ci = ciAttempt?.result?.ci;
+    const integrateEvidence =
+      attempt.role === "conflict-resolution"
+        ? {
+            qualification:
+              qualification ??
+              (
+                await this.runs.latestCompletedAttempt(
+                  run.id,
+                  "qualify",
+                  run.revision,
+                )
+              )?.result?.qualification,
+            plan:
+              plan ??
+              (
+                await this.runs.latestCompletedAttempt(
+                  run.id,
+                  "plan",
+                  run.revision,
+                )
+              )?.result?.plan,
+            implementation:
+              implementation ??
+              (
+                await this.runs.latestCompletedAttempt(
+                  run.id,
+                  "implement",
+                  run.revision,
+                )
+              )?.result?.implementation,
+            review,
+          }
+        : undefined;
     const reviewer = reviewerForRole(attempt.role);
     const sameRevisionReviews =
       attempt.stage === "review"
@@ -449,7 +535,7 @@ class ContainerDispatcher implements AttemptDispatcher {
         review,
         ci,
       }),
-      routing: route,
+      ...(route ? { routing: route } : {}),
       ...(reviewer ? { reviewer } : {}),
       artifact: {
         repositoryId: repository.id,
@@ -461,14 +547,42 @@ class ContainerDispatcher implements AttemptDispatcher {
         access: token.access,
         ref: workspaceRef(attempt.runId),
       },
-      ...(attempt.stage === "implement" &&
-      (ci as Record<string, unknown> | undefined)?.reason === "base_conflict"
+      ...(attempt.stage === "integrate"
         ? {
             upstream: {
               remote: `https://github.com/${run.repository}.git`,
               hostname: "github.com",
-              branch: "main",
+              branch: run.githubDefaultBranch ?? "main",
             },
+            integration: {
+              candidateHead: run.reviewedHead ?? run.currentHead,
+              ...(typeof conflictedOutcome?.baseHead === "string"
+                ? { baseHead: conflictedOutcome.baseHead }
+                : run.targetBaseHead
+                  ? { baseHead: run.targetBaseHead }
+                  : {}),
+              ...(Array.isArray(conflictedOutcome?.conflicts)
+                ? { conflicts: conflictedOutcome.conflicts }
+                : {}),
+            },
+            ...(integrateEvidence
+              ? {
+                  context: {
+                    ...(integrateEvidence.qualification
+                      ? { qualification: integrateEvidence.qualification }
+                      : {}),
+                    ...(integrateEvidence.plan
+                      ? { plan: integrateEvidence.plan }
+                      : {}),
+                    ...(integrateEvidence.implementation
+                      ? { implementation: integrateEvidence.implementation }
+                      : {}),
+                    ...(integrateEvidence.review
+                      ? { review: integrateEvidence.review }
+                      : {}),
+                  },
+                }
+              : {}),
           }
         : {}),
     };
@@ -528,7 +642,10 @@ class ContainerCheckpointValidator implements CheckpointValidator {
           throw new Error("run_profile_missing");
         })(),
     });
-    if (attempt.stage !== "implement") {
+    if (
+      !["implement", "integrate"].includes(attempt.stage) ||
+      attempt.role === "review-integration"
+    ) {
       try {
         validateReadOnlyCheckpoint(input.checkpoint);
       } finally {
@@ -536,6 +653,10 @@ class ContainerCheckpointValidator implements CheckpointValidator {
       }
       return;
     }
+    const conflicted =
+      attempt.role === "conflict-resolution"
+        ? await conflictedIntegrationOutcome(this.repository, run)
+        : undefined;
     const token = await artifact.createToken("read", 5 * 60);
     try {
       const response = await observeResponse(
@@ -550,6 +671,18 @@ class ContainerCheckpointValidator implements CheckpointValidator {
                 baseCommit: run.baseCommit,
                 profile: run.profile,
                 checkpoint: input.checkpoint,
+                ...(conflicted
+                  ? {
+                      integration: {
+                        ...(typeof conflicted.baseHead === "string"
+                          ? { baseHead: conflicted.baseHead }
+                          : {}),
+                        ...(Array.isArray(conflicted.conflicts)
+                          ? { conflicts: conflicted.conflicts }
+                          : {}),
+                      },
+                    }
+                  : {}),
                 artifact: {
                   repositoryId: artifact.id,
                   repository: artifact.name,
@@ -696,7 +829,8 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       const attempt = await repository.getAttempt(attemptId);
       if (
         !attempt ||
-        attempt.stage !== "implement" ||
+        !["implement", "integrate"].includes(attempt.stage) ||
+        attempt.role === "review-integration" ||
         !["created", "dispatched"].includes(attempt.state) ||
         attempt.deadlineAt <= Date.now()
       )

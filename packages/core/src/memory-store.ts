@@ -195,6 +195,7 @@ export class MemoryRunRepository implements RunRepository {
         "plan",
         "implement",
         "review",
+        "integrate",
         "merge",
       ]).has(this.runs.get(runId)?.stage ?? "")
         ? [{ runId, expectedRevision: lease.runRevision }]

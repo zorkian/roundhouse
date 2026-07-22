@@ -250,33 +250,74 @@ export class GitHubCiAutomation {
     private readonly github: GitHubAutomationApi,
   ) {}
 
+  // The reviewed candidate keeps its identity when only its base moved; the
+  // integration commit is the head CI and merge must bind to.
+  private reviewedHead(run: RunSnapshot): string {
+    return run.reviewedHead ?? run.currentHead;
+  }
+
+  private async latestBaseHead(run: RunSnapshot): Promise<string | undefined> {
+    const branch = run.githubDefaultBranch ?? "main";
+    const reference = await this.github.get<{
+      readonly object?: { readonly sha?: string };
+    }>(`/repos/${run.repository}/git/ref/heads/${encodeURIComponent(branch)}`);
+    const sha = reference.object?.sha;
+    return sha && /^[a-f0-9]{40}$/.test(sha) ? sha : undefined;
+  }
+
+  // A conflict-resolved integration reaches CI only after its
+  // integration-delta review; a mechanical clean merge needs none.
+  private async integrationReviewed(run: RunSnapshot): Promise<boolean> {
+    if (!run.integrationHead) return true;
+    const latest = await this.repository.latestCompletedAttempt(
+      run.id,
+      "integrate",
+      run.revision,
+    );
+    if (!latest) return false;
+    if (latest.role === "integrate")
+      return latest.acceptedHead === run.integrationHead;
+    if (latest.role !== "review-integration") return false;
+    const review = latest.result?.review as Record<string, unknown> | undefined;
+    return (
+      latest.expectedHead === run.integrationHead && review?.status === "clean"
+    );
+  }
+
+  // A moved or conflicted target branch sends the run back to last-mile
+  // integration with the same reviewed candidate instead of restarting
+  // general implementation.
+  private async reintegrate(run: RunSnapshot): Promise<"recorded" | "stale"> {
+    // Atomically clear the superseded integration/base identities so the
+    // run never pairs a pending integration with an obsolete validated head.
+    const next = await this.repository.transition(run.id, run.revision, {
+      status: "active",
+      stage: "integrate",
+      heads: { integrationHead: null, targetBaseHead: null },
+    });
+    return next ? "recorded" : "stale";
+  }
+
   async reconcileCi(
     run: RunSnapshot,
     now = Date.now(),
   ): Promise<"recorded" | "pending" | "stale"> {
     if (run.status !== "active" || run.stage !== "ci") return "stale";
     const review = await aggregateReview(this.repository, run);
-    if (!exactAttempt(review, "review", run.currentHead, "clean"))
+    if (!exactAttempt(review, "review", this.reviewedHead(run), "clean"))
       return "stale";
+    if (run.integrationHead && run.integrationHead !== run.currentHead)
+      return "stale";
+    if (!(await this.integrationReviewed(run))) return "stale";
+    if (run.targetBaseHead) {
+      const latestBase = await this.latestBaseHead(run);
+      if (latestBase && latestBase !== run.targetBaseHead)
+        return this.reintegrate(run);
+    }
     let pull = await pullRequest(this.github, run);
     if (!pull || pull.state !== "open" || pull.head.sha !== run.currentHead)
       return "stale";
-    if (pull.mergeable === false)
-      return this.recordCi(
-        run,
-        pull,
-        [
-          {
-            name: "Pull request base",
-            status: "completed",
-            conclusion: "failure",
-            head_sha: run.currentHead,
-          },
-        ],
-        "failure",
-        now,
-        { reason: "base_conflict" },
-      );
+    if (pull.mergeable === false) return this.reintegrate(run);
     let checks = await checkRuns(this.github, run);
     if (!checksCompleted(checks, run.currentHead)) return "pending";
     if (!checksSucceeded(checks, run.currentHead)) {
@@ -312,7 +353,7 @@ export class GitHubCiAutomation {
       current.status !== "active" ||
       current.stage !== "ci" ||
       current.currentHead !== run.currentHead ||
-      !exactAttempt(currentReview, "review", run.currentHead, "clean") ||
+      !exactAttempt(currentReview, "review", this.reviewedHead(run), "clean") ||
       !pull ||
       pull.state !== "open" ||
       pull.draft ||
@@ -491,8 +532,7 @@ export class GitHubCiAutomation {
     status: "success" | "failure",
     now: number,
     detail?: {
-      readonly reason?:
-        "base_conflict" | "diagnostics_unavailable" | "evidence_consumed";
+      readonly reason?: "diagnostics_unavailable" | "evidence_consumed";
       readonly diagnostics?: CiDiagnostics;
       readonly diagnosticsError?: string;
     },
@@ -519,6 +559,7 @@ export class GitHubCiAutomation {
           status,
           ...(detail?.reason ? { reason: detail.reason } : {}),
           head: run.currentHead,
+          ...(run.targetBaseHead ? { baseHead: run.targetBaseHead } : {}),
           pullRequest: { number: pull.number, html_url: pull.html_url },
           checks: checkEvidence(checks),
           ...(detail?.diagnostics ? { diagnostics: detail.diagnostics } : {}),
@@ -546,9 +587,23 @@ export class GitHubCiAutomation {
       pullRequest(this.github, run, "all"),
       checkRuns(this.github, run),
     ]);
+    if (!(await this.integrationReviewed(run))) return "stale";
+    // The target branch is rechecked immediately before merge so a base that
+    // moved after CI reconciliation returns the run to integration instead
+    // of merging a head that was never integrated or tested against it.
+    if (run.targetBaseHead) {
+      const latestBase = await this.latestBaseHead(run);
+      if (latestBase && latestBase !== run.targetBaseHead)
+        return this.reintegrate(run);
+    }
     if (
-      !exactAttempt(review, "review", run.currentHead, "clean") ||
+      !exactAttempt(review, "review", this.reviewedHead(run), "clean") ||
       !exactAttempt(ci, "ci", run.currentHead, "success") ||
+      (run.integrationHead !== undefined &&
+        run.integrationHead !== run.currentHead) ||
+      (run.targetBaseHead !== undefined &&
+        (ci?.result?.ci as Record<string, unknown> | undefined)?.baseHead !==
+          run.targetBaseHead) ||
       !pull ||
       pull.head.sha !== run.currentHead
     )

@@ -20,6 +20,7 @@ export const runStages = [
   "implement",
   "validate",
   "review",
+  "integrate",
   "publish",
   "ci",
   "merge",
@@ -50,6 +51,10 @@ export interface RunSnapshot {
   readonly issueNumber: number;
   readonly baseCommit: string;
   readonly currentHead: string;
+  readonly candidateHead?: string;
+  readonly reviewedHead?: string;
+  readonly targetBaseHead?: string;
+  readonly integrationHead?: string;
   readonly profileVersion: string;
   readonly profile?: AppliedProfile;
   readonly profileError?: string;
@@ -93,6 +98,14 @@ export interface RunTransition {
   readonly stage: RunStage;
   readonly waitingReason?: WaitingReason;
   readonly acceptedHead?: string;
+  // Identity heads may be set to a commit or explicitly cleared with null
+  // (for example, superseding an integration when the target base moves).
+  readonly heads?: Partial<
+    Record<
+      "candidateHead" | "reviewedHead" | "targetBaseHead" | "integrationHead",
+      string | null
+    >
+  >;
 }
 
 const terminalStatuses = new Set<RunStatus>([
@@ -152,6 +165,9 @@ function assertTransition(transition: RunTransition): void {
     !/^[a-f0-9]{40}$/.test(transition.acceptedHead)
   )
     throw new Error("invalid_accepted_head");
+  for (const value of Object.values(transition.heads ?? {}))
+    if (value !== null && !/^[a-f0-9]{40}$/.test(value))
+      throw new Error("invalid_identity_head");
 }
 
 export function transitionRun(
@@ -164,13 +180,19 @@ export function transitionRun(
   assertTransition(transition);
 
   const { waitingReason: _waitingReason, ...current } = run;
-  const { acceptedHead, ...nextTransition } = transition;
-  return {
+  const { acceptedHead, heads, ...nextTransition } = transition;
+  const next: RunSnapshot = {
     ...current,
     ...nextTransition,
     currentHead: acceptedHead ?? current.currentHead,
     revision: run.revision + 1,
   };
+  const mutable = next as unknown as Record<string, unknown>;
+  for (const [key, value] of Object.entries(heads ?? {})) {
+    if (value === null) delete mutable[key];
+    else mutable[key] = value;
+  }
+  return next;
 }
 
 export function resumeRun(

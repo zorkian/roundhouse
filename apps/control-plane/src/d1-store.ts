@@ -562,7 +562,7 @@ export class D1RunRepository implements RunRepository {
   async expiredLeases(now: number): Promise<readonly Wakeup[]> {
     const result = await this.db
       .prepare(
-        "SELECT id,revision FROM runs WHERE status='active' AND stage IN ('qualify','reproduce','plan','implement','review','merge') AND lease_expires_at<=?1",
+        "SELECT id,revision FROM runs WHERE status='active' AND stage IN ('qualify','reproduce','plan','implement','review','integrate','merge') AND lease_expires_at<=?1",
       )
       .bind(now)
       .all<{ id: string; revision: number }>();
