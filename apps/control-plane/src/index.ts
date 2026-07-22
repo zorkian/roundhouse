@@ -918,7 +918,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       const attempt = await repository.getAttempt(attemptId);
       if (
         !attempt ||
-        attempt.stage !== "implement" ||
+        !["reproduce", "implement"].includes(attempt.stage) ||
         !["created", "dispatched"].includes(attempt.state) ||
         attempt.deadlineAt <= Date.now()
       )
