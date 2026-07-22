@@ -1013,7 +1013,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
           });
         });
         await page.goto(new URL(input.path, previewOrigin).toString(), {
-          waitUntil: "networkidle",
+          waitUntil: "load",
         });
         const png = await page.screenshot({ type: "png", fullPage: true });
         const id = crypto.randomUUID();
