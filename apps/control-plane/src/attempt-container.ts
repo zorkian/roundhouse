@@ -437,6 +437,7 @@ export function extractModelUsage(
 }
 
 export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
+  // Sandbox.defaultPort is its reserved control API; the runner is separate.
   private readonly agentRunnerPort = 8080;
   override sleepAfter = "5m";
   override enableInternet = false;
