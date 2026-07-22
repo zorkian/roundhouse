@@ -91,6 +91,7 @@ describe("V2 run contract", () => {
 });
 
 describe("resumeRun", () => {
+  const { profile: _profile, ...profilelessInput } = input;
   const issue = {
     title: "Report",
     body: "Details",
@@ -100,7 +101,15 @@ describe("resumeRun", () => {
   };
 
   it.each(waitingReasons)("resumes a %s wait at the same stage", (reason) => {
-    const waiting = transitionRun(createRun(input), 1, {
+    const run = createRun(
+      reason === "profile_error"
+        ? {
+            ...profilelessInput,
+            profileError: "Repository profile is missing or invalid",
+          }
+        : input,
+    );
+    const waiting = transitionRun(run, 1, {
       status: "waiting",
       stage: "reproduce",
       waitingReason: reason,
@@ -125,16 +134,22 @@ describe("resumeRun", () => {
   });
 
   it("requires a refreshed profile for profile-error and profile-less runs", () => {
-    const profileError = transitionRun(createRun(input), 1, {
-      status: "waiting",
-      stage: "qualify",
-      waitingReason: "profile_error",
-    });
+    const profileError = transitionRun(
+      createRun({
+        ...profilelessInput,
+        profileError: "Repository profile is missing or invalid",
+      }),
+      1,
+      {
+        status: "waiting",
+        stage: "qualify",
+        waitingReason: "profile_error",
+      },
+    );
     expect(() => resumeRun(profileError, 2, issue)).toThrow(
       "resume_profile_required",
     );
-    const { profile: _profile, ...withoutProfile } = input;
-    const legacy = transitionRun(createRun(withoutProfile), 1, {
+    const legacy = transitionRun(createRun(profilelessInput), 1, {
       status: "waiting",
       stage: "implement",
       waitingReason: "maintainer_judgment",

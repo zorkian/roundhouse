@@ -360,8 +360,9 @@ function repositoryContract(label, createRepository) {
 
     it.each(waitingReasons)("resumes a %s wait", async (reason) => {
       const repository = createRepository();
+      const { profile: _profile, ...profilelessInput } = input;
       const run = createRun({
-        ...input,
+        ...(reason === "profile_error" ? profilelessInput : input),
         id: `run_waiting_${reason}`,
         ...(reason === "profile_error"
           ? { profileError: "Repository profile is missing or invalid" }
