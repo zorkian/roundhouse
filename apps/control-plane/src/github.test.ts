@@ -1976,6 +1976,12 @@ describe("GitHub intake", () => {
           pullRequestTitle: "Handle empty input",
           pullRequestBody: "Fixes the empty-input behavior described in #42.",
           validation: [{ command: "pnpm test", exitCode: 0, output: "passed" }],
+          screenshots: [
+            {
+              url: "https://roundhouse-dev.rm-rf.rip/screenshots/example",
+              description: "Empty [state]\nview",
+            },
+          ],
         },
       },
     } satisfies Attempt;
@@ -2000,6 +2006,9 @@ describe("GitHub intake", () => {
     );
     expect(JSON.stringify(post.mock.calls)).not.toContain("pnpm test");
     expect(JSON.stringify(post.mock.calls)).not.toContain("passed");
+    expect(JSON.stringify(post.mock.calls)).toContain(
+      "![Empty  state  view](https://roundhouse-dev.rm-rf.rip/screenshots/example)",
+    );
   });
 
   it("updates the same draft pull request after review findings", async () => {

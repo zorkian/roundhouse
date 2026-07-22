@@ -417,10 +417,12 @@ function implementationComment(
         const screenshot = item as Record<string, unknown>;
         const url = String(screenshot.url ?? "");
         if (!url.startsWith("https://")) return [];
-        return [
-          "",
-          `![${String(screenshot.description ?? "Implementation screenshot")}](${url})`,
-        ];
+        const description = String(
+          screenshot.description ?? "Implementation screenshot",
+        )
+          .replace(/[\[\]\r\n]/g, " ")
+          .trim();
+        return ["", `![${description || "Implementation screenshot"}](${url})`];
       })
     : [];
   return [

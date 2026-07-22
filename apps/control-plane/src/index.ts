@@ -1078,24 +1078,27 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
             runId: attempt.runId,
             expectedRevision: attempt.runRevision,
           });
-          if (attempt.stage === "implement") {
-            const sandbox = attemptSandbox(
+          try {
+            if (attempt.stage === "implement") {
+              const sandbox = attemptSandbox(
+                env.ATTEMPT_SANDBOXES,
+                sandboxName(attempt),
+              );
+              const backup = await sandbox.backupWorkspace(attempt.runId);
+              await saveWorkspaceBackup(
+                env.DB,
+                attempt.runId,
+                attempt.id,
+                backup,
+              );
+            }
+          } finally {
+            scheduleAttemptSandboxDestruction(
               env.ATTEMPT_SANDBOXES,
               sandboxName(attempt),
-            );
-            const backup = await sandbox.backupWorkspace(attempt.runId);
-            await saveWorkspaceBackup(
-              env.DB,
-              attempt.runId,
-              attempt.id,
-              backup,
+              context,
             );
           }
-          scheduleAttemptSandboxDestruction(
-            env.ATTEMPT_SANDBOXES,
-            sandboxName(attempt),
-            context,
-          );
         }
       }
       return json(
