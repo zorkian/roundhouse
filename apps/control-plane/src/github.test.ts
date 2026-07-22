@@ -961,7 +961,11 @@ describe("GitHub intake", () => {
     const id = "run_123_issue_42";
     const created = await repository.get(id);
     if (!created) throw new Error("test_run_missing");
-    repository.runs.set(id, { ...created, issue: undefined });
+    repository.runs.set(id, {
+      ...created,
+      issue: undefined,
+      profile: undefined,
+    });
     await repository.transition(id, 1, {
       status: "waiting",
       stage: "implement",
@@ -985,6 +989,11 @@ describe("GitHub intake", () => {
         title: "Qualify this",
         body: "Acceptance details",
         actor: "maintainer",
+      },
+      profile: {
+        sourcePath: ".roundhouse/profile.yaml",
+        sourceCommit: "a".repeat(40),
+        version: 1,
       },
     });
     expect(wakeups).toEqual([

@@ -1000,7 +1000,7 @@ export async function acceptGitHubComment(
         actor,
       };
       let profile: AppliedProfile | undefined;
-      if (run.waitingReason === "profile_error") {
+      if (!run.profile || run.waitingReason === "profile_error") {
         try {
           profile = await loadRepositoryProfile(
             api,

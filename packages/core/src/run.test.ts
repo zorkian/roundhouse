@@ -10,7 +10,14 @@ const input = {
   issueNumber: 246,
   baseCommit: "a".repeat(40),
   profileVersion: "v2-initial",
-};
+  profile: {
+    sourcePath: ".roundhouse/profile.yaml",
+    sourceCommit: "a".repeat(40),
+    version: 1,
+    hash: "v2-initial",
+    paths: { allowed: ["**"], protected: [] },
+  },
+} as const;
 
 describe("V2 run contract", () => {
   it("creates the one initial qualification state", () => {
@@ -98,13 +105,43 @@ describe("resumeRun", () => {
       stage: "reproduce",
       waitingReason: reason,
     });
-    expect(resumeRun(waiting, 2, issue)).toMatchObject({
+    const refreshedProfile =
+      reason === "profile_error"
+        ? {
+            ...input.profile,
+            sourceCommit: "b".repeat(40),
+            hash: "v2-refreshed",
+          }
+        : undefined;
+    expect(resumeRun(waiting, 2, issue, refreshedProfile)).toMatchObject({
       status: "active",
       stage: "reproduce",
       revision: 3,
       issue,
     });
-    expect(resumeRun(waiting, 2, issue).waitingReason).toBeUndefined();
+    expect(
+      resumeRun(waiting, 2, issue, refreshedProfile).waitingReason,
+    ).toBeUndefined();
+  });
+
+  it("requires a refreshed profile for profile-error and profile-less runs", () => {
+    const profileError = transitionRun(createRun(input), 1, {
+      status: "waiting",
+      stage: "qualify",
+      waitingReason: "profile_error",
+    });
+    expect(() => resumeRun(profileError, 2, issue)).toThrow(
+      "resume_profile_required",
+    );
+    const { profile: _profile, ...withoutProfile } = input;
+    const legacy = transitionRun(createRun(withoutProfile), 1, {
+      status: "waiting",
+      stage: "implement",
+      waitingReason: "maintainer_judgment",
+    });
+    expect(() => resumeRun(legacy, 2, issue)).toThrow(
+      "resume_profile_required",
+    );
   });
 
   it("reopens a succeeded no-change qualification on the same run", () => {

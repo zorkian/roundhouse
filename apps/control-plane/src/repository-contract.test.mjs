@@ -105,6 +105,13 @@ const input = {
   issueNumber: 42,
   baseCommit: "a".repeat(40),
   profileVersion: "v2",
+  profile: {
+    sourcePath: ".roundhouse/profile.yaml",
+    sourceCommit: "a".repeat(40),
+    version: 1,
+    hash: "v2",
+    paths: { allowed: ["**"], protected: [] },
+  },
 };
 
 function repositoryContract(label, createRepository) {

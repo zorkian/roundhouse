@@ -184,6 +184,11 @@ export function resumeRun(
     run.status === "waiting" ||
     (run.status === "succeeded" && run.stage === "qualify");
   if (!resumable) throw new Error("run_not_resumable");
+  if (
+    (!run.profile && !profile) ||
+    (run.waitingReason === "profile_error" && !profile)
+  )
+    throw new Error("resume_profile_required");
   const { waitingReason: _waitingReason, ...current } = run;
   const resumed: RunSnapshot = {
     ...current,
