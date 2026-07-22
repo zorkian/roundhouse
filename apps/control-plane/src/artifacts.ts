@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { assertPathAllowed, type AppliedProfile } from "@roundhouse/core";
+import { observeResponse } from "@roundhouse/response-observer";
 
 export type ArtifactAccess = "read" | "write";
 
@@ -86,23 +87,18 @@ class CloudflareArtifactRepository implements ArtifactRepository {
     private readonly repository: ArtifactsRepo,
     name: string,
     location: ArtifactLocation,
-    empty?: boolean,
+    empty: boolean,
   ) {
     const identity = artifactIdentity(name, location);
     this.id = identity.id;
     this.name = identity.name;
     this.remote = identity.remote;
     this.hostname = identity.hostname;
-    const source = repository.source;
-    const lastPushAt = repository.lastPushAt;
-    this.empty = empty ?? (!source?.trim() && !lastPushAt?.trim());
+    this.empty = empty;
     console.log(
       JSON.stringify({
-        message: "artifact_repository_metadata",
+        message: "artifact_repository_state",
         repository: name,
-        source,
-        lastPushAt,
-        emptyOverride: empty,
         empty: this.empty,
       }),
     );
@@ -150,6 +146,33 @@ export class CloudflareArtifactsNamespace implements ArtifactsNamespace {
     throw new Error("artifact_repository_not_ready");
   }
 
+  private async empty(repository: ArtifactsRepo, name: string) {
+    const token = await repository.createToken("read", 60);
+    const identity = artifactIdentity(name, this.location);
+    try {
+      const response = await observeResponse(
+        await fetch(`${identity.remote}/info/refs?service=git-upload-pack`, {
+          headers: { authorization: `Bearer ${token.plaintext}` },
+        }),
+        { api: "artifacts", operation: "advertise_refs" },
+      );
+      if (!response.ok)
+        throw new Error(`artifact_advertise_refs_http_${response.status}`);
+      return !(await response.text()).includes("refs/heads/main");
+    } finally {
+      await repository.revokeToken(token.id);
+    }
+  }
+
+  private async wrap(repository: ArtifactsRepo, name: string) {
+    return new CloudflareArtifactRepository(
+      repository,
+      name,
+      this.location,
+      await this.empty(repository, name),
+    );
+  }
+
   async ensure(name: string) {
     const existing = await this.get(name);
     if (existing) return existing;
@@ -181,21 +204,13 @@ export class CloudflareArtifactsNamespace implements ArtifactsNamespace {
         if (reconciled) return reconciled;
         throw error;
       }
-      return new CloudflareArtifactRepository(
-        await this.ready(name),
-        name,
-        this.location,
-      );
+      return await this.wrap(await this.ready(name), name);
     }
   }
 
   async get(name: string): Promise<ArtifactRepository | undefined> {
     try {
-      return new CloudflareArtifactRepository(
-        await this.ready(name),
-        name,
-        this.location,
-      );
+      return await this.wrap(await this.ready(name), name);
     } catch (error) {
       if (isArtifactsError(error, "NOT_FOUND")) return undefined;
       throw error;
