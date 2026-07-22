@@ -567,10 +567,10 @@ export function piModelConfiguration(assignment, attemptSecret) {
               compat: {
                 supportsStore: false,
                 supportsDeveloperRole: false,
-                supportsReasoningEffort: false,
+                supportsReasoningEffort: true,
                 maxTokensField: "max_tokens",
                 supportsStrictMode: false,
-                thinkingFormat: "deepseek",
+                thinkingFormat: "openai",
                 requiresReasoningContentOnAssistantMessages: true,
                 deferredToolsMode: "kimi",
               },
@@ -583,6 +583,17 @@ export function piModelConfiguration(assignment, attemptSecret) {
             id: route.model,
             name: route.model,
             reasoning: route.thinkingLevel !== "off",
+            ...(route.model === "moonshotai/kimi-k3"
+              ? {
+                  thinkingLevelMap: {
+                    off: null,
+                    minimal: null,
+                    low: "low",
+                    medium: null,
+                    high: "high",
+                  },
+                }
+              : {}),
             input: ["text"],
             contextWindow:
               route.model === "moonshotai/kimi-k3" ? 1_048_576 : 200_000,
