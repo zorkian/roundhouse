@@ -439,7 +439,6 @@ export function extractModelUsage(
 export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
   // Sandbox.defaultPort is its reserved control API; the runner is separate.
   private readonly agentRunnerPort = 8080;
-  override sleepAfter = "5m";
   override enableInternet = false;
   override interceptHttps = true;
 
@@ -474,6 +473,9 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
   ): Promise<number> {
     if (attempt.deadlineAt <= Date.now()) return 409;
 
+    // Agent work continues asynchronously after /assign returns. Completion,
+    // cancellation, and expired-lease recovery explicitly destroy the sandbox.
+    await this.setKeepAlive(true);
     await this.setAllowedHosts(attemptAllowedHosts(attempt, callbackUrl));
     let runner = await this.getProcess("roundhouse-runner");
     if (!runner) {
