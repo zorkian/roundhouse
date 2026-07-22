@@ -227,8 +227,21 @@ export function ciTransition(attempt: Attempt) {
     attempt.acceptedHead !== attempt.expectedHead
   )
     return { status: "failed", stage: "ci" } as const;
-  if (outcome.status === "failure")
+  if (outcome.status === "failure") {
+    // A CI failure may only return to implementation with concrete,
+    // newly retrieved failure evidence; missing diagnostics or evidence
+    // already consumed by an earlier repair leaves the run waiting.
+    if (
+      outcome.reason === "diagnostics_unavailable" ||
+      outcome.reason === "evidence_consumed"
+    )
+      return {
+        status: "waiting",
+        stage: "ci",
+        waitingReason: "external_check",
+      } as const;
     return { status: "active", stage: "implement" } as const;
+  }
   if (outcome.status !== "success")
     return { status: "failed", stage: "ci" } as const;
   return {

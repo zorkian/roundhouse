@@ -7,6 +7,7 @@ import type {
   RunStage,
   RunTransition,
 } from "./run.js";
+import type { AppliedProfile } from "./profile.js";
 
 export const attemptKinds = ["agent", "external"] as const;
 export const attemptStates = [
@@ -197,10 +198,11 @@ export interface RunRepository {
     expectedRevision: number,
     transition: RunTransition,
   ): Promise<RunSnapshot | undefined>;
-  resumeClarification(
+  resume(
     runId: string,
     expectedRevision: number,
     issue: IssueSnapshot,
+    profile?: AppliedProfile,
   ): Promise<RunSnapshot | undefined>;
   claimLease(
     runId: string,
@@ -232,6 +234,17 @@ export interface RunRepository {
     stage: RunStage,
     beforeRevision: number,
   ): Promise<Attempt | undefined>;
+  /**
+   * Returns true when a completed CI attempt recorded before the given
+   * revision already contains this failure-evidence key, so repeated webhook
+   * deliveries or reconciliation cannot dispatch another paid repair attempt
+   * for the same candidate SHA and concrete check/workflow attempt.
+   */
+  consumedCiEvidence(
+    runId: string,
+    evidenceKey: string,
+    beforeRevision: number,
+  ): Promise<boolean>;
   attemptsForRevision(
     runId: string,
     revision: number,

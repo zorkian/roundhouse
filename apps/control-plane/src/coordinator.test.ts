@@ -1066,7 +1066,7 @@ describe("single coordinator", () => {
       revision: 2,
     });
 
-    const reopened = await store.resumeClarification(input.id, 2, {
+    const reopened = await store.resume(input.id, 2, {
       title: "Report",
       body: "Details",
       url: "https://github.com/zorkian/roundhouse/issues/1",
@@ -1656,6 +1656,41 @@ describe("single coordinator", () => {
       ciTransition({
         ...attempt,
         result: { ci: { status: "failure", head } },
+      }),
+    ).toEqual({ status: "active", stage: "implement" });
+    expect(
+      ciTransition({
+        ...attempt,
+        result: {
+          ci: {
+            status: "failure",
+            head,
+            reason: "diagnostics_unavailable",
+            diagnosticsError: "github_get_404",
+          },
+        },
+      }),
+    ).toEqual({
+      status: "waiting",
+      stage: "ci",
+      waitingReason: "external_check",
+    });
+    expect(
+      ciTransition({
+        ...attempt,
+        result: {
+          ci: { status: "failure", head, reason: "evidence_consumed" },
+        },
+      }),
+    ).toEqual({
+      status: "waiting",
+      stage: "ci",
+      waitingReason: "external_check",
+    });
+    expect(
+      ciTransition({
+        ...attempt,
+        result: { ci: { status: "failure", head, reason: "base_conflict" } },
       }),
     ).toEqual({ status: "active", stage: "implement" });
     expect(ciTransition({ ...attempt, acceptedHead: "c".repeat(40) })).toEqual({

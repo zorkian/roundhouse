@@ -5,6 +5,7 @@ import {
   parseModelRoute,
   resumeRun,
   transitionRun,
+  type AppliedProfile,
   type Attempt,
   type IssueSnapshot,
   type Lease,
@@ -361,14 +362,15 @@ export class D1RunRepository implements RunRepository {
     return (result.meta.changes ?? 0) === 1 ? next : undefined;
   }
 
-  async resumeClarification(
+  async resume(
     runId: string,
     expectedRevision: number,
     issue: IssueSnapshot,
+    profile?: AppliedProfile,
   ): Promise<RunSnapshot | undefined> {
     const current = await this.get(runId);
     if (!current || current.revision !== expectedRevision) return undefined;
-    const next = resumeRun(current, expectedRevision, issue);
+    const next = resumeRun(current, expectedRevision, issue, profile);
     const result = await this.db
       .prepare(
         "UPDATE runs SET status=?1, stage=?2, revision=?3, document_json=?4, lease_attempt_id=NULL, lease_revision=NULL, lease_expires_at=NULL, updated_at=?5 WHERE id=?6 AND revision=?7",
@@ -531,6 +533,20 @@ export class D1RunRepository implements RunRepository {
       .bind(runId, stage, beforeRevision)
       .first<AttemptRow>();
     return row ? attemptFromRow(row) : undefined;
+  }
+
+  async consumedCiEvidence(
+    runId: string,
+    evidenceKey: string,
+    beforeRevision: number,
+  ): Promise<boolean> {
+    const row = await this.db
+      .prepare(
+        "SELECT 1 AS found FROM attempts WHERE run_id=?1 AND stage='ci' AND state='completed' AND run_revision<?2 AND json_extract(result_json,'$.ci.diagnostics.evidenceKey')=?3 LIMIT 1",
+      )
+      .bind(runId, beforeRevision, evidenceKey)
+      .first<{ found: number }>();
+    return row !== null && row !== undefined;
   }
 
   async attemptsForRevision(runId: string, revision: number) {

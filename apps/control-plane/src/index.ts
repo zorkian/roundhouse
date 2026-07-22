@@ -99,6 +99,47 @@ export function successorWakeup(
     : undefined;
 }
 
+// Prior-stage outcomes passed to an attempt as context. CI failure
+// diagnostics travel here as durable, explicitly untrusted evidence; no
+// GitHub credential or API capability is ever part of this object.
+export function attemptContext(parts: {
+  readonly qualification?: unknown;
+  readonly reproduction?: unknown;
+  readonly plan?: unknown;
+  readonly implementation?: unknown;
+  readonly holisticSelection?: unknown;
+  readonly review?: unknown;
+  readonly ci?: unknown;
+}): Readonly<Record<string, unknown>> | undefined {
+  const {
+    qualification,
+    reproduction,
+    plan,
+    implementation,
+    holisticSelection,
+    review,
+    ci,
+  } = parts;
+  if (
+    !qualification &&
+    !reproduction &&
+    !plan &&
+    !implementation &&
+    !review &&
+    !ci
+  )
+    return undefined;
+  return {
+    ...(qualification ? { qualification } : {}),
+    ...(reproduction ? { reproduction } : {}),
+    ...(plan ? { plan } : {}),
+    ...(implementation ? { implementation } : {}),
+    ...(holisticSelection ? { holisticSelection } : {}),
+    ...(review ? { review } : {}),
+    ...(ci ? { ci } : {}),
+  };
+}
+
 interface AttemptStub {
   destroy(): Promise<void>;
   fetch(request: Request): Promise<Response>;
@@ -485,18 +526,15 @@ class ContainerDispatcher implements AttemptDispatcher {
       profile: run.profile,
       issue: run.issue,
       issueNumber: run.issueNumber,
-      context:
-        qualification || reproduction || plan || implementation || review || ci
-          ? {
-              ...(qualification ? { qualification } : {}),
-              ...(reproduction ? { reproduction } : {}),
-              ...(plan ? { plan } : {}),
-              ...(implementation ? { implementation } : {}),
-              ...(holisticSelection ? { holisticSelection } : {}),
-              ...(review ? { review } : {}),
-              ...(ci ? { ci } : {}),
-            }
-          : undefined,
+      context: attemptContext({
+        qualification,
+        reproduction,
+        plan,
+        implementation,
+        holisticSelection,
+        review,
+        ci,
+      }),
       ...(route ? { routing: route } : {}),
       ...(reviewer ? { reviewer } : {}),
       artifact: {
