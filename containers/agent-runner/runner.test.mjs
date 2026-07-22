@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   activityRequest,
+  agentSystemPrompt,
   agentRuntime,
   artifactWriteTokenRequest,
   bootstrapWorkspace,
@@ -39,6 +40,15 @@ afterEach(async () => {
 describe("V2 agent runner", () => {
   it("uses the Container rather than an unavailable nested sandbox", () => {
     expect(agentRuntime).toBe("pi");
+  });
+
+  it("submits promptly after completing and validating a stage", () => {
+    expect(agentSystemPrompt).toContain(
+      "When the requested stage is complete and relevant validation has passed (or none applies), immediately call submit_result.",
+    );
+    expect(agentSystemPrompt).toContain(
+      "Do not reopen analysis or perform more investigation unless a concrete failed check or unresolved requirement remains.",
+    );
   });
 
   it("configures Pi for the persisted native route without exposing a provider key", () => {
