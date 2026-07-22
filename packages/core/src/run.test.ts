@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from "vitest";
-import { createRun, resumeRun, transitionRun } from "./run.js";
+import { createRun, resumeRun, transitionRun, waitingReasons } from "./run.js";
 
 const input = {
   id: "run_01",
@@ -92,30 +92,15 @@ describe("resumeRun", () => {
     clarifications: [{ actor: "citizen", body: "More context" }],
   };
 
-  it("resumes a clarification wait at the same stage", () => {
+  it.each(waitingReasons)("resumes a %s wait at the same stage", (reason) => {
     const waiting = transitionRun(createRun(input), 1, {
       status: "waiting",
       stage: "reproduce",
-      waitingReason: "clarification",
+      waitingReason: reason,
     });
     expect(resumeRun(waiting, 2, issue)).toMatchObject({
       status: "active",
       stage: "reproduce",
-      revision: 3,
-      issue,
-    });
-    expect(resumeRun(waiting, 2, issue).waitingReason).toBeUndefined();
-  });
-
-  it("resumes a budget wait at the same stage", () => {
-    const waiting = transitionRun(createRun(input), 1, {
-      status: "waiting",
-      stage: "implement",
-      waitingReason: "budget",
-    });
-    expect(resumeRun(waiting, 2, issue)).toMatchObject({
-      status: "active",
-      stage: "implement",
       revision: 3,
       issue,
     });
@@ -139,13 +124,6 @@ describe("resumeRun", () => {
     [{ status: "succeeded", stage: "merge" }],
     [{ status: "failed", stage: "qualify" }],
     [{ status: "cancelled", stage: "qualify" }],
-    [
-      {
-        status: "waiting",
-        stage: "plan",
-        waitingReason: "plan_approval",
-      },
-    ],
   ])("rejects an unrelated run state %o", (state) => {
     const run = transitionRun(
       createRun(input),

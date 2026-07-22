@@ -3,7 +3,12 @@
 
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { createRun, MemoryRunRepository, parseProfile } from "@roundhouse/core";
+import {
+  createRun,
+  MemoryRunRepository,
+  parseProfile,
+  waitingReasons,
+} from "@roundhouse/core";
 import { describe, expect, it } from "vitest";
 import { D1RunRepository } from "./d1-store.js";
 
@@ -238,22 +243,18 @@ function repositoryContract(label, createRepository) {
       });
 
       await expect(
-        repository.resumeClarification(run.id, 1, concluded.issue),
+        repository.resume(run.id, 1, concluded.issue),
       ).resolves.toBeUndefined();
-      const reopened = await repository.resumeClarification(
-        run.id,
-        concluded.revision,
-        {
-          ...concluded.issue,
-          clarifications: [
-            {
-              actor: "citizen",
-              body: "Still broken, here is evidence.",
-              url: "https://github.com/zorkian/roundhouse/issues/42#issuecomment-1",
-            },
-          ],
-        },
-      );
+      const reopened = await repository.resume(run.id, concluded.revision, {
+        ...concluded.issue,
+        clarifications: [
+          {
+            actor: "citizen",
+            body: "Still broken, here is evidence.",
+            url: "https://github.com/zorkian/roundhouse/issues/42#issuecomment-1",
+          },
+        ],
+      });
       expect(reopened).toMatchObject({
         status: "active",
         stage: "qualify",
@@ -273,11 +274,7 @@ function repositoryContract(label, createRepository) {
       // The same revision cannot be reopened twice, and the reopened
       // revision can hold a fresh lease for the new qualification attempt.
       await expect(
-        repository.resumeClarification(
-          run.id,
-          concluded.revision,
-          concluded.issue,
-        ),
+        repository.resume(run.id, concluded.revision, concluded.issue),
       ).resolves.toBeUndefined();
       await expect(
         repository.claimLease(
@@ -316,11 +313,7 @@ function repositoryContract(label, createRepository) {
         stage: "qualify",
       });
       await expect(
-        repository.resumeClarification(
-          run.id,
-          reconcluded.revision,
-          reconcluded.issue,
-        ),
+        repository.resume(run.id, reconcluded.revision, reconcluded.issue),
       ).resolves.toMatchObject({
         status: "active",
         stage: "qualify",
@@ -348,14 +341,64 @@ function repositoryContract(label, createRepository) {
         status: "succeeded",
         stage: "merge",
       });
-      await expect(
-        repository.resumeClarification(run.id, 2, run.issue),
-      ).rejects.toThrow("run_not_resumable");
+      await expect(repository.resume(run.id, 2, run.issue)).rejects.toThrow(
+        "run_not_resumable",
+      );
       await expect(repository.get(run.id)).resolves.toMatchObject({
         status: "succeeded",
         stage: "merge",
         revision: 2,
       });
+    });
+
+    it.each(waitingReasons)("resumes a %s wait", async (reason) => {
+      const repository = createRepository();
+      const run = createRun({
+        ...input,
+        id: `run_waiting_${reason}`,
+        ...(reason === "profile_error"
+          ? { profileError: "Repository profile is missing or invalid" }
+          : {}),
+        issue: {
+          title: "Paused work",
+          body: "Original report",
+          url: "https://github.com/zorkian/roundhouse/issues/42",
+          actor: "reporter",
+        },
+      });
+      await repository.create(run);
+      const waiting = await repository.transition(run.id, 1, {
+        status: "waiting",
+        stage: "implement",
+        waitingReason: reason,
+      });
+      const profile =
+        reason === "profile_error"
+          ? await parseProfile(
+              'version: 1\npaths:\n  allowed: ["**"]\n  protected: []\n',
+              "b".repeat(40),
+            )
+          : undefined;
+      const resumed = await repository.resume(
+        run.id,
+        waiting.revision,
+        run.issue,
+        profile,
+      );
+      expect(resumed).toMatchObject({
+        status: "active",
+        stage: "implement",
+        revision: 3,
+      });
+      expect(resumed).not.toHaveProperty("waitingReason");
+      if (profile) {
+        expect(resumed).toMatchObject({
+          profile,
+          profileVersion: profile.hash,
+        });
+        expect(resumed).not.toHaveProperty("profileError");
+      }
+      await expect(repository.get(run.id)).resolves.toEqual(resumed);
     });
 
     it("resumes clarification with the updated issue conversation", async () => {
@@ -377,7 +420,7 @@ function repositoryContract(label, createRepository) {
         waitingReason: "clarification",
       });
       await expect(
-        repository.resumeClarification(run.id, waiting.revision, {
+        repository.resume(run.id, waiting.revision, {
           ...run.issue,
           clarifications: [{ actor: "citizen", body: "More context" }],
         }),

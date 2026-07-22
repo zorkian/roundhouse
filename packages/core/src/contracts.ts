@@ -7,6 +7,7 @@ import type {
   RunStage,
   RunTransition,
 } from "./run.js";
+import type { AppliedProfile } from "./profile.js";
 
 export const attemptKinds = ["agent", "external"] as const;
 export const attemptStates = [
@@ -197,10 +198,11 @@ export interface RunRepository {
     expectedRevision: number,
     transition: RunTransition,
   ): Promise<RunSnapshot | undefined>;
-  resumeClarification(
+  resume(
     runId: string,
     expectedRevision: number,
     issue: IssueSnapshot,
+    profile?: AppliedProfile,
   ): Promise<RunSnapshot | undefined>;
   claimLease(
     runId: string,

@@ -177,20 +177,26 @@ export function resumeRun(
   run: RunSnapshot,
   expectedRevision: number,
   issue: IssueSnapshot,
+  profile?: AppliedProfile,
 ): RunSnapshot {
   if (run.revision !== expectedRevision) throw new Error("stale_run_revision");
   const resumable =
-    (run.status === "waiting" &&
-      (run.waitingReason === "clarification" ||
-        run.waitingReason === "budget")) ||
+    run.status === "waiting" ||
     (run.status === "succeeded" && run.stage === "qualify");
   if (!resumable) throw new Error("run_not_resumable");
   const { waitingReason: _waitingReason, ...current } = run;
-  return {
+  const resumed: RunSnapshot = {
     ...current,
     status: "active",
     stage: run.stage,
     revision: run.revision + 1,
     issue,
+  };
+  if (!profile) return resumed;
+  const { profileError: _profileError, ...withValidProfile } = resumed;
+  return {
+    ...withValidProfile,
+    profile,
+    profileVersion: profile.hash,
   };
 }

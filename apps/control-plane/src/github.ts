@@ -6,6 +6,7 @@ import {
   parseProfile,
   profileSourcePath,
   immutableAttemptId,
+  type AppliedProfile,
   type Attempt,
   type RunSnapshot,
   type RunTransition,
@@ -18,10 +19,11 @@ import { observeResponse } from "@roundhouse/response-observer";
 export interface GitHubIntakeRepository {
   get(runId: string): Promise<RunSnapshot | undefined>;
   create(run: RunSnapshot): Promise<void>;
-  resumeClarification(
+  resume(
     runId: string,
     expectedRevision: number,
     issue: NonNullable<RunSnapshot["issue"]>,
+    profile?: AppliedProfile,
   ): Promise<RunSnapshot | undefined>;
   latestCompletedAttempt(
     runId: string,
@@ -753,6 +755,34 @@ function runId(repositoryId: number, issueNumber: number): string {
   return `run_${repositoryId}_issue_${issueNumber}`;
 }
 
+async function loadRepositoryProfile(
+  api: GitHubApi,
+  repository: string,
+  commit: string,
+): Promise<AppliedProfile> {
+  const file = await api.get<{
+    content?: string;
+    encoding?: string;
+    name?: string;
+    type?: string;
+  }>(
+    `/repos/${repository}/contents/${profileSourcePath}?ref=${encodeURIComponent(commit)}`,
+  );
+  if (
+    file.name !== "profile.yaml" ||
+    file.type !== "file" ||
+    file.encoding !== "base64" ||
+    !file.content
+  )
+    throw new Error("profile_content_missing");
+  const yaml = new TextDecoder().decode(
+    Uint8Array.from(atob(file.content.replaceAll("\n", "")), (value) =>
+      value.charCodeAt(0),
+    ),
+  );
+  return parseProfile(yaml, commit);
+}
+
 export function githubClientForRun(
   env: GitHubEnv,
   run: Pick<RunSnapshot, "githubInstallationId">,
@@ -882,7 +912,7 @@ export async function acceptGitHubComment(
       issueNumber,
     });
     if (!fresh) return "duplicate";
-    run = await repository.resumeClarification(id, run.revision, {
+    run = await repository.resume(id, run.revision, {
       ...run.issue,
       title: payload.issue?.title ?? run.issue.title,
       body: payload.issue?.body ?? run.issue.body,
@@ -925,27 +955,7 @@ export async function acceptGitHubComment(
     let profile: Awaited<ReturnType<typeof parseProfile>> | undefined;
     let profileError: string | undefined;
     try {
-      const file = await api.get<{
-        content?: string;
-        encoding?: string;
-        name?: string;
-        type?: string;
-      }>(
-        `/repos/${repositoryName}/contents/${profileSourcePath}?ref=${encodeURIComponent(commit.sha)}`,
-      );
-      if (
-        file.name !== "profile.yaml" ||
-        file.type !== "file" ||
-        file.encoding !== "base64" ||
-        !file.content
-      )
-        throw new Error("profile_content_missing");
-      const yaml = new TextDecoder().decode(
-        Uint8Array.from(atob(file.content.replaceAll("\n", "")), (value) =>
-          value.charCodeAt(0),
-        ),
-      );
-      profile = await parseProfile(yaml, commit.sha);
+      profile = await loadRepositoryProfile(api, repositoryName, commit.sha);
     } catch (error) {
       profileError = "Repository profile is missing or invalid";
       console.error("repository_profile_invalid", error);
@@ -979,18 +989,41 @@ export async function acceptGitHubComment(
   });
   if (!fresh) return "duplicate";
   if (existing) {
-    const resumableBudget =
-      run.status === "waiting" && run.waitingReason === "budget";
-    if (
-      run.issue &&
-      (resumableBudget ||
-        (await concludedNoChangeQualification(repository, run)))
-    ) {
-      const resumed = await repository.resumeClarification(
-        id,
-        run.revision,
-        run.issue,
-      );
+    const resumable =
+      run.status === "waiting" ||
+      (await concludedNoChangeQualification(repository, run));
+    if (resumable) {
+      const issue = run.issue ?? {
+        title: payload.issue?.title ?? "",
+        body: payload.issue?.body ?? "",
+        url: payload.issue?.html_url ?? "",
+        actor,
+      };
+      let profile: AppliedProfile | undefined;
+      if (run.waitingReason === "profile_error") {
+        try {
+          profile = await loadRepositoryProfile(
+            api,
+            repositoryName,
+            commit.sha,
+          );
+        } catch (error) {
+          console.error("repository_profile_invalid", error);
+          await postIntakeComment(
+            api,
+            run,
+            `profile-error:${id}:${run.revision}`,
+            [
+              "## I can’t start on this yet",
+              "",
+              "Roundhouse cannot start because `.roundhouse/profile.yaml` is missing or invalid. Add or fix that file in the repository so Roundhouse can begin.",
+            ].join("\n"),
+            controlPlaneOrigin,
+          );
+          return "accepted";
+        }
+      }
+      const resumed = await repository.resume(id, run.revision, issue, profile);
       if (!resumed) return "duplicate";
       await enqueue({ runId: id, expectedRevision: resumed.revision });
       return "accepted";
