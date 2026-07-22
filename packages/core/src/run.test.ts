@@ -172,10 +172,22 @@ describe("resumeRun", () => {
     });
   });
 
+  it("resumes explicitly cancelled work at the same stage", () => {
+    const cancelled = transitionRun(createRun(input), 1, {
+      status: "cancelled",
+      stage: "reproduce",
+    });
+    expect(resumeRun(cancelled, 2, issue)).toMatchObject({
+      status: "active",
+      stage: "reproduce",
+      revision: 3,
+      issue,
+    });
+  });
+
   it.each([
     [{ status: "succeeded", stage: "merge" }],
     [{ status: "failed", stage: "qualify" }],
-    [{ status: "cancelled", stage: "qualify" }],
   ])("rejects an unrelated run state %o", (state) => {
     const run = transitionRun(
       createRun(input),

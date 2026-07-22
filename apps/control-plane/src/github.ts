@@ -84,6 +84,7 @@ interface CommentPayload {
     readonly title?: string;
     readonly body?: string | null;
     readonly html_url?: string;
+    readonly state?: string;
   };
   readonly comment?: { readonly body?: string; readonly html_url?: string };
 }
@@ -1043,7 +1044,8 @@ export async function acceptGitHubComment(
   if (existing) {
     const resumable =
       run.status === "waiting" ||
-      (await concludedNoChangeQualification(repository, run));
+      (await concludedNoChangeQualification(repository, run)) ||
+      (run.status === "cancelled" && payload.issue?.state === "open");
     if (resumable) {
       const issue = run.issue ?? {
         title: payload.issue?.title ?? "",
