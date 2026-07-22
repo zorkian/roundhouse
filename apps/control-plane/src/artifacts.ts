@@ -94,7 +94,7 @@ class CloudflareArtifactRepository implements ArtifactRepository {
     this.remote = identity.remote;
     this.hostname = identity.hostname;
     this.empty =
-      empty ?? (repository.source == null && repository.lastPushAt == null);
+      empty ?? (!repository.source?.trim() && !repository.lastPushAt?.trim());
   }
 
   async createToken(access: ArtifactAccess, ttlSeconds: number) {

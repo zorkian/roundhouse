@@ -477,6 +477,10 @@ describe("V2 agent runner", () => {
       ],
       { cwd: source },
     );
+    const pinnedHead = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: source,
+      encoding: "utf8",
+    }).trim();
     await writeFile(resolve(source, "README.md"), "baseline\ncurrent\n");
     execFileSync("git", ["add", "README.md"], { cwd: source });
     execFileSync(
@@ -492,10 +496,6 @@ describe("V2 agent runner", () => {
       ],
       { cwd: source },
     );
-    const head = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: source,
-      encoding: "utf8",
-    }).trim();
     execFileSync("git", ["init", "--bare", "--initial-branch=main", artifact]);
     execFileSync("git", ["config", "receive.shallowUpdate", "true"], {
       cwd: artifact,
@@ -506,7 +506,7 @@ describe("V2 agent runner", () => {
       source: {
         remote: pathToFileURL(source).toString(),
         branch: "main",
-        head,
+        head: pinnedHead,
       },
     });
     expect(
@@ -514,7 +514,7 @@ describe("V2 agent runner", () => {
         cwd: artifact,
         encoding: "utf8",
       }).trim(),
-    ).toBe(head);
+    ).toBe(pinnedHead);
     expect(
       execFileSync("git", ["rev-list", "--count", "refs/heads/main"], {
         cwd: artifact,
