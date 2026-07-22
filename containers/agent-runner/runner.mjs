@@ -1175,25 +1175,22 @@ export async function bootstrapWorkspace(assignment) {
   const directory = resolve(workspaceRoot(), `${assignment.id}-bootstrap`);
   await rm(directory, { recursive: true, force: true });
   await mkdir(workspaceRoot(), { recursive: true });
+  await command("git", ["init", "--initial-branch=main", directory]);
+  await command("git", ["remote", "add", "origin", assignment.source.remote], {
+    cwd: directory,
+  });
   await command(
     "git",
-    [
-      "clone",
-      "--depth=1",
-      "--single-branch",
-      "--branch",
-      assignment.source.branch,
-      "--no-tags",
-      assignment.source.remote,
-      directory,
-    ],
-    { env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
+    ["fetch", "--depth=1", "--no-tags", "origin", assignment.source.head],
+    { cwd: directory, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
   );
-  const head = await command("git", ["rev-parse", "HEAD"], { cwd: directory });
+  const head = await command("git", ["rev-parse", "FETCH_HEAD"], {
+    cwd: directory,
+  });
   if (head !== assignment.source.head) throw new Error("source_head_changed");
   await command(
     "git",
-    ["push", assignment.artifact.remote, "HEAD:refs/heads/main"],
+    ["push", assignment.artifact.remote, "FETCH_HEAD:refs/heads/main"],
     { cwd: directory, env: gitEnvironment(assignment.artifact.token) },
   );
 }

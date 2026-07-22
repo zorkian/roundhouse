@@ -188,6 +188,23 @@ describe("Artifacts workspace contract", () => {
     expect(workspace.empty).toBe(true);
   });
 
+  it("recognizes the binding's empty metadata values as an empty workspace", async () => {
+    const repo = {
+      source: "",
+      lastPushAt: "",
+    } as unknown as ArtifactsRepo;
+    const binding = {
+      get: async () => repo,
+    } as unknown as Artifacts;
+
+    const workspace = await new CloudflareArtifactsNamespace(binding, {
+      namespace: "development",
+      remoteOrigin: "https://account.artifacts.cloudflare.net",
+    }).get("run_1");
+
+    expect(workspace?.empty).toBe(true);
+  });
+
   it("derives one stable repository identity from its configured namespace", () => {
     expect(
       artifactIdentity("run_1", {
