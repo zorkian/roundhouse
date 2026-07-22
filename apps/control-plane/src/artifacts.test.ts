@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { parseProfile } from "@roundhouse/core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   artifactIdentity,
   CloudflareArtifactsNamespace,
@@ -188,22 +188,41 @@ describe("Artifacts workspace contract", () => {
     expect(workspace.empty).toBe(true);
   });
 
-  it("recognizes the binding's empty metadata values as an empty workspace", async () => {
-    const repo = {
-      source: "",
-      lastPushAt: "",
-    } as unknown as ArtifactsRepo;
-    const binding = {
-      get: async () => repo,
-    } as unknown as Artifacts;
+  it.each([
+    ["0000# service=git-upload-pack\n0000", true],
+    ["0040deadbeef refs/heads/main\n0000", false],
+  ])(
+    "reads workspace initialization from its advertised refs",
+    async (body, empty) => {
+      let revoked: string | undefined;
+      const repo = {
+        createToken: async () => ({ id: "probe", plaintext: "secret" }),
+        revokeToken: async (id: string) => {
+          revoked = id;
+          return true;
+        },
+      } as unknown as ArtifactsRepo;
+      const binding = {
+        get: async () => repo,
+      } as unknown as Artifacts;
+      const fetch = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(new Response(body, { status: 200 }));
 
-    const workspace = await new CloudflareArtifactsNamespace(binding, {
-      namespace: "development",
-      remoteOrigin: "https://account.artifacts.cloudflare.net",
-    }).get("run_1");
+      const workspace = await new CloudflareArtifactsNamespace(binding, {
+        namespace: "development",
+        remoteOrigin: "https://account.artifacts.cloudflare.net",
+      }).get("run_1");
 
-    expect(workspace?.empty).toBe(true);
-  });
+      expect(workspace?.empty).toBe(empty);
+      expect(fetch).toHaveBeenCalledWith(
+        "https://account.artifacts.cloudflare.net/git/development/run_1.git/info/refs?service=git-upload-pack",
+        { headers: { authorization: "Bearer secret" } },
+      );
+      expect(revoked).toBe("probe");
+      fetch.mockRestore();
+    },
+  );
 
   it("derives one stable repository identity from its configured namespace", () => {
     expect(
