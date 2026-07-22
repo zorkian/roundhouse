@@ -93,14 +93,16 @@ class CloudflareArtifactRepository implements ArtifactRepository {
     this.name = identity.name;
     this.remote = identity.remote;
     this.hostname = identity.hostname;
-    this.empty =
-      empty ?? (!repository.source?.trim() && !repository.lastPushAt?.trim());
+    const source = repository.source;
+    const lastPushAt = repository.lastPushAt;
+    this.empty = empty ?? (!source?.trim() && !lastPushAt?.trim());
     console.log(
       JSON.stringify({
         message: "artifact_repository_metadata",
         repository: name,
-        source: repository.source,
-        lastPushAt: repository.lastPushAt,
+        source,
+        lastPushAt,
+        emptyOverride: empty,
         empty: this.empty,
       }),
     );
