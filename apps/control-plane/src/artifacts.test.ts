@@ -5,6 +5,7 @@ import { parseProfile } from "@roundhouse/core";
 import { describe, expect, it, vi } from "vitest";
 import {
   artifactIdentity,
+  artifactAdvertisementHasMain,
   CloudflareArtifactsNamespace,
   validateCheckpointIdentity,
   validateReadOnlyCheckpoint,
@@ -189,8 +190,11 @@ describe("Artifacts workspace contract", () => {
   });
 
   it.each([
-    ["0000# service=git-upload-pack\n0000", true],
-    ["0040deadbeef refs/heads/main\n0000", false],
+    [
+      `001e# service=git-upload-pack\n0000013d${"0".repeat(40)} capabilities^{}\0agent=gitty/1.0 symref=HEAD:refs/heads/main\n0000`,
+      true,
+    ],
+    [`0044${"a".repeat(40)} refs/heads/main\n0000`, false],
   ])(
     "reads workspace initialization from its advertised refs",
     async (body, empty) => {
@@ -223,6 +227,15 @@ describe("Artifacts workspace contract", () => {
       fetch.mockRestore();
     },
   );
+
+  it("requires an object behind the advertised main ref", () => {
+    expect(
+      artifactAdvertisementHasMain(`${"0".repeat(40)} refs/heads/main\n`),
+    ).toBe(false);
+    expect(
+      artifactAdvertisementHasMain(`${"a".repeat(40)} refs/heads/main\n`),
+    ).toBe(true);
+  });
 
   it("derives one stable repository identity from its configured namespace", () => {
     expect(
