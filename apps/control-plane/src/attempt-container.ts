@@ -147,9 +147,18 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
   const attempt = await repository.getAttempt(attemptId);
   if (
     !attempt ||
-    !["qualify", "reproduce", "plan", "implement", "review"].includes(
-      attempt.stage,
-    ) ||
+    ![
+      "qualify",
+      "reproduce",
+      "plan",
+      "implement",
+      "review",
+      "integrate",
+    ].includes(attempt.stage) ||
+    // Mechanical integration is a no-model operation; only conflict
+    // resolution and the integration-delta review may call a model.
+    (attempt.stage === "integrate" &&
+      !["conflict-resolution", "review-integration"].includes(attempt.role)) ||
     !["created", "dispatched"].includes(attempt.state) ||
     attempt.deadlineAt <= Date.now()
   ) {
@@ -184,9 +193,9 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
     "x-roundhouse-task-type",
     attempt.stage === "plan"
       ? "planning"
-      : attempt.stage === "implement"
+      : attempt.stage === "implement" || attempt.role === "conflict-resolution"
         ? "implementation"
-        : attempt.stage === "review"
+        : attempt.stage === "review" || attempt.role === "review-integration"
           ? "review"
           : "validation",
   );

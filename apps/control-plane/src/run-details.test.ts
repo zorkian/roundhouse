@@ -305,7 +305,7 @@ describe("run details", () => {
     expect(html).toContain('<a href="https://example.test">test</a>');
     expect(html).toContain("</dl>\n<section><h2>Attempt history</h2>");
     expect(html).toContain(
-      "@media(max-width:700px){body{margin:1rem auto;padding:0 .75rem}summary{grid-template-columns:1fr 1fr}.phase{grid-column:auto}dl{grid-template-columns:minmax(0,1fr)}",
+      "@media(max-width:700px){body{box-sizing:border-box;margin:1rem auto;max-width:none;padding:0 .75rem;width:100%}summary{grid-template-columns:1fr 1fr}.phase{grid-column:auto}dl{grid-template-columns:minmax(0,1fr)}",
     );
     expect(html).toContain(
       ".attempt-details{padding:0 0 1rem .75rem;margin-left:0;min-width:0}",
@@ -759,6 +759,37 @@ describe("run details", () => {
     expect(html).toContain("<dt>Protected paths</dt>");
     expect(html).toContain(".github/workflows/**");
     expect(html).not.toContain("Path rules");
+  });
+
+  it("shows the distinct candidate, base, and integration identities", () => {
+    const html = renderRunDetails({
+      run: {
+        schemaVersion: 2,
+        id: "run_integrated",
+        repository: "zorkian/roundhouse",
+        issueNumber: 3,
+        baseCommit: "a".repeat(40),
+        currentHead: "d".repeat(40),
+        candidateHead: "b".repeat(40),
+        reviewedHead: "b".repeat(40),
+        targetBaseHead: "c".repeat(40),
+        integrationHead: "d".repeat(40),
+        profileVersion: "test",
+        status: "active",
+        stage: "ci",
+        revision: 8,
+      },
+      createdAt: 1,
+      updatedAt: 2,
+      attempts: [],
+    });
+    expect(html).toContain("<dt>Authored candidate head</dt>");
+    expect(html).toContain("<dt>Reviewed candidate head</dt>");
+    expect(html).toContain("<dt>Target base head</dt>");
+    expect(html).toContain("<dt>Validated integration head</dt>");
+    expect(html).toContain("b".repeat(40));
+    expect(html).toContain("c".repeat(40));
+    expect(html).toContain("d".repeat(40));
   });
 
   it("does not label an unaccepted merge head as merged", () => {
