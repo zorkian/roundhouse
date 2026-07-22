@@ -1170,6 +1170,68 @@ describe("GitHub intake", () => {
     ]);
   });
 
+  it("reloads a missing profile before resuming from ordinary prose", async () => {
+    const repository = new IntakeRepository();
+    const wakeups: Wakeup[] = [];
+    await acceptGitHubComment(
+      await delivery("delivery-start"),
+      env,
+      repository,
+      async (wakeup) => {
+        wakeups.push(wakeup);
+      },
+      github(),
+    );
+    const id = "run_123_issue_42";
+    const created = await repository.get(id);
+    if (!created) throw new Error("test_run_missing");
+    repository.runs.set(id, { ...created, profile: undefined });
+    await repository.transition(id, 1, {
+      status: "waiting",
+      stage: "qualify",
+      waitingReason: "clarification",
+    });
+    const baseApi = github();
+    const api: GitHubApi = {
+      get: vi.fn(async (path: string) =>
+        path.includes("/issues/42/comments?") ? [] : baseApi.get(path),
+      ) as GitHubApi["get"],
+      post: baseApi.post,
+    };
+    await expect(
+      acceptGitHubComment(
+        await delivery(
+          "delivery-legacy-answer",
+          "The failing input is empty.",
+          "random-citizen",
+        ),
+        env,
+        repository,
+        async (wakeup) => {
+          wakeups.push(wakeup);
+        },
+        api,
+      ),
+    ).resolves.toBe("accepted");
+    await expect(repository.get(id)).resolves.toMatchObject({
+      status: "active",
+      stage: "qualify",
+      revision: 3,
+      profile: {
+        sourcePath: ".roundhouse/profile.yaml",
+        sourceCommit: "a".repeat(40),
+        version: 1,
+      },
+    });
+    expect(api.get).not.toHaveBeenCalledWith(
+      expect.stringContaining("/collaborators/"),
+    );
+    expect(wakeups).toEqual([
+      { runId: id, expectedRevision: 1 },
+      { runId: id, expectedRevision: 3 },
+    ]);
+  });
+
   it("does not repeat the clarification acknowledgment when its marker is already posted", async () => {
     const repository = new IntakeRepository();
     const wakeups: Wakeup[] = [];

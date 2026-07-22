@@ -912,22 +912,53 @@ export async function acceptGitHubComment(
       issueNumber,
     });
     if (!fresh) return "duplicate";
-    run = await repository.resume(id, run.revision, {
-      ...run.issue,
-      title: payload.issue?.title ?? run.issue.title,
-      body: payload.issue?.body ?? run.issue.body,
-      url: payload.issue?.html_url ?? run.issue.url,
-      clarifications: [
-        ...(run.issue.clarifications ?? []),
-        {
-          actor,
-          body: comment,
-          ...(payload.comment?.html_url
-            ? { url: payload.comment.html_url }
-            : {}),
-        },
-      ],
-    });
+    let profile: AppliedProfile | undefined;
+    if (!run.profile) {
+      try {
+        const repo = await api.get<{ default_branch: string }>(
+          `/repos/${repositoryName}`,
+        );
+        const commit = await api.get<{ sha: string }>(
+          `/repos/${repositoryName}/commits/${encodeURIComponent(repo.default_branch)}`,
+        );
+        profile = await loadRepositoryProfile(api, repositoryName, commit.sha);
+      } catch (error) {
+        console.error("repository_profile_invalid", error);
+        await postIntakeComment(
+          api,
+          run,
+          `profile-error:${id}:${run.revision}`,
+          [
+            "## I can’t continue yet",
+            "",
+            "Roundhouse cannot continue because `.roundhouse/profile.yaml` is missing or invalid. Add or fix that file in the repository, then reply again.",
+          ].join("\n"),
+          controlPlaneOrigin,
+        );
+        return "accepted";
+      }
+    }
+    run = await repository.resume(
+      id,
+      run.revision,
+      {
+        ...run.issue,
+        title: payload.issue?.title ?? run.issue.title,
+        body: payload.issue?.body ?? run.issue.body,
+        url: payload.issue?.html_url ?? run.issue.url,
+        clarifications: [
+          ...(run.issue.clarifications ?? []),
+          {
+            actor,
+            body: comment,
+            ...(payload.comment?.html_url
+              ? { url: payload.comment.html_url }
+              : {}),
+          },
+        ],
+      },
+      profile,
+    );
     if (!run) return "ignored";
     await enqueue({ runId: id, expectedRevision: run.revision });
     await postIntakeComment(
