@@ -1,7 +1,15 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import { createRequire } from "node:module";
+import os from "node:os";
+import path from "node:path";
+import zlib from "node:zlib";
+import type { Browser } from "puppeteer-core";
+import puppeteer from "puppeteer-core";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { RunDetails } from "./d1-store.js";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
 import { renderRunDetails } from "./run-details.js";
@@ -496,13 +504,258 @@ describe("run details", () => {
     expect(html).toContain('<dt>Total usage</dt><dd><span class="usage-hint"');
     expect(html).toContain('>350 tokens · $0.03<span class="usage-breakdown"');
     expect(html).toContain(
-      ".usage-hint:hover .usage-breakdown,.usage-hint:focus .usage-breakdown",
+      ".usage-hint:hover .usage-breakdown,.usage-hint:focus .usage-breakdown,.usage-hint:focus-within .usage-breakdown{display:block}",
     );
     expect(html).toContain("100 tokens");
     expect(html).toContain("250 tokens");
     expect(html).toContain("$0.03");
     expect(html).not.toContain("<h2>Usage by workflow step</h2>");
   });
+
+  // The bundled Chromium binary from chrome-aws-lambda is built for
+  // Amazon Linux x86_64, so the real-browser regression only runs there.
+  const canLaunchBundledChromium =
+    process.platform === "linux" && process.arch === "x64";
+  describe.skipIf(!canLaunchBundledChromium)(
+    "rendered layout regression for issue #399",
+    () => {
+      const layoutFixture = () =>
+        renderRunDetails({
+          run: {
+            schemaVersion: 2,
+            id: "run_tooltip_overflow",
+            repository: "zorkian/roundhouse",
+            issueNumber: 399,
+            baseCommit: "base",
+            currentHead: "head",
+            profileVersion: "test",
+            status: "succeeded",
+            stage: "implement",
+            revision: 1,
+          },
+          createdAt: 1_000,
+          updatedAt: 2_000,
+          attempts: [],
+          events: [],
+          usage: [
+            {
+              callId: "call-long",
+              attemptId: "implement-1",
+              model: "test-model",
+              totalTokens: 123_456_789,
+              inputTokens: 123_456_789,
+              outputTokens: 123_456_789,
+              costUsd: 123.45,
+            },
+          ],
+        });
+
+      interface Measurement {
+        scrollWidth: number;
+        clientWidth: number;
+        bodyLeft: number;
+        bodyContentWidth: number;
+        tooltipDisplay: string;
+        tooltipWhiteSpace: string;
+        tooltipRight: number | null;
+      }
+
+      let browser: Browser | undefined;
+      let chromiumTempDir: string | undefined;
+
+      const nssLibraryPath = () => {
+        // Chromium links against NSS, which is not installed in minimal CI
+        // containers. The @achingbrain/nss package ships the shared libraries,
+        // so fall back to them only when the system has none.
+        const require = createRequire(import.meta.url);
+        const nssDir = path.join(
+          path.dirname(require.resolve("@achingbrain/nss/package.json")),
+          "linux",
+        );
+        try {
+          const ldconfig = execFileSync("ldconfig", ["-p"], {
+            encoding: "utf8",
+          });
+          if (ldconfig.includes("libnss3.so")) return undefined;
+        } catch {
+          for (const dir of ["/usr/lib", "/lib"]) {
+            try {
+              if (
+                fs
+                  .readdirSync(dir, { recursive: true })
+                  .some((entry) => String(entry).endsWith("libnss3.so"))
+              )
+                return undefined;
+            } catch {
+              // Keep looking.
+            }
+          }
+        }
+        return nssDir;
+      };
+
+      const chromiumExecutablePath = () => {
+        // chrome-aws-lambda only inflates its bundled binary on Lambda, so
+        // decompress the brotli-packed Chromium from the package directly.
+        const require = createRequire(import.meta.url);
+        const binDir = path.join(
+          path.dirname(require.resolve("chrome-aws-lambda/package.json")),
+          "bin",
+        );
+        chromiumTempDir = fs.mkdtempSync(
+          path.join(os.tmpdir(), "run-details-chromium-"),
+        );
+        const target = path.join(chromiumTempDir, "chromium");
+        fs.writeFileSync(
+          target,
+          zlib.brotliDecompressSync(
+            fs.readFileSync(path.join(binDir, "chromium.br")),
+          ),
+        );
+        fs.chmodSync(target, 0o755);
+        return target;
+      };
+
+      beforeAll(async () => {
+        const libraryPath = nssLibraryPath();
+        browser = await puppeteer.launch({
+          executablePath: chromiumExecutablePath(),
+          args: [
+            "--no-sandbox",
+            "--disable-gpu",
+            "--disable-dev-shm-usage",
+            "--headless",
+          ],
+          env: {
+            ...process.env,
+            ...(libraryPath
+              ? {
+                  LD_LIBRARY_PATH: [libraryPath, process.env.LD_LIBRARY_PATH]
+                    .filter(Boolean)
+                    .join(":"),
+                }
+              : {}),
+          },
+        });
+      }, 120_000);
+
+      afterAll(async () => {
+        await browser?.close();
+        if (chromiumTempDir)
+          fs.rmSync(chromiumTempDir, { recursive: true, force: true });
+      });
+
+      const measure = async (
+        html: string,
+        width: number,
+        height: number,
+        revealTooltip: boolean,
+      ): Promise<Measurement> => {
+        const page = await browser!.newPage();
+        try {
+          await page.setViewport({ width, height });
+          await page.setContent(html, { waitUntil: "load" });
+          if (revealTooltip) await page.hover(".usage-hint");
+          return await page.evaluate(() => {
+            // Runs in the browser; the project compiles against WebWorker
+            // libs, so access DOM globals through a structural type.
+            interface Rect {
+              left: number;
+              right: number;
+              width: number;
+            }
+            const win = globalThis as unknown as {
+              document: {
+                documentElement: { scrollWidth: number; clientWidth: number };
+                body: { getBoundingClientRect(): Rect };
+                querySelector(selector: string): {
+                  getBoundingClientRect(): Rect;
+                } | null;
+              };
+              getComputedStyle(element: unknown): {
+                display: string;
+                whiteSpace: string;
+                paddingLeft: string;
+                paddingRight: string;
+              };
+            };
+            const root = win.document.documentElement;
+            const bodyStyle = win.getComputedStyle(win.document.body);
+            const bodyRect = win.document.body.getBoundingClientRect();
+            const tooltip = win.document.querySelector(".usage-breakdown");
+            const tooltipStyle = tooltip ? win.getComputedStyle(tooltip) : null;
+            const tooltipRect =
+              tooltip && tooltipStyle?.display !== "none"
+                ? tooltip.getBoundingClientRect()
+                : null;
+            return {
+              scrollWidth: root.scrollWidth,
+              clientWidth: root.clientWidth,
+              bodyLeft: bodyRect.left,
+              bodyContentWidth:
+                bodyRect.width -
+                Number.parseFloat(bodyStyle.paddingLeft) -
+                Number.parseFloat(bodyStyle.paddingRight),
+              tooltipDisplay: tooltipStyle?.display ?? "",
+              tooltipWhiteSpace: tooltipStyle?.whiteSpace ?? "",
+              tooltipRight: tooltipRect ? tooltipRect.right : null,
+            };
+          });
+        } finally {
+          await page.close();
+        }
+      };
+
+      it("keeps the document inside the iPhone portrait viewport while the usage breakdown is inactive", async () => {
+        const measurement = await measure(layoutFixture(), 390, 844, false);
+        // The diagnosed issue #399 failure rendered an 848px document at this
+        // viewport because the hidden nowrap tooltip stayed in layout.
+        expect(measurement.clientWidth).toBe(390);
+        expect(measurement.scrollWidth).toBe(390);
+        expect(measurement.bodyLeft).toBe(0);
+        expect(measurement.bodyContentWidth).toBe(390 - 2 * 12);
+        expect(measurement.tooltipDisplay).toBe("none");
+      });
+
+      it("keeps the revealed usage breakdown inside the portrait viewport", async () => {
+        const measurement = await measure(layoutFixture(), 390, 844, true);
+        expect(measurement.tooltipDisplay).toBe("block");
+        expect(measurement.tooltipWhiteSpace).toBe("normal");
+        expect(measurement.tooltipRight).not.toBeNull();
+        expect(measurement.tooltipRight!).toBeLessThanOrEqual(390);
+        expect(measurement.scrollWidth).toBe(390);
+      });
+
+      it("preserves the centered desktop layout and nowrap hover tooltip", async () => {
+        const measurement = await measure(layoutFixture(), 1280, 900, true);
+        expect(measurement.bodyContentWidth).toBe(1000);
+        expect(measurement.bodyLeft).toBe((1280 - (1000 + 2 * 16)) / 2);
+        expect(measurement.tooltipDisplay).toBe("block");
+        expect(measurement.tooltipWhiteSpace).toBe("nowrap");
+        expect(measurement.tooltipRight!).toBeLessThanOrEqual(1280);
+        expect(measurement.scrollWidth).toBe(1280);
+      });
+
+      it("detects the original failure mode when the hidden tooltip stays in layout", async () => {
+        // Guard the regression itself: restoring the pre-fix pattern
+        // (visibility:hidden with the element still laid out) must reproduce
+        // the horizontal overflow measured in the issue reproduction.
+        const regressed = layoutFixture()
+          .replace(
+            ".usage-breakdown{background:#202124;",
+            ".usage-breakdown{visibility:hidden;background:#202124;",
+          )
+          .replace("display:none;font-size:.875rem", "font-size:.875rem")
+          .replace(
+            ".usage-breakdown{max-width:calc(100vw - 2rem);white-space:normal}",
+            "",
+          );
+        const measurement = await measure(regressed, 390, 844, false);
+        expect(measurement.tooltipDisplay).not.toBe("none");
+        expect(measurement.scrollWidth).toBeGreaterThan(390);
+      });
+    },
+  );
 
   it("shows recovered executions with separate outcomes and usage", () => {
     const html = renderRunDetails({
