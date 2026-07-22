@@ -95,6 +95,15 @@ class CloudflareArtifactRepository implements ArtifactRepository {
     this.hostname = identity.hostname;
     this.empty =
       empty ?? (!repository.source?.trim() && !repository.lastPushAt?.trim());
+    console.log(
+      JSON.stringify({
+        message: "artifact_repository_metadata",
+        repository: name,
+        source: repository.source,
+        lastPushAt: repository.lastPushAt,
+        empty: this.empty,
+      }),
+    );
   }
 
   async createToken(access: ArtifactAccess, ttlSeconds: number) {
