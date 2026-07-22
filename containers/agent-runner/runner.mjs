@@ -1162,11 +1162,12 @@ export async function integrationReview(assignment, directory, attemptSecret) {
   );
 }
 
-async function clone(artifact, directory) {
+async function clone(artifact, directory, onProgress) {
   await rm(directory, { recursive: true, force: true });
   await mkdir(workspaceRoot(), { recursive: true });
   await command("git", ["clone", "--no-checkout", artifact.remote, directory], {
     env: gitEnvironment(artifact.token),
+    onProgress,
   });
 }
 
@@ -1197,7 +1198,7 @@ export async function bootstrapWorkspace(assignment) {
   );
 }
 
-export async function prepareWorkspace(assignment) {
+export async function prepareWorkspace(assignment, onProgress) {
   const resumable = assignment.stage === "implement";
   const directory = resolve(
     workspaceRoot(),
@@ -1219,17 +1220,23 @@ export async function prepareWorkspace(assignment) {
         assignment.artifact.remote,
         assignment.artifact.ref,
       ],
-      { cwd: directory, env: gitEnvironment(assignment.artifact.token) },
+      {
+        cwd: directory,
+        env: gitEnvironment(assignment.artifact.token),
+        onProgress,
+      },
     );
   } else {
-    await clone(assignment.artifact, directory);
+    await clone(assignment.artifact, directory, onProgress);
   }
   await command("git", ["checkout", "--detach", assignment.expectedHead], {
     cwd: directory,
+    onProgress,
   });
   if (restored)
     await command("git", ["reset", "--hard", assignment.expectedHead], {
       cwd: directory,
+      onProgress,
     });
   await command(
     "git",
@@ -1239,7 +1246,7 @@ export async function prepareWorkspace(assignment) {
       assignment.baseCommit,
       assignment.expectedHead,
     ],
-    { cwd: directory },
+    { cwd: directory, onProgress },
   );
   if (
     assignment.artifact.access === "write" &&
@@ -1705,7 +1712,9 @@ async function completeAssignment(assignment, headers) {
     });
   };
   await progress("workspace_started");
-  const directory = await prepareWorkspace(agentAssignment);
+  const directory = await prepareWorkspace(agentAssignment, (details) =>
+    reportActivity(agentAssignment, callbackUrl, attemptSecret, details),
+  );
   await progress("workspace_ready");
   await progress("agent_started");
   const evidence =

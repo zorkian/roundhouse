@@ -483,10 +483,6 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
         "node /opt/roundhouse/containers/agent-runner/runner.mjs",
         {
           processId: "roundhouse-runner",
-          onOutput(stream, data) {
-            if (stream === "stderr") console.error(data);
-            else console.log(data);
-          },
           env: {
             ROUNDHOUSE_ATTEMPT_ID: attempt.id,
             ROUNDHOUSE_ATTEMPT_CAPABILITY: attemptSecret,
