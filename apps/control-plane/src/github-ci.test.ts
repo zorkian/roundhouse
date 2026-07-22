@@ -412,9 +412,63 @@ describe("GitHub exact-head CI and merge", () => {
 
   const integration = "f".repeat(40);
   const targetBase = "e".repeat(40);
-  async function setupIntegrated() {
+  async function setupIntegrated(
+    integrateRole:
+      "integrate" | "conflict-resolution" | "reviewed" = "integrate",
+  ) {
     const { repository, run } = await setupCi();
-    const next = await repository.transition(run.id, run.revision, {
+    const integrateAttempt: Attempt = {
+      id: `${run.id}_rev_${run.revision}_integrate`,
+      runId: run.id,
+      runRevision: run.revision,
+      kind: "agent",
+      stage: "integrate",
+      role: integrateRole === "integrate" ? "integrate" : "conflict-resolution",
+      state: "created",
+      deadlineAt: 1_000,
+      baseCommit: integrateRole === "integrate" ? run.baseCommit : targetBase,
+      expectedHead: head,
+    };
+    await repository.createAttempt(integrateAttempt);
+    await repository.completeAttempt(
+      integrateAttempt.id,
+      integrateAttempt.runRevision,
+      integration,
+      {
+        integration: {
+          status: "clean",
+          candidateHead: head,
+          baseHead: targetBase,
+          head: integration,
+        },
+      },
+    );
+    let current = run;
+    if (integrateRole === "reviewed") {
+      const resolved = await repository.transition(run.id, run.revision, {
+        status: "active",
+        stage: "integrate",
+        acceptedHead: integration,
+        heads: { targetBaseHead: targetBase, integrationHead: integration },
+      });
+      if (!resolved) throw new Error("run_missing");
+      current = resolved;
+      const deltaReview: Attempt = {
+        ...integrateAttempt,
+        id: `${current.id}_rev_${current.revision}_review`,
+        runRevision: current.revision,
+        role: "review-integration",
+        expectedHead: integration,
+      };
+      await repository.createAttempt(deltaReview);
+      await repository.completeAttempt(
+        deltaReview.id,
+        deltaReview.runRevision,
+        integration,
+        { review: { status: "clean", findings: [] } },
+      );
+    }
+    const next = await repository.transition(current.id, current.revision, {
       status: "active",
       stage: "ci",
       acceptedHead: integration,
@@ -470,6 +524,77 @@ describe("GitHub exact-head CI and merge", () => {
       "/repos/zorkian/roundhouse/pulls/73/merge",
       { sha: integration, merge_method: "merge" },
     );
+  });
+
+  it("requires an integration-delta review for conflict-resolved integrations", async () => {
+    const { repository, run } = await setupIntegrated("conflict-resolution");
+    const api = github(integration, "success", true, [], {
+      checkSha: integration,
+      baseSha: targetBase,
+    });
+    const automation = new GitHubCiAutomation(repository, api.api);
+    await expect(automation.reconcileCi(run, 100)).resolves.toBe("stale");
+    expect(api.put).not.toHaveBeenCalled();
+  });
+
+  it("runs CI and merge for a conflict-resolved integration after its delta review", async () => {
+    const { repository, run } = await setupIntegrated("reviewed");
+    const api = github(integration, "success", true, [], {
+      checkSha: integration,
+      baseSha: targetBase,
+    });
+    const automation = new GitHubCiAutomation(repository, api.api);
+    await expect(automation.reconcileCi(run, 100)).resolves.toBe("recorded");
+    const merged = await repository.transition(run.id, run.revision, {
+      status: "active",
+      stage: "merge",
+    });
+    if (!merged) throw new Error("merge_run_missing");
+    await expect(automation.merge(merged, 200)).resolves.toBe("recorded");
+    expect(api.put).toHaveBeenCalledWith(
+      "/repos/zorkian/roundhouse/pulls/73/merge",
+      { sha: integration, merge_method: "merge" },
+    );
+  });
+
+  it("returns the run to integration when the target branch moves before merge", async () => {
+    const { repository, run } = await setupIntegrated();
+    const ci: Attempt = {
+      id: `${run.id}_rev_7`,
+      runId: run.id,
+      runRevision: run.revision,
+      kind: "external",
+      stage: "ci",
+      role: "github-checks",
+      state: "created",
+      deadlineAt: 1_000,
+      baseCommit: run.baseCommit,
+      expectedHead: integration,
+    };
+    await repository.createAttempt(ci);
+    await repository.completeAttempt(ci.id, ci.runRevision, integration, {
+      ci: { status: "success", head: integration, baseHead: targetBase },
+    });
+    const merging = await repository.transition(run.id, run.revision, {
+      status: "active",
+      stage: "merge",
+    });
+    if (!merging) throw new Error("merge_run_missing");
+    const api = github(integration, "success", true, [], {
+      checkSha: integration,
+      baseSha: "9".repeat(40),
+    });
+    const automation = new GitHubCiAutomation(repository, api.api);
+    await expect(automation.merge(merging, 200)).resolves.toBe("recorded");
+    expect(api.put).not.toHaveBeenCalled();
+    await expect(repository.get(run.id)).resolves.toMatchObject({
+      status: "active",
+      stage: "integrate",
+      currentHead: integration,
+      reviewedHead: head,
+      targetBaseHead: targetBase,
+      integrationHead: integration,
+    });
   });
 
   it("rejects merge when the pull-request head is not the integration head", async () => {

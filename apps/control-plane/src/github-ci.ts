@@ -178,6 +178,25 @@ export class GitHubCiAutomation {
     return sha && /^[a-f0-9]{40}$/.test(sha) ? sha : undefined;
   }
 
+  // A conflict-resolved integration reaches CI only after its
+  // integration-delta review; a mechanical clean merge needs none.
+  private async integrationReviewed(run: RunSnapshot): Promise<boolean> {
+    if (!run.integrationHead) return true;
+    const latest = await this.repository.latestCompletedAttempt(
+      run.id,
+      "integrate",
+      run.revision,
+    );
+    if (!latest) return false;
+    if (latest.role === "integrate")
+      return latest.acceptedHead === run.integrationHead;
+    if (latest.role !== "review-integration") return false;
+    const review = latest.result?.review as Record<string, unknown> | undefined;
+    return (
+      latest.expectedHead === run.integrationHead && review?.status === "clean"
+    );
+  }
+
   // A moved or conflicted target branch sends the run back to last-mile
   // integration with the same reviewed candidate instead of restarting
   // general implementation.
@@ -199,6 +218,7 @@ export class GitHubCiAutomation {
       return "stale";
     if (run.integrationHead && run.integrationHead !== run.currentHead)
       return "stale";
+    if (!(await this.integrationReviewed(run))) return "stale";
     if (run.targetBaseHead) {
       const latestBase = await this.latestBaseHead(run);
       if (latestBase && latestBase !== run.targetBaseHead)
@@ -288,6 +308,15 @@ export class GitHubCiAutomation {
       pullRequest(this.github, run, "all"),
       checkRuns(this.github, run),
     ]);
+    if (!(await this.integrationReviewed(run))) return "stale";
+    // The target branch is rechecked immediately before merge so a base that
+    // moved after CI reconciliation returns the run to integration instead
+    // of merging a head that was never integrated or tested against it.
+    if (run.targetBaseHead) {
+      const latestBase = await this.latestBaseHead(run);
+      if (latestBase && latestBase !== run.targetBaseHead)
+        return this.reintegrate(run);
+    }
     if (
       !exactAttempt(review, "review", this.reviewedHead(run), "clean") ||
       !exactAttempt(ci, "ci", run.currentHead, "success") ||

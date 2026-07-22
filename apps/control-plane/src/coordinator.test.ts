@@ -1411,7 +1411,8 @@ describe("single coordinator", () => {
       stage: "integrate",
       expectedHead: candidate,
     });
-    // The resolved integration commit advances to CI with every identity bound.
+    // The resolved integration commit stays in integration with every
+    // identity bound until its conflict-resolution delta is reviewed.
     await store.completeAttempt(submitted[1]!.id, 7, resolved, {
       integration: {
         status: "clean",
@@ -1433,7 +1434,7 @@ describe("single coordinator", () => {
     );
     await expect(store.get(input.id)).resolves.toMatchObject({
       status: "active",
-      stage: "ci",
+      stage: "integrate",
       revision: 8,
       currentHead: resolved,
       candidateHead: candidate,
@@ -1441,7 +1442,134 @@ describe("single coordinator", () => {
       targetBaseHead: base,
       integrationHead: resolved,
     });
-    expect(submitted).toHaveLength(2);
+    // The next wakeup dispatches the integration-delta review against the
+    // resolved integration head; the candidate review is not rerun.
+    await expect(
+      coordinate(
+        store,
+        dispatcher,
+        { runId: input.id, expectedRevision: 8 },
+        105,
+      ),
+    ).resolves.toBe("dispatched");
+    expect(submitted[2]).toMatchObject({
+      role: "review-integration",
+      stage: "integrate",
+      expectedHead: resolved,
+    });
+    await store.completeAttempt(submitted[2]!.id, 8, resolved, {
+      review: { status: "clean", findings: [] },
+    });
+    await coordinate(
+      store,
+      { submit: async () => undefined },
+      { runId: input.id, expectedRevision: 8 },
+      106,
+    );
+    await expect(store.get(input.id)).resolves.toMatchObject({
+      status: "active",
+      stage: "ci",
+      revision: 9,
+      currentHead: resolved,
+      candidateHead: candidate,
+      reviewedHead: candidate,
+      targetBaseHead: base,
+      integrationHead: resolved,
+    });
+    expect(submitted).toHaveLength(3);
+  });
+
+  it("rejects integration results with mismatched candidate or base identities", () => {
+    const candidate = "b".repeat(40);
+    const base = "d".repeat(40);
+    const resolved = "e".repeat(40);
+    const attempt = {
+      id: "run_slice_rev_7",
+      runId: input.id,
+      runRevision: 7,
+      kind: "agent",
+      stage: "integrate",
+      role: "conflict-resolution",
+      state: "completed",
+      deadlineAt: 1_000,
+      baseCommit: base,
+      expectedHead: candidate,
+      acceptedHead: resolved,
+      result: {
+        integration: {
+          status: "clean",
+          candidateHead: candidate,
+          baseHead: base,
+          head: resolved,
+        },
+      },
+    } satisfies Attempt;
+    expect(integrateTransition(attempt)).toEqual({
+      status: "active",
+      stage: "integrate",
+      acceptedHead: resolved,
+      heads: { targetBaseHead: base, integrationHead: resolved },
+    });
+    // A completion that reports a different candidate than the reviewed head
+    // the attempt was bound to is stale.
+    expect(
+      integrateTransition({
+        ...attempt,
+        result: {
+          integration: {
+            status: "clean",
+            candidateHead: "c".repeat(40),
+            baseHead: base,
+            head: resolved,
+          },
+        },
+      }),
+    ).toEqual({ status: "failed", stage: "integrate" });
+    // A conflict resolution that reports a base other than the selected
+    // target base carried on the attempt is stale.
+    expect(
+      integrateTransition({
+        ...attempt,
+        result: {
+          integration: {
+            status: "clean",
+            candidateHead: candidate,
+            baseHead: "9".repeat(40),
+            head: resolved,
+          },
+        },
+      }),
+    ).toEqual({ status: "failed", stage: "integrate" });
+    // A failed integration-delta review returns to conflict resolution, not
+    // to general implementation.
+    expect(
+      integrateTransition({
+        ...attempt,
+        role: "review-integration",
+        expectedHead: resolved,
+        acceptedHead: resolved,
+        result: {
+          review: {
+            status: "changes_requested",
+            findings: [{ title: "Bad resolution" }],
+          },
+        },
+      }),
+    ).toEqual({ status: "active", stage: "integrate" });
+    expect(
+      integrateTransition({
+        ...attempt,
+        role: "review-integration",
+        expectedHead: resolved,
+        acceptedHead: resolved,
+        result: { review: { status: "clean", findings: [] } },
+      }),
+    ).toEqual({
+      status: "active",
+      stage: "ci",
+      acceptedHead: resolved,
+      heads: { integrationHead: resolved },
+    });
   });
 
   it("retries mechanical integration against a moved base without repeating earlier stages", async () => {

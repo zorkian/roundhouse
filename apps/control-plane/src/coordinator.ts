@@ -147,6 +147,22 @@ export function reviewTransition(attempt: Attempt) {
 }
 
 export function integrateTransition(attempt: Attempt) {
+  // The integration-delta review is the only gate between a conflict
+  // resolution and CI; the original candidate review remains valid evidence.
+  if (attempt.role === "review-integration") {
+    const review = attempt.result?.review as
+      Record<string, unknown> | undefined;
+    if (review?.status === "clean")
+      return {
+        status: "active",
+        stage: "ci",
+        acceptedHead: attempt.expectedHead,
+        heads: { integrationHead: attempt.expectedHead },
+      } as const;
+    if (review?.status === "changes_requested")
+      return { status: "active", stage: "integrate" } as const;
+    return { status: "failed", stage: "integrate" } as const;
+  }
   const outcome = attempt.result?.integration as
     Record<string, unknown> | undefined;
   const baseHead = outcome?.baseHead;
@@ -156,7 +172,7 @@ export function integrateTransition(attempt: Attempt) {
     !/^[a-f0-9]{40}$/.test(baseHead)
   )
     return { status: "failed", stage: "integrate" } as const;
-  if (outcome.status === "conflict")
+  if (outcome.status === "conflict" && attempt.role === "integrate")
     return {
       status: "active",
       stage: "integrate",
@@ -165,9 +181,25 @@ export function integrateTransition(attempt: Attempt) {
   if (
     outcome.status === "clean" &&
     outcome.head === attempt.acceptedHead &&
+    outcome.candidateHead === attempt.expectedHead &&
     attempt.acceptedHead &&
     attempt.acceptedHead !== attempt.expectedHead
-  )
+  ) {
+    // A conflict resolution must integrate the base selected by the
+    // preceding conflict, which is carried immutably on the attempt.
+    if (attempt.role === "conflict-resolution") {
+      if (baseHead !== attempt.baseCommit)
+        return { status: "failed", stage: "integrate" } as const;
+      return {
+        status: "active",
+        stage: "integrate",
+        acceptedHead: attempt.acceptedHead,
+        heads: {
+          targetBaseHead: baseHead,
+          integrationHead: attempt.acceptedHead,
+        },
+      } as const;
+    }
     return {
       status: "active",
       stage: "ci",
@@ -177,6 +209,7 @@ export function integrateTransition(attempt: Attempt) {
         integrationHead: attempt.acceptedHead,
       },
     } as const;
+  }
   return { status: "failed", stage: "integrate" } as const;
 }
 
@@ -404,9 +437,21 @@ export async function coordinate(
     );
     const integration = previous?.result?.integration as
       Record<string, unknown> | undefined;
-    return integration?.status === "conflict"
-      ? "conflict-resolution"
-      : "integrate";
+    if (integration?.status === "conflict") return "conflict-resolution";
+    // A conflict resolution is reviewed as an integration delta before CI.
+    if (
+      previous?.role === "conflict-resolution" &&
+      integration?.status === "clean"
+    )
+      return "review-integration";
+    const deltaReview = previous?.result?.review as
+      Record<string, unknown> | undefined;
+    if (
+      previous?.role === "review-integration" &&
+      deltaReview?.status === "changes_requested"
+    )
+      return "conflict-resolution";
+    return "integrate";
   };
   const role = await integrateRole();
   const claimed = await repository.claimLease(
@@ -432,10 +477,15 @@ export async function coordinate(
     role,
     state: "created",
     deadlineAt: now + leaseMilliseconds,
-    baseCommit: run.baseCommit,
+    baseCommit:
+      run.stage === "integrate" && role !== "integrate"
+        ? (run.targetBaseHead ?? run.baseCommit)
+        : run.baseCommit,
     expectedHead:
       run.stage === "integrate"
-        ? (run.reviewedHead ?? run.currentHead)
+        ? role === "review-integration"
+          ? (run.integrationHead ?? run.currentHead)
+          : (run.reviewedHead ?? run.currentHead)
         : run.currentHead,
   };
   const created = await repository.createAttempt(attempt);

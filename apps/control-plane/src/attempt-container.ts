@@ -140,6 +140,10 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
       "review",
       "integrate",
     ].includes(attempt.stage) ||
+    // Mechanical integration is a no-model operation; only conflict
+    // resolution and the integration-delta review may call a model.
+    (attempt.stage === "integrate" &&
+      !["conflict-resolution", "review-integration"].includes(attempt.role)) ||
     !["created", "dispatched"].includes(attempt.state) ||
     attempt.deadlineAt <= Date.now()
   ) {
@@ -176,7 +180,7 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
       ? "planning"
       : attempt.stage === "implement" || attempt.role === "conflict-resolution"
         ? "implementation"
-        : attempt.stage === "review"
+        : attempt.stage === "review" || attempt.role === "review-integration"
           ? "review"
           : "validation",
   );
