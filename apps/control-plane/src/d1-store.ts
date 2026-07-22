@@ -149,9 +149,13 @@ function attemptFromRow(row: AttemptRow): Attempt {
 
 export class D1RunRepository implements RunRepository {
   constructor(
-    private readonly db: D1Like,
+    readonly database: D1Like,
     private readonly now = () => Date.now(),
   ) {}
+
+  private get db(): D1Like {
+    return this.database;
+  }
 
   async create(run: RunSnapshot): Promise<void> {
     const time = this.now();

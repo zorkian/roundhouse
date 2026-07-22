@@ -6,14 +6,14 @@ import { describe, expect, it } from "vitest";
 import {
   attemptAllowedHosts,
   pauseForModelBudget,
-  RoundhouseAttemptContainer,
+  RoundhouseAttemptSandbox,
 } from "./attempt-container.js";
 import {
   attemptContext,
   controlPlaneService,
   handleRequest,
   recoverExpiredAttempts,
-  scheduleAttemptContainerDestruction,
+  scheduleAttemptSandboxDestruction,
   successorWakeup,
   validAttemptProgress,
 } from "./index.js";
@@ -247,7 +247,7 @@ describe("V2 control plane", () => {
 
   it("registers the private model egress handler with the Containers SDK", () => {
     expect(
-      RoundhouseAttemptContainer.outboundByHost?.["model.roundhouse.internal"],
+      RoundhouseAttemptSandbox.outboundByHost?.["model.roundhouse.internal"],
     ).toBeTypeOf("function");
   });
 
@@ -421,7 +421,7 @@ describe("V2 control plane", () => {
   it("schedules completed sandbox destruction by immutable attempt id", async () => {
     const events: string[] = [];
     const scheduled: Promise<unknown>[] = [];
-    scheduleAttemptContainerDestruction(
+    scheduleAttemptSandboxDestruction(
       {
         idFromName: (name: string) => `id:${name}`,
         get: (id: unknown) => ({

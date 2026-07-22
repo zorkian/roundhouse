@@ -4,7 +4,7 @@
 import { createServer } from "node:http";
 import { createHmac } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -106,6 +106,19 @@ export function artifactWriteTokenRequest(
     },
     body: JSON.stringify({ artifactTokenId: assignment.artifact.tokenId }),
     signal: AbortSignal.timeout(30_000),
+  });
+}
+
+function screenshotRequest(assignment, callbackUrl, attemptSecret, input) {
+  return new Request(new URL("/attempts/screenshots", callbackUrl), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-roundhouse-attempt-capability": attemptSecret,
+      "x-roundhouse-attempt-id": assignment.id,
+    },
+    body: JSON.stringify(input),
+    signal: AbortSignal.timeout(120_000),
   });
 }
 
@@ -423,7 +436,13 @@ export const reproductionSchema = Object.freeze({
 export const implementationSchema = Object.freeze({
   type: "object",
   additionalProperties: false,
-  required: ["summary", "pullRequestTitle", "pullRequestBody", "validation"],
+  required: [
+    "summary",
+    "pullRequestTitle",
+    "pullRequestBody",
+    "validation",
+    "screenshots",
+  ],
   properties: {
     summary: { type: "string" },
     pullRequestTitle: { type: "string" },
@@ -438,6 +457,18 @@ export const implementationSchema = Object.freeze({
           command: { type: "string" },
           exitCode: { type: "integer" },
           output: { type: "string" },
+        },
+      },
+    },
+    screenshots: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["url", "description"],
+        properties: {
+          url: { type: "string" },
+          description: { type: "string" },
         },
       },
     },
@@ -655,6 +686,44 @@ async function structuredAgent(
       };
     },
   };
+  const captureScreenshot = {
+    name: "capture_screenshot",
+    label: "Capture screenshot",
+    description:
+      "Capture a screenshot of an application currently listening in this workspace. Start the application first, then provide its local port and route.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["port", "path", "width", "height"],
+      properties: {
+        port: { type: "integer", minimum: 1, maximum: 65535 },
+        path: { type: "string" },
+        width: { type: "integer", minimum: 320, maximum: 2560 },
+        height: { type: "integer", minimum: 240, maximum: 1600 },
+      },
+    },
+    async execute(_toolCallId, params) {
+      const response = await fetch(
+        screenshotRequest(
+          assignment,
+          assignment.activityCallbackUrl,
+          attemptSecret,
+          params,
+        ),
+      );
+      if (!response.ok) throw new Error(`screenshot_http_${response.status}`);
+      const screenshot = await response.json();
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Screenshot captured: ${screenshot.url}`,
+          },
+        ],
+        details: screenshot,
+      };
+    },
+  };
   const resourceLoader = {
     getExtensions: () => ({
       extensions: [],
@@ -672,7 +741,17 @@ async function structuredAgent(
   };
   const implementation = name === "implementation";
   const tools = implementation
-    ? ["read", "bash", "edit", "write", "grep", "find", "ls", "submit_result"]
+    ? [
+        "read",
+        "bash",
+        "edit",
+        "write",
+        "grep",
+        "find",
+        "ls",
+        "capture_screenshot",
+        "submit_result",
+      ]
     : ["read", "bash", "grep", "find", "ls", "submit_result"];
   const startedAt = Date.now();
   const operation = "pi agent";
@@ -715,7 +794,9 @@ async function structuredAgent(
     model,
     thinkingLevel: route.thinkingLevel,
     tools,
-    customTools: [submitResult],
+    customTools: implementation
+      ? [submitResult, captureScreenshot]
+      : [submitResult],
     resourceLoader,
     sessionManager: SessionManager.inMemory(directory),
     settingsManager: SettingsManager.inMemory({
@@ -901,6 +982,7 @@ export function implementationPrompt(assignment) {
         ]
       : []),
     "Run the relevant validation available in the repository and record each command, exit code, and useful output in validation.",
+    "When the issue or conversation asks for visual evidence, run the application and use capture_screenshot before submitting. Include every returned screenshot URL and a short description in screenshots; otherwise return an empty screenshots array.",
     "Write a concise pull request title and body for a maintainer. Describe the change and why; do not include validation commands or command output in the pull request body.",
     "Return only the requested structured implementation result.",
   ].join("\n");
@@ -1000,11 +1082,39 @@ export async function bootstrapWorkspace(assignment) {
 }
 
 export async function prepareWorkspace(assignment) {
-  const directory = resolve(workspaceRoot(), assignment.id);
-  await clone(assignment.artifact, directory);
+  const resumable = assignment.stage === "implement";
+  const directory = resolve(
+    workspaceRoot(),
+    resumable ? assignment.runId : assignment.id,
+  );
+  let restored = false;
+  if (resumable) {
+    try {
+      await access(resolve(directory, ".git"));
+      restored = true;
+    } catch {}
+  }
+  if (restored) {
+    await command(
+      "git",
+      [
+        "fetch",
+        "--no-tags",
+        assignment.artifact.remote,
+        assignment.artifact.ref,
+      ],
+      { cwd: directory, env: gitEnvironment(assignment.artifact.token) },
+    );
+  } else {
+    await clone(assignment.artifact, directory);
+  }
   await command("git", ["checkout", "--detach", assignment.expectedHead], {
     cwd: directory,
   });
+  if (restored)
+    await command("git", ["reset", "--hard", assignment.expectedHead], {
+      cwd: directory,
+    });
   await command(
     "git",
     [

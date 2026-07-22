@@ -411,11 +411,24 @@ function implementationComment(
   const summary = String(
     implementation?.summary ?? "The requested change is ready for review.",
   );
+  const screenshots = Array.isArray(implementation?.screenshots)
+    ? implementation.screenshots.flatMap((item) => {
+        if (!item || typeof item !== "object") return [];
+        const screenshot = item as Record<string, unknown>;
+        const url = String(screenshot.url ?? "");
+        if (!url.startsWith("https://")) return [];
+        return [
+          "",
+          `![${String(screenshot.description ?? "Implementation screenshot")}](${url})`,
+        ];
+      })
+    : [];
   return [
     `<!-- roundhouse:v2:implementation:${attempt.id} -->`,
     `## I ${created ? "opened" : "updated"} the draft pull request`,
     "",
     summary,
+    ...screenshots,
     "",
     `[View draft pull request #${pullRequest.number}](${pullRequest.html_url})`,
   ].join("\n");

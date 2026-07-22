@@ -1,7 +1,11 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import { Container } from "@cloudflare/containers";
+import {
+  Sandbox,
+  type DirectoryBackup,
+  type TunnelInfo,
+} from "@cloudflare/sandbox";
 import {
   isModelRoute,
   modelStopReasonHeader,
@@ -19,11 +23,22 @@ interface AttemptAssignment extends Attempt {
   readonly artifact: {
     readonly remote: string;
     readonly hostname: string;
+    readonly [key: string]: unknown;
   };
   readonly issue?: unknown;
-  readonly source?: { readonly hostname: string };
-  readonly publish?: { readonly hostname: string };
-  readonly upstream?: { readonly hostname: string };
+  readonly source?: {
+    readonly hostname: string;
+    readonly [key: string]: unknown;
+  };
+  readonly publish?: {
+    readonly hostname: string;
+    readonly [key: string]: unknown;
+  };
+  readonly upstream?: {
+    readonly hostname: string;
+    readonly [key: string]: unknown;
+  };
+  readonly [key: string]: unknown;
 }
 
 type AttemptContainerEnv = Cloudflare.Env & {
@@ -412,70 +427,116 @@ export function extractModelUsage(
   };
 }
 
-export class RoundhouseAttemptContainer extends Container<Cloudflare.Env> {
+export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
   override defaultPort = 8080;
   override sleepAfter = "5m";
   override enableInternet = false;
   override interceptHttps = true;
 
-  override async fetch(request: Request): Promise<Response> {
-    if (request.method !== "POST")
-      return new Response("method_not_allowed", { status: 405 });
-    const attempt = await request.json<AttemptAssignment>();
-    if (attempt.deadlineAt <= Date.now())
-      return new Response("attempt_deadline_expired", { status: 409 });
+  async restoreWorkspace(backup: DirectoryBackup): Promise<void> {
+    await this.restoreBackup(backup);
+  }
 
-    await this.setAllowedHosts(
-      attemptAllowedHosts(
-        attempt,
-        request.headers.get("x-roundhouse-callback-url"),
-      ),
-    );
-    await this.startAndWaitForPorts({
-      ports: this.defaultPort,
-      cancellationOptions: { portReadyTimeoutMS: 30_000 },
-      startOptions: {
-        envVars: {
-          ROUNDHOUSE_ATTEMPT_ID: attempt.id,
-          ROUNDHOUSE_ATTEMPT_CAPABILITY:
-            request.headers.get("x-roundhouse-attempt-secret") ?? "",
-          ROUNDHOUSE_TASK_TYPE:
-            attempt.stage === "plan"
-              ? "planning"
-              : attempt.stage === "implement"
-                ? "implementation"
-                : attempt.stage === "review"
-                  ? "review"
-                  : "validation",
-          ROUNDHOUSE_COMPLEXITY: "unknown",
-          ROUNDHOUSE_DUMMY_TOKEN: "service-binding-auth-only",
-          GIT_SSL_CAINFO: containerCa,
-          NODE_EXTRA_CA_CERTS: containerCa,
-        },
-        enableInternet: false,
-      },
+  async backupWorkspace(runId: string): Promise<DirectoryBackup> {
+    await this.killAllProcesses();
+    return this.createBackup({
+      dir: `/workspace/roundhouse/${runId}`,
+      name: `roundhouse-${runId}`,
+      gitignore: false,
+      localBucket: true,
+      ttl: 30 * 24 * 60 * 60,
     });
-    const path = new URL(request.url).pathname;
+  }
+
+  async openPreview(port: number): Promise<TunnelInfo> {
+    return this.tunnels.get(port);
+  }
+
+  async closePreview(port: number): Promise<void> {
+    await this.tunnels.destroy(port);
+  }
+
+  async runAttempt(
+    path: "/bootstrap" | "/assign",
+    attempt: AttemptAssignment,
+    attemptSecret: string,
+    callbackUrl?: string,
+  ): Promise<number> {
+    if (attempt.deadlineAt <= Date.now()) return 409;
+
+    await this.setAllowedHosts(attemptAllowedHosts(attempt, callbackUrl));
+    let runner = await this.getProcess("roundhouse-runner");
+    if (!runner) {
+      runner = await this.startProcess(
+        "node /opt/roundhouse/containers/agent-runner/runner.mjs",
+        {
+          processId: "roundhouse-runner",
+          env: {
+            ROUNDHOUSE_ATTEMPT_ID: attempt.id,
+            ROUNDHOUSE_ATTEMPT_CAPABILITY: attemptSecret,
+            ROUNDHOUSE_TASK_TYPE:
+              attempt.stage === "plan"
+                ? "planning"
+                : attempt.stage === "implement"
+                  ? "implementation"
+                  : attempt.stage === "review"
+                    ? "review"
+                    : "validation",
+            ROUNDHOUSE_COMPLEXITY: "unknown",
+            ROUNDHOUSE_DUMMY_TOKEN: "service-binding-auth-only",
+            ROUNDHOUSE_WORKSPACE_ROOT: "/workspace/roundhouse",
+            GIT_SSL_CAINFO: containerCa,
+            NODE_EXTRA_CA_CERTS: containerCa,
+          },
+        },
+      );
+    }
+    await runner.waitForPort(this.defaultPort, { timeout: 30_000 });
     const response = await observeResponse(
-      await this.containerFetch(`http://runner${path}`, {
-        method: "POST",
-        headers: request.headers,
-        body: JSON.stringify(attempt),
-      }),
+      await this.containerFetch(
+        `http://runner${path}`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-roundhouse-attempt-secret": attemptSecret,
+            ...(callbackUrl
+              ? { "x-roundhouse-callback-url": callbackUrl }
+              : {}),
+          },
+          body: JSON.stringify(attempt),
+        },
+        this.defaultPort,
+      ),
       {
         api: "agent_runner",
         operation: path,
         attemptId: attempt.id,
       },
     );
-    if (path === "/bootstrap" || path === "/validate") return response;
-    return response.ok
-      ? Response.json(
-          { accepted: true, attemptId: attempt.id },
-          { status: 202 },
-        )
-      : new Response("runner_rejected", { status: 503 });
+    return response.status;
+  }
+
+  async validateCheckpoint(attempt: AttemptAssignment): Promise<number> {
+    const runner = await this.startProcess(
+      "node /opt/roundhouse/containers/agent-runner/runner.mjs",
+      {
+        processId: `validator-${attempt.id}`,
+        env: { ROUNDHOUSE_WORKSPACE_ROOT: "/workspace/roundhouse" },
+      },
+    );
+    await runner.waitForPort(this.defaultPort, { timeout: 30_000 });
+    const response = await this.containerFetch(
+      "http://runner/validate",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(attempt),
+      },
+      this.defaultPort,
+    );
+    return response.status;
   }
 }
 
-RoundhouseAttemptContainer.outboundByHost = { [modelHost]: modelEgress };
+RoundhouseAttemptSandbox.outboundByHost = { [modelHost]: modelEgress };

@@ -8,12 +8,24 @@ export default defineConfig({
   cacheDir: "/tmp/roundhouse-vitest",
   resolve: {
     alias: {
+      "@cloudflare/containers": fileURLToPath(
+        new URL("./tests/cloudflare-containers.ts", import.meta.url),
+      ),
       "cloudflare:workers": fileURLToPath(
         new URL("./tests/cloudflare-workers.ts", import.meta.url),
       ),
     },
   },
   test: {
+    server: {
+      deps: {
+        inline: [
+          "@cloudflare/sandbox",
+          "@cloudflare/containers",
+          "@cloudflare/playwright",
+        ],
+      },
+    },
     include: [
       "apps/**/*.test.ts",
       "apps/**/*.test.mjs",

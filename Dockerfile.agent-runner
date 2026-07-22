@@ -1,26 +1,24 @@
 # Copyright 2026 Mark Smith
 # SPDX-License-Identifier: Apache-2.0
 
-FROM node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d
+FROM node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d AS node-runtime
+
+FROM docker.io/cloudflare/sandbox:0.12.4
+
+COPY --from=node-runtime /usr/local /opt/node24
+ENV PATH="/opt/node24/bin:${PATH}"
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
 
-RUN corepack enable
-
-RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin runner
+RUN corepack enable pnpm --install-directory /opt/node24/bin \
+    && corepack prepare pnpm@10.13.1 --activate
 
 WORKDIR /opt/roundhouse
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY containers/agent-runner/package.json containers/agent-runner/package.json
 RUN pnpm install --filter @roundhouse/agent-runner --prod --frozen-lockfile
 
-COPY --chown=runner:runner containers/agent-runner/runner.mjs /opt/roundhouse/containers/agent-runner/runner.mjs
-COPY --chown=runner:runner packages/response-observer/index.mjs /opt/roundhouse/packages/response-observer/index.mjs
-
-USER runner
-WORKDIR /home/runner
-EXPOSE 8080
-
-CMD ["node", "/opt/roundhouse/containers/agent-runner/runner.mjs"]
+COPY containers/agent-runner/runner.mjs /opt/roundhouse/containers/agent-runner/runner.mjs
+COPY packages/response-observer/index.mjs /opt/roundhouse/packages/response-observer/index.mjs
