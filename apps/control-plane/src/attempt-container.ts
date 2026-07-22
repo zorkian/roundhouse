@@ -501,7 +501,10 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
         },
       );
     }
-    await runner.waitForPort(this.agentRunnerPort, { timeout: 30_000 });
+    await runner.waitForPort(this.agentRunnerPort, {
+      path: "/health",
+      timeout: 30_000,
+    });
     const response = await observeResponse(
       await this.containerFetch(
         `http://runner${path}`,
@@ -540,7 +543,10 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
         },
       },
     );
-    await runner.waitForPort(this.agentRunnerPort, { timeout: 30_000 });
+    await runner.waitForPort(this.agentRunnerPort, {
+      path: "/health",
+      timeout: 30_000,
+    });
     const response = await this.containerFetch(
       "http://runner/validate",
       {
