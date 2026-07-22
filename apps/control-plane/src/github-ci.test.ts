@@ -959,7 +959,6 @@ describe("GitHub exact-head CI and merge", () => {
   );
 
   it("returns a conflicted pull request to integration instead of implementation", async () => {
-
     const { repository, run } = await setupCi();
     const api = github(head, "success", false);
     const automation = new GitHubCiAutomation(repository, api.api);
