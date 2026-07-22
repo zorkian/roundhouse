@@ -15,3 +15,5 @@ export class WorkerEntrypoint<Env = unknown, Properties = unknown> {
   protected readonly env!: Env;
   protected readonly ctx!: ExecutionContext<Properties>;
 }
+
+export class RpcTarget {}

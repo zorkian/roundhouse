@@ -3,6 +3,7 @@
   "name": "roundhouse-v2-control-plane",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-18",
+  "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "routes": [
     {
@@ -39,6 +40,13 @@
   "artifacts": [
     { "binding": "ARTIFACTS", "namespace": "roundhouse-v2-development" },
   ],
+  "r2_buckets": [
+    {
+      "binding": "BACKUP_BUCKET",
+      "bucket_name": "roundhouse-v2-development-workspaces",
+    },
+  ],
+  "browser": { "binding": "BROWSER" },
   "services": [
     {
       "binding": "MODEL_BROKER",
@@ -47,7 +55,7 @@
   ],
   "containers": [
     {
-      "class_name": "RoundhouseAttemptContainer",
+      "class_name": "RoundhouseAttemptSandbox",
       "image": "../../Dockerfile.agent-runner",
       "instance_type": "standard-1",
       "max_instances": 10,
@@ -56,8 +64,8 @@
   "durable_objects": {
     "bindings": [
       {
-        "name": "ATTEMPT_CONTAINERS",
-        "class_name": "RoundhouseAttemptContainer",
+        "name": "ATTEMPT_SANDBOXES",
+        "class_name": "RoundhouseAttemptSandbox",
       },
     ],
   },
@@ -65,6 +73,11 @@
     {
       "tag": "v2-phase-1",
       "new_sqlite_classes": ["RoundhouseAttemptContainer"],
+    },
+    {
+      "tag": "resumable-visual-workspaces",
+      "new_sqlite_classes": ["RoundhouseAttemptSandbox"],
+      "deleted_classes": ["RoundhouseAttemptContainer"],
     },
   ],
   "triggers": { "crons": ["*/5 * * * *"] },
@@ -75,6 +88,8 @@
     "PUBLIC_ORIGIN": "https://roundhouse-dev.rm-rf.rip",
     "GITHUB_APP_ID": "4281837",
     "GITHUB_START_COMMAND": "/roundhouse-dev start",
+    "SANDBOX_TRANSPORT": "rpc",
+    "BACKUP_BUCKET_NAME": "roundhouse-v2-development-workspaces",
   },
   "observability": {
     "enabled": true,

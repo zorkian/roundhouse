@@ -41,8 +41,11 @@ import {
 } from "./github.js";
 import { observeResponse } from "@roundhouse/response-observer";
 import { aggregatedReview } from "./aggregated-review.js";
-export { ContainerProxy } from "@cloudflare/containers";
-export { RoundhouseAttemptContainer } from "./attempt-container.js";
+import { getSandbox, type DirectoryBackup } from "@cloudflare/sandbox";
+import { launch } from "@cloudflare/playwright";
+import { RoundhouseAttemptSandbox } from "./attempt-container.js";
+export { ContainerProxy } from "@cloudflare/sandbox";
+export { RoundhouseAttemptSandbox } from "./attempt-container.js";
 
 export const controlPlaneService = "roundhouse-v2-control-plane";
 
@@ -142,26 +145,38 @@ export function attemptContext(parts: {
 
 interface AttemptStub {
   destroy(): Promise<void>;
-  fetch(request: Request): Promise<Response>;
 }
 interface AttemptNamespace {
   idFromName(name: string): unknown;
   get(id: unknown): AttemptStub;
 }
 
-export async function destroyAttemptContainer(
-  containers: AttemptNamespace,
-  attemptId: string,
-): Promise<void> {
-  await containers.get(containers.idFromName(attemptId)).destroy();
+type SandboxNamespace = DurableObjectNamespace<RoundhouseAttemptSandbox>;
+
+function attemptSandbox(
+  sandboxes: SandboxNamespace,
+  name: string,
+): RoundhouseAttemptSandbox {
+  return getSandbox(sandboxes, name);
 }
 
-export function scheduleAttemptContainerDestruction(
+function sandboxName(attempt: Pick<Attempt, "id" | "runId" | "stage">): string {
+  return attempt.stage === "implement" ? attempt.runId : attempt.id;
+}
+
+export async function destroyAttemptSandbox(
   containers: AttemptNamespace,
-  attemptId: string,
+  name: string,
+): Promise<void> {
+  await containers.get(containers.idFromName(name)).destroy();
+}
+
+export function scheduleAttemptSandboxDestruction(
+  containers: AttemptNamespace,
+  name: string,
   context: Pick<ExecutionContext, "waitUntil">,
 ): void {
-  context.waitUntil(destroyAttemptContainer(containers, attemptId));
+  context.waitUntil(destroyAttemptSandbox(containers, name));
 }
 
 export async function recoverExpiredAttempts(
@@ -169,11 +184,15 @@ export async function recoverExpiredAttempts(
   wakeups: readonly Wakeup[],
   enqueue: (wakeup: Wakeup) => Promise<void>,
   diagnose?: (attemptId: string, wakeup: Wakeup) => Promise<void>,
+  resolveName?: (attemptId: string) => Promise<string>,
 ): Promise<void> {
   for (const wakeup of wakeups) {
     const attemptId = immutableAttemptId(wakeup.runId, wakeup.expectedRevision);
     if (diagnose) await diagnose(attemptId, wakeup);
-    await destroyAttemptContainer(containers, attemptId);
+    await destroyAttemptSandbox(
+      containers,
+      resolveName ? await resolveName(attemptId) : attemptId,
+    );
     await enqueue(wakeup);
   }
 }
@@ -242,11 +261,45 @@ export function validAttemptProgress(
 }
 type RuntimeEnv = Cloudflare.Env & {
   DB: D1Like;
+  BROWSER: Fetcher;
+  BACKUP_BUCKET: R2Bucket;
   CALLBACK_SIGNING_SECRET: string;
   GITHUB_APP_ID: string;
   ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY: string;
   ROUNDHOUSE_GITHUB_WEBHOOK_SECRET: string;
 };
+
+async function workspaceBackup(
+  db: D1Like,
+  runId: string,
+): Promise<DirectoryBackup | undefined> {
+  const row = await db
+    .prepare(
+      "SELECT backup_json FROM implementation_workspaces WHERE run_id = ?",
+    )
+    .bind(runId)
+    .first<{ backup_json: string }>();
+  return row ? (JSON.parse(row.backup_json) as DirectoryBackup) : undefined;
+}
+
+async function saveWorkspaceBackup(
+  db: D1Like,
+  runId: string,
+  attemptId: string,
+  backup: DirectoryBackup,
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO implementation_workspaces (run_id, attempt_id, backup_json, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(run_id) DO UPDATE SET
+         attempt_id = excluded.attempt_id,
+         backup_json = excluded.backup_json,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(runId, attemptId, JSON.stringify(backup), Date.now())
+    .run();
+}
 
 function artifactsNamespace(env: RuntimeEnv) {
   return new CloudflareArtifactsNamespace(env.ARTIFACTS, {
@@ -296,9 +349,9 @@ async function conflictedIntegrationOutcome(
   return undefined;
 }
 
-class ContainerDispatcher implements AttemptDispatcher {
+class SandboxDispatcher implements AttemptDispatcher {
   constructor(
-    private readonly containers: AttemptNamespace,
+    private readonly containers: SandboxNamespace,
     private readonly artifacts: CloudflareArtifactsNamespace,
     private readonly callbackSigningSecret: string,
     private readonly controlPlaneOrigin: string,
@@ -357,7 +410,7 @@ class ContainerDispatcher implements AttemptDispatcher {
     // Recovery invalidates every token from an interrupted container before a
     // replacement receives a fresh, short-lived credential.
     await repository.revokeActiveTokens();
-    const id = this.containers.idFromName(attempt.id);
+    const sandbox = attemptSandbox(this.containers, sandboxName(attempt));
     const attemptSecret = await signCallback(
       this.callbackSigningSecret,
       attempt.id,
@@ -365,42 +418,29 @@ class ContainerDispatcher implements AttemptDispatcher {
     if (repository.empty) {
       const bootstrapToken = await repository.createToken("write", 30 * 60);
       try {
-        const response = await observeResponse(
-          await this.containers.get(id).fetch(
-            new Request("https://attempt.invalid/bootstrap", {
-              method: "POST",
-              headers: {
-                "content-type": "application/json",
-                "x-roundhouse-attempt-secret": attemptSecret,
-              },
-              body: JSON.stringify({
-                ...attempt,
-                artifact: {
-                  repositoryId: repository.id,
-                  repository: repository.name,
-                  remote: repository.remote,
-                  hostname: repository.hostname,
-                  tokenId: bootstrapToken.id,
-                  token: bootstrapToken.plaintext,
-                  access: bootstrapToken.access,
-                },
-                source: {
-                  remote: `https://github.com/${run.repository}.git`,
-                  hostname: "github.com",
-                  branch: run.githubDefaultBranch ?? "main",
-                  head: run.baseCommit,
-                },
-              }),
-            }),
-          ),
+        const status = await sandbox.runAttempt(
+          "/bootstrap",
           {
-            api: "attempt_container",
-            operation: "bootstrap",
-            attemptId: attempt.id,
+            ...attempt,
+            artifact: {
+              repositoryId: repository.id,
+              repository: repository.name,
+              remote: repository.remote,
+              hostname: repository.hostname,
+              tokenId: bootstrapToken.id,
+              token: bootstrapToken.plaintext,
+              access: bootstrapToken.access,
+            },
+            source: {
+              remote: `https://github.com/${run.repository}.git`,
+              hostname: "github.com",
+              branch: run.githubDefaultBranch ?? "main",
+              head: run.baseCommit,
+            },
           },
+          attemptSecret,
         );
-        if (response.status !== 204)
-          throw new Error("container_bootstrap_failed");
+        if (status !== 204) throw new Error("sandbox_bootstrap_failed");
       } catch (error) {
         await repository.revokeToken(bootstrapToken.id);
         throw error;
@@ -587,28 +627,17 @@ class ContainerDispatcher implements AttemptDispatcher {
         : {}),
     };
     try {
-      const response = await observeResponse(
-        await this.containers.get(id).fetch(
-          new Request("https://attempt.invalid/assign", {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              "x-roundhouse-attempt-secret": attemptSecret,
-              "x-roundhouse-callback-url": new URL(
-                "/attempts/callback",
-                this.controlPlaneOrigin,
-              ).toString(),
-            },
-            body: JSON.stringify(assignment),
-          }),
-        ),
-        {
-          api: "attempt_container",
-          operation: "assign",
-          attemptId: attempt.id,
-        },
+      if (attempt.stage === "implement") {
+        const backup = await workspaceBackup(this.runs.database, run.id);
+        if (backup) await sandbox.restoreWorkspace(backup);
+      }
+      const status = await sandbox.runAttempt(
+        "/assign",
+        assignment,
+        attemptSecret,
+        new URL("/attempts/callback", this.controlPlaneOrigin).toString(),
       );
-      if (response.status !== 202) throw new Error("container_dispatch_failed");
+      if (status !== 202) throw new Error("sandbox_dispatch_failed");
     } catch (error) {
       await repository.revokeToken(token.id);
       throw error;
@@ -616,9 +645,9 @@ class ContainerDispatcher implements AttemptDispatcher {
   }
 }
 
-class ContainerCheckpointValidator implements CheckpointValidator {
+class SandboxCheckpointValidator implements CheckpointValidator {
   constructor(
-    private readonly containers: AttemptNamespace,
+    private readonly containers: SandboxNamespace,
     private readonly artifacts: CloudflareArtifactsNamespace,
     private readonly repository: D1RunRepository,
     private readonly githubEnv: GitHubEnv,
@@ -659,63 +688,53 @@ class ContainerCheckpointValidator implements CheckpointValidator {
         : undefined;
     const token = await artifact.createToken("read", 5 * 60);
     try {
-      const response = await observeResponse(
-        await this.containers
-          .get(this.containers.idFromName(`${attempt.id}-validation`))
-          .fetch(
-            new Request("https://attempt.invalid/validate", {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({
-                ...attempt,
-                baseCommit: run.baseCommit,
-                profile: run.profile,
-                checkpoint: input.checkpoint,
-                ...(conflicted
-                  ? {
-                      integration: {
-                        ...(typeof conflicted.baseHead === "string"
-                          ? { baseHead: conflicted.baseHead }
-                          : {}),
-                        ...(Array.isArray(conflicted.conflicts)
-                          ? { conflicts: conflicted.conflicts }
-                          : {}),
-                      },
-                    }
+      const status = await attemptSandbox(
+        this.containers,
+        `${attempt.id}-validation`,
+      ).validateCheckpoint({
+        ...attempt,
+        baseCommit: run.baseCommit,
+        profile: run.profile,
+        checkpoint: input.checkpoint,
+        ...(conflicted
+          ? {
+              integration: {
+                ...(typeof conflicted.baseHead === "string"
+                  ? { baseHead: conflicted.baseHead }
                   : {}),
-                artifact: {
-                  repositoryId: artifact.id,
-                  repository: artifact.name,
-                  remote: artifact.remote,
-                  hostname: artifact.hostname,
-                  tokenId: token.id,
-                  token: token.plaintext,
-                  access: token.access,
-                  ref: input.checkpoint.ref,
-                },
-                publish: {
-                  remote: `https://github.com/${run.repository}.git`,
-                  hostname: "github.com",
-                  token: await githubClientForRun(
-                    this.githubEnv,
-                    run,
-                  ).installationToken(),
-                  ref: `refs/heads/${githubBranch(run.issueNumber)}`,
-                },
-              }),
-            }),
-          ),
-        {
-          api: "attempt_container",
-          operation: "validate",
-          attemptId: attempt.id,
+                ...(Array.isArray(conflicted.conflicts)
+                  ? { conflicts: conflicted.conflicts }
+                  : {}),
+              },
+            }
+          : {}),
+        artifact: {
+          repositoryId: artifact.id,
+          repository: artifact.name,
+          remote: artifact.remote,
+          hostname: artifact.hostname,
+          tokenId: token.id,
+          token: token.plaintext,
+          access: token.access,
+          ref: input.checkpoint.ref,
         },
-      );
-      if (!response.ok) throw new Error("checkpoint_git_validation_failed");
+        publish: {
+          remote: `https://github.com/${run.repository}.git`,
+          hostname: "github.com",
+          token: await githubClientForRun(
+            this.githubEnv,
+            run,
+          ).installationToken(),
+          ref: `refs/heads/${githubBranch(run.issueNumber)}`,
+        },
+      });
+      if (status < 200 || status >= 300)
+        throw new Error("checkpoint_git_validation_failed");
     } finally {
       await Promise.all([
         artifact.revokeToken(token.id),
         artifact.revokeToken(input.artifactTokenId),
+        destroyAttemptSandbox(this.containers, `${attempt.id}-validation`),
       ]);
     }
   }
@@ -726,6 +745,22 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
     const url = new URL(request.url);
     const isPublicUiRequest = () =>
       url.hostname === new URL(env.PUBLIC_ORIGIN).hostname;
+    const screenshotMatch = url.pathname.match(/^\/screenshots\/([^/]+)$/);
+    if (screenshotMatch && isPublicUiRequest()) {
+      if (request.method !== "GET")
+        return json({ error: "method_not_allowed" }, 405, { allow: "GET" });
+      const screenshot = await env.BACKUP_BUCKET.get(
+        `screenshots/${screenshotMatch[1]}.png`,
+      );
+      if (!screenshot) return json({ error: "not_found" }, 404);
+      return new Response(screenshot.body, {
+        headers: {
+          "cache-control": "no-store",
+          "content-type": "image/png",
+          "x-content-type-options": "nosniff",
+        },
+      });
+    }
     if (
       (url.pathname === "/" || url.pathname === "/runs") &&
       isPublicUiRequest()
@@ -861,6 +896,127 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
         { "cache-control": "no-store" },
       );
     }
+    if (url.pathname === "/attempts/screenshots") {
+      if (request.method !== "POST")
+        return json({ error: "method_not_allowed" }, 405, { allow: "POST" });
+      const attemptId = request.headers.get("x-roundhouse-attempt-id") ?? "";
+      const capability =
+        request.headers.get("x-roundhouse-attempt-capability") ?? "";
+      if (
+        !attemptId ||
+        !capability ||
+        !(await verifyCallback(
+          env.CALLBACK_SIGNING_SECRET,
+          attemptId,
+          capability,
+        ))
+      )
+        return json({ error: "unauthorized" }, 401);
+      const repository = new D1RunRepository(env.DB);
+      const attempt = await repository.getAttempt(attemptId);
+      if (
+        !attempt ||
+        attempt.stage !== "implement" ||
+        !["created", "dispatched"].includes(attempt.state) ||
+        attempt.deadlineAt <= Date.now()
+      )
+        return json({ error: "stale_attempt" }, 409);
+      let input: {
+        port: number;
+        path: string;
+        width: number;
+        height: number;
+        sourceHead: string;
+        sourceTree: string;
+      };
+      try {
+        const body = await request.json<Partial<typeof input>>();
+        input = {
+          port: Number(body.port),
+          path: typeof body.path === "string" ? body.path : "/",
+          width: Number(body.width ?? 1440),
+          height: Number(body.height ?? 900),
+          sourceHead:
+            typeof body.sourceHead === "string" ? body.sourceHead : "",
+          sourceTree:
+            typeof body.sourceTree === "string" ? body.sourceTree : "",
+        };
+      } catch {
+        return json({ error: "invalid_request" }, 400);
+      }
+      if (
+        !Number.isInteger(input.port) ||
+        input.port < 1 ||
+        input.port > 65_535 ||
+        !input.path.startsWith("/") ||
+        input.path.startsWith("//") ||
+        !Number.isInteger(input.width) ||
+        input.width < 320 ||
+        input.width > 2560 ||
+        !Number.isInteger(input.height) ||
+        input.height < 240 ||
+        input.height > 1600 ||
+        !/^[a-f0-9]{40,64}$/.test(input.sourceHead) ||
+        !/^[a-f0-9]{40,64}$/.test(input.sourceTree)
+      )
+        return json({ error: "invalid_request" }, 400);
+      const sandbox = attemptSandbox(
+        env.ATTEMPT_SANDBOXES,
+        sandboxName(attempt),
+      );
+      const tunnel = await sandbox.openPreview(input.port);
+      try {
+        if (!tunnel.url) return json({ error: "preview_unavailable" }, 502);
+        const browser = await launch(env.BROWSER);
+        try {
+          const page = await browser.newPage({
+            viewport: { width: input.width, height: input.height },
+          });
+          await page.goto(new URL(input.path, tunnel.url).toString(), {
+            waitUntil: "networkidle",
+          });
+          const png = await page.screenshot({ type: "png", fullPage: true });
+          const id = crypto.randomUUID();
+          const objectKey = `screenshots/${id}.png`;
+          await env.BACKUP_BUCKET.put(objectKey, png, {
+            httpMetadata: { contentType: "image/png" },
+          });
+          await env.DB.prepare(
+            `INSERT INTO implementation_screenshots
+              (id, run_id, attempt_id, source_head, source_tree, object_key, route, port, width, height, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+            .bind(
+              id,
+              attempt.runId,
+              attempt.id,
+              input.sourceHead,
+              input.sourceTree,
+              objectKey,
+              input.path,
+              input.port,
+              input.width,
+              input.height,
+              Date.now(),
+            )
+            .run();
+          await repository.recordActivity(
+            attemptId,
+            Date.now() + attemptInactivityMilliseconds,
+          );
+          return json({
+            id,
+            sourceHead: input.sourceHead,
+            sourceTree: input.sourceTree,
+            url: new URL(`/screenshots/${id}`, env.PUBLIC_ORIGIN).toString(),
+          });
+        } finally {
+          await browser.close();
+        }
+      } finally {
+        await sandbox.closePreview(input.port);
+      }
+    }
     if (url.pathname === "/github/webhook" && request.method === "POST") {
       const repository = new D1RunRepository(env.DB);
       const enqueue = async (wakeup: Wakeup) => {
@@ -878,12 +1034,14 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       else if (event === "issues") {
         const closure = await acceptGitHubIssueClosed(request, env, repository);
         outcome = closure.outcome;
-        if (closure.attemptId)
-          scheduleAttemptContainerDestruction(
-            env.ATTEMPT_CONTAINERS,
-            closure.attemptId,
+        if (closure.attemptId) {
+          const attempt = await repository.getAttempt(closure.attemptId);
+          scheduleAttemptSandboxDestruction(
+            env.ATTEMPT_SANDBOXES,
+            attempt ? sandboxName(attempt) : closure.attemptId,
             context,
           );
+        }
       } else
         outcome = await acceptGitHubComment(
           request,
@@ -905,8 +1063,8 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       const outcome = await acceptCallback(
         repository,
         await signCallback(env.CALLBACK_SIGNING_SECRET, input.attemptId),
-        new ContainerCheckpointValidator(
-          env.ATTEMPT_CONTAINERS,
+        new SandboxCheckpointValidator(
+          env.ATTEMPT_SANDBOXES,
           artifacts,
           repository,
           env,
@@ -915,16 +1073,33 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       );
       if (outcome === "completed" || outcome === "duplicate") {
         const attempt = await repository.getAttempt(input.attemptId);
-        if (attempt)
+        if (attempt) {
           await env.RUN_WAKEUPS.send({
             runId: attempt.runId,
             expectedRevision: attempt.runRevision,
           });
-        scheduleAttemptContainerDestruction(
-          env.ATTEMPT_CONTAINERS,
-          input.attemptId,
-          context,
-        );
+          try {
+            if (attempt.stage === "implement") {
+              const sandbox = attemptSandbox(
+                env.ATTEMPT_SANDBOXES,
+                sandboxName(attempt),
+              );
+              const backup = await sandbox.backupWorkspace(attempt.runId);
+              await saveWorkspaceBackup(
+                env.DB,
+                attempt.runId,
+                attempt.id,
+                backup,
+              );
+            }
+          } finally {
+            scheduleAttemptSandboxDestruction(
+              env.ATTEMPT_SANDBOXES,
+              sandboxName(attempt),
+              context,
+            );
+          }
+        }
       }
       return json(
         { outcome },
@@ -935,8 +1110,8 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
   },
   async queue(batch, env) {
     const repository = new D1RunRepository(env.DB);
-    const dispatcher = new ContainerDispatcher(
-      env.ATTEMPT_CONTAINERS,
+    const dispatcher = new SandboxDispatcher(
+      env.ATTEMPT_SANDBOXES,
       artifactsNamespace(env),
       env.CALLBACK_SIGNING_SECRET,
       env.CONTROL_PLANE_ORIGIN,
@@ -985,7 +1160,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
     const repository = new D1RunRepository(env.DB);
     const expiredAt = Date.now();
     await recoverExpiredAttempts(
-      env.ATTEMPT_CONTAINERS,
+      env.ATTEMPT_SANDBOXES,
       await repository.expiredLeases(expiredAt),
       async (wakeup) => {
         await env.RUN_WAKEUPS.send(wakeup);
@@ -1022,6 +1197,10 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
             }),
           );
         }
+      },
+      async (attemptId) => {
+        const attempt = await repository.getAttempt(attemptId);
+        return attempt ? sandboxName(attempt) : attemptId;
       },
     );
   },

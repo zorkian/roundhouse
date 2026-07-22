@@ -28,6 +28,7 @@ import {
   repositoryChangedPaths,
   runnerIdentity,
   runnerResponse,
+  sourceSnapshot,
   validateCheckpoint,
   validModelRoute,
 } from "./runner.mjs";
@@ -39,7 +40,7 @@ afterEach(async () => {
 });
 
 describe("V2 agent runner", () => {
-  it("uses the Container rather than an unavailable nested sandbox", () => {
+  it("uses Pi inside the Cloudflare Sandbox boundary", () => {
     expect(agentRuntime).toBe("pi");
   });
 
@@ -220,6 +221,7 @@ describe("V2 agent runner", () => {
       "pullRequestTitle",
       "pullRequestBody",
       "validation",
+      "screenshots",
     ]);
     expect(implementationSchema.properties.validation).not.toHaveProperty(
       "maxItems",
@@ -643,7 +645,8 @@ describe("V2 agent runner", () => {
     await mkdir(source, { recursive: true });
     execFileSync("git", ["init", "--initial-branch=main"], { cwd: source });
     await writeFile(resolve(source, "README.md"), "fake GitHub baseline\n");
-    execFileSync("git", ["add", "README.md"], { cwd: source });
+    await writeFile(resolve(source, ".gitignore"), "node_modules/\n");
+    execFileSync("git", ["add", "README.md", ".gitignore"], { cwd: source });
     execFileSync(
       "git",
       [
@@ -673,6 +676,7 @@ describe("V2 agent runner", () => {
     const assignment = {
       id: "run_git_rev_1",
       runId: "run_git",
+      stage: "implement",
       runRevision: 1,
       issueNumber: 42,
       deadlineAt: Date.now() + 60_000,
@@ -690,10 +694,29 @@ describe("V2 agent runner", () => {
       },
     };
     const firstDirectory = await prepareWorkspace(assignment);
+    await mkdir(resolve(firstDirectory, "node_modules"));
+    await writeFile(resolve(firstDirectory, "node_modules", "cached"), "yes\n");
     await writeFile(
       resolve(firstDirectory, "README.md"),
       "fake GitHub baseline\nimplemented change\n",
     );
+    const snapshot = await sourceSnapshot(
+      firstDirectory,
+      resolve(testRoot, "screenshot-index"),
+    );
+    expect(snapshot.sourceHead).toBe(baseCommit);
+    expect(
+      execFileSync("git", ["show", `${snapshot.sourceTree}:README.md`], {
+        cwd: firstDirectory,
+        encoding: "utf8",
+      }),
+    ).toBe("fake GitHub baseline\nimplemented change\n");
+    expect(
+      execFileSync("git", ["diff", "--cached", "--name-only"], {
+        cwd: firstDirectory,
+        encoding: "utf8",
+      }),
+    ).toBe("");
     const checkpointProgress = [];
     const first = await checkpointWorkspace(
       assignment,
@@ -701,6 +724,9 @@ describe("V2 agent runner", () => {
       async (progress) => checkpointProgress.push(progress),
     );
     const replacementDirectory = await prepareWorkspace(assignment);
+    await expect(
+      readFile(resolve(replacementDirectory, "node_modules", "cached"), "utf8"),
+    ).resolves.toBe("yes\n");
     await writeFile(
       resolve(replacementDirectory, "README.md"),
       "fake GitHub baseline\nimplemented change\n",
