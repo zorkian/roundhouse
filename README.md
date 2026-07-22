@@ -50,14 +50,15 @@ the normative product and architecture document.
 
 ## Repository layout
 
-| Path                         | Purpose                                                           |
-| ---------------------------- | ----------------------------------------------------------------- |
-| `apps/control-plane`         | Cloudflare Worker that handles GitHub intake and coordinates runs |
-| `apps/model-broker`          | Private model routing and credential boundary                     |
-| `containers/agent-runner`    | Isolated coding-agent runtime                                     |
-| `packages/core`              | Shared workflow state, contracts, and repository profiles         |
-| `packages/response-observer` | Streaming model-response observation                              |
-| `docs/v2-plan.md`            | Product contract, architecture, and acceptance criteria           |
+| Path                          | Purpose                                                           |
+| ----------------------------- | ----------------------------------------------------------------- |
+| `apps/control-plane`          | Cloudflare Worker that handles GitHub intake and coordinates runs |
+| `apps/model-broker`           | Private model routing and credential boundary                     |
+| `containers/agent-runner`     | Isolated coding-agent runtime                                     |
+| `packages/core`               | Shared workflow state, contracts, and repository profiles         |
+| `packages/response-observer`  | Streaming model-response observation                              |
+| `docs/v2-plan.md`             | Product contract, architecture, and acceptance criteria           |
+| `docs/future-improvements.md` | Deferred ideas that are not approved implementation work          |
 
 ## Development
 
