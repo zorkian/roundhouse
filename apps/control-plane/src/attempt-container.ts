@@ -527,11 +527,16 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
   }
 
   async validateCheckpoint(attempt: AttemptAssignment): Promise<number> {
+    await this.setAllowedHosts(attemptAllowedHosts(attempt));
     const runner = await this.startProcess(
       "node /opt/roundhouse/containers/agent-runner/runner.mjs",
       {
         processId: `validator-${attempt.id}`,
-        env: { ROUNDHOUSE_WORKSPACE_ROOT: "/workspace/roundhouse" },
+        env: {
+          ROUNDHOUSE_WORKSPACE_ROOT: "/workspace/roundhouse",
+          GIT_SSL_CAINFO: containerCa,
+          NODE_EXTRA_CA_CERTS: containerCa,
+        },
       },
     );
     await runner.waitForPort(this.defaultPort, { timeout: 30_000 });

@@ -347,6 +347,31 @@ function command(commandName, args, options = {}) {
   });
 }
 
+export async function sourceSnapshot(directory, indexFile) {
+  const sourceHead = await command("git", ["rev-parse", "HEAD"], {
+    cwd: directory,
+  });
+  const environment = { ...process.env, GIT_INDEX_FILE: indexFile };
+  let sourceTree;
+  try {
+    await command("git", ["read-tree", "HEAD"], {
+      cwd: directory,
+      env: environment,
+    });
+    await command("git", ["add", "--all"], {
+      cwd: directory,
+      env: environment,
+    });
+    sourceTree = await command("git", ["write-tree"], {
+      cwd: directory,
+      env: environment,
+    });
+  } finally {
+    await rm(indexFile, { force: true });
+  }
+  return { sourceHead, sourceTree };
+}
+
 const researchSourceSchema = Object.freeze({
   type: "object",
   additionalProperties: false,
@@ -703,12 +728,16 @@ async function structuredAgent(
       },
     },
     async execute(_toolCallId, params) {
+      const { sourceHead, sourceTree } = await sourceSnapshot(
+        directory,
+        resolve(runtime, "screenshot-index"),
+      );
       const response = await fetch(
         screenshotRequest(
           assignment,
           assignment.activityCallbackUrl,
           attemptSecret,
-          params,
+          { ...params, sourceHead, sourceTree },
         ),
       );
       if (!response.ok) throw new Error(`screenshot_http_${response.status}`);

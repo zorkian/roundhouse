@@ -28,6 +28,7 @@ import {
   repositoryChangedPaths,
   runnerIdentity,
   runnerResponse,
+  sourceSnapshot,
   validateCheckpoint,
   validModelRoute,
 } from "./runner.mjs";
@@ -699,6 +700,23 @@ describe("V2 agent runner", () => {
       resolve(firstDirectory, "README.md"),
       "fake GitHub baseline\nimplemented change\n",
     );
+    const snapshot = await sourceSnapshot(
+      firstDirectory,
+      resolve(testRoot, "screenshot-index"),
+    );
+    expect(snapshot.sourceHead).toBe(baseCommit);
+    expect(
+      execFileSync("git", ["show", `${snapshot.sourceTree}:README.md`], {
+        cwd: firstDirectory,
+        encoding: "utf8",
+      }),
+    ).toBe("fake GitHub baseline\nimplemented change\n");
+    expect(
+      execFileSync("git", ["diff", "--cached", "--name-only"], {
+        cwd: firstDirectory,
+        encoding: "utf8",
+      }),
+    ).toBe("");
     const checkpointProgress = [];
     const first = await checkpointWorkspace(
       assignment,

@@ -921,7 +921,14 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
         attempt.deadlineAt <= Date.now()
       )
         return json({ error: "stale_attempt" }, 409);
-      let input: { port: number; path: string; width: number; height: number };
+      let input: {
+        port: number;
+        path: string;
+        width: number;
+        height: number;
+        sourceHead: string;
+        sourceTree: string;
+      };
       try {
         const body = await request.json<Partial<typeof input>>();
         input = {
@@ -929,6 +936,10 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
           path: typeof body.path === "string" ? body.path : "/",
           width: Number(body.width ?? 1440),
           height: Number(body.height ?? 900),
+          sourceHead:
+            typeof body.sourceHead === "string" ? body.sourceHead : "",
+          sourceTree:
+            typeof body.sourceTree === "string" ? body.sourceTree : "",
         };
       } catch {
         return json({ error: "invalid_request" }, 400);
@@ -944,7 +955,9 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
         input.width > 2560 ||
         !Number.isInteger(input.height) ||
         input.height < 240 ||
-        input.height > 1600
+        input.height > 1600 ||
+        !/^[a-f0-9]{40,64}$/.test(input.sourceHead) ||
+        !/^[a-f0-9]{40,64}$/.test(input.sourceTree)
       )
         return json({ error: "invalid_request" }, 400);
       const sandbox = attemptSandbox(
@@ -952,48 +965,56 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
         sandboxName(attempt),
       );
       const tunnel = await sandbox.openPreview(input.port);
-      if (!tunnel.url) throw new Error("quick_tunnel_url_missing");
-      const browser = await launch(env.BROWSER);
       try {
-        const page = await browser.newPage({
-          viewport: { width: input.width, height: input.height },
-        });
-        await page.goto(new URL(input.path, tunnel.url).toString(), {
-          waitUntil: "networkidle",
-        });
-        const png = await page.screenshot({ type: "png", fullPage: true });
-        const id = crypto.randomUUID();
-        const objectKey = `screenshots/${id}.png`;
-        await env.BACKUP_BUCKET.put(objectKey, png, {
-          httpMetadata: { contentType: "image/png" },
-        });
-        await env.DB.prepare(
-          `INSERT INTO implementation_screenshots
-            (id, run_id, attempt_id, object_key, route, port, width, height, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-          .bind(
-            id,
-            attempt.runId,
-            attempt.id,
-            objectKey,
-            input.path,
-            input.port,
-            input.width,
-            input.height,
-            Date.now(),
+        if (!tunnel.url) return json({ error: "preview_unavailable" }, 502);
+        const browser = await launch(env.BROWSER);
+        try {
+          const page = await browser.newPage({
+            viewport: { width: input.width, height: input.height },
+          });
+          await page.goto(new URL(input.path, tunnel.url).toString(), {
+            waitUntil: "networkidle",
+          });
+          const png = await page.screenshot({ type: "png", fullPage: true });
+          const id = crypto.randomUUID();
+          const objectKey = `screenshots/${id}.png`;
+          await env.BACKUP_BUCKET.put(objectKey, png, {
+            httpMetadata: { contentType: "image/png" },
+          });
+          await env.DB.prepare(
+            `INSERT INTO implementation_screenshots
+              (id, run_id, attempt_id, source_head, source_tree, object_key, route, port, width, height, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
-          .run();
-        await repository.recordActivity(
-          attemptId,
-          Date.now() + attemptInactivityMilliseconds,
-        );
-        return json({
-          id,
-          url: new URL(`/screenshots/${id}`, env.PUBLIC_ORIGIN).toString(),
-        });
+            .bind(
+              id,
+              attempt.runId,
+              attempt.id,
+              input.sourceHead,
+              input.sourceTree,
+              objectKey,
+              input.path,
+              input.port,
+              input.width,
+              input.height,
+              Date.now(),
+            )
+            .run();
+          await repository.recordActivity(
+            attemptId,
+            Date.now() + attemptInactivityMilliseconds,
+          );
+          return json({
+            id,
+            sourceHead: input.sourceHead,
+            sourceTree: input.sourceTree,
+            url: new URL(`/screenshots/${id}`, env.PUBLIC_ORIGIN).toString(),
+          });
+        } finally {
+          await browser.close();
+        }
       } finally {
-        await Promise.all([browser.close(), sandbox.closePreview(input.port)]);
+        await sandbox.closePreview(input.port);
       }
     }
     if (url.pathname === "/github/webhook" && request.method === "POST") {
@@ -1058,11 +1079,6 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
             expectedRevision: attempt.runRevision,
           });
           if (attempt.stage === "implement") {
-            await env.DB.prepare(
-              "UPDATE implementation_screenshots SET commit_sha = ? WHERE attempt_id = ?",
-            )
-              .bind(input.checkpoint.outputHead, attempt.id)
-              .run();
             const sandbox = attemptSandbox(
               env.ATTEMPT_SANDBOXES,
               sandboxName(attempt),
