@@ -77,10 +77,10 @@ describe("V2 agent runner", () => {
       compat: {
         supportsStore: false,
         supportsDeveloperRole: false,
-        supportsReasoningEffort: false,
+        supportsReasoningEffort: true,
         maxTokensField: "max_tokens",
         supportsStrictMode: false,
-        thinkingFormat: "deepseek",
+        thinkingFormat: "openai",
         requiresReasoningContentOnAssistantMessages: true,
         deferredToolsMode: "kimi",
       },
@@ -88,6 +88,13 @@ describe("V2 agent runner", () => {
         {
           id: "moonshotai/kimi-k3",
           reasoning: true,
+          thinkingLevelMap: {
+            off: null,
+            minimal: null,
+            low: "low",
+            medium: null,
+            high: "high",
+          },
           contextWindow: 1_048_576,
           maxTokens: 131_072,
         },
