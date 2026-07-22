@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from "vitest";
-import { createRun, resumeRun, transitionRun } from "./run.js";
+import { createRun, resumeRun, transitionRun, waitingReasons } from "./run.js";
 
 const input = {
   id: "run_01",
@@ -10,7 +10,14 @@ const input = {
   issueNumber: 246,
   baseCommit: "a".repeat(40),
   profileVersion: "v2-initial",
-};
+  profile: {
+    sourcePath: ".roundhouse/profile.yaml",
+    sourceCommit: "a".repeat(40),
+    version: 1,
+    hash: "v2-initial",
+    paths: { allowed: ["**"], protected: [] },
+  },
+} as const;
 
 describe("V2 run contract", () => {
   it("creates the one initial qualification state", () => {
@@ -84,6 +91,7 @@ describe("V2 run contract", () => {
 });
 
 describe("resumeRun", () => {
+  const { profile: _profile, ...profilelessInput } = input;
   const issue = {
     title: "Report",
     body: "Details",
@@ -92,34 +100,63 @@ describe("resumeRun", () => {
     clarifications: [{ actor: "citizen", body: "More context" }],
   };
 
-  it("resumes a clarification wait at the same stage", () => {
-    const waiting = transitionRun(createRun(input), 1, {
+  it.each(waitingReasons)("resumes a %s wait at the same stage", (reason) => {
+    const run = createRun(
+      reason === "profile_error"
+        ? {
+            ...profilelessInput,
+            profileError: "Repository profile is missing or invalid",
+          }
+        : input,
+    );
+    const waiting = transitionRun(run, 1, {
       status: "waiting",
       stage: "reproduce",
-      waitingReason: "clarification",
+      waitingReason: reason,
     });
-    expect(resumeRun(waiting, 2, issue)).toMatchObject({
+    const refreshedProfile =
+      reason === "profile_error"
+        ? {
+            ...input.profile,
+            sourceCommit: "b".repeat(40),
+            hash: "v2-refreshed",
+          }
+        : undefined;
+    expect(resumeRun(waiting, 2, issue, refreshedProfile)).toMatchObject({
       status: "active",
       stage: "reproduce",
       revision: 3,
       issue,
     });
-    expect(resumeRun(waiting, 2, issue).waitingReason).toBeUndefined();
+    expect(
+      resumeRun(waiting, 2, issue, refreshedProfile).waitingReason,
+    ).toBeUndefined();
   });
 
-  it("resumes a budget wait at the same stage", () => {
-    const waiting = transitionRun(createRun(input), 1, {
+  it("requires a refreshed profile for profile-error and profile-less runs", () => {
+    const profileError = transitionRun(
+      createRun({
+        ...profilelessInput,
+        profileError: "Repository profile is missing or invalid",
+      }),
+      1,
+      {
+        status: "waiting",
+        stage: "qualify",
+        waitingReason: "profile_error",
+      },
+    );
+    expect(() => resumeRun(profileError, 2, issue)).toThrow(
+      "resume_profile_required",
+    );
+    const legacy = transitionRun(createRun(profilelessInput), 1, {
       status: "waiting",
       stage: "implement",
-      waitingReason: "budget",
+      waitingReason: "maintainer_judgment",
     });
-    expect(resumeRun(waiting, 2, issue)).toMatchObject({
-      status: "active",
-      stage: "implement",
-      revision: 3,
-      issue,
-    });
-    expect(resumeRun(waiting, 2, issue).waitingReason).toBeUndefined();
+    expect(() => resumeRun(legacy, 2, issue)).toThrow(
+      "resume_profile_required",
+    );
   });
 
   it("reopens a succeeded no-change qualification on the same run", () => {
@@ -139,13 +176,6 @@ describe("resumeRun", () => {
     [{ status: "succeeded", stage: "merge" }],
     [{ status: "failed", stage: "qualify" }],
     [{ status: "cancelled", stage: "qualify" }],
-    [
-      {
-        status: "waiting",
-        stage: "plan",
-        waitingReason: "plan_approval",
-      },
-    ],
   ])("rejects an unrelated run state %o", (state) => {
     const run = transitionRun(
       createRun(input),

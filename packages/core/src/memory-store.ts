@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { Attempt, Lease, RunRepository, Wakeup } from "./contracts.js";
+import type { AppliedProfile } from "./profile.js";
 import type { IssueSnapshot, RunSnapshot, RunStage } from "./run.js";
 import { resumeRun, transitionRun, type RunTransition } from "./run.js";
 
@@ -32,14 +33,15 @@ export class MemoryRunRepository implements RunRepository {
     return next;
   }
 
-  async resumeClarification(
+  async resume(
     runId: string,
     expectedRevision: number,
     issue: IssueSnapshot,
+    profile?: AppliedProfile,
   ): Promise<RunSnapshot | undefined> {
     const run = this.runs.get(runId);
     if (!run || run.revision !== expectedRevision) return undefined;
-    const next = resumeRun(run, expectedRevision, issue);
+    const next = resumeRun(run, expectedRevision, issue, profile);
     this.runs.set(runId, next);
     this.leases.delete(runId);
     return next;

@@ -4,6 +4,7 @@
 import {
   createRun,
   MemoryRunRepository,
+  waitingReasons,
   type Attempt,
   type RunSnapshot,
   type Wakeup,
@@ -724,6 +725,49 @@ describe("GitHub intake", () => {
     expect(enqueue).not.toHaveBeenCalled();
   });
 
+  it("reloads a corrected repository profile when restarting its wait", async () => {
+    vi.spyOn(console, "error").mockImplementationOnce(() => undefined);
+    const repository = new IntakeRepository();
+    const enqueue = vi.fn();
+    await expect(
+      acceptGitHubComment(
+        await delivery("delivery-profile-missing"),
+        env,
+        repository,
+        enqueue,
+        profileErrorApi([], "missing"),
+      ),
+    ).resolves.toBe("accepted");
+
+    await expect(
+      acceptGitHubComment(
+        await delivery("delivery-profile-fixed"),
+        env,
+        repository,
+        enqueue,
+        github(),
+      ),
+    ).resolves.toBe("accepted");
+
+    const resumed = await repository.get("run_123_issue_42");
+    expect(resumed).toMatchObject({
+      status: "active",
+      stage: "qualify",
+      revision: 2,
+      profile: {
+        sourcePath: ".roundhouse/profile.yaml",
+        sourceCommit: "a".repeat(40),
+        version: 1,
+      },
+    });
+    expect(resumed).not.toHaveProperty("profileError");
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(enqueue).toHaveBeenCalledWith({
+      runId: "run_123_issue_42",
+      expectedRevision: 2,
+    });
+  });
+
   it("does not repeat the profile error comment when its marker is already posted", async () => {
     vi.spyOn(console, "error").mockImplementationOnce(() => undefined);
     const repository = new IntakeRepository();
@@ -856,7 +900,51 @@ describe("GitHub intake", () => {
     expect(api.post).toHaveBeenCalledTimes(1);
   });
 
-  it("lets a maintainer restart work after model budget is available", async () => {
+  it.each(waitingReasons)(
+    "lets a maintainer restart a %s wait",
+    async (reason) => {
+      const repository = new IntakeRepository();
+      const wakeups: Wakeup[] = [];
+      const enqueue = async (wakeup: Wakeup) => {
+        wakeups.push(wakeup);
+      };
+      const api = github();
+      await acceptGitHubComment(
+        await delivery("delivery-budget-start"),
+        env,
+        repository,
+        enqueue,
+        api,
+      );
+      const id = "run_123_issue_42";
+      await repository.transition(id, 1, {
+        status: "waiting",
+        stage: "implement",
+        waitingReason: reason,
+      });
+
+      await expect(
+        acceptGitHubComment(
+          await delivery("delivery-budget-resume"),
+          env,
+          repository,
+          enqueue,
+          api,
+        ),
+      ).resolves.toBe("accepted");
+      await expect(repository.get(id)).resolves.toMatchObject({
+        status: "active",
+        stage: "implement",
+        revision: 3,
+      });
+      expect(wakeups).toEqual([
+        { runId: id, expectedRevision: 1 },
+        { runId: id, expectedRevision: 3 },
+      ]);
+    },
+  );
+
+  it("restarts a waiting legacy run without a stored issue snapshot", async () => {
     const repository = new IntakeRepository();
     const wakeups: Wakeup[] = [];
     const enqueue = async (wakeup: Wakeup) => {
@@ -864,22 +952,29 @@ describe("GitHub intake", () => {
     };
     const api = github();
     await acceptGitHubComment(
-      await delivery("delivery-budget-start"),
+      await delivery("delivery-legacy-start"),
       env,
       repository,
       enqueue,
       api,
     );
     const id = "run_123_issue_42";
+    const created = await repository.get(id);
+    if (!created) throw new Error("test_run_missing");
+    repository.runs.set(id, {
+      ...created,
+      issue: undefined,
+      profile: undefined,
+    });
     await repository.transition(id, 1, {
       status: "waiting",
       stage: "implement",
-      waitingReason: "budget",
+      waitingReason: "maintainer_judgment",
     });
 
     await expect(
       acceptGitHubComment(
-        await delivery("delivery-budget-resume"),
+        await delivery("delivery-legacy-resume"),
         env,
         repository,
         enqueue,
@@ -890,6 +985,16 @@ describe("GitHub intake", () => {
       status: "active",
       stage: "implement",
       revision: 3,
+      issue: {
+        title: "Qualify this",
+        body: "Acceptance details",
+        actor: "maintainer",
+      },
+      profile: {
+        sourcePath: ".roundhouse/profile.yaml",
+        sourceCommit: "a".repeat(40),
+        version: 1,
+      },
     });
     expect(wakeups).toEqual([
       { runId: id, expectedRevision: 1 },
@@ -930,10 +1035,10 @@ describe("GitHub intake", () => {
       order.push("delivery");
       return record(runId, deliveryId, payload);
     };
-    const resume = repository.resumeClarification.bind(repository);
-    repository.resumeClarification = async (runId, revision, issue) => {
+    const resume = repository.resume.bind(repository);
+    repository.resume = async (runId, revision, issue, profile) => {
       order.push("resume");
-      return resume(runId, revision, issue);
+      return resume(runId, revision, issue, profile);
     };
     const enqueue = async (wakeup: Wakeup) => {
       order.push("enqueue");
@@ -1062,6 +1167,68 @@ describe("GitHub intake", () => {
       { runId: id, expectedRevision: 1 },
       { runId: id, expectedRevision: 3 },
       { runId: id, expectedRevision: 5 },
+    ]);
+  });
+
+  it("reloads a missing profile before resuming from ordinary prose", async () => {
+    const repository = new IntakeRepository();
+    const wakeups: Wakeup[] = [];
+    await acceptGitHubComment(
+      await delivery("delivery-start"),
+      env,
+      repository,
+      async (wakeup) => {
+        wakeups.push(wakeup);
+      },
+      github(),
+    );
+    const id = "run_123_issue_42";
+    const created = await repository.get(id);
+    if (!created) throw new Error("test_run_missing");
+    repository.runs.set(id, { ...created, profile: undefined });
+    await repository.transition(id, 1, {
+      status: "waiting",
+      stage: "qualify",
+      waitingReason: "clarification",
+    });
+    const baseApi = github();
+    const api: GitHubApi = {
+      get: vi.fn(async (path: string) =>
+        path.includes("/issues/42/comments?") ? [] : baseApi.get(path),
+      ) as GitHubApi["get"],
+      post: baseApi.post,
+    };
+    await expect(
+      acceptGitHubComment(
+        await delivery(
+          "delivery-legacy-answer",
+          "The failing input is empty.",
+          "random-citizen",
+        ),
+        env,
+        repository,
+        async (wakeup) => {
+          wakeups.push(wakeup);
+        },
+        api,
+      ),
+    ).resolves.toBe("accepted");
+    await expect(repository.get(id)).resolves.toMatchObject({
+      status: "active",
+      stage: "qualify",
+      revision: 3,
+      profile: {
+        sourcePath: ".roundhouse/profile.yaml",
+        sourceCommit: "a".repeat(40),
+        version: 1,
+      },
+    });
+    expect(api.get).not.toHaveBeenCalledWith(
+      expect.stringContaining("/collaborators/"),
+    );
+    expect(wakeups).toEqual([
+      { runId: id, expectedRevision: 1 },
+      { runId: id, expectedRevision: 3 },
     ]);
   });
 

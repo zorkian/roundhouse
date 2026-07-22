@@ -1054,7 +1054,7 @@ describe("single coordinator", () => {
       revision: 2,
     });
 
-    const reopened = await store.resumeClarification(input.id, 2, {
+    const reopened = await store.resume(input.id, 2, {
       title: "Report",
       body: "Details",
       url: "https://github.com/zorkian/roundhouse/issues/1",
