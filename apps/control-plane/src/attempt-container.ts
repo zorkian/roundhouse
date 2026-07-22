@@ -437,7 +437,8 @@ export function extractModelUsage(
 }
 
 export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
-  override defaultPort = 8080;
+  // Sandbox.defaultPort is its reserved control API; the runner is separate.
+  private readonly agentRunnerPort = 8080;
   override sleepAfter = "5m";
   override enableInternet = false;
   override interceptHttps = true;
@@ -500,7 +501,7 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
         },
       );
     }
-    await runner.waitForPort(this.defaultPort, { timeout: 30_000 });
+    await runner.waitForPort(this.agentRunnerPort, { timeout: 30_000 });
     const response = await observeResponse(
       await this.containerFetch(
         `http://runner${path}`,
@@ -515,7 +516,7 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
           },
           body: JSON.stringify(attempt),
         },
-        this.defaultPort,
+        this.agentRunnerPort,
       ),
       {
         api: "agent_runner",
@@ -539,7 +540,7 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
         },
       },
     );
-    await runner.waitForPort(this.defaultPort, { timeout: 30_000 });
+    await runner.waitForPort(this.agentRunnerPort, { timeout: 30_000 });
     const response = await this.containerFetch(
       "http://runner/validate",
       {
@@ -547,7 +548,7 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
         headers: { "content-type": "application/json" },
         body: JSON.stringify(attempt),
       },
-      this.defaultPort,
+      this.agentRunnerPort,
     );
     return response.status;
   }
