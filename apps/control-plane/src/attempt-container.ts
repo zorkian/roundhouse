@@ -439,6 +439,10 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
   override interceptHttps = true;
 
   async restoreWorkspace(backup: DirectoryBackup): Promise<void> {
+    const prepared = await this.exec("mkdir -p /workspace/roundhouse", {
+      origin: "internal",
+    });
+    if (!prepared.success) throw new Error("workspace_root_creation_failed");
     await this.restoreBackup(backup);
   }
 
