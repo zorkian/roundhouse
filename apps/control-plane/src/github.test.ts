@@ -108,7 +108,12 @@ async function delivery(
   command = "/roundhouse-dev start",
   actor = "maintainer",
   type = "User",
-  target = {
+  target: {
+    repository: string;
+    repositoryId: number;
+    installationId: number;
+    issueState?: string;
+  } = {
     repository: "zorkian/roundhouse",
     repositoryId: 123,
     installationId: 456,
@@ -124,6 +129,7 @@ async function delivery(
       title: "Qualify this",
       body: "Acceptance details",
       html_url: `https://github.com/${target.repository}/issues/42`,
+      state: target.issueState ?? "open",
     },
     comment: {
       body: command,
@@ -1516,6 +1522,84 @@ describe("GitHub intake", () => {
     await expect(
       repository.latestCompletedAttempt(id, "qualify", 3),
     ).resolves.toMatchObject({ id: `${id}_rev_1`, runRevision: 1 });
+  });
+
+  it("resumes cancelled work from an authorized start command after the issue reopens", async () => {
+    const repository = new IntakeRepository();
+    const wakeups: Wakeup[] = [];
+    const enqueue = async (wakeup: Wakeup) => {
+      wakeups.push(wakeup);
+    };
+    await acceptGitHubComment(
+      await delivery("delivery-start"),
+      env,
+      repository,
+      enqueue,
+      github(),
+    );
+    await repository.transition("run_123_issue_42", 1, {
+      status: "cancelled",
+      stage: "reproduce",
+    });
+
+    await expect(
+      acceptGitHubComment(
+        await delivery("delivery-restart-open"),
+        env,
+        repository,
+        enqueue,
+        github(),
+      ),
+    ).resolves.toBe("accepted");
+    await expect(repository.get("run_123_issue_42")).resolves.toMatchObject({
+      status: "active",
+      stage: "reproduce",
+      revision: 3,
+    });
+    expect(wakeups).toEqual([
+      { runId: "run_123_issue_42", expectedRevision: 1 },
+      { runId: "run_123_issue_42", expectedRevision: 3 },
+    ]);
+  });
+
+  it("does not resume cancelled work while the issue is closed", async () => {
+    const repository = new IntakeRepository();
+    await acceptGitHubComment(
+      await delivery("delivery-start"),
+      env,
+      repository,
+      async () => undefined,
+      github(),
+    );
+    await repository.transition("run_123_issue_42", 1, {
+      status: "cancelled",
+      stage: "reproduce",
+    });
+
+    await expect(
+      acceptGitHubComment(
+        await delivery(
+          "delivery-restart-closed",
+          undefined,
+          undefined,
+          undefined,
+          {
+            repository: "zorkian/roundhouse",
+            repositoryId: 123,
+            installationId: 456,
+            issueState: "closed",
+          },
+        ),
+        env,
+        repository,
+        async () => undefined,
+        github(),
+      ),
+    ).resolves.toBe("duplicate");
+    await expect(repository.get("run_123_issue_42")).resolves.toMatchObject({
+      status: "cancelled",
+      revision: 2,
+    });
   });
 
   it("ignores bot and marker replies on a concluded qualification", async () => {
