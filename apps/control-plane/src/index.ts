@@ -966,60 +966,95 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
         env.ATTEMPT_SANDBOXES,
         sandboxName(attempt),
       );
-      const tunnel = await sandbox.openPreview(input.port);
+      const browser = await launch(env.BROWSER);
       try {
-        if (!tunnel.url) return json({ error: "preview_unavailable" }, 502);
-        const browser = await launch(env.BROWSER);
-        try {
-          const page = await browser.newPage({
-            viewport: { width: input.width, height: input.height },
+        const page = await browser.newPage({
+          viewport: { width: input.width, height: input.height },
+        });
+        const previewOrigin = "http://roundhouse-preview.invalid";
+        type PageRoute = Parameters<Parameters<typeof page.route>[1]>[0];
+        await page.route("**/*", async (route: PageRoute) => {
+          const previewRequest = route.request();
+          const previewUrl = new URL(previewRequest.url());
+          if (
+            previewUrl.origin !== previewOrigin &&
+            !["localhost", "127.0.0.1", "::1"].includes(previewUrl.hostname)
+          ) {
+            await route.abort("blockedbyclient");
+            return;
+          }
+          const body = previewRequest.postDataBuffer() ?? undefined;
+          const response = await sandbox.fetchPreview(
+            new URL(
+              `${previewUrl.pathname}${previewUrl.search}`,
+              "http://localhost",
+            ).toString(),
+            input.port,
+            {
+              method: previewRequest.method(),
+              headers: previewRequest.headers(),
+              ...(body ? { body } : {}),
+            },
+          );
+          const headers = Object.fromEntries(
+            response.headers.filter(
+              ([name]) =>
+                ![
+                  "content-encoding",
+                  "content-length",
+                  "transfer-encoding",
+                ].includes(name.toLowerCase()),
+            ),
+          );
+          await route.fulfill({
+            status: response.status,
+            headers,
+            body: new Uint8Array(response.body),
           });
-          await page.goto(new URL(input.path, tunnel.url).toString(), {
-            waitUntil: "networkidle",
-          });
-          const png = await page.screenshot({ type: "png", fullPage: true });
-          const id = crypto.randomUUID();
-          const objectKey = `screenshots/${id}.png`;
-          await env.BACKUP_BUCKET.put(objectKey, png, {
-            httpMetadata: { contentType: "image/png" },
-          });
-          await env.DB.prepare(
-            `INSERT INTO implementation_screenshots
+        });
+        await page.goto(new URL(input.path, previewOrigin).toString(), {
+          waitUntil: "networkidle",
+        });
+        const png = await page.screenshot({ type: "png", fullPage: true });
+        const id = crypto.randomUUID();
+        const objectKey = `screenshots/${id}.png`;
+        await env.BACKUP_BUCKET.put(objectKey, png, {
+          httpMetadata: { contentType: "image/png" },
+        });
+        await env.DB.prepare(
+          `INSERT INTO implementation_screenshots
               (id, run_id, attempt_id, source_head, source_tree, object_key, route, port, width, height, created_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          )
-            .bind(
-              id,
-              attempt.runId,
-              attempt.id,
-              input.sourceHead,
-              input.sourceTree,
-              objectKey,
-              input.path,
-              input.port,
-              input.width,
-              input.height,
-              Date.now(),
-            )
-            .run();
-          await repository.recordActivity(
-            attemptId,
-            Date.now() + attemptInactivityMilliseconds,
-          );
-          return json({
+        )
+          .bind(
             id,
-            sourceHead: input.sourceHead,
-            sourceTree: input.sourceTree,
-            url: new URL(
-              `/screenshots/${id}`,
-              env.CONTROL_PLANE_ORIGIN,
-            ).toString(),
-          });
-        } finally {
-          await browser.close();
-        }
+            attempt.runId,
+            attempt.id,
+            input.sourceHead,
+            input.sourceTree,
+            objectKey,
+            input.path,
+            input.port,
+            input.width,
+            input.height,
+            Date.now(),
+          )
+          .run();
+        await repository.recordActivity(
+          attemptId,
+          Date.now() + attemptInactivityMilliseconds,
+        );
+        return json({
+          id,
+          sourceHead: input.sourceHead,
+          sourceTree: input.sourceTree,
+          url: new URL(
+            `/screenshots/${id}`,
+            env.CONTROL_PLANE_ORIGIN,
+          ).toString(),
+        });
       } finally {
-        await sandbox.closePreview(input.port);
+        await browser.close();
       }
     }
     if (url.pathname === "/github/webhook" && request.method === "POST") {

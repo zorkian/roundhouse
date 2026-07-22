@@ -1,11 +1,7 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import {
-  Sandbox,
-  type DirectoryBackup,
-  type TunnelInfo,
-} from "@cloudflare/sandbox";
+import { Sandbox, type DirectoryBackup } from "@cloudflare/sandbox";
 import {
   isModelRoute,
   modelStopReasonHeader,
@@ -457,12 +453,23 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
     });
   }
 
-  async openPreview(port: number): Promise<TunnelInfo> {
-    return this.tunnels.get(port);
-  }
-
-  async closePreview(port: number): Promise<void> {
-    await this.tunnels.destroy(port);
+  async fetchPreview(
+    url: string,
+    port: number,
+    init: RequestInit = {},
+  ): Promise<{
+    status: number;
+    headers: [string, string][];
+    body: ArrayBuffer;
+  }> {
+    const response = await this.containerFetch(url, init, port);
+    const headers: [string, string][] = [];
+    response.headers.forEach((value, name) => headers.push([name, value]));
+    return {
+      status: response.status,
+      headers,
+      body: await response.arrayBuffer(),
+    };
   }
 
   async runAttempt(
