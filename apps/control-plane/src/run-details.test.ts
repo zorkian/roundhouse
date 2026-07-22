@@ -305,7 +305,7 @@ describe("run details", () => {
     expect(html).toContain('<a href="https://example.test">test</a>');
     expect(html).toContain("</dl>\n<section><h2>Attempt history</h2>");
     expect(html).toContain(
-      "@media(max-width:700px){body{margin:1rem auto;padding:0 .75rem}summary{grid-template-columns:1fr 1fr}.phase{grid-column:auto}dl{grid-template-columns:minmax(0,1fr)}",
+      "@media(max-width:700px){body{box-sizing:border-box;margin:1rem auto;max-width:none;padding:0 .75rem;width:100%}summary{grid-template-columns:1fr 1fr}.phase{grid-column:auto}dl{grid-template-columns:minmax(0,1fr)}",
     );
     expect(html).toContain(
       ".attempt-details{padding:0 0 1rem .75rem;margin-left:0;min-width:0}",
