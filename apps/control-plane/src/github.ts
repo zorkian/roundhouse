@@ -58,6 +58,7 @@ export interface GitHubApi {
 
 export interface GitHubAutomationApi extends GitHubApi {
   put<T>(path: string, body: unknown): Promise<T>;
+  getText(path: string): Promise<string>;
   graphql<T>(
     query: string,
     variables: Readonly<Record<string, unknown>>,
@@ -193,6 +194,29 @@ export class GitHubClient {
 
   async put<T>(path: string, body: unknown): Promise<T> {
     return this.request<T>(path, "PUT", body);
+  }
+
+  // Actions job logs are plain text rather than JSON, and GitHub answers
+  // with a redirect to a pre-signed download that fetch follows without the
+  // installation credential.
+  async getText(path: string): Promise<string> {
+    const response = await observeResponse(
+      await this.send(`https://api.github.com${path}`, {
+        method: "GET",
+        headers: {
+          accept: "application/vnd.github+json",
+          authorization: `Bearer ${await this.installationToken()}`,
+          "user-agent": "roundhouse-v2",
+          "x-github-api-version": "2026-03-10",
+        },
+      }),
+      {
+        api: "github",
+        operation: `GET ${path}`,
+      },
+    );
+    if (!response.ok) throw new Error(`github_get_${response.status}`);
+    return response.text();
   }
 
   async patch<T>(path: string, body: unknown): Promise<T> {
