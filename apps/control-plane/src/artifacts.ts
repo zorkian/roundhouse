@@ -76,6 +76,12 @@ export function artifactIdentity(name: string, location: ArtifactLocation) {
   };
 }
 
+export function artifactAdvertisementHasMain(advertisement: string) {
+  return [
+    ...advertisement.matchAll(/([0-9a-f]{40}) refs\/heads\/main(?:\0|\n)/g),
+  ].some(([, objectId]) => objectId !== "0".repeat(40));
+}
+
 class CloudflareArtifactRepository implements ArtifactRepository {
   readonly id: string;
   readonly name: string;
@@ -158,7 +164,7 @@ export class CloudflareArtifactsNamespace implements ArtifactsNamespace {
       );
       if (!response.ok)
         throw new Error(`artifact_advertise_refs_http_${response.status}`);
-      return !(await response.text()).includes("refs/heads/main");
+      return !artifactAdvertisementHasMain(await response.text());
     } finally {
       await repository.revokeToken(token.id);
     }
