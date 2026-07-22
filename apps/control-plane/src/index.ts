@@ -745,8 +745,10 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
     const url = new URL(request.url);
     const isPublicUiRequest = () =>
       url.hostname === new URL(env.PUBLIC_ORIGIN).hostname;
+    const isPublicScreenshotRequest = () =>
+      url.hostname === new URL(env.CONTROL_PLANE_ORIGIN).hostname;
     const screenshotMatch = url.pathname.match(/^\/screenshots\/([^/]+)$/);
-    if (screenshotMatch && isPublicUiRequest()) {
+    if (screenshotMatch && isPublicScreenshotRequest()) {
       if (request.method !== "GET")
         return json({ error: "method_not_allowed" }, 405, { allow: "GET" });
       const screenshot = await env.BACKUP_BUCKET.get(
@@ -1008,7 +1010,10 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
             id,
             sourceHead: input.sourceHead,
             sourceTree: input.sourceTree,
-            url: new URL(`/screenshots/${id}`, env.PUBLIC_ORIGIN).toString(),
+            url: new URL(
+              `/screenshots/${id}`,
+              env.CONTROL_PLANE_ORIGIN,
+            ).toString(),
           });
         } finally {
           await browser.close();

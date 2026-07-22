@@ -92,6 +92,7 @@ function dashboardDb(): D1Like {
 const uiEnv = (DB: D1Like) => ({
   DB,
   PUBLIC_ORIGIN: "https://v2.invalid",
+  CONTROL_PLANE_ORIGIN: "https://direct-worker.invalid",
 });
 
 describe("V2 control plane", () => {
@@ -129,6 +130,45 @@ describe("V2 control plane", () => {
       );
       expect(directOrigin.status).toBe(404);
     }
+  });
+
+  it("serves screenshots from the public Worker origin without exposing the dashboard", async () => {
+    const fetch = worker.fetch as unknown as (
+      request: Request,
+      env: unknown,
+      context: unknown,
+    ) => Promise<Response>;
+    const env = {
+      ...uiEnv(dashboardDb()),
+      BACKUP_BUCKET: {
+        get: async (key: string) =>
+          key === "screenshots/example.png"
+            ? { body: new Uint8Array([137, 80, 78, 71]) }
+            : null,
+      },
+    };
+
+    const screenshot = await fetch(
+      new Request("https://direct-worker.invalid/screenshots/example"),
+      env as never,
+      {} as never,
+    );
+    expect(screenshot.status).toBe(200);
+    expect(screenshot.headers.get("content-type")).toBe("image/png");
+
+    const dashboard = await fetch(
+      new Request("https://direct-worker.invalid/"),
+      env as never,
+      {} as never,
+    );
+    expect(dashboard.status).toBe(404);
+
+    const protectedOriginScreenshot = await fetch(
+      new Request("https://v2.invalid/screenshots/example"),
+      env as never,
+      {} as never,
+    );
+    expect(protectedOriginScreenshot.status).toBe(404);
   });
 
   it("reports a small versioned health contract", async () => {
