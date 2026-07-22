@@ -1804,6 +1804,12 @@ describe("GitHub intake", () => {
           observedBehavior: "The test fails.",
           commands: [{ command: "pnpm test", exitCode: 1, output: "failed" }],
           relevantFiles: ["src/example.ts"],
+          screenshots: [
+            {
+              url: "https://roundhouse-dev.rm-rf.rip/screenshots/baseline",
+              description: "iPhone portrait baseline",
+            },
+          ],
         },
       },
     } satisfies Attempt;
@@ -1824,6 +1830,11 @@ describe("GitHub intake", () => {
     });
     expect(post.mock.calls[0]?.[1]).toMatchObject({
       body: expect.not.stringContaining("Relevant files:"),
+    });
+    expect(post.mock.calls[0]?.[1]).toMatchObject({
+      body: expect.stringContaining(
+        "![iPhone portrait baseline](https://roundhouse-dev.rm-rf.rip/screenshots/baseline)",
+      ),
     });
   });
 

@@ -181,6 +181,7 @@ describe("V2 agent runner", () => {
         "relevantFiles",
         "uncertainties",
         "sources",
+        "screenshots",
       ]),
     );
     expect(reproductionSchema.properties.commands.items).toMatchObject({
