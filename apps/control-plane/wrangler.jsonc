@@ -44,6 +44,7 @@
     {
       "binding": "BACKUP_BUCKET",
       "bucket_name": "roundhouse-v2-development-workspaces",
+      "remote": true,
     },
   ],
   "browser": { "binding": "BROWSER" },
@@ -53,11 +54,22 @@
       "service": "roundhouse-v2-model-broker",
     },
   ],
+  "workflows": [
+    {
+      "name": "roundhouse-v2-development-attempt-execution",
+      "binding": "ATTEMPT_EXECUTIONS",
+      "class_name": "AttemptExecutionWorkflow",
+    },
+  ],
   "containers": [
     {
       "class_name": "RoundhouseAttemptSandbox",
       "image": "../../Dockerfile.agent-runner",
-      "instance_type": "standard-1",
+      "instance_type": {
+        "vcpu": 1,
+        "memory_mib": 10240,
+        "disk_mb": 20000,
+      },
       "max_instances": 10,
     },
   ],
@@ -90,6 +102,7 @@
     "GITHUB_START_COMMAND": "/roundhouse-dev start",
     "SANDBOX_TRANSPORT": "rpc",
     "BACKUP_BUCKET_NAME": "roundhouse-v2-development-workspaces",
+    "CLOUDFLARE_R2_ACCOUNT_ID": "07ff5b32b60ae3e5d613b90ddde90069",
   },
   "observability": {
     "enabled": true,

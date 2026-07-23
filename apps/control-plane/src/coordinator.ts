@@ -122,6 +122,17 @@ export function implementationTransition(attempt: Attempt) {
   const outcome = attempt.result?.implementation;
   if (!outcome || typeof outcome !== "object" || !attempt.acceptedHead)
     return { status: "failed", stage: "implement" } as const;
+  const screenshots = (outcome as Record<string, unknown>).screenshots;
+  if (
+    attempt.acceptedHead === attempt.expectedHead &&
+    Array.isArray(screenshots) &&
+    screenshots.length > 0
+  )
+    return {
+      status: "succeeded",
+      stage: "implement",
+      acceptedHead: attempt.acceptedHead,
+    } as const;
   return {
     status: "active",
     stage: "review",

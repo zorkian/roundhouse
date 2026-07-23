@@ -1,24 +1,93 @@
 # Copyright 2026 Mark Smith
 # SPDX-License-Identifier: Apache-2.0
 
-FROM node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d AS node-runtime
+FROM node:24.18.0-alpine@sha256:4ba75f835bb8802193e4c114572113d4b26f95f6f094f4b5229d2a77773e0afc AS node-runtime
 
-FROM docker.io/cloudflare/sandbox:0.12.4
+FROM node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d AS inner-agent-runtime
 
-COPY --from=node-runtime /usr/local /opt/node24
-ENV PATH="/opt/node24/bin:${PATH}"
-
-RUN apt-get update \
-    && apt-get install --yes --no-install-recommends ca-certificates git \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN corepack enable pnpm --install-directory /opt/node24/bin \
-    && corepack prepare pnpm@10.13.1 --activate
+RUN corepack enable pnpm && corepack prepare pnpm@10.13.1 --activate
 
 WORKDIR /opt/roundhouse
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY containers/agent-runner/package.json containers/agent-runner/package.json
 RUN pnpm install --filter @roundhouse/agent-runner --prod --frozen-lockfile
+COPY containers/agent-runner/runner.mjs /opt/roundhouse/containers/agent-runner/runner.mjs
+COPY packages/response-observer/index.mjs /opt/roundhouse/packages/response-observer/index.mjs
+
+FROM docker.io/library/docker:29.6.2-dind-rootless@sha256:9ca5d2d7f364f7c48579ba57dcb218b37387f214943f6446f62a200935511278
+
+USER root
+
+COPY --from=docker.io/cloudflare/sandbox:0.12.4-musl /container-server/sandbox /sandbox
+COPY --from=docker.io/cloudflare/sandbox:0.12.4-musl /usr/lib/libstdc++.so.6 /usr/lib/libstdc++.so.6
+COPY --from=docker.io/cloudflare/sandbox:0.12.4-musl /usr/lib/libgcc_s.so.1 /usr/lib/libgcc_s.so.1
+
+COPY --from=node-runtime /usr/local /opt/node24
+COPY --from=inner-agent-runtime /usr/local /opt/inner-node24
+COPY --from=inner-agent-runtime /opt/roundhouse /opt/inner-roundhouse
+ENV PATH="/opt/node24/bin:${PATH}"
+
+RUN apk add --no-cache \
+    bash \
+    ca-certificates \
+    curl \
+    fuse3 \
+    fuse-overlayfs \
+    git \
+    squashfs-tools \
+    squashfuse
+RUN for tool in bash curl fusermount3 squashfuse fuse-overlayfs; do \
+      command -v "$tool"; \
+    done \
+    && /bin/bash -lc 'true'
+
+RUN corepack enable pnpm --install-directory /opt/node24/bin \
+    && corepack prepare pnpm@10.13.1 --activate
+
+RUN printf '[registry."ghcr.io"]\n  ca = ["/etc/cloudflare/certs/cloudflare-containers-ca.crt"]\n' \
+    > /etc/roundhouse-buildkitd.toml
+
+WORKDIR /opt/roundhouse
+ENV PORT=8090 \
+    ROUNDHOUSE_WORKSPACE_ROOT=/workspace/roundhouse \
+    GIT_SSL_CAINFO=/etc/cloudflare/certs/cloudflare-containers-ca.crt \
+    NODE_EXTRA_CA_CERTS=/etc/cloudflare/certs/cloudflare-containers-ca.crt
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY containers/agent-runner/package.json containers/agent-runner/package.json
+RUN pnpm install --filter @roundhouse/agent-runner --prod --frozen-lockfile
+RUN test -x /opt/roundhouse/containers/agent-runner/node_modules/.bin/devcontainer
 
 COPY containers/agent-runner/runner.mjs /opt/roundhouse/containers/agent-runner/runner.mjs
 COPY packages/response-observer/index.mjs /opt/roundhouse/packages/response-observer/index.mjs
+
+RUN printf '#!/bin/sh\n\
+  set -eu\n\
+  mkdir -p /workspace/roundhouse\n\
+  : > /workspace/roundhouse/agent-runner.log\n\
+  if [ -f /etc/cloudflare/certs/cloudflare-containers-ca.crt ]; then\n\
+    cp /etc/cloudflare/certs/cloudflare-containers-ca.crt /usr/local/share/ca-certificates/cloudflare-containers-ca.crt\n\
+    update-ca-certificates >/dev/null\n\
+  fi\n\
+  dockerd-entrypoint.sh dockerd --iptables=false --ip6tables=false --data-root=/workspace/roundhouse/.docker &\n\
+  docker_pid=$!\n\
+  until docker version >/dev/null 2>&1; do sleep 0.2; done\n\
+  /opt/node24/bin/node /opt/roundhouse/containers/agent-runner/runner.mjs \
+    >> /workspace/roundhouse/agent-runner.log 2>&1 &\n\
+  echo "Docker is ready"\n\
+  wait "$docker_pid"\n' > /home/rootless/boot-docker-for-dind.sh \
+    && chmod +x /home/rootless/boot-docker-for-dind.sh
+
+RUN printf '#!/bin/sh\n\
+  set -eu\n\
+  mkdir -p /workspace/roundhouse\n\
+  : > /workspace/roundhouse/agent-runner.log\n\
+  exec /opt/node24/bin/node /opt/roundhouse/containers/agent-runner/runner.mjs "$@" \
+    >> /workspace/roundhouse/agent-runner.log 2>&1\n' \
+    > /home/rootless/boot-agent-runner.sh \
+    && chmod +x /home/rootless/boot-agent-runner.sh
+
+EXPOSE 8090
+
+ENTRYPOINT ["/sandbox"]
+CMD []

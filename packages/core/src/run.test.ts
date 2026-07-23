@@ -185,17 +185,70 @@ describe("resumeRun", () => {
     });
   });
 
-  it.each([
-    [{ status: "succeeded", stage: "merge" }],
-    [{ status: "failed", stage: "qualify" }],
-  ])("rejects an unrelated run state %o", (state) => {
-    const run = transitionRun(
-      createRun(input),
+  it("continues a completed merge as implementation from the new default-branch head", () => {
+    const candidate = "c".repeat(40);
+    const merged = "d".repeat(40);
+    const completed = transitionRun(
+      {
+        ...createRun(input),
+        currentHead: candidate,
+        candidateHead: candidate,
+        reviewedHead: candidate,
+        targetBaseHead: input.baseCommit,
+        integrationHead: candidate,
+      },
       1,
-      state as Parameters<typeof transitionRun>[2],
+      { status: "succeeded", stage: "merge" },
     );
-    expect(() => resumeRun(run, 2, issue)).toThrow("run_not_resumable");
+    expect(resumeRun(completed, 2, issue, undefined, merged)).toEqual(
+      expect.objectContaining({
+        status: "active",
+        stage: "implement",
+        revision: 3,
+        baseCommit: merged,
+        currentHead: merged,
+        issue,
+      }),
+    );
+    expect(resumeRun(completed, 2, issue, undefined, merged)).not.toEqual(
+      expect.objectContaining({
+        candidateHead: expect.anything(),
+        reviewedHead: expect.anything(),
+        targetBaseHead: expect.anything(),
+        integrationHead: expect.anything(),
+      }),
+    );
   });
+
+  it("continues completed visual verification as implementation from the current default-branch head", () => {
+    const completed = transitionRun(createRun(input), 1, {
+      status: "succeeded",
+      stage: "implement",
+    });
+    const current = "e".repeat(40);
+    expect(resumeRun(completed, 2, issue, undefined, current)).toEqual(
+      expect.objectContaining({
+        status: "active",
+        stage: "implement",
+        revision: 3,
+        baseCommit: current,
+        currentHead: current,
+        issue,
+      }),
+    );
+  });
+
+  it.each([[{ status: "failed", stage: "qualify" }]])(
+    "rejects an unrelated run state %o",
+    (state) => {
+      const run = transitionRun(
+        createRun(input),
+        1,
+        state as Parameters<typeof transitionRun>[2],
+      );
+      expect(() => resumeRun(run, 2, issue)).toThrow("run_not_resumable");
+    },
+  );
 
   it("rejects an active run and a stale revision", () => {
     expect(() => resumeRun(createRun(input), 1, issue)).toThrow(

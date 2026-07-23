@@ -2,17 +2,24 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createRun, MemoryRunRepository, type Attempt } from "@roundhouse/core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("cloudflare:workers", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("cloudflare:workers")>()),
+  WorkflowEntrypoint: class {},
+}));
 import {
   attemptAllowedHosts,
   pauseForModelBudget,
   RoundhouseAttemptSandbox,
 } from "./attempt-container.js";
 import {
+  artifactNeedsSync,
   attemptContext,
   controlPlaneService,
   handleRequest,
   recoverExpiredAttempts,
+  sandboxPreviewPath,
   scheduleAttemptSandboxDestruction,
   successorWakeup,
   validAttemptProgress,
@@ -96,6 +103,100 @@ const uiEnv = (DB: D1Like) => ({
 });
 
 describe("V2 control plane", () => {
+  it("prepares a private assignment before its workflow restores the workspace", async () => {
+    let finishRestore!: () => void;
+    const restoring = new Promise<void>((resolve) => {
+      finishRestore = resolve;
+    });
+    const storage = new Map<string, unknown>();
+    const phases: string[] = [];
+    const sandbox = Object.create(
+      RoundhouseAttemptSandbox.prototype,
+    ) as RoundhouseAttemptSandbox & Record<string, unknown>;
+    Object.assign(sandbox, {
+      durableState: {
+        storage: {
+          async put(key: string, value: unknown) {
+            storage.set(key, value);
+          },
+          async get(key: string) {
+            return storage.get(key);
+          },
+          async delete(key: string) {
+            return storage.delete(key);
+          },
+        },
+      },
+      runtimeEnv: {},
+      traceSetup: async (_attemptId: string, phase: string): Promise<void> => {
+        phases.push(phase);
+      },
+      restoreWorkspace: async () => restoring,
+      runAttempt: async () => 202,
+    });
+    const attempt = {
+      id: "attempt_1",
+      runId: "run_1",
+      runRevision: 1,
+      stage: "implement",
+      deadlineAt: Date.now() + 60_000,
+      artifact: {
+        remote: "https://artifact.invalid/repository.git",
+        hostname: "artifact.invalid",
+      },
+    } as never;
+
+    await sandbox.prepareAttempt(
+      attempt,
+      "secret",
+      "https://control.invalid/attempts/callback",
+      {
+        id: "backup_1",
+        name: "workspace",
+        dir: "/workspace/roundhouse",
+        localBucket: true,
+      } as never,
+    );
+    expect(storage.has("prepared:attempt_1")).toBe(true);
+    expect(phases).toContain("attempt_workflow_preparation_completed");
+
+    const execution = sandbox.executePreparedAttempt("attempt_1");
+    expect(phases).not.toContain("attempt_workflow_execution_completed");
+    finishRestore();
+    await expect(execution).resolves.toBe(202);
+    expect(storage.has("prepared:attempt_1")).toBe(false);
+    expect(phases).toContain("attempt_workflow_execution_completed");
+  });
+
+  it("routes preview and loopback asset URLs to the sandbox application", () => {
+    const previewOrigin = "https://preview.roundhouse.invalid";
+
+    expect(
+      sandboxPreviewPath(
+        new URL("https://preview.roundhouse.invalid/journal?view=recent"),
+        previewOrigin,
+      ),
+    ).toBe("/journal?view=recent");
+    expect(
+      sandboxPreviewPath(
+        new URL("http://localhost/~test_user/res/5/stylesheet?123"),
+        previewOrigin,
+      ),
+    ).toBe("/~test_user/res/5/stylesheet?123");
+    expect(
+      sandboxPreviewPath(
+        new URL("http://127.0.0.1:8080/static/app.css"),
+        previewOrigin,
+      ),
+    ).toBe("/static/app.css");
+    expect(
+      sandboxPreviewPath(
+        new URL("https://cdn.example.com/static/app.css"),
+        previewOrigin,
+      ),
+    ).toBeUndefined();
+  });
+
   it("serves the operational dashboard at the root", async () => {
     const fetch = worker.fetch as unknown as (
       request: Request,
@@ -299,6 +400,7 @@ describe("V2 control plane", () => {
             remote: "https://artifacts.test/repository.git",
             hostname: "artifacts.test",
           },
+          stage: "plan",
           publish: { hostname: "github.com" },
         },
         "https://control.test/attempts/callback",
@@ -306,10 +408,60 @@ describe("V2 control plane", () => {
     ).toEqual([
       "model.roundhouse.internal",
       "registry.npmjs.org",
+      "ghcr.io",
+      "pkg-containers.githubusercontent.com",
       "artifacts.test",
       "github.com",
       "control.test",
     ]);
+  });
+
+  it("allows repository development environments to fetch their dependencies", () => {
+    expect(
+      attemptAllowedHosts({
+        artifact: {
+          remote: "https://artifacts.test/repository.git",
+          hostname: "artifacts.test",
+        },
+        stage: "implement",
+      }),
+    ).toEqual(["*"]);
+  });
+
+  it("resynchronizes an implementation artifact only when its refreshed base is missing", () => {
+    const merged = "b".repeat(40);
+    const run = {
+      baseCommit: merged,
+      currentHead: merged,
+    };
+    expect(
+      artifactNeedsSync(
+        { empty: false, head: "a".repeat(40) },
+        { stage: "implement" },
+        run,
+      ),
+    ).toBe(true);
+    expect(
+      artifactNeedsSync(
+        { empty: false, head: merged },
+        { stage: "implement" },
+        run,
+      ),
+    ).toBe(false);
+    expect(
+      artifactNeedsSync(
+        { empty: false, head: "a".repeat(40) },
+        { stage: "review" },
+        run,
+      ),
+    ).toBe(false);
+    expect(
+      artifactNeedsSync(
+        { empty: false, head: "a".repeat(40) },
+        { stage: "implement" },
+        { ...run, candidateHead: "c".repeat(40) },
+      ),
+    ).toBe(false);
   });
 
   it("passes CI failure diagnostics to the repair assignment as untrusted evidence without credentials", () => {
@@ -430,11 +582,23 @@ describe("V2 control plane", () => {
       async (attemptId, next) => {
         events.push(`diagnose:${attemptId}:${next.expectedRevision}`);
       },
+      undefined,
+      async (_attemptId, phase) => {
+        events.push(`trace:${phase}`);
+      },
     );
     expect(events).toEqual([
+      "trace:recovery_started",
       "diagnose:run_1_rev_3:3",
+      "trace:sandbox_name_resolution_started",
+      "trace:sandbox_name_resolution_completed",
+      "trace:sandbox_destroy_started",
       "destroy:run_1_rev_3",
+      "trace:sandbox_destroy_completed",
+      "trace:wakeup_enqueue_started",
       "enqueue:run_1:3",
+      "trace:wakeup_enqueue_completed",
+      "trace:recovery_completed",
     ]);
   });
 
@@ -446,6 +610,7 @@ describe("V2 control plane", () => {
         durationMs: 30_000,
         stdoutBytes: 128,
         stderrBytes: 0,
+        detail: "devcontainer failed",
       }),
     ).toBe(true);
     expect(
@@ -453,6 +618,36 @@ describe("V2 control plane", () => {
         phase: "command_output",
         operation: "pi agent",
         output: "raw command output must not be persisted",
+      }),
+    ).toBe(false);
+    expect(
+      validAttemptProgress({
+        phase: "devcontainer_up_failed",
+        detail: "x".repeat(4_001),
+      }),
+    ).toBe(false);
+    expect(
+      validAttemptProgress({
+        phase: "devcontainer_lifecycle_diagnostics_completed",
+        durationMs: 81,
+        detail: "mysqld is not running",
+      }),
+    ).toBe(true);
+    expect(
+      validAttemptProgress({
+        phase: "agent_tool_completed",
+        toolCallId: "tool_123",
+        stage: "review",
+        input: '{"query":"Custom Text"}',
+        output: '{"matches":3}',
+        durationMs: 42,
+      }),
+    ).toBe(true);
+    expect(
+      validAttemptProgress({
+        phase: "agent_tool_failed",
+        toolCallId: "tool_123",
+        input: "x".repeat(4_001),
       }),
     ).toBe(false);
     expect(validAttemptProgress({ phase: "unknown" })).toBe(false);

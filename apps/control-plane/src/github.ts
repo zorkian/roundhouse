@@ -24,6 +24,7 @@ export interface GitHubIntakeRepository {
     expectedRevision: number,
     issue: NonNullable<RunSnapshot["issue"]>,
     profile?: AppliedProfile,
+    continuationHead?: string,
   ): Promise<RunSnapshot | undefined>;
   latestCompletedAttempt(
     runId: string,
@@ -442,6 +443,21 @@ function implementationComment(
   ].join("\n");
 }
 
+function implementationNoChangeComment(attempt: Attempt): string {
+  const implementation = attempt.result?.implementation as
+    Record<string, unknown> | undefined;
+  return [
+    `<!-- roundhouse:v2:implementation:${attempt.id} -->`,
+    "## Visual verification completed",
+    "",
+    String(
+      implementation?.summary ??
+        "The requested visual verification is complete.",
+    ),
+    ...screenshotLines(implementation?.screenshots),
+  ].join("\n");
+}
+
 export interface OpenPullRequest {
   readonly number: number;
   readonly html_url: string;
@@ -687,6 +703,20 @@ export class GitHubStageReporter implements AttemptReporter {
     if (attempt.stage === "implement") {
       const implementation = attempt.result?.implementation as
         Record<string, unknown> | undefined;
+      if (
+        run.status === "succeeded" &&
+        attempt.acceptedHead === attempt.expectedHead &&
+        Array.isArray(implementation?.screenshots) &&
+        implementation.screenshots.length > 0
+      ) {
+        await this.github.post(
+          `/repos/${run.repository}/issues/${run.issueNumber}/comments`,
+          {
+            body: this.withDetails(run, implementationNoChangeComment(attempt)),
+          },
+        );
+        return;
+      }
       let pullRequest = await findOpenPullRequest(this.github, run);
       const created = !pullRequest;
       if (!pullRequest) {
@@ -926,7 +956,10 @@ export async function acceptGitHubComment(
       return "ignored";
     const resumable =
       (run.status === "waiting" && run.waitingReason === "clarification") ||
-      (await concludedNoChangeQualification(repository, run));
+      (await concludedNoChangeQualification(repository, run)) ||
+      (run.status === "succeeded" &&
+        (run.stage === "merge" || run.stage === "implement") &&
+        payload.issue?.state === "open");
     if (!resumable) return "ignored";
     const fresh = await repository.recordGitHubDelivery(id, deliveryId, {
       event,
@@ -935,6 +968,19 @@ export async function acceptGitHubComment(
     });
     if (!fresh) return "duplicate";
     let profile: AppliedProfile | undefined;
+    let continuationHead: string | undefined;
+    if (
+      run.status === "succeeded" &&
+      (run.stage === "merge" || run.stage === "implement")
+    ) {
+      const repo = await api.get<{ default_branch: string }>(
+        `/repos/${repositoryName}`,
+      );
+      const commit = await api.get<{ sha: string }>(
+        `/repos/${repositoryName}/commits/${encodeURIComponent(repo.default_branch)}`,
+      );
+      continuationHead = commit.sha;
+    }
     if (!run.profile) {
       try {
         const repo = await api.get<{ default_branch: string }>(
@@ -980,6 +1026,7 @@ export async function acceptGitHubComment(
         ],
       },
       profile,
+      continuationHead,
     );
     if (!run) return "ignored";
     await enqueue({ runId: id, expectedRevision: run.revision });
@@ -1045,7 +1092,10 @@ export async function acceptGitHubComment(
     const resumable =
       run.status === "waiting" ||
       (await concludedNoChangeQualification(repository, run)) ||
-      (run.status === "cancelled" && payload.issue?.state === "open");
+      (run.status === "cancelled" && payload.issue?.state === "open") ||
+      (run.status === "succeeded" &&
+        (run.stage === "merge" || run.stage === "implement") &&
+        payload.issue?.state === "open");
     if (resumable) {
       const issue = run.issue ?? {
         title: payload.issue?.title ?? "",
@@ -1077,7 +1127,16 @@ export async function acceptGitHubComment(
           return "accepted";
         }
       }
-      const resumed = await repository.resume(id, run.revision, issue, profile);
+      const resumed = await repository.resume(
+        id,
+        run.revision,
+        issue,
+        profile,
+        run.status === "succeeded" &&
+          (run.stage === "merge" || run.stage === "implement")
+          ? commit.sha
+          : undefined,
+      );
       if (!resumed) return "duplicate";
       await enqueue({ runId: id, expectedRevision: resumed.revision });
       return "accepted";

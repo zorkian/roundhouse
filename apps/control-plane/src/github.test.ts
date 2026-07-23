@@ -1383,7 +1383,7 @@ describe("GitHub intake", () => {
     },
   );
 
-  it("does not reopen terminal runs beyond qualification or without a no-change conclusion", async () => {
+  it("continues a completed merged issue from new prose while leaving unrelated terminal runs closed", async () => {
     const repository = new IntakeRepository();
     const wakeups: Wakeup[] = [];
     const enqueue = async (wakeup: Wakeup) => {
@@ -1409,7 +1409,7 @@ describe("GitHub intake", () => {
         enqueue,
         github(),
       ),
-    ).resolves.toBe("ignored");
+    ).resolves.toBe("accepted");
     await expect(
       acceptGitHubComment(
         await delivery("delivery-restart"),
@@ -1420,11 +1420,22 @@ describe("GitHub intake", () => {
       ),
     ).resolves.toBe("duplicate");
     await expect(repository.get(id)).resolves.toMatchObject({
-      status: "succeeded",
-      stage: "merge",
-      revision: 2,
+      status: "active",
+      stage: "implement",
+      revision: 3,
+      issue: {
+        clarifications: [
+          {
+            actor: "citizen",
+            body: "Please look again.",
+          },
+        ],
+      },
     });
-    expect(wakeups).toHaveLength(1);
+    expect(wakeups).toEqual([
+      { runId: id, expectedRevision: 1 },
+      { runId: id, expectedRevision: 3 },
+    ]);
 
     // A succeeded qualification with no completed no-change attempt stays closed.
     const bare = new IntakeRepository();

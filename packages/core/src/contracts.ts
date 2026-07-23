@@ -203,6 +203,7 @@ export interface RunRepository {
     expectedRevision: number,
     issue: IssueSnapshot,
     profile?: AppliedProfile,
+    continuationHead?: string,
   ): Promise<RunSnapshot | undefined>;
   claimLease(
     runId: string,

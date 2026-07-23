@@ -1237,6 +1237,34 @@ describe("single coordinator", () => {
     });
   });
 
+  it("completes screenshot-only implementation without empty review and CI work", () => {
+    const head = "b".repeat(40);
+    const attempt = {
+      id: "run_slice_rev_4",
+      runId: input.id,
+      runRevision: 4,
+      kind: "agent",
+      stage: "implement",
+      role: "implement",
+      state: "completed",
+      deadlineAt: 1_000,
+      baseCommit: input.baseCommit,
+      expectedHead: head,
+      acceptedHead: head,
+      result: {
+        implementation: {
+          summary: "Visual verification complete",
+          screenshots: [{ url: "https://example.test/screenshot" }],
+        },
+      },
+    } satisfies Attempt;
+    expect(implementationTransition(attempt)).toEqual({
+      status: "succeeded",
+      stage: "implement",
+      acceptedHead: head,
+    });
+  });
+
   it("advances a clean review to integration and returns findings to implementation", () => {
     const attempt = {
       id: "run_slice_rev_5",

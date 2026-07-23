@@ -5,7 +5,9 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@devcontainers/cli": "0.88.0",
     "@earendil-works/pi-coding-agent": "0.81.1",
+    "jsonc-parser": "3.3.1",
     "typebox": "1.1.38"
   }
 }

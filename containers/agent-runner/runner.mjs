@@ -8,6 +8,7 @@ import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { parse as parseJsonc } from "jsonc-parser";
 import {
   createAgentSession,
   createExtensionRuntime,
@@ -30,6 +31,10 @@ const jsonHeaders = Object.freeze({
 });
 const acceptedAttempts = new Set();
 const runnerContext = new AsyncLocalStorage();
+const devcontainerCli =
+  "/opt/roundhouse/containers/agent-runner/node_modules/.bin/devcontainer";
+const containerCa = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
+const devcontainerRuntimeVersion = 2;
 function workspaceRoot() {
   return process.env.ROUNDHOUSE_WORKSPACE_ROOT ?? "/home/runner/workspaces";
 }
@@ -245,8 +250,8 @@ function command(commandName, args, options = {}) {
         });
     };
     queueProgress({ phase: "command_started", operation });
-    const recordActivity = () => {
-      if (Date.now() - lastActivityAt < 30_000) return;
+    const recordActivity = (force = false) => {
+      if (!force && Date.now() - lastActivityAt < 15_000) return;
       lastActivityAt = Date.now();
       runnerLog("info", "runner_command_activity", {
         operation,
@@ -262,6 +267,8 @@ function command(commandName, args, options = {}) {
         stderrBytes,
       });
     };
+    const heartbeat = setInterval(() => recordActivity(true), 15_000);
+    heartbeat.unref();
     child.stdout.on("data", (chunk) => {
       stdout.push(chunk);
       stdoutBytes += chunk.byteLength;
@@ -273,6 +280,7 @@ function command(commandName, args, options = {}) {
       recordActivity();
     });
     child.once("error", (error) => {
+      clearInterval(heartbeat);
       runnerLog("error", "runner_command_failed", {
         operation,
         durationMs: Date.now() - startedAt,
@@ -291,6 +299,7 @@ function command(commandName, args, options = {}) {
       activity.then(() => rejectCommand(error));
     });
     child.once("close", async (code) => {
+      clearInterval(heartbeat);
       await activity;
       if (code === 0 || options.allowFailure) {
         runnerLog("info", "runner_command_completed", {
@@ -316,10 +325,7 @@ function command(commandName, args, options = {}) {
           resolveCommand(options.preserveOutput ? text : text.trim());
         }
       } else {
-        const detail =
-          commandName === "git"
-            ? Buffer.concat(stderr).toString().trim().slice(0, 1_000)
-            : "";
+        const detail = Buffer.concat(stderr).toString().trim().slice(-4_000);
         const error = new Error(
           `${commandName}_${args[0]}_failed_${code}${detail ? `: ${detail}` : ""}`,
         );
@@ -345,6 +351,515 @@ function command(commandName, args, options = {}) {
       }
     });
   });
+}
+
+function withoutUnsupportedRunArgs(runArgs = []) {
+  const withValue = new Set([
+    "-p",
+    "--publish",
+    "-v",
+    "--volume",
+    "--mount",
+    "--device",
+    "--network",
+  ]);
+  const unsupported = [
+    "--publish=",
+    "--volume=",
+    "--mount=",
+    "--device=",
+    "--network=",
+  ];
+  const result = [];
+  for (let index = 0; index < runArgs.length; index += 1) {
+    const argument = runArgs[index];
+    if (withValue.has(argument)) {
+      index += 1;
+      continue;
+    }
+    if (
+      argument === "--privileged" ||
+      unsupported.some((prefix) => argument.startsWith(prefix))
+    )
+      continue;
+    result.push(argument);
+  }
+  return [...result, "--network=host"];
+}
+
+export function normalizedDevContainerConfig(config, image) {
+  if (!config || typeof config !== "object" || Array.isArray(config))
+    throw new Error("devcontainer_config_invalid");
+  if (config.privileged === true) throw new Error("devcontainer_privileged");
+  if (!image) throw new Error("devcontainer_image_required");
+  const mounts = Array.isArray(config.mounts)
+    ? config.mounts.filter(
+        (mount) =>
+          typeof mount === "string" && /^type=volume(?:,|$)/.test(mount),
+      )
+    : [];
+  return {
+    ...config,
+    image,
+    privileged: false,
+    containerEnv: {
+      ...(config.containerEnv &&
+      typeof config.containerEnv === "object" &&
+      !Array.isArray(config.containerEnv)
+        ? config.containerEnv
+        : {}),
+      SSL_CERT_FILE: containerCa,
+      GIT_SSL_CAINFO: containerCa,
+      NODE_EXTRA_CA_CERTS: containerCa,
+      CURL_CA_BUNDLE: containerCa,
+      REQUESTS_CA_BUNDLE: containerCa,
+    },
+    mounts: [
+      ...mounts,
+      "type=tmpfs,target=/run",
+      "type=bind,source=/opt/inner-roundhouse,target=/opt/roundhouse,readonly",
+      "type=bind,source=/opt/inner-node24,target=/opt/node24,readonly",
+      "type=bind,source=/etc/cloudflare/certs,target=/etc/cloudflare/certs,readonly",
+    ],
+    runArgs: withoutUnsupportedRunArgs(
+      Array.isArray(config.runArgs)
+        ? config.runArgs.filter((value) => typeof value === "string")
+        : [],
+    ),
+  };
+}
+
+function devcontainerResult(output) {
+  for (const line of output.trim().split(/\r?\n/).reverse()) {
+    try {
+      const result = JSON.parse(line);
+      if (result?.outcome === "success" && result.containerId) return result;
+    } catch {}
+  }
+  throw new Error("devcontainer_result_missing");
+}
+
+async function measured(progress, phase, action) {
+  const startedAt = Date.now();
+  runnerLog("info", `${phase}_started`);
+  await progress(`${phase}_started`);
+  try {
+    const value = await action();
+    const durationMs = Date.now() - startedAt;
+    runnerLog("info", `${phase}_completed`, { durationMs });
+    await progress(`${phase}_completed`, { durationMs });
+    return value;
+  } catch (error) {
+    const detail = (error?.message ?? String(error)).slice(-4_000);
+    const failure = {
+      durationMs: Date.now() - startedAt,
+      errorType: error?.name ?? typeof error,
+      detail,
+    };
+    runnerLog("error", `${phase}_failed`, failure);
+    await progress(`${phase}_failed`, failure);
+    throw error;
+  }
+}
+
+export function commandProgress(progress) {
+  return ({ phase, ...details }) => progress(phase, details);
+}
+
+function eventDetail(value) {
+  try {
+    return JSON.stringify(value).slice(0, 4_000);
+  } catch {
+    return "[unserializable]";
+  }
+}
+
+export function observableAgentEvent(event, stage, startedAt) {
+  const shared = {
+    stage,
+    durationMs: Date.now() - startedAt,
+  };
+  if (event.type === "tool_execution_start")
+    return {
+      phase: "agent_tool_started",
+      operation: event.toolName,
+      toolCallId: event.toolCallId,
+      input: eventDetail(event.args),
+      ...shared,
+    };
+  if (event.type === "tool_execution_end")
+    return {
+      phase: event.isError ? "agent_tool_failed" : "agent_tool_completed",
+      operation: event.toolName,
+      toolCallId: event.toolCallId,
+      output: eventDetail(event.result),
+      ...shared,
+    };
+  if (event.type === "agent_end")
+    return {
+      phase: "agent_session_completed",
+      ...shared,
+    };
+  return undefined;
+}
+
+async function prepareDevContainer(directory, progress) {
+  const sourceConfig = resolve(directory, ".devcontainer/devcontainer.json");
+  const configFound = await measured(
+    progress,
+    "devcontainer_config_detection",
+    async () => {
+      try {
+        await access(sourceConfig);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  );
+  if (!configFound) return undefined;
+  const runtimeDirectory = resolve(directory, ".git/roundhouse-runtime");
+  const runtimeConfig = resolve(runtimeDirectory, "devcontainer.json");
+  const statePath = resolve(runtimeDirectory, "devcontainer-state.json");
+  await measured(progress, "devcontainer_runtime_prepare", () =>
+    mkdir(runtimeDirectory, { recursive: true }),
+  );
+  let state = await measured(progress, "devcontainer_state_read", async () => {
+    try {
+      return JSON.parse(await readFile(statePath, "utf8"));
+    } catch {
+      return undefined;
+    }
+  });
+  if (state?.runtimeVersion !== devcontainerRuntimeVersion)
+    state = await measured(
+      progress,
+      "devcontainer_runtime_config_refresh",
+      async () => {
+        const staleContainerId = state?.containerId;
+        if (
+          staleContainerId !== undefined &&
+          !/^[a-f0-9]{12,64}$/.test(staleContainerId)
+        )
+          throw new Error("devcontainer_state_container_id_invalid");
+        const source = await measured(
+          progress,
+          "devcontainer_config_read",
+          async () => parseJsonc(await readFile(sourceConfig, "utf8")),
+        );
+        if (typeof source?.image !== "string")
+          throw new Error("devcontainer_image_required");
+        let digest =
+          state?.image === source.image &&
+          /^[^@\s]+@sha256:[a-f0-9]{64}$/.test(state?.imageDigest ?? "")
+            ? state.imageDigest
+            : undefined;
+        if (!digest) {
+          await measured(progress, "devcontainer_image_pull", async () =>
+            command("docker", ["pull", source.image], {
+              onProgress: commandProgress(progress),
+            }),
+          );
+          digest = await measured(
+            progress,
+            "devcontainer_image_digest_resolve",
+            () =>
+              command(
+                "docker",
+                [
+                  "image",
+                  "inspect",
+                  source.image,
+                  "--format",
+                  "{{index .RepoDigests 0}}",
+                ],
+                { onProgress: commandProgress(progress) },
+              ),
+          );
+        }
+        if (!/^[^@\s]+@sha256:[a-f0-9]{64}$/.test(digest))
+          throw new Error("devcontainer_image_digest_missing");
+        await measured(progress, "devcontainer_runtime_config_write", () =>
+          writeFile(
+            runtimeConfig,
+            `${JSON.stringify(normalizedDevContainerConfig(source, digest), null, 2)}\n`,
+          ),
+        );
+        if (staleContainerId) {
+          const existingContainer = await command(
+            "docker",
+            ["container", "inspect", "--format", "{{.Id}}", staleContainerId],
+            {
+              onProgress: commandProgress(progress),
+              allowFailure: true,
+            },
+          );
+          if (existingContainer)
+            await measured(
+              progress,
+              "devcontainer_stale_container_remove",
+              () =>
+                command("docker", ["rm", "--force", staleContainerId], {
+                  onProgress: commandProgress(progress),
+                }),
+            );
+        }
+        return {
+          ...state,
+          image: source.image,
+          imageDigest: digest,
+          runtimeVersion: devcontainerRuntimeVersion,
+          containerId: undefined,
+        };
+      },
+    );
+  let output;
+  try {
+    output = await measured(progress, "devcontainer_up", async () =>
+      command(
+        devcontainerCli,
+        [
+          "up",
+          "--workspace-folder",
+          directory,
+          "--config",
+          runtimeConfig,
+          "--log-format",
+          "json",
+          "--skip-post-create",
+        ],
+        { onProgress: commandProgress(progress), preserveOutput: true },
+      ),
+    );
+  } catch (upError) {
+    const diagnosticsStartedAt = Date.now();
+    runnerLog("info", "devcontainer_up_diagnostics_started");
+    await progress("devcontainer_up_diagnostics_started");
+    try {
+      const detail = await command(
+        "/bin/sh",
+        [
+          "-lc",
+          [
+            "set +e",
+            'echo "=== outer CA ==="',
+            `sha256sum ${containerCa}`,
+            'echo "=== outer BuildKit config ==="',
+            "cat /etc/roundhouse-buildkitd.toml",
+            'echo "=== builder CA ==="',
+            "docker exec buildx_buildkit_roundhouse-host-v10 sha256sum /etc/buildkit/certs/ghcr.io/cloudflare-containers-ca.crt",
+            'echo "=== builder config ==="',
+            "docker exec buildx_buildkit_roundhouse-host-v10 cat /etc/buildkit/buildkitd.toml",
+            'echo "=== builder inspection ==="',
+            "docker buildx inspect roundhouse-host-v1",
+          ].join("; "),
+        ],
+        {
+          onProgress: commandProgress(progress),
+          preserveOutput: true,
+          allowFailure: true,
+        },
+      );
+      const diagnostics = detail.trim().slice(-4_000);
+      const durationMs = Date.now() - diagnosticsStartedAt;
+      runnerLog("info", "devcontainer_up_diagnostics_completed", {
+        durationMs,
+        detail: diagnostics,
+      });
+      await progress("devcontainer_up_diagnostics_completed", {
+        durationMs,
+        detail: diagnostics,
+      });
+    } catch (diagnosticsError) {
+      const failure = {
+        durationMs: Date.now() - diagnosticsStartedAt,
+        errorType: diagnosticsError?.name ?? typeof diagnosticsError,
+        detail: (diagnosticsError?.message ?? String(diagnosticsError)).slice(
+          -4_000,
+        ),
+      };
+      runnerLog("error", "devcontainer_up_diagnostics_failed", failure);
+      await progress("devcontainer_up_diagnostics_failed", failure);
+    }
+    throw upError;
+  }
+  const result = await measured(
+    progress,
+    "devcontainer_result_parse",
+    async () => devcontainerResult(output),
+  );
+  await measured(progress, "devcontainer_runtime_mount_verify", async () => {
+    const runtimeMount = await command(
+      "docker",
+      [
+        "inspect",
+        result.containerId,
+        "--format",
+        '{{range .Mounts}}{{if eq .Destination "/run"}}{{.Type}}{{end}}{{end}}',
+      ],
+      { onProgress: commandProgress(progress) },
+    );
+    if (runtimeMount !== "tmpfs")
+      throw new Error(`devcontainer_runtime_mount_invalid:${runtimeMount}`);
+  });
+  state = {
+    ...state,
+    containerId: result.containerId,
+    remoteUser: result.remoteUser,
+    remoteWorkspaceFolder: result.remoteWorkspaceFolder,
+  };
+  await measured(progress, "devcontainer_ca_verify", () =>
+    command(
+      "docker",
+      [
+        "exec",
+        state.containerId,
+        "/bin/sh",
+        "-lc",
+        'test -s "$SSL_CERT_FILE" && printf "ssl_cert_file=%s\\n" "$SSL_CERT_FILE"',
+      ],
+      { onProgress: commandProgress(progress) },
+    ),
+  );
+  try {
+    await measured(progress, "devcontainer_lifecycle", () =>
+      command(
+        devcontainerCli,
+        [
+          "run-user-commands",
+          "--container-id",
+          state.containerId,
+          "--workspace-folder",
+          directory,
+          "--config",
+          runtimeConfig,
+          "--log-format",
+          "json",
+        ],
+        { onProgress: commandProgress(progress), preserveOutput: true },
+      ),
+    );
+  } catch (lifecycleError) {
+    const diagnosticsStartedAt = Date.now();
+    runnerLog("info", "devcontainer_lifecycle_diagnostics_started");
+    await progress("devcontainer_lifecycle_diagnostics_started");
+    try {
+      const detail = await command(
+        "docker",
+        [
+          "exec",
+          state.containerId,
+          "/bin/sh",
+          "-lc",
+          [
+            "set +e",
+            'echo "=== filesystem ==="',
+            "df -h",
+            "df -i",
+            'echo "=== mysql processes ==="',
+            "ps aux | grep -E '[m]ysqld|[m]ariadbd'",
+            'echo "=== mysql runtime paths ==="',
+            "ls -ld /run/mysqld /var/run/mysqld /var/lib/mysql 2>&1",
+            "find /run/mysqld /var/run/mysqld -maxdepth 1 -ls 2>&1",
+            'echo "=== mysql service ==="',
+            "service mysql status 2>&1",
+            'echo "=== mysql logs ==="',
+            'for log in /var/log/mysql/error.log /var/log/mysql/mysqld.log /var/log/mysqld.log; do if [ -f "$log" ]; then echo "--- $log"; tail -n 100 "$log"; fi; done',
+          ].join("; "),
+        ],
+        {
+          onProgress: commandProgress(progress),
+          preserveOutput: true,
+          allowFailure: true,
+        },
+      );
+      const diagnostics = detail.trim().slice(-4_000);
+      const durationMs = Date.now() - diagnosticsStartedAt;
+      runnerLog("info", "devcontainer_lifecycle_diagnostics_completed", {
+        durationMs,
+        detail: diagnostics,
+      });
+      await progress("devcontainer_lifecycle_diagnostics_completed", {
+        durationMs,
+        detail: diagnostics,
+      });
+    } catch (diagnosticsError) {
+      const failure = {
+        durationMs: Date.now() - diagnosticsStartedAt,
+        errorType: diagnosticsError?.name ?? typeof diagnosticsError,
+        detail: (diagnosticsError?.message ?? String(diagnosticsError)).slice(
+          -4_000,
+        ),
+      };
+      runnerLog("error", "devcontainer_lifecycle_diagnostics_failed", failure);
+      await progress("devcontainer_lifecycle_diagnostics_failed", failure);
+    }
+    throw lifecycleError;
+  }
+  await measured(progress, "devcontainer_state_write", () =>
+    writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`),
+  );
+  runnerLog("info", "devcontainer_ready", state);
+  return { ...state, config: runtimeConfig };
+}
+
+async function implementationInDevContainer(
+  assignment,
+  directory,
+  attemptSecret,
+  progress,
+) {
+  const environment = await prepareDevContainer(directory, progress);
+  if (!environment) return implement(assignment, directory, attemptSecret);
+  const requestPath = resolve(
+    directory,
+    ".git/roundhouse-runtime/inner-assignment.json",
+  );
+  const resultPath = resolve(
+    directory,
+    ".git/roundhouse-runtime/inner-result.json",
+  );
+  await measured(progress, "devcontainer_inner_assignment_write", () =>
+    writeFile(
+      requestPath,
+      `${JSON.stringify({ assignment, attemptSecret })}\n`,
+      { mode: 0o600 },
+    ),
+  );
+  try {
+    await measured(progress, "devcontainer_agent", async () =>
+      command(
+        devcontainerCli,
+        [
+          "exec",
+          "--workspace-folder",
+          directory,
+          "--config",
+          environment.config,
+          "--remote-env",
+          `NODE_EXTRA_CA_CERTS=${containerCa}`,
+          "/opt/node24/bin/node",
+          "/opt/roundhouse/containers/agent-runner/runner.mjs",
+          "--inner-implementation",
+          ".git/roundhouse-runtime/inner-assignment.json",
+          ".git/roundhouse-runtime/inner-result.json",
+        ],
+        { onProgress: commandProgress(progress) },
+      ),
+    );
+    return await measured(
+      progress,
+      "devcontainer_inner_result_read",
+      async () => JSON.parse(await readFile(resultPath, "utf8")),
+    );
+  } finally {
+    await measured(progress, "devcontainer_inner_runtime_cleanup", () =>
+      Promise.all([
+        rm(requestPath, { force: true }),
+        rm(resultPath, { force: true }),
+      ]),
+    );
+  }
 }
 
 export async function sourceSnapshot(directory, indexFile) {
@@ -503,6 +1018,30 @@ export const implementationSchema = Object.freeze({
     screenshots: screenshotEvidenceSchema,
   },
 });
+
+export function visualEvidenceRequested(assignment) {
+  const issue = assignment.issue ?? {};
+  const conversation = Array.isArray(issue.clarifications)
+    ? issue.clarifications
+    : [];
+  return [issue.title, issue.body, ...conversation.map((entry) => entry?.body)]
+    .filter((value) => typeof value === "string")
+    .some((value) => /\bscreenshots?\b/i.test(value));
+}
+
+export function implementationResultSchema(assignment) {
+  if (!visualEvidenceRequested(assignment)) return implementationSchema;
+  return {
+    ...implementationSchema,
+    properties: {
+      ...implementationSchema.properties,
+      screenshots: {
+        ...screenshotEvidenceSchema,
+        minItems: 1,
+      },
+    },
+  };
+}
 
 const reviewProperties = {
   status: { type: "string", enum: ["clean", "changes_requested"] },
@@ -801,10 +1340,10 @@ async function structuredAgent(
   const operation = "pi agent";
   let lastActivityAt = 0;
   let activity = Promise.resolve();
-  const queueActivity = () => {
+  const queueActivity = (force = false) => {
     if (
       typeof assignment.activityCallbackUrl !== "string" ||
-      Date.now() - lastActivityAt < 30_000
+      (!force && Date.now() - lastActivityAt < 15_000)
     )
       return;
     lastActivityAt = Date.now();
@@ -830,6 +1369,8 @@ async function structuredAgent(
         }),
       );
   };
+  const heartbeat = setInterval(() => queueActivity(true), 15_000);
+  heartbeat.unref();
   runnerLog("info", "runner_command_started", { operation, stage: name });
   const { session } = await createAgentSession({
     cwd: directory,
@@ -849,12 +1390,31 @@ async function structuredAgent(
   });
   const unsubscribe = session.subscribe((event) => {
     runnerLog("info", "pi_agent_event", { stage: name, event: event.type });
+    const observable = observableAgentEvent(event, name, startedAt);
+    if (observable) {
+      activity = activity
+        .then(() =>
+          reportActivity(
+            assignment,
+            assignment.activityCallbackUrl,
+            attemptSecret,
+            observable,
+          ),
+        )
+        .catch((error) =>
+          runnerLog("error", "runner_progress_failed", {
+            operation: observable.operation ?? observable.phase,
+            errorType: error?.name ?? typeof error,
+          }),
+        );
+    }
     queueActivity();
   });
   try {
     await session.prompt(prompt);
     await activity;
   } finally {
+    clearInterval(heartbeat);
     unsubscribe();
     session.dispose();
   }
@@ -1022,7 +1582,7 @@ export function implementationPrompt(assignment) {
         ]
       : []),
     "Run the relevant validation available in the repository and record each command, exit code, and useful output in validation.",
-    "When the issue or conversation asks for visual evidence, run the application with its server bound to 0.0.0.0 (not 127.0.0.1 or localhost) and use capture_screenshot before submitting. Include every returned screenshot URL and a short description in screenshots; otherwise return an empty screenshots array.",
+    "When the issue or conversation asks for a screenshot, that screenshot is a completion requirement. Run the application with its server bound to 0.0.0.0 (not 127.0.0.1 or localhost), use capture_screenshot before submitting, and include every returned screenshot URL and a short description in screenshots. Do not submit an empty screenshots array after a screenshot was requested, even if you also found and fixed a separate code or test problem. Treat a requested visual adjustment as scoped: preserve unrelated visible elements, and compare the relevant UI before and after so moving one element does not silently remove another.",
     "Write a concise pull request title and body for a maintainer. Describe the change and why; do not include validation commands or command output in the pull request body.",
     "Return only the requested structured implementation result.",
   ].join("\n");
@@ -1090,7 +1650,7 @@ export async function implement(assignment, directory, attemptSecret) {
     directory,
     attemptSecret,
     "implementation",
-    implementationSchema,
+    implementationResultSchema(assignment),
     prompt,
   );
 }
@@ -1203,7 +1763,11 @@ export async function bootstrapWorkspace(assignment) {
   if (head !== assignment.source.head) throw new Error("source_head_changed");
   await command(
     "git",
-    ["push", assignment.artifact.remote, "FETCH_HEAD:refs/heads/main"],
+    [
+      "push",
+      assignment.artifact.remote,
+      `${assignment.source.force ? "+" : ""}FETCH_HEAD:refs/heads/main`,
+    ],
     { cwd: directory, env: gitEnvironment(assignment.artifact.token) },
   );
 }
@@ -1749,10 +2313,11 @@ async function completeAssignment(assignment, headers) {
           ? { plan: await plan(agentAssignment, directory, attemptSecret) }
           : assignment.stage === "implement"
             ? {
-                implementation: await implement(
+                implementation: await implementationInDevContainer(
                   agentAssignment,
                   directory,
                   attemptSecret,
+                  progress,
                 ),
               }
             : assignment.stage === "review"
@@ -1893,7 +2458,9 @@ function validBootstrap(body) {
     !body?.source?.remote?.startsWith("https://") ||
     !body?.source?.hostname ||
     !/^[A-Za-z0-9._\/-]+$/.test(body?.source?.branch ?? "") ||
-    !/^[a-f0-9]{40}$/.test(body?.source?.head ?? "")
+    !/^[a-f0-9]{40}$/.test(body?.source?.head ?? "") ||
+    (body?.source?.force !== undefined &&
+      typeof body.source.force !== "boolean")
   )
     return false;
   try {
@@ -1961,9 +2528,23 @@ export function createRunnerServer() {
             reply.writeHead(204, jsonHeaders);
             reply.end();
           },
-          () => {
+          (error) => {
+            const errorType =
+              error instanceof Error ? error.constructor.name : typeof error;
+            const detail =
+              error instanceof Error ? error.message : String(error);
+            runnerLog("error", "checkpoint_validation_failed", {
+              errorType,
+              error: detail,
+            });
             reply.writeHead(422, jsonHeaders);
-            reply.end(JSON.stringify({ error: "invalid_checkpoint" }));
+            reply.end(
+              JSON.stringify({
+                error: "invalid_checkpoint",
+                errorType,
+                detail,
+              }),
+            );
           },
         );
         return;
@@ -2052,5 +2633,30 @@ function start() {
   process.once("SIGTERM", shutdown);
 }
 
+async function runInnerImplementation(requestName, resultName) {
+  const requestPath = resolve(process.cwd(), requestName);
+  const resultPath = resolve(process.cwd(), resultName);
+  const { assignment, attemptSecret } = JSON.parse(
+    await readFile(requestPath, "utf8"),
+  );
+  if (assignment?.stage !== "implement" || typeof attemptSecret !== "string")
+    throw new Error("inner_implementation_request_invalid");
+  await runnerContext.run(
+    { attemptId: assignment.id, stage: assignment.stage },
+    async () => {
+      runnerLog("info", "inner_implementation_started");
+      const result = await implement(assignment, process.cwd(), attemptSecret);
+      await writeFile(resultPath, `${JSON.stringify(result)}\n`, {
+        mode: 0o600,
+      });
+      runnerLog("info", "inner_implementation_completed");
+    },
+  );
+}
+
 const entry = process.argv[1];
-if (entry && fileURLToPath(import.meta.url) === resolve(entry)) start();
+if (entry && fileURLToPath(import.meta.url) === resolve(entry)) {
+  if (process.argv[2] === "--inner-implementation")
+    await runInnerImplementation(process.argv[3], process.argv[4]);
+  else start();
+}
