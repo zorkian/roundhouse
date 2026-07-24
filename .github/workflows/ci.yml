@@ -9,7 +9,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # A delayed PR check must not cancel the merged-PR deployment.
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event.action == 'closed' && 'deploy' || 'check' }}
   cancel-in-progress: true
 
 jobs:
