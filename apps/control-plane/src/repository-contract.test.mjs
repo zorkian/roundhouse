@@ -349,7 +349,7 @@ function repositoryContract(label, createRepository) {
         stage: "merge",
       });
       await expect(repository.resume(run.id, 2, run.issue)).rejects.toThrow(
-        "run_not_resumable",
+        "resume_head_required",
       );
       await expect(repository.get(run.id)).resolves.toMatchObject({
         status: "succeeded",

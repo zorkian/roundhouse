@@ -53,9 +53,15 @@ importers:
 
   containers/agent-runner:
     dependencies:
+      '@devcontainers/cli':
+        specifier: 0.88.0
+        version: 0.88.0
       '@earendil-works/pi-coding-agent':
         specifier: 0.81.1
         version: 0.81.1(ws@8.21.0)(zod@4.4.3)
+      jsonc-parser:
+        specifier: 3.3.1
+        version: 3.3.1
       typebox:
         specifier: 1.1.38
         version: 1.1.38
@@ -249,6 +255,11 @@ packages:
   '@cspotcode/source-map-support@0.8.1':
     resolution: {integrity: sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw==}
     engines: {node: '>=12'}
+
+  '@devcontainers/cli@0.88.0':
+    resolution: {integrity: sha512-sMkruPy/icfov20mdQh2EjFYZogxvMEZptDEvg5/eMBIUOr2xr+8wlsI7nvDR6EJxoBjqoasXqgRGbiMqbaJ1w==}
+    engines: {node: '>=20.0.0'}
+    hasBin: true
 
   '@earendil-works/pi-agent-core@0.81.1':
     resolution: {integrity: sha512-yqbh68CyhqxMov/jUogFJfMqlu2Gd37GAki+tr59YCmAPHfomiCA5ESzusXtpGzABeiZFC/OrRdQ4GwCCOMIHA==}
@@ -1116,6 +1127,9 @@ packages:
     resolution: {integrity: sha512-+DWg8jCJG2TEnpy7kOm/7/AxaYoaRbjVB4LFZLySZlWn8exGs3A4OLJR966cVvU26N7X9TWxl+Jsw7dzAqKT6g==}
     engines: {node: '>=16'}
 
+  jsonc-parser@3.3.1:
+    resolution: {integrity: sha512-HUgH65KyejrUFPvHFPbqOY0rsFip3Bo5wb4ngvdi1EpCYWUQDC5V+Y7mZws+DLkr4M//zQJoanu1SP+87Dv1oQ==}
+
   jwa@2.0.1:
     resolution: {integrity: sha512-hRF04fqJIP8Abbkq5NKGN0Bbr3JxlQ+qhZufXVr0DvujKy93ZCbXZMHDL4EOtodSbCWxOqR8MS1tXA5hwqCXDg==}
 
@@ -1741,6 +1755,8 @@ snapshots:
   '@cspotcode/source-map-support@0.8.1':
     dependencies:
       '@jridgewell/trace-mapping': 0.3.9
+
+  '@devcontainers/cli@0.88.0': {}
 
   '@earendil-works/pi-agent-core@0.81.1(ws@8.21.0)(zod@4.4.3)':
     dependencies:
@@ -2490,6 +2506,8 @@ snapshots:
     dependencies:
       '@babel/runtime': 7.29.7
       ts-algebra: 2.0.0
+
+  jsonc-parser@3.3.1: {}
 
   jwa@2.0.1:
     dependencies:

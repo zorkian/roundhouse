@@ -19,6 +19,7 @@ export interface ArtifactRepository {
   readonly remote: string;
   readonly hostname: string;
   readonly empty: boolean;
+  readonly head?: string;
   createToken(
     access: ArtifactAccess,
     ttlSeconds: number,
@@ -76,10 +77,18 @@ export function artifactIdentity(name: string, location: ArtifactLocation) {
   };
 }
 
-export function artifactAdvertisementHasMain(advertisement: string) {
+export function artifactAdvertisementMainHead(
+  advertisement: string,
+): string | undefined {
   return [
     ...advertisement.matchAll(/([0-9a-f]{40}) refs\/heads\/main(?:\0|\n)/g),
-  ].some(([, objectId]) => objectId !== "0".repeat(40));
+  ]
+    .map(([, objectId]) => objectId)
+    .find((objectId) => objectId !== "0".repeat(40));
+}
+
+export function artifactAdvertisementHasMain(advertisement: string) {
+  return artifactAdvertisementMainHead(advertisement) !== undefined;
 }
 
 class CloudflareArtifactRepository implements ArtifactRepository {
@@ -88,19 +97,21 @@ class CloudflareArtifactRepository implements ArtifactRepository {
   readonly remote: string;
   readonly hostname: string;
   readonly empty: boolean;
+  readonly head?: string;
 
   constructor(
     private readonly repository: ArtifactsRepo,
     name: string,
     location: ArtifactLocation,
-    empty: boolean,
+    head?: string,
   ) {
     const identity = artifactIdentity(name, location);
     this.id = identity.id;
     this.name = identity.name;
     this.remote = identity.remote;
     this.hostname = identity.hostname;
-    this.empty = empty;
+    this.head = head;
+    this.empty = head === undefined;
     console.log(
       JSON.stringify({
         message: "artifact_repository_state",
@@ -152,7 +163,7 @@ export class CloudflareArtifactsNamespace implements ArtifactsNamespace {
     throw new Error("artifact_repository_not_ready");
   }
 
-  private async empty(repository: ArtifactsRepo, name: string) {
+  private async head(repository: ArtifactsRepo, name: string) {
     const token = await repository.createToken("read", 60);
     const identity = artifactIdentity(name, this.location);
     try {
@@ -164,7 +175,7 @@ export class CloudflareArtifactsNamespace implements ArtifactsNamespace {
       );
       if (!response.ok)
         throw new Error(`artifact_advertise_refs_http_${response.status}`);
-      return !artifactAdvertisementHasMain(await response.text());
+      return artifactAdvertisementMainHead(await response.text());
     } finally {
       await repository.revokeToken(token.id);
     }
@@ -175,7 +186,7 @@ export class CloudflareArtifactsNamespace implements ArtifactsNamespace {
       repository,
       name,
       this.location,
-      await this.empty(repository, name),
+      await this.head(repository, name),
     );
   }
 
@@ -191,12 +202,7 @@ export class CloudflareArtifactsNamespace implements ArtifactsNamespace {
       // dispatch issues its own short-lived, purpose-specific token instead.
       const repository = await this.ready(name);
       await repository.revokeToken(created.token);
-      return new CloudflareArtifactRepository(
-        repository,
-        name,
-        this.location,
-        true,
-      );
+      return new CloudflareArtifactRepository(repository, name, this.location);
     } catch (error) {
       console.error(
         JSON.stringify({

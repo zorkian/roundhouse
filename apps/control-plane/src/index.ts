@@ -46,6 +46,7 @@ import { launch } from "@cloudflare/playwright";
 import { RoundhouseAttemptSandbox } from "./attempt-container.js";
 export { ContainerProxy } from "@cloudflare/sandbox";
 export { RoundhouseAttemptSandbox } from "./attempt-container.js";
+export { AttemptExecutionWorkflow } from "./attempt-workflow.js";
 
 export const controlPlaneService = "roundhouse-v2-control-plane";
 
@@ -81,6 +82,19 @@ export function handleRequest(request: Request): Response {
     });
   }
   return json({ error: "not_found" }, 404);
+}
+
+export function sandboxPreviewPath(
+  requestedUrl: URL,
+  previewOrigin: string,
+): string | undefined {
+  if (
+    requestedUrl.origin !== previewOrigin &&
+    !["localhost", "127.0.0.1", "[::1]"].includes(requestedUrl.hostname)
+  ) {
+    return undefined;
+  }
+  return `${requestedUrl.pathname}${requestedUrl.search}`;
 }
 
 export function successorWakeup(
@@ -157,7 +171,7 @@ function attemptSandbox(
   sandboxes: SandboxNamespace,
   name: string,
 ): RoundhouseAttemptSandbox {
-  return getSandbox(sandboxes, name);
+  return getSandbox(sandboxes, name, { enableDefaultSession: false });
 }
 
 function sandboxName(attempt: Pick<Attempt, "id" | "runId" | "stage">): string {
@@ -171,12 +185,70 @@ export async function destroyAttemptSandbox(
   await containers.get(containers.idFromName(name)).destroy();
 }
 
+type SandboxDestructionTrace = (
+  attemptId: string,
+  phase: string,
+  detail: Readonly<Record<string, unknown>>,
+) => Promise<void>;
+
+async function destroyAttemptSandboxWithTrace(
+  containers: AttemptNamespace,
+  name: string,
+  attemptId: string,
+  trace?: SandboxDestructionTrace,
+): Promise<void> {
+  const startedAt = Date.now();
+  const emit = async (
+    phase: string,
+    detail: Readonly<Record<string, unknown>> = {},
+  ): Promise<void> => {
+    const payload = {
+      phase,
+      sandboxName: name,
+      durationMs: Date.now() - startedAt,
+      ...detail,
+    };
+    const log = { message: "sandbox_destruction_trace", attemptId, ...payload };
+    if (phase.endsWith("_failed")) console.error(JSON.stringify(log));
+    else console.log(JSON.stringify(log));
+    if (!trace) return;
+    try {
+      await trace(attemptId, phase, payload);
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          message: "sandbox_destruction_trace_record_failed",
+          attemptId,
+          phase,
+          sandboxName: name,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
+  };
+  await emit("sandbox_destroy_started");
+  try {
+    await destroyAttemptSandbox(containers, name);
+    await emit("sandbox_destroy_completed");
+  } catch (error) {
+    await emit("sandbox_destroy_failed", {
+      errorType: error instanceof Error ? error.constructor.name : typeof error,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+}
+
 export function scheduleAttemptSandboxDestruction(
   containers: AttemptNamespace,
   name: string,
   context: Pick<ExecutionContext, "waitUntil">,
+  attemptId = name,
+  trace?: SandboxDestructionTrace,
 ): void {
-  context.waitUntil(destroyAttemptSandbox(containers, name));
+  context.waitUntil(
+    destroyAttemptSandboxWithTrace(containers, name, attemptId, trace),
+  );
 }
 
 export async function recoverExpiredAttempts(
@@ -185,22 +257,86 @@ export async function recoverExpiredAttempts(
   enqueue: (wakeup: Wakeup) => Promise<void>,
   diagnose?: (attemptId: string, wakeup: Wakeup) => Promise<void>,
   resolveName?: (attemptId: string) => Promise<string>,
+  trace?: (
+    attemptId: string,
+    phase: string,
+    detail: Record<string, unknown>,
+  ) => Promise<void>,
 ): Promise<void> {
   for (const wakeup of wakeups) {
     const attemptId = immutableAttemptId(wakeup.runId, wakeup.expectedRevision);
-    if (diagnose) await diagnose(attemptId, wakeup);
-    await destroyAttemptSandbox(
-      containers,
-      resolveName ? await resolveName(attemptId) : attemptId,
-    );
-    await enqueue(wakeup);
+    const recoveryStartedAt = Date.now();
+    const emit = async (
+      phase: string,
+      detail: Record<string, unknown> = {},
+    ): Promise<void> => {
+      await trace?.(attemptId, phase, {
+        runId: wakeup.runId,
+        expectedRevision: wakeup.expectedRevision,
+        elapsedMs: Date.now() - recoveryStartedAt,
+        ...detail,
+      });
+    };
+    try {
+      await emit("recovery_started");
+      if (diagnose) await diagnose(attemptId, wakeup);
+      await emit("sandbox_name_resolution_started");
+      const name = resolveName ? await resolveName(attemptId) : attemptId;
+      await emit("sandbox_name_resolution_completed", { sandboxName: name });
+      await emit("sandbox_destroy_started", { sandboxName: name });
+      await destroyAttemptSandbox(containers, name);
+      await emit("sandbox_destroy_completed", { sandboxName: name });
+      await emit("wakeup_enqueue_started");
+      await enqueue(wakeup);
+      await emit("wakeup_enqueue_completed");
+      await emit("recovery_completed");
+    } catch (error) {
+      await emit("recovery_failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
   }
 }
+
+const observedDevcontainerPhases = [
+  "devcontainer_config_detection",
+  "devcontainer_runtime_prepare",
+  "devcontainer_state_read",
+  "devcontainer_config_read",
+  "devcontainer_runtime_config_refresh",
+  "devcontainer_stale_container_remove",
+  "devcontainer_image_digest_resolve",
+  "devcontainer_runtime_config_write",
+  "devcontainer_up_diagnostics",
+  "devcontainer_result_parse",
+  "devcontainer_runtime_mount_verify",
+  "devcontainer_ca_verify",
+  "devcontainer_lifecycle",
+  "devcontainer_lifecycle_diagnostics",
+  "devcontainer_state_write",
+  "devcontainer_inner_assignment_write",
+  "devcontainer_inner_result_read",
+  "devcontainer_inner_runtime_cleanup",
+] as const;
 
 const progressPhases = new Set([
   "workspace_started",
   "workspace_ready",
+  "devcontainer_image_pull_started",
+  "devcontainer_image_pull_completed",
+  "devcontainer_image_pull_failed",
+  "devcontainer_up_started",
+  "devcontainer_up_completed",
+  "devcontainer_up_failed",
+  "devcontainer_agent_started",
+  "devcontainer_agent_completed",
+  "devcontainer_agent_failed",
   "agent_started",
+  "agent_tool_started",
+  "agent_tool_completed",
+  "agent_tool_failed",
+  "agent_session_completed",
   "command_started",
   "command_output",
   "command_completed",
@@ -210,6 +346,11 @@ const progressPhases = new Set([
   "checkpoint_completed",
   "callback_started",
   "callback_completed",
+  ...observedDevcontainerPhases.flatMap((phase) => [
+    `${phase}_started`,
+    `${phase}_completed`,
+    `${phase}_failed`,
+  ]),
 ]);
 
 export function validAttemptProgress(
@@ -225,17 +366,45 @@ export function validAttemptProgress(
     "stderrBytes",
     "exitCode",
     "errorType",
+    "detail",
     "changedPathCount",
     "status",
+    "toolCallId",
+    "input",
+    "output",
+    "stage",
   ]);
   if (Object.keys(progress).some((key) => !allowed.has(key))) return false;
   if (typeof progress.phase !== "string" || !progressPhases.has(progress.phase))
     return false;
-  for (const key of ["operation", "errorType"] as const) {
+  const agentPhase =
+    progress.phase.startsWith("agent_tool_") ||
+    progress.phase === "agent_session_completed";
+  if (
+    !agentPhase &&
+    ["toolCallId", "input", "output", "stage"].some(
+      (key) => progress[key] !== undefined,
+    )
+  )
+    return false;
+  for (const key of [
+    "operation",
+    "errorType",
+    "toolCallId",
+    "stage",
+  ] as const) {
     const field = progress[key];
     if (
       field !== undefined &&
       (typeof field !== "string" || field.length > 100)
+    )
+      return false;
+  }
+  for (const key of ["detail", "input", "output"] as const) {
+    const field = progress[key];
+    if (
+      field !== undefined &&
+      (typeof field !== "string" || field.length > 4_000)
     )
       return false;
   }
@@ -349,6 +518,20 @@ async function conflictedIntegrationOutcome(
   return undefined;
 }
 
+export function artifactNeedsSync(
+  artifact: { readonly empty: boolean; readonly head?: string },
+  attempt: Pick<Attempt, "stage">,
+  run: Pick<RunSnapshot, "baseCommit" | "currentHead" | "candidateHead">,
+): boolean {
+  return (
+    artifact.empty ||
+    (attempt.stage === "implement" &&
+      run.currentHead === run.baseCommit &&
+      !run.candidateHead &&
+      artifact.head !== run.currentHead)
+  );
+}
+
 class SandboxDispatcher implements AttemptDispatcher {
   constructor(
     private readonly containers: SandboxNamespace,
@@ -357,6 +540,10 @@ class SandboxDispatcher implements AttemptDispatcher {
     private readonly controlPlaneOrigin: string,
     private readonly runs: D1RunRepository,
     private readonly modelBroker: Fetcher,
+    private readonly attemptExecutions: Workflow<{
+      readonly attemptId: string;
+      readonly sandboxName: string;
+    }>,
   ) {}
 
   private async resolveModelRoute(
@@ -415,7 +602,27 @@ class SandboxDispatcher implements AttemptDispatcher {
       this.callbackSigningSecret,
       attempt.id,
     );
-    if (repository.empty) {
+    const syncArtifact = artifactNeedsSync(repository, attempt, run);
+    if (syncArtifact) {
+      const syncStartedAt = Date.now();
+      const syncDetail = {
+        phase: "artifact_sync_started",
+        artifactHead: repository.head ?? null,
+        sourceHead: run.currentHead,
+        force: !repository.empty,
+      };
+      console.log(
+        JSON.stringify({
+          message: "artifact_sync_started",
+          attemptId: attempt.id,
+          ...syncDetail,
+        }),
+      );
+      await this.runs.recordAttemptEvent(
+        attempt.id,
+        "artifact_sync",
+        syncDetail,
+      );
       const bootstrapToken = await repository.createToken("write", 30 * 60);
       try {
         const status = await sandbox.runAttempt(
@@ -435,17 +642,54 @@ class SandboxDispatcher implements AttemptDispatcher {
               remote: `https://github.com/${run.repository}.git`,
               hostname: "github.com",
               branch: run.githubDefaultBranch ?? "main",
-              head: run.baseCommit,
+              head: run.currentHead,
+              force: !repository.empty,
             },
           },
           attemptSecret,
         );
         if (status !== 204) throw new Error("sandbox_bootstrap_failed");
       } catch (error) {
+        const failure = {
+          phase: "artifact_sync_failed",
+          durationMs: Date.now() - syncStartedAt,
+          errorType:
+            error instanceof Error ? error.constructor.name : typeof error,
+          error: error instanceof Error ? error.message : String(error),
+        };
+        console.error(
+          JSON.stringify({
+            message: "artifact_sync_failed",
+            attemptId: attempt.id,
+            ...failure,
+          }),
+        );
+        await this.runs.recordAttemptEvent(
+          attempt.id,
+          "artifact_sync",
+          failure,
+        );
         await repository.revokeToken(bootstrapToken.id);
         throw error;
       }
       await repository.revokeToken(bootstrapToken.id);
+      const completed = {
+        phase: "artifact_sync_completed",
+        durationMs: Date.now() - syncStartedAt,
+        sourceHead: run.currentHead,
+      };
+      console.log(
+        JSON.stringify({
+          message: "artifact_sync_completed",
+          attemptId: attempt.id,
+          ...completed,
+        }),
+      );
+      await this.runs.recordAttemptEvent(
+        attempt.id,
+        "artifact_sync",
+        completed,
+      );
     }
     const access =
       ["implement", "integrate"].includes(attempt.stage) &&
@@ -627,19 +871,48 @@ class SandboxDispatcher implements AttemptDispatcher {
         : {}),
     };
     try {
-      if (attempt.stage === "implement") {
-        const backup = await workspaceBackup(this.runs.database, run.id);
-        if (backup) await sandbox.restoreWorkspace(backup);
-      }
-      const status = await sandbox.runAttempt(
-        "/assign",
+      const backup =
+        attempt.stage === "implement"
+          ? await workspaceBackup(this.runs.database, run.id)
+          : undefined;
+      await sandbox.prepareAttempt(
         assignment,
         attemptSecret,
         new URL("/attempts/callback", this.controlPlaneOrigin).toString(),
+        backup,
       );
-      if (status !== 202) throw new Error("sandbox_dispatch_failed");
+      const workflowInstanceId = `${attempt.id}-${attempt.deadlineAt}`;
+      const instances = await this.attemptExecutions.createBatch([
+        {
+          id: workflowInstanceId,
+          params: {
+            attemptId: attempt.id,
+            sandboxName: sandboxName(attempt),
+          },
+        },
+      ]);
+      await this.runs.recordAttemptEvent(attempt.id, "attempt_workflow", {
+        phase: "attempt_workflow_created",
+        workflowInstanceId,
+        created: instances.length === 1,
+      });
     } catch (error) {
       await repository.revokeToken(token.id);
+      try {
+        await destroyAttemptSandbox(this.containers, sandboxName(attempt));
+      } catch (cleanupError) {
+        console.error(
+          JSON.stringify({
+            message: "failed_dispatch_sandbox_cleanup_failed",
+            attemptId: attempt.id,
+            sandbox: sandboxName(attempt),
+            error:
+              cleanupError instanceof Error
+                ? cleanupError.message
+                : String(cleanupError),
+          }),
+        );
+      }
       throw error;
     }
   }
@@ -718,15 +991,19 @@ class SandboxCheckpointValidator implements CheckpointValidator {
           access: token.access,
           ref: input.checkpoint.ref,
         },
-        publish: {
-          remote: `https://github.com/${run.repository}.git`,
-          hostname: "github.com",
-          token: await githubClientForRun(
-            this.githubEnv,
-            run,
-          ).installationToken(),
-          ref: `refs/heads/${githubBranch(run.issueNumber)}`,
-        },
+        ...(input.checkpoint.outputHead !== input.checkpoint.inputHead
+          ? {
+              publish: {
+                remote: `https://github.com/${run.repository}.git`,
+                hostname: "github.com",
+                token: await githubClientForRun(
+                  this.githubEnv,
+                  run,
+                ).installationToken(),
+                ref: `refs/heads/${githubBranch(run.issueNumber)}`,
+              },
+            }
+          : {}),
       });
       if (status < 200 || status >= 300)
         throw new Error("checkpoint_git_validation_failed");
@@ -736,6 +1013,18 @@ class SandboxCheckpointValidator implements CheckpointValidator {
         artifact.revokeToken(input.artifactTokenId),
         destroyAttemptSandbox(this.containers, `${attempt.id}-validation`),
       ]);
+    }
+    if (attempt.stage === "implement") {
+      const backup = await attemptSandbox(
+        this.containers,
+        sandboxName(attempt),
+      ).backupWorkspace(attempt.id, attempt.runId);
+      await saveWorkspaceBackup(
+        this.repository.database,
+        attempt.runId,
+        attempt.id,
+        backup,
+      );
     }
   }
 }
@@ -899,6 +1188,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       );
     }
     if (url.pathname === "/attempts/screenshots") {
+      const screenshotStartedAt = Date.now();
       if (request.method !== "POST")
         return json({ error: "method_not_allowed" }, 405, { allow: "POST" });
       const attemptId = request.headers.get("x-roundhouse-attempt-id") ?? "";
@@ -966,31 +1256,205 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
         env.ATTEMPT_SANDBOXES,
         sandboxName(attempt),
       );
-      const previewResponse = await sandbox.fetchPreview(
-        new URL(input.path, "http://localhost").toString(),
-        input.port,
-      );
-      if (previewResponse.status < 200 || previewResponse.status >= 300)
-        return json(
-          { error: "preview_request_failed", status: previewResponse.status },
-          422,
+      const traceScreenshot = async (
+        phase: string,
+        startedAt?: number,
+        detail: Readonly<Record<string, unknown>> = {},
+      ): Promise<void> => {
+        const payload = {
+          phase,
+          ...(startedAt === undefined
+            ? {}
+            : { durationMs: Date.now() - startedAt }),
+          ...detail,
+        };
+        console.log(
+          JSON.stringify({
+            message: "screenshot_trace",
+            attemptId,
+            ...payload,
+          }),
         );
-      const html = new TextDecoder().decode(previewResponse.body);
-      const browser = await launch(env.BROWSER);
+        try {
+          await repository.recordAttemptEvent(
+            attemptId,
+            "screenshot_trace",
+            payload,
+          );
+        } catch (error) {
+          console.error(
+            JSON.stringify({
+              message: "screenshot_trace_record_failed",
+              attemptId,
+              phase,
+              error: error instanceof Error ? error.message : String(error),
+            }),
+          );
+        }
+      };
+      await traceScreenshot("screenshot_request_accepted", undefined, {
+        port: input.port,
+        path: input.path,
+        width: input.width,
+        height: input.height,
+      });
+      let browser: Awaited<ReturnType<typeof launch>>;
+      let stepStartedAt = Date.now();
+      await traceScreenshot("browser_launch_started");
       try {
+        browser = await launch(env.BROWSER);
+        await traceScreenshot("browser_launch_completed", stepStartedAt);
+      } catch (error) {
+        await traceScreenshot("browser_launch_failed", stepStartedAt, {
+          errorType:
+            error instanceof Error ? error.constructor.name : typeof error,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+      try {
+        stepStartedAt = Date.now();
+        await traceScreenshot("browser_page_creation_started");
         const page = await browser.newPage({
           viewport: { width: input.width, height: input.height },
         });
+        await traceScreenshot("browser_page_creation_completed", stepStartedAt);
         type PageRoute = Parameters<Parameters<typeof page.route>[1]>[0];
-        await page.route("**/*", (route: PageRoute) =>
-          route.abort("blockedbyclient"),
+        const previewOrigin = "https://preview.roundhouse.invalid";
+        stepStartedAt = Date.now();
+        await traceScreenshot("browser_route_registration_started");
+        await page.route("**/*", async (route: PageRoute) => {
+          const routeStartedAt = Date.now();
+          const browserRequest = route.request();
+          const requestedUrl = new URL(browserRequest.url());
+          await traceScreenshot("browser_route_request_started", undefined, {
+            method: browserRequest.method(),
+            origin: requestedUrl.origin,
+            path: requestedUrl.pathname,
+          });
+          const previewPath = sandboxPreviewPath(requestedUrl, previewOrigin);
+          if (!previewPath) {
+            await route.abort("blockedbyclient");
+            await traceScreenshot(
+              "browser_route_request_blocked",
+              routeStartedAt,
+              {
+                method: browserRequest.method(),
+                origin: requestedUrl.origin,
+                path: requestedUrl.pathname,
+              },
+            );
+            return;
+          }
+          if (requestedUrl.origin !== previewOrigin) {
+            await traceScreenshot(
+              "browser_route_request_rewritten",
+              routeStartedAt,
+              {
+                method: browserRequest.method(),
+                origin: requestedUrl.origin,
+                path: requestedUrl.pathname,
+                targetPort: input.port,
+              },
+            );
+          }
+          const headers = new Headers(browserRequest.headers());
+          headers.delete("host");
+          headers.delete("content-length");
+          headers.delete("accept-encoding");
+          const postData = browserRequest.postDataBuffer();
+          const previewResponse = await sandbox.fetchPreview(
+            attemptId,
+            new URL(previewPath, "http://localhost").toString(),
+            input.port,
+            {
+              method: browserRequest.method(),
+              headers,
+              ...(postData ? { body: postData } : {}),
+            },
+          );
+          const responseHeaders = Object.fromEntries(
+            previewResponse.headers.filter(
+              ([name]) =>
+                !["content-length", "content-encoding"].includes(
+                  name.toLowerCase(),
+                ),
+            ),
+          );
+          await route.fulfill({
+            status: previewResponse.status,
+            headers: responseHeaders,
+            body: Buffer.from(previewResponse.body),
+          });
+          await traceScreenshot(
+            "browser_route_request_completed",
+            routeStartedAt,
+            {
+              method: browserRequest.method(),
+              path: requestedUrl.pathname,
+              status: previewResponse.status,
+              bodyBytes: previewResponse.body.byteLength,
+            },
+          );
+        });
+        await traceScreenshot(
+          "browser_route_registration_completed",
+          stepStartedAt,
         );
-        await page.setContent(html, { waitUntil: "load" });
+        stepStartedAt = Date.now();
+        await traceScreenshot("browser_navigation_started", undefined, {
+          path: input.path,
+        });
+        const navigation = await page.goto(
+          new URL(input.path, previewOrigin).toString(),
+          { waitUntil: "load" },
+        );
+        await traceScreenshot("browser_navigation_completed", stepStartedAt, {
+          path: input.path,
+          status: navigation?.status() ?? null,
+          ok: navigation?.ok() ?? false,
+        });
+        if (!navigation?.ok()) {
+          await traceScreenshot(
+            "screenshot_request_failed",
+            screenshotStartedAt,
+            {
+              reason: "preview_request_failed",
+              status: navigation?.status() ?? 502,
+            },
+          );
+          return json(
+            {
+              error: "preview_request_failed",
+              status: navigation?.status() ?? 502,
+            },
+            422,
+          );
+        }
+        stepStartedAt = Date.now();
+        await traceScreenshot("browser_screenshot_started");
         const png = await page.screenshot({ type: "png", fullPage: true });
+        await traceScreenshot("browser_screenshot_completed", stepStartedAt, {
+          bodyBytes: png.byteLength,
+        });
         const id = crypto.randomUUID();
         const objectKey = `screenshots/${id}.png`;
+        stepStartedAt = Date.now();
+        await traceScreenshot("screenshot_object_write_started", undefined, {
+          screenshotId: id,
+          objectKey,
+        });
         await env.BACKUP_BUCKET.put(objectKey, png, {
           httpMetadata: { contentType: "image/png" },
+        });
+        await traceScreenshot(
+          "screenshot_object_write_completed",
+          stepStartedAt,
+          { screenshotId: id, objectKey, bodyBytes: png.byteLength },
+        );
+        stepStartedAt = Date.now();
+        await traceScreenshot("screenshot_record_write_started", undefined, {
+          screenshotId: id,
         });
         await env.DB.prepare(
           `INSERT INTO implementation_screenshots
@@ -1011,9 +1475,32 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
             Date.now(),
           )
           .run();
+        await traceScreenshot(
+          "screenshot_record_write_completed",
+          stepStartedAt,
+          { screenshotId: id },
+        );
+        stepStartedAt = Date.now();
+        await traceScreenshot("screenshot_activity_update_started", undefined, {
+          screenshotId: id,
+        });
         await repository.recordActivity(
           attemptId,
           Date.now() + attemptInactivityMilliseconds,
+        );
+        await traceScreenshot(
+          "screenshot_activity_update_completed",
+          stepStartedAt,
+          { screenshotId: id },
+        );
+        await traceScreenshot(
+          "screenshot_request_completed",
+          screenshotStartedAt,
+          {
+            screenshotId: id,
+            width: input.width,
+            height: input.height,
+          },
         );
         return json({
           id,
@@ -1024,8 +1511,30 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
             env.CONTROL_PLANE_ORIGIN,
           ).toString(),
         });
+      } catch (error) {
+        await traceScreenshot(
+          "screenshot_request_failed",
+          screenshotStartedAt,
+          {
+            errorType:
+              error instanceof Error ? error.constructor.name : typeof error,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        );
+        throw error;
       } finally {
-        await browser.close();
+        const closeStartedAt = Date.now();
+        await traceScreenshot("browser_close_started");
+        try {
+          await browser.close();
+          await traceScreenshot("browser_close_completed", closeStartedAt);
+        } catch (error) {
+          await traceScreenshot("browser_close_failed", closeStartedAt, {
+            errorType:
+              error instanceof Error ? error.constructor.name : typeof error,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       }
     }
     if (url.pathname === "/github/webhook" && request.method === "POST") {
@@ -1051,6 +1560,13 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
             env.ATTEMPT_SANDBOXES,
             attempt ? sandboxName(attempt) : closure.attemptId,
             context,
+            closure.attemptId,
+            async (attemptId, phase, detail) => {
+              await repository.recordAttemptEvent(attemptId, "sandbox_trace", {
+                phase,
+                ...detail,
+              });
+            },
           );
         }
       } else
@@ -1089,27 +1605,18 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
             runId: attempt.runId,
             expectedRevision: attempt.runRevision,
           });
-          try {
-            if (attempt.stage === "implement") {
-              const sandbox = attemptSandbox(
-                env.ATTEMPT_SANDBOXES,
-                sandboxName(attempt),
-              );
-              const backup = await sandbox.backupWorkspace(attempt.runId);
-              await saveWorkspaceBackup(
-                env.DB,
-                attempt.runId,
-                attempt.id,
-                backup,
-              );
-            }
-          } finally {
-            scheduleAttemptSandboxDestruction(
-              env.ATTEMPT_SANDBOXES,
-              sandboxName(attempt),
-              context,
-            );
-          }
+          scheduleAttemptSandboxDestruction(
+            env.ATTEMPT_SANDBOXES,
+            sandboxName(attempt),
+            context,
+            attempt.id,
+            async (attemptId, phase, detail) => {
+              await repository.recordAttemptEvent(attemptId, "sandbox_trace", {
+                phase,
+                ...detail,
+              });
+            },
+          );
         }
       }
       return json(
@@ -1128,6 +1635,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       env.CONTROL_PLANE_ORIGIN,
       repository,
       env.MODEL_BROKER,
+      env.ATTEMPT_EXECUTIONS,
     );
     for (const message of batch.messages) {
       try {
@@ -1212,6 +1720,32 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       async (attemptId) => {
         const attempt = await repository.getAttempt(attemptId);
         return attempt ? sandboxName(attempt) : attemptId;
+      },
+      async (attemptId, phase, detail) => {
+        const payload = { phase, ...detail };
+        console.log(
+          JSON.stringify({
+            message: "attempt_recovery_trace",
+            attemptId,
+            ...payload,
+          }),
+        );
+        try {
+          await repository.recordAttemptEvent(
+            attemptId,
+            "attempt_recovery_trace",
+            payload,
+          );
+        } catch (error) {
+          console.error(
+            JSON.stringify({
+              message: "attempt_recovery_trace_persist_failed",
+              attemptId,
+              phase,
+              error: error instanceof Error ? error.message : String(error),
+            }),
+          );
+        }
       },
     );
   },

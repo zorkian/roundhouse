@@ -38,10 +38,17 @@ export class MemoryRunRepository implements RunRepository {
     expectedRevision: number,
     issue: IssueSnapshot,
     profile?: AppliedProfile,
+    continuationHead?: string,
   ): Promise<RunSnapshot | undefined> {
     const run = this.runs.get(runId);
     if (!run || run.revision !== expectedRevision) return undefined;
-    const next = resumeRun(run, expectedRevision, issue, profile);
+    const next = resumeRun(
+      run,
+      expectedRevision,
+      issue,
+      profile,
+      continuationHead,
+    );
     this.runs.set(runId, next);
     this.leases.delete(runId);
     return next;

@@ -1,7 +1,12 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import { Sandbox, type DirectoryBackup } from "@cloudflare/sandbox";
+import {
+  Sandbox,
+  type DirectoryBackup,
+  type ExecOptions,
+  type Process,
+} from "@cloudflare/sandbox";
 import {
   isModelRoute,
   modelStopReasonHeader,
@@ -12,6 +17,10 @@ import {
 } from "@roundhouse/core";
 import { observeResponse } from "@roundhouse/response-observer";
 import { verifyCallback } from "./callback.js";
+import type { SandboxComponentHost } from "./attempt-sandbox-components.js";
+import { NestedContainerRuntime } from "./nested-container-runtime.js";
+import { PreviewTransport } from "./preview-transport.js";
+import { WorkspaceLifecycle } from "./workspace-lifecycle.js";
 import { attemptInactivityMilliseconds } from "./coordinator.js";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
 
@@ -43,9 +52,26 @@ type AttemptContainerEnv = Cloudflare.Env & {
   readonly CALLBACK_SIGNING_SECRET: string;
 };
 
+interface PreparedAttempt {
+  readonly attempt: AttemptAssignment;
+  readonly attemptSecret: string;
+  readonly callbackUrl: string;
+  readonly backup?: DirectoryBackup;
+}
+
 const modelHost = "model.roundhouse.internal";
 const packageRegistryHost = "registry.npmjs.org";
-const containerCa = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
+const containerRegistryHosts = [
+  "ghcr.io",
+  "pkg-containers.githubusercontent.com",
+] as const;
+// getSandbox(..., { enableDefaultSession: false }) applies this token to exec
+// calls on the client stub. Calls made inside a Sandbox subclass do not pass
+// through that enhancer, so use the same SDK command contract here. The SDK's
+// background-process API remains on its normal process channel; only concurrent
+// readiness and diagnostic commands need to be sessionless.
+const sessionlessExecutionToken = "__DISABLE_SESSION__";
+
 async function recordModelEvent(
   repository: D1RunRepository,
   attemptId: string,
@@ -101,13 +127,19 @@ export async function pauseForModelBudget(
 export function attemptAllowedHosts(
   attempt: Pick<
     AttemptAssignment,
-    "artifact" | "publish" | "source" | "upstream"
+    "artifact" | "publish" | "source" | "stage" | "upstream"
   >,
   callbackUrl?: string | null,
 ): string[] {
+  // Implementation runs use the repository's own development environment.
+  // Its image build and lifecycle commands may install dependencies from
+  // arbitrary project-selected package repositories. The sandbox VM remains
+  // the isolation boundary, while credentials stay behind outbound handlers.
+  if (attempt.stage === "implement") return ["*"];
   return [
     modelHost,
     packageRegistryHost,
+    ...containerRegistryHosts,
     attempt.artifact.hostname,
     attempt.publish?.hostname ?? "",
     attempt.source?.hostname ?? "",
@@ -434,30 +466,213 @@ export function extractModelUsage(
 
 export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
   // Sandbox.defaultPort is its reserved control API; the runner is separate.
-  private readonly agentRunnerPort = 8080;
+  private readonly agentRunnerPort = 8090;
+  private readonly durableState: DurableObjectState<{}>;
+  private readonly runtimeEnv: AttemptContainerEnv;
   override enableInternet = false;
   override interceptHttps = true;
 
-  async restoreWorkspace(backup: DirectoryBackup): Promise<void> {
-    const prepared = await this.exec("mkdir -p /workspace/roundhouse", {
-      origin: "internal",
-    });
-    if (!prepared.success) throw new Error("workspace_root_creation_failed");
-    await this.restoreBackup(backup);
+  constructor(ctx: DurableObjectState<{}>, env: Cloudflare.Env) {
+    super(ctx, env);
+    this.durableState = ctx;
+    this.runtimeEnv = env as AttemptContainerEnv;
   }
 
-  async backupWorkspace(runId: string): Promise<DirectoryBackup> {
-    await this.killAllProcesses();
-    return this.createBackup({
-      dir: `/workspace/roundhouse/${runId}`,
-      name: `roundhouse-${runId}`,
-      gitignore: false,
-      localBucket: true,
-      ttl: 30 * 24 * 60 * 60,
-    });
+  private execSessionless(command: string, options?: ExecOptions) {
+    return this.execWithSessionToken(
+      command,
+      sessionlessExecutionToken,
+      options,
+    );
+  }
+
+  private getProcessSessionless(processId: string) {
+    return this.getProcess(processId, sessionlessExecutionToken);
+  }
+
+  private componentHost(): SandboxComponentHost {
+    return {
+      trace: (attemptId, phase, startedAt, detail) =>
+        this.traceSetup(attemptId, phase, startedAt, detail),
+      exec: (command, options) => this.execSessionless(command, options),
+      getProcess: (processId) => this.getProcessSessionless(processId),
+      startProcess: (command, options) => this.startProcess(command, options),
+      getProcessLogs: (processId) => this.getProcessLogs(processId),
+      exists: (path) => this.exists(path, sessionlessExecutionToken),
+      killAllProcesses: () => this.killAllProcesses(),
+      createBackup: (options) => this.createBackup(options),
+      restoreBackup: (backup) => this.restoreBackup(backup),
+      containerFetch: (url, init, port) => this.containerFetch(url, init, port),
+      awaitWithHeartbeat: (attemptId, phase, operation) =>
+        this.awaitWithHeartbeat(attemptId, phase, operation),
+    };
+  }
+
+  private async traceSetup(
+    attemptId: string | undefined,
+    phase: string,
+    startedAt?: number,
+    detail: Readonly<Record<string, unknown>> = {},
+  ): Promise<void> {
+    const payload = {
+      phase,
+      ...(startedAt === undefined
+        ? {}
+        : { durationMs: Date.now() - startedAt }),
+      ...detail,
+    };
+    console.log(
+      JSON.stringify({
+        message: "sandbox_trace",
+        ...(attemptId ? { attemptId } : {}),
+        ...payload,
+      }),
+    );
+    if (!attemptId) return;
+    try {
+      await new D1RunRepository(this.runtimeEnv.DB).recordAttemptEvent(
+        attemptId,
+        "sandbox_trace",
+        payload,
+      );
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          message: "sandbox_trace_record_failed",
+          attemptId,
+          phase,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
+  }
+
+  private async awaitWithHeartbeat<T>(
+    attemptId: string,
+    phase: string,
+    operation: Promise<T>,
+  ): Promise<T> {
+    const startedAt = Date.now();
+    const completed = operation.then((value) => ({
+      completed: true as const,
+      value,
+    }));
+    for (;;) {
+      const result = await Promise.race([
+        completed,
+        new Promise<{ completed: false }>((resolve) =>
+          setTimeout(() => resolve({ completed: false }), 15_000),
+        ),
+      ]);
+      if (result.completed) return result.value;
+      await this.traceSetup(attemptId, `${phase}_heartbeat`, startedAt, {
+        elapsedMs: Date.now() - startedAt,
+      });
+    }
+  }
+
+  async restoreWorkspace(
+    attemptId: string,
+    backup: DirectoryBackup,
+  ): Promise<void> {
+    const host = this.componentHost();
+    await new WorkspaceLifecycle(host, (runtimeAttemptId) =>
+      new NestedContainerRuntime(host).ensure(runtimeAttemptId),
+    ).restore(attemptId, backup);
+  }
+
+  async prepareAttempt(
+    attempt: AttemptAssignment,
+    attemptSecret: string,
+    callbackUrl: string,
+    backup?: DirectoryBackup,
+  ): Promise<void> {
+    const startedAt = Date.now();
+    await this.traceSetup(
+      attempt.id,
+      "attempt_workflow_preparation_started",
+      undefined,
+      {
+        stage: attempt.stage,
+        backupId: backup?.id ?? null,
+      },
+    );
+    await this.durableState.storage.put(`prepared:${attempt.id}`, {
+      attempt,
+      attemptSecret,
+      callbackUrl,
+      backup,
+    } satisfies PreparedAttempt);
+    await this.traceSetup(
+      attempt.id,
+      "attempt_workflow_preparation_completed",
+      startedAt,
+      {
+        stage: attempt.stage,
+        backupId: backup?.id ?? null,
+      },
+    );
+  }
+
+  async executePreparedAttempt(attemptId: string): Promise<number> {
+    const prepared = await this.durableState.storage.get<PreparedAttempt>(
+      `prepared:${attemptId}`,
+    );
+    if (!prepared) throw new Error("prepared_attempt_missing");
+    const startedAt = Date.now();
+    await this.traceSetup(
+      attemptId,
+      "attempt_workflow_execution_started",
+      undefined,
+      {
+        stage: prepared.attempt.stage,
+        backupId: prepared.backup?.id ?? null,
+      },
+    );
+    try {
+      if (prepared.backup)
+        await this.restoreWorkspace(attemptId, prepared.backup);
+      const status = await this.runAttempt(
+        "/assign",
+        prepared.attempt,
+        prepared.attemptSecret,
+        prepared.callbackUrl,
+      );
+      if (status !== 202) throw new Error(`sandbox_dispatch_http_${status}`);
+      await this.durableState.storage.delete(`prepared:${attemptId}`);
+      await this.traceSetup(
+        attemptId,
+        "attempt_workflow_execution_completed",
+        startedAt,
+        { status },
+      );
+      return status;
+    } catch (error) {
+      await this.traceSetup(
+        attemptId,
+        "attempt_workflow_execution_failed",
+        startedAt,
+        {
+          errorType:
+            error instanceof Error ? error.constructor.name : typeof error,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
+      throw error;
+    }
+  }
+
+  async backupWorkspace(
+    attemptId: string,
+    runId: string,
+  ): Promise<DirectoryBackup> {
+    return new WorkspaceLifecycle(this.componentHost(), (runtimeAttemptId) =>
+      this.ensureDocker(runtimeAttemptId),
+    ).backup(attemptId, runId);
   }
 
   async fetchPreview(
+    attemptId: string,
     url: string,
     port: number,
     init: RequestInit = {},
@@ -466,14 +681,12 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
     headers: [string, string][];
     body: ArrayBuffer;
   }> {
-    const response = await this.containerFetch(url, init, port);
-    const headers: [string, string][] = [];
-    response.headers.forEach((value, name) => headers.push([name, value]));
-    return {
-      status: response.status,
-      headers,
-      body: await response.arrayBuffer(),
-    };
+    return new PreviewTransport(this.componentHost()).fetch(
+      attemptId,
+      url,
+      port,
+      init,
+    );
   }
 
   async runAttempt(
@@ -486,90 +699,342 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
 
     // Agent work continues asynchronously after /assign returns. Completion,
     // cancellation, and expired-lease recovery explicitly destroy the sandbox.
-    await this.setKeepAlive(true);
-    await this.setAllowedHosts(attemptAllowedHosts(attempt, callbackUrl));
-    let runner = await this.getProcess("roundhouse-runner");
-    if (!runner) {
-      runner = await this.startProcess(
-        "node /opt/roundhouse/containers/agent-runner/runner.mjs",
-        {
-          processId: "roundhouse-runner",
-          env: {
-            ROUNDHOUSE_ATTEMPT_ID: attempt.id,
-            ROUNDHOUSE_ATTEMPT_CAPABILITY: attemptSecret,
-            ROUNDHOUSE_TASK_TYPE:
-              attempt.stage === "plan"
-                ? "planning"
-                : attempt.stage === "implement"
-                  ? "implementation"
-                  : attempt.stage === "review"
-                    ? "review"
-                    : "validation",
-            ROUNDHOUSE_COMPLEXITY: "unknown",
-            ROUNDHOUSE_DUMMY_TOKEN: "service-binding-auth-only",
-            ROUNDHOUSE_WORKSPACE_ROOT: "/workspace/roundhouse",
-            GIT_SSL_CAINFO: containerCa,
-            NODE_EXTRA_CA_CERTS: containerCa,
+    const setupStartedAt = Date.now();
+    await this.traceSetup(attempt.id, "run_attempt_started", undefined, {
+      path,
+      stage: attempt.stage,
+    });
+    try {
+      let stepStartedAt = Date.now();
+      await this.traceSetup(attempt.id, "keepalive_started");
+      await this.setKeepAlive(true);
+      await this.traceSetup(attempt.id, "keepalive_completed", stepStartedAt);
+
+      const allowedHosts = attemptAllowedHosts(attempt, callbackUrl);
+      stepStartedAt = Date.now();
+      await this.traceSetup(attempt.id, "network_policy_started", undefined, {
+        allowedHostCount: allowedHosts.length,
+      });
+      await this.setAllowedHosts(allowedHosts);
+      await this.traceSetup(
+        attempt.id,
+        "network_policy_completed",
+        stepStartedAt,
+        { allowedHostCount: allowedHosts.length },
+      );
+
+      let runner: Process | null = null;
+      if (attempt.stage === "implement") {
+        stepStartedAt = Date.now();
+        await this.traceSetup(attempt.id, "docker_setup_started");
+        runner = await this.ensureDocker(attempt.id);
+        await this.traceSetup(
+          attempt.id,
+          "docker_setup_completed",
+          stepStartedAt,
+          { runtimeProcessId: runner.id },
+        );
+      }
+
+      stepStartedAt = Date.now();
+      await this.traceSetup(attempt.id, "runner_lookup_started");
+      runner ??= await this.getProcessSessionless("roundhouse-runner");
+      await this.traceSetup(
+        attempt.id,
+        "runner_lookup_completed",
+        stepStartedAt,
+        { found: Boolean(runner) },
+      );
+      if (!runner) {
+        stepStartedAt = Date.now();
+        await this.traceSetup(attempt.id, "runner_start_started");
+        runner = await this.startProcess(
+          "/home/rootless/boot-agent-runner.sh",
+          {
+            processId: "roundhouse-runner",
           },
+        );
+        const runnerStatus = await runner.getStatus();
+        await this.traceSetup(
+          attempt.id,
+          "runner_start_completed",
+          stepStartedAt,
+          {
+            processId: runner.id,
+            pid: runner.pid,
+            status: runnerStatus,
+          },
+        );
+      }
+      stepStartedAt = Date.now();
+      await this.traceSetup(attempt.id, "runner_health_wait_started");
+      try {
+        await runner.waitForPort(this.agentRunnerPort, {
+          path: "/health",
+          timeout: 30_000,
+        });
+      } catch (error) {
+        let processStatus: string | undefined;
+        let stdout = "";
+        let stderr = "";
+        try {
+          processStatus = await runner.getStatus();
+          const logs = await this.getProcessLogs(runner.id);
+          stdout = logs.stdout;
+          stderr = logs.stderr;
+          const persisted = await this.execSessionless(
+            "tail -c 4000 /workspace/roundhouse/agent-runner.log",
+            { origin: "internal", timeout: 5_000 },
+          );
+          if (persisted.success) stderr += `\n${persisted.stdout}`;
+          else stderr += `\n${persisted.stderr}`;
+        } catch (diagnosticError) {
+          stderr = `runner_diagnostic_failed: ${
+            diagnosticError instanceof Error
+              ? diagnosticError.message
+              : String(diagnosticError)
+          }`;
+        }
+        await this.traceSetup(
+          attempt.id,
+          "runner_health_wait_failed",
+          stepStartedAt,
+          {
+            processId: runner.id,
+            processStatus: processStatus ?? null,
+            stdout: stdout.slice(-4_000),
+            stderr: stderr.slice(-4_000),
+            errorType:
+              error instanceof Error ? error.constructor.name : typeof error,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        );
+        throw error;
+      }
+      await this.traceSetup(
+        attempt.id,
+        "runner_health_wait_completed",
+        stepStartedAt,
+      );
+
+      stepStartedAt = Date.now();
+      await this.traceSetup(
+        attempt.id,
+        "runner_assignment_started",
+        undefined,
+        {
+          path,
         },
       );
-    }
-    await runner.waitForPort(this.agentRunnerPort, {
-      path: "/health",
-      timeout: 30_000,
-    });
-    const response = await observeResponse(
-      await this.containerFetch(
-        `http://runner${path}`,
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-roundhouse-attempt-secret": attemptSecret,
-            ...(callbackUrl
-              ? { "x-roundhouse-callback-url": callbackUrl }
-              : {}),
+      const response = await observeResponse(
+        await this.containerFetch(
+          `http://runner${path}`,
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-roundhouse-attempt-secret": attemptSecret,
+              ...(callbackUrl
+                ? { "x-roundhouse-callback-url": callbackUrl }
+                : {}),
+            },
+            body: JSON.stringify(attempt),
           },
-          body: JSON.stringify(attempt),
+          this.agentRunnerPort,
+        ),
+        {
+          api: "agent_runner",
+          operation: path,
+          attemptId: attempt.id,
         },
-        this.agentRunnerPort,
-      ),
-      {
-        api: "agent_runner",
-        operation: path,
-        attemptId: attempt.id,
-      },
-    );
-    return response.status;
+      );
+      await this.traceSetup(
+        attempt.id,
+        "runner_assignment_completed",
+        stepStartedAt,
+        { path, status: response.status },
+      );
+      await this.traceSetup(
+        attempt.id,
+        "run_attempt_completed",
+        setupStartedAt,
+        { status: response.status },
+      );
+      return response.status;
+    } catch (error) {
+      await this.traceSetup(attempt.id, "run_attempt_failed", setupStartedAt, {
+        errorType:
+          error instanceof Error ? error.constructor.name : typeof error,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  private ensureDocker(attemptId?: string): Promise<Process> {
+    return new NestedContainerRuntime(this.componentHost()).ensure(attemptId);
   }
 
   async validateCheckpoint(attempt: AttemptAssignment): Promise<number> {
-    await this.setAllowedHosts(attemptAllowedHosts(attempt));
-    const runner = await this.startProcess(
-      "node /opt/roundhouse/containers/agent-runner/runner.mjs",
-      {
-        processId: `validator-${attempt.id}`,
-        env: {
-          ROUNDHOUSE_WORKSPACE_ROOT: "/workspace/roundhouse",
-          GIT_SSL_CAINFO: containerCa,
-          NODE_EXTRA_CA_CERTS: containerCa,
+    const startedAt = Date.now();
+    await this.traceSetup(attempt.id, "checkpoint_validation_started");
+    try {
+      let stepStartedAt = Date.now();
+      const allowedHosts = attemptAllowedHosts(attempt);
+      await this.traceSetup(
+        attempt.id,
+        "checkpoint_validation_network_policy_started",
+        undefined,
+        { allowedHostCount: allowedHosts.length },
+      );
+      await this.setAllowedHosts(allowedHosts);
+      await this.traceSetup(
+        attempt.id,
+        "checkpoint_validation_network_policy_completed",
+        stepStartedAt,
+        { allowedHostCount: allowedHosts.length },
+      );
+      stepStartedAt = Date.now();
+      await this.traceSetup(
+        attempt.id,
+        "checkpoint_runtime_owner_lookup_started",
+        undefined,
+        { needsDocker: attempt.stage === "implement" },
+      );
+      let runner =
+        attempt.stage === "implement"
+          ? await this.ensureDocker(attempt.id)
+          : await this.getProcessSessionless("roundhouse-runner");
+      if (!runner) {
+        await this.traceSetup(attempt.id, "checkpoint_runner_start_started");
+        const runnerStartedAt = Date.now();
+        runner = await this.startProcess(
+          "/home/rootless/boot-agent-runner.sh",
+          { processId: "roundhouse-runner" },
+        );
+        await this.traceSetup(
+          attempt.id,
+          "checkpoint_runner_start_completed",
+          runnerStartedAt,
+          {
+            processId: runner.id,
+            pid: runner.pid,
+            status: await runner.getStatus(),
+          },
+        );
+      }
+      await this.traceSetup(
+        attempt.id,
+        "checkpoint_runtime_owner_lookup_completed",
+        stepStartedAt,
+        {
+          needsDocker: attempt.stage === "implement",
+          processId: runner.id,
+          pid: runner.pid,
+          status: await runner.getStatus(),
         },
-      },
-    );
-    await runner.waitForPort(this.agentRunnerPort, {
-      path: "/health",
-      timeout: 30_000,
-    });
-    const response = await this.containerFetch(
-      "http://runner/validate",
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(attempt),
-      },
-      this.agentRunnerPort,
-    );
-    return response.status;
+      );
+      stepStartedAt = Date.now();
+      await this.traceSetup(
+        attempt.id,
+        "checkpoint_validator_health_wait_started",
+      );
+      try {
+        await runner.waitForPort(this.agentRunnerPort, {
+          path: "/health",
+          timeout: 30_000,
+        });
+      } catch (error) {
+        const logs = await this.getProcessLogs(runner.id).catch(() => ({
+          stdout: "",
+          stderr: "checkpoint_validator_logs_unavailable",
+          processId: runner.id,
+        }));
+        const persisted = await this.execSessionless(
+          "tail -c 4000 /workspace/roundhouse/agent-runner.log",
+          { origin: "internal", timeout: 5_000 },
+        ).catch(() => undefined);
+        await this.traceSetup(
+          attempt.id,
+          "checkpoint_validator_health_wait_failed",
+          stepStartedAt,
+          {
+            processId: runner.id,
+            processStatus: await runner.getStatus().catch(() => null),
+            stdout: logs.stdout.slice(-4_000),
+            stderr: `${logs.stderr}\n${
+              persisted
+                ? persisted.success
+                  ? persisted.stdout
+                  : persisted.stderr
+                : ""
+            }`.slice(-4_000),
+            errorType:
+              error instanceof Error ? error.constructor.name : typeof error,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        );
+        throw error;
+      }
+      await this.traceSetup(
+        attempt.id,
+        "checkpoint_validator_health_wait_completed",
+        stepStartedAt,
+      );
+      stepStartedAt = Date.now();
+      await this.traceSetup(
+        attempt.id,
+        "checkpoint_validation_request_started",
+      );
+      const response = await observeResponse(
+        await this.containerFetch(
+          "http://runner/validate",
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(attempt),
+          },
+          this.agentRunnerPort,
+        ),
+        {
+          api: "agent_runner",
+          operation: "/validate",
+          attemptId: attempt.id,
+        },
+      );
+      const responseBody = await response.clone().text();
+      await this.traceSetup(
+        attempt.id,
+        "checkpoint_validation_request_completed",
+        stepStartedAt,
+        {
+          status: response.status,
+          responseBody: responseBody.slice(0, 4_000),
+        },
+      );
+      await this.traceSetup(
+        attempt.id,
+        "checkpoint_validation_completed",
+        startedAt,
+        {
+          status: response.status,
+          responseBody: responseBody.slice(0, 4_000),
+        },
+      );
+      return response.status;
+    } catch (error) {
+      await this.traceSetup(
+        attempt.id,
+        "checkpoint_validation_failed",
+        startedAt,
+        {
+          errorType:
+            error instanceof Error ? error.constructor.name : typeof error,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
+      throw error;
+    }
   }
 }
 

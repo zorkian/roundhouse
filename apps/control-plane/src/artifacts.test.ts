@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   artifactIdentity,
   artifactAdvertisementHasMain,
+  artifactAdvertisementMainHead,
   CloudflareArtifactsNamespace,
   validateCheckpointIdentity,
   validateReadOnlyCheckpoint,
@@ -219,6 +220,7 @@ describe("Artifacts workspace contract", () => {
       }).get("run_1");
 
       expect(workspace?.empty).toBe(empty);
+      expect(workspace?.head).toBe(empty ? undefined : "a".repeat(40));
       expect(fetch).toHaveBeenCalledWith(
         "https://account.artifacts.cloudflare.net/git/development/run_1.git/info/refs?service=git-upload-pack",
         { headers: { authorization: "Bearer secret" } },
@@ -235,6 +237,9 @@ describe("Artifacts workspace contract", () => {
     expect(
       artifactAdvertisementHasMain(`${"a".repeat(40)} refs/heads/main\n`),
     ).toBe(true);
+    expect(
+      artifactAdvertisementMainHead(`${"b".repeat(40)} refs/heads/main\n0000`),
+    ).toBe("b".repeat(40));
   });
 
   it("derives one stable repository identity from its configured namespace", () => {

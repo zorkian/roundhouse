@@ -200,23 +200,51 @@ export function resumeRun(
   expectedRevision: number,
   issue: IssueSnapshot,
   profile?: AppliedProfile,
+  continuationHead?: string,
 ): RunSnapshot {
   if (run.revision !== expectedRevision) throw new Error("stale_run_revision");
+  const completedWork =
+    run.status === "succeeded" &&
+    (run.stage === "merge" || run.stage === "implement");
   const resumable =
     run.status === "waiting" ||
     run.status === "cancelled" ||
-    (run.status === "succeeded" && run.stage === "qualify");
+    (run.status === "succeeded" &&
+      (run.stage === "qualify" ||
+        run.stage === "merge" ||
+        run.stage === "implement"));
   if (!resumable) throw new Error("run_not_resumable");
+  if (completedWork && !continuationHead)
+    throw new Error("resume_head_required");
   if (
     (!run.profile && !profile) ||
     (run.waitingReason === "profile_error" && !profile)
   )
     throw new Error("resume_profile_required");
-  const { waitingReason: _waitingReason, ...current } = run;
+  const {
+    waitingReason: _waitingReason,
+    candidateHead,
+    reviewedHead,
+    targetBaseHead,
+    integrationHead,
+    ...withoutContinuationHeads
+  } = run;
+  const current = completedWork
+    ? withoutContinuationHeads
+    : {
+        ...withoutContinuationHeads,
+        ...(candidateHead ? { candidateHead } : {}),
+        ...(reviewedHead ? { reviewedHead } : {}),
+        ...(targetBaseHead ? { targetBaseHead } : {}),
+        ...(integrationHead ? { integrationHead } : {}),
+      };
   const resumed: RunSnapshot = {
     ...current,
+    ...(completedWork && continuationHead
+      ? { baseCommit: continuationHead, currentHead: continuationHead }
+      : {}),
     status: "active",
-    stage: run.stage,
+    stage: completedWork ? "implement" : run.stage,
     revision: run.revision + 1,
     issue,
   };

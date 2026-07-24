@@ -12,12 +12,17 @@ import {
   agentRuntime,
   artifactWriteTokenRequest,
   bootstrapWorkspace,
+  commandProgress,
   completionRequest,
   checkpointWorkspace,
+  devContainerConfigIdentity,
   implementationPrompt,
+  implementationResultSchema,
   implementationSchema,
   investigationPrompt,
   mechanicalIntegration,
+  normalizedDevContainerConfig,
+  observableAgentEvent,
   planningPrompt,
   planSchema,
   piModelConfiguration,
@@ -29,6 +34,7 @@ import {
   runnerIdentity,
   runnerResponse,
   sourceSnapshot,
+  visualEvidenceRequested,
   validateCheckpoint,
   validModelRoute,
 } from "./runner.mjs";
@@ -42,6 +48,136 @@ afterEach(async () => {
 describe("V2 agent runner", () => {
   it("uses Pi inside the Cloudflare Sandbox boundary", () => {
     expect(agentRuntime).toBe("pi");
+  });
+
+  it("adapts command progress objects to lifecycle progress callbacks", async () => {
+    const progress = vi.fn();
+    await commandProgress(progress)({
+      phase: "command_output",
+      operation: "docker pull",
+      durationMs: 15_000,
+      stdoutBytes: 0,
+      stderrBytes: 61,
+    });
+    expect(progress).toHaveBeenCalledWith("command_output", {
+      operation: "docker pull",
+      durationMs: 15_000,
+      stdoutBytes: 0,
+      stderrBytes: 61,
+    });
+  });
+
+  it("makes agent tool boundaries observable with inputs and outputs", () => {
+    vi.spyOn(Date, "now").mockReturnValue(17_000);
+    expect(
+      observableAgentEvent(
+        {
+          type: "tool_execution_start",
+          toolCallId: "tool_1",
+          toolName: "bash",
+          args: { command: "pnpm test" },
+        },
+        "implementation",
+        2_000,
+      ),
+    ).toEqual({
+      phase: "agent_tool_started",
+      operation: "bash",
+      toolCallId: "tool_1",
+      input: '{"command":"pnpm test"}',
+      stage: "implementation",
+      durationMs: 15_000,
+    });
+    expect(
+      observableAgentEvent(
+        {
+          type: "tool_execution_end",
+          toolCallId: "tool_1",
+          toolName: "bash",
+          result: { content: [{ type: "text", text: "passed" }] },
+          isError: false,
+        },
+        "implementation",
+        2_000,
+      ),
+    ).toMatchObject({
+      phase: "agent_tool_completed",
+      operation: "bash",
+      toolCallId: "tool_1",
+      output: '{"content":[{"type":"text","text":"passed"}]}',
+      stage: "implementation",
+      durationMs: 15_000,
+    });
+  });
+
+  it("normalizes repository Dev Containers for rootless Docker", () => {
+    expect(
+      normalizedDevContainerConfig(
+        {
+          name: "Repository environment",
+          image: "example.invalid/repository:latest",
+          runArgs: [
+            "--security-opt",
+            "label=disable",
+            "-p",
+            "127.0.0.1:0:8080",
+          ],
+          mounts: [
+            "type=volume,source=database,target=/var/lib/database",
+            "type=bind,source=/host,target=/host",
+          ],
+        },
+        "example.invalid/repository@sha256:abc",
+      ),
+    ).toMatchObject({
+      image: "example.invalid/repository@sha256:abc",
+      privileged: false,
+      containerEnv: {
+        SSL_CERT_FILE: "/etc/cloudflare/certs/cloudflare-containers-ca.crt",
+        GIT_SSL_CAINFO: "/etc/cloudflare/certs/cloudflare-containers-ca.crt",
+        NODE_EXTRA_CA_CERTS:
+          "/etc/cloudflare/certs/cloudflare-containers-ca.crt",
+        CURL_CA_BUNDLE: "/etc/cloudflare/certs/cloudflare-containers-ca.crt",
+        REQUESTS_CA_BUNDLE:
+          "/etc/cloudflare/certs/cloudflare-containers-ca.crt",
+      },
+      runArgs: ["--security-opt", "label=disable", "--network=host"],
+      mounts: [
+        "type=volume,source=database,target=/var/lib/database",
+        "type=tmpfs,target=/run",
+        "type=bind,source=/opt/inner-roundhouse,target=/opt/roundhouse,readonly",
+        "type=bind,source=/opt/inner-node24,target=/opt/node24,readonly",
+        "type=bind,source=/etc/cloudflare/certs,target=/etc/cloudflare/certs,readonly",
+      ],
+    });
+  });
+
+  it("rejects privileged repository Dev Containers", () => {
+    expect(() =>
+      normalizedDevContainerConfig(
+        { image: "example.invalid/repository:latest", privileged: true },
+        "example.invalid/repository@sha256:abc",
+      ),
+    ).toThrow("devcontainer_privileged");
+  });
+
+  it("identifies semantic Dev Container configuration changes", () => {
+    const original = {
+      image: "example.invalid/repository:latest",
+      postCreateCommand: "pnpm install",
+    };
+    expect(
+      devContainerConfigIdentity({
+        postCreateCommand: "pnpm install",
+        image: "example.invalid/repository:latest",
+      }),
+    ).toBe(devContainerConfigIdentity(original));
+    expect(
+      devContainerConfigIdentity({
+        ...original,
+        postCreateCommand: "pnpm install && pnpm build",
+      }),
+    ).not.toBe(devContainerConfigIdentity(original));
   });
 
   it("submits promptly after completing and validating a stage", () => {
@@ -245,6 +381,32 @@ describe("V2 agent runner", () => {
     expect(prompt).toContain("install repository-declared dependencies");
     expect(prompt).toContain("server bound to 0.0.0.0");
     expect(prompt).toContain('"conclusion":"failure"');
+  });
+
+  it("requires requested screenshot evidence before implementation can submit", () => {
+    const assignment = {
+      issue: {
+        title: "Allow a blank heading",
+        body: "",
+        clarifications: [
+          {
+            body: "Please start the application and capture a screenshot on an iPhone viewport.",
+          },
+        ],
+      },
+    };
+    expect(visualEvidenceRequested(assignment)).toBe(true);
+    expect(
+      implementationResultSchema(assignment).properties.screenshots,
+    ).toMatchObject({ minItems: 1 });
+    expect(implementationPrompt(assignment)).toContain(
+      "screenshot is a completion requirement",
+    );
+    expect(
+      implementationResultSchema({
+        issue: { title: "Fix the parser", body: "" },
+      }),
+    ).toBe(implementationSchema);
   });
 
   it("labels retrieved CI failure diagnostics as untrusted evidence", () => {
@@ -457,6 +619,18 @@ describe("V2 agent runner", () => {
         source: { ...bootstrap.source, hostname: "elsewhere.invalid" },
       }),
     ).toMatchObject({ status: 400 });
+    expect(
+      runnerResponse("POST", "/bootstrap", {
+        ...bootstrap,
+        source: { ...bootstrap.source, force: "yes" },
+      }),
+    ).toMatchObject({ status: 400 });
+    expect(
+      runnerResponse("POST", "/bootstrap", {
+        ...bootstrap,
+        source: { ...bootstrap.source, force: true },
+      }),
+    ).toMatchObject({ status: 202 });
   });
 
   it("shallow-clones the exact source head into an empty artifact", async () => {
