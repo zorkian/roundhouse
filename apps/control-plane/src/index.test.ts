@@ -672,9 +672,58 @@ describe("V2 control plane", () => {
           scheduled.push(promise);
         },
       },
+      "attempt_1",
+      async (attemptId, phase, detail) => {
+        events.push(
+          `trace:${attemptId}:${phase}:${String(detail.sandboxName)}`,
+        );
+      },
     );
     expect(scheduled).toHaveLength(1);
     await Promise.all(scheduled);
-    expect(events).toEqual(["destroy:id:run_1_rev_4"]);
+    expect(events).toEqual([
+      "trace:attempt_1:sandbox_destroy_started:run_1_rev_4",
+      "destroy:id:run_1_rev_4",
+      "trace:attempt_1:sandbox_destroy_completed:run_1_rev_4",
+    ]);
+  });
+
+  it("records failed normal sandbox destruction before surfacing it", async () => {
+    const phases: string[] = [];
+    const scheduled: Promise<unknown>[] = [];
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    scheduleAttemptSandboxDestruction(
+      {
+        idFromName: (name: string) => name,
+        get: () => ({
+          destroy: async () => {
+            throw new Error("container unavailable");
+          },
+          fetch: async () => new Response(),
+        }),
+      },
+      "run_1",
+      {
+        waitUntil: (promise) => {
+          scheduled.push(promise);
+        },
+      },
+      "attempt_1",
+      async (_attemptId, phase) => {
+        phases.push(phase);
+      },
+    );
+
+    await expect(Promise.all(scheduled)).rejects.toThrow(
+      "container unavailable",
+    );
+    expect(phases).toEqual([
+      "sandbox_destroy_started",
+      "sandbox_destroy_failed",
+    ]);
+    expect(errorLog).toHaveBeenCalledWith(
+      expect.stringContaining('"phase":"sandbox_destroy_failed"'),
+    );
+    errorLog.mockRestore();
   });
 });

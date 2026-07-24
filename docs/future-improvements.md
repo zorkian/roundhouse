@@ -5,7 +5,7 @@
 
 - Status: Ideas to revisit; none are approved to start
 - Audience: Maintainers and future implementers
-- Last updated: 2026-07-22
+- Last updated: 2026-07-23
 
 This document preserves promising improvements that arose while operating the
 V2 prototype. It is not a roadmap, acceptance plan, or implementation queue.
@@ -26,24 +26,17 @@ Browser Rendering, store the image and source provenance, and include it in
 GitHub evidence. Implementation workspaces can be backed up, destroyed, and
 restored for a later revision.
 
-The current preview transport renders the initial HTML response and blocks all
-subsequent browser requests. This is sufficient for self-contained pages, but
-not for applications that load relative stylesheets, JavaScript bundles,
-images, fonts, or same-origin API responses. Screenshots are evidence; there
-is also no explicit pre-merge state in which Roundhouse waits for a maintainer
-to approve or request another visual revision.
+The current capability-protected preview origin forwards the active run's
+same-origin and localhost browser requests through the control plane to its
+private Sandbox port. Stylesheets, JavaScript, images, fonts, and same-origin
+API responses therefore render normally, while requests to unrelated origins
+are aborted. Screenshots are evidence; there is no explicit pre-merge state in
+which Roundhouse waits for a maintainer to approve or request another visual
+revision.
 
 ### Improvement to revisit
 
-Introduce a capability-protected preview origin that forwards only the active
-run's same-origin browser requests to its Sandbox through the trusted control
-plane. Browser Rendering would load the application normally from that origin,
-while requests to every other origin remain blocked. This should preserve the
-existing isolation boundary without installing a browser in the agent Sandbox
-or giving either the application or browser general network access.
-
-After the preview path works for a representative asset-built application,
-consider a deliberate visual-feedback waiting point before merge. A maintainer
+Consider a deliberate visual-feedback waiting point before merge. A maintainer
 could inspect a screenshot, respond in ordinary GitHub prose, and receive a
 new screenshot from the restored implementation workspace.
 
@@ -56,15 +49,13 @@ validate this slice.
 
 ### Current evidence
 
-Roundhouse records detailed workflow events in D1, but it does not emit
-purpose-built time-series metrics for Sandbox creation, backup, restoration,
-or destruction. In issue #399, the first implementation reached a ready
-workspace in about 7 seconds. A later clean restored implementation reached
-the runner in about 63 seconds and needed another 5 seconds to prepare its Git
-workspace. The available events cannot separate queueing, container startup,
-and backup restoration inside that 63-second interval. Earlier restored
-attempts also encountered an independent Git-fetch recovery failure, so their
-longer elapsed times are not useful restore benchmarks.
+Roundhouse records detailed workflow events in D1, including normal Sandbox
+destruction, but it does not emit purpose-built time-series metrics. In the
+Dreamwidth Dev Container pilot, cold environment preparation took about 286
+seconds. Restoring the stateful workspace and recreating its Dev Container
+took about 594 seconds before agent execution; saving the replacement
+checkpoint took about 148 seconds. Restoration currently provides state
+fidelity rather than a latency improvement.
 
 ### Improvement to revisit
 

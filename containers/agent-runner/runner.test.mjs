@@ -15,6 +15,7 @@ import {
   commandProgress,
   completionRequest,
   checkpointWorkspace,
+  devContainerConfigIdentity,
   implementationPrompt,
   implementationResultSchema,
   implementationSchema,
@@ -158,6 +159,25 @@ describe("V2 agent runner", () => {
         "example.invalid/repository@sha256:abc",
       ),
     ).toThrow("devcontainer_privileged");
+  });
+
+  it("identifies semantic Dev Container configuration changes", () => {
+    const original = {
+      image: "example.invalid/repository:latest",
+      postCreateCommand: "pnpm install",
+    };
+    expect(
+      devContainerConfigIdentity({
+        postCreateCommand: "pnpm install",
+        image: "example.invalid/repository:latest",
+      }),
+    ).toBe(devContainerConfigIdentity(original));
+    expect(
+      devContainerConfigIdentity({
+        ...original,
+        postCreateCommand: "pnpm install && pnpm build",
+      }),
+    ).not.toBe(devContainerConfigIdentity(original));
   });
 
   it("submits promptly after completing and validating a stage", () => {

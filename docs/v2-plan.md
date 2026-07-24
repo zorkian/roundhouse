@@ -5,7 +5,7 @@
 
 - Status: Active
 - Audience: Maintainers and implementers
-- Last updated: 2026-07-18
+- Last updated: 2026-07-23
 
 This is the product contract, architecture decision, transition plan, and
 acceptance plan for Roundhouse V2. It supersedes every V1 plan, ADR, manifest,
@@ -293,8 +293,12 @@ GitHub webhook/comment/check
           |
           +------> Artifacts (one durable Git repo per run)
           |
-          +------> agent Container (one stage attempt)
-          |       - embedded Pi coding agent
+          +------> run-scoped Cloudflare Sandbox VM
+          |       - outer runner and rootless Docker
+          |       - repository Dev Container
+          |         - embedded Pi coding agent
+          |         - application and database
+          |       - R2-backed workspace checkpoint
           |               |
           |               v
           |       trusted outbound handler
@@ -310,7 +314,10 @@ GitHub webhook/comment/check
           |       - Unified Billing
           |       - no vendor key in Roundhouse
           |
-          +------> GitHub publication / CI / merge
+          +------> Browser Rendering / screenshot evidence
+          |
+          +------> clean validation Sandbox
+                  - GitHub publication / CI / merge credential
 ```
 
 Target source layout:
@@ -354,9 +361,13 @@ qualification, current-behavior, and planning roles and removes it for other
 roles, so the boundary does not depend on client behavior. Pi consumes the
 provider's final answer through the same native stream. The result records the
 public sources actually used. Implementation and review do not receive the
-search capability. Container internet access remains
-disabled; only explicit Artifacts, package-registry, callback, and intercepted
-model hosts are allowed.
+search capability. Read-only stage internet access remains disabled except for
+explicit Artifacts, package-registry, callback, and intercepted model hosts.
+Implementation runs permit arbitrary outbound destinations because
+repository-selected image builds and lifecycle commands may use
+project-specific package hosts. The outer Cloudflare Sandbox VM, not its
+network allowlist or nested Dev Container, is the implementation isolation
+boundary.
 
 ### 6.1 One coordinator owns progress
 
@@ -548,17 +559,49 @@ human summary.
 
 The runner may not publish to GitHub or decide the next workflow stage.
 
-The Cloudflare Container is the agent sandbox. Pi runs directly inside it with
-the tools appropriate to the stage rather than trying to create a nested Linux
-sandbox. Pi does not load repository-provided extensions, skills, or agent
-instructions. The process remains non-root in a disposable Container, internet
-access is disabled, outbound requests are intercepted and allowlisted, and
-qualification and other read-only stages receive read-only agent tools plus a
+The Cloudflare Sandbox VM is the agent security boundary. Qualification,
+current-behavior investigation, planning, review, and integration run the
+runner directly in that disposable Sandbox with stage-appropriate tools and
+allowlisted outbound access.
+
+Implementation additionally starts rootless Docker and adapts the enrolled
+repository's image-based `.devcontainer/devcontainer.json`. Pi, repository
+lifecycle commands, the application, and its database run inside that nested
+Dev Container. The Dev Container is a compatibility boundary, not a security
+boundary: all code within it is repository-controlled, and
+`initializeCommand` executes in the outer Sandbox as defined by the Dev
+Container lifecycle. Pi does not load repository-provided extensions, skills,
+or agent instructions. Privileged mode, devices, bind mounts, published
+ports, and repository-selected Docker networks are rejected or removed, while
+the outer Sandbox remains disposable and isolated from other runs.
+
+Implementation outbound access is unrestricted within that outer Sandbox so
+project image builds and lifecycle commands can install from repositories
+chosen by the enrolled project. Model credentials remain behind an
+attempt-bound outbound handler, Git state uses a scoped Artifacts credential,
+and the implementation environment never receives a GitHub App credential.
+GitHub publication occurs only from a separate clean validation Sandbox after
+exact-head, ancestry, and allowed/protected-path validation.
+
+Implementation workspaces, including dependency caches, named volumes, and
+application databases, are backed up to R2-backed Sandbox storage before
+compute is destroyed. A later implementation revision restores the checkpoint
+into a new Sandbox with the same run identity. The source Dev Container
+configuration is identified by content; a change recreates the adapted runtime
+instead of silently reusing stale configuration.
+
+Browser Rendering runs outside the agent Sandbox. A capability-protected
+synthetic preview origin forwards only the active run's same-origin and
+localhost application requests through the control plane to the private
+Sandbox port. Other browser origins are aborted. Screenshots are stored as
+public, unguessable evidence for the currently supported public-repository
+prototype.
+
+Qualification and other read-only stages receive read-only agent tools plus a
 read-scoped Artifacts credential. A read-only attempt cannot push a durable
 checkpoint; the control plane accepts only the unchanged, independently
-validated input commit. V2 does not add elevated Linux capabilities merely to
-nest one sandbox inside another and disables Pi's internal retry loops rather
-than introducing unobserved retry policy.
+validated input commit. Pi's internal retry loops remain disabled rather than
+introducing unobserved retry policy.
 
 ### 6.6 Model routing is policy
 
@@ -622,8 +665,10 @@ change. These paths share one internal pre-planning stage; they do not create
 separate workflow branches.
 
 The attempt may install repository-declared dependencies with the repository's
-declared package manager and lockfile. Its Container can reach the configured
-package registry but not arbitrary internet destinations.
+declared package manager and lockfile. Its Sandbox can reach the configured
+package registry but not arbitrary internet destinations. The broader
+implementation-stage network policy described in section 6.5 does not apply to
+this read-only stage.
 
 For a bug, a successful reproduction records a regression strategy that
 validation must run after implementation. A change cannot receive the “fix

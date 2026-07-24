@@ -17,6 +17,10 @@ import {
 } from "@roundhouse/core";
 import { observeResponse } from "@roundhouse/response-observer";
 import { verifyCallback } from "./callback.js";
+import type { SandboxComponentHost } from "./attempt-sandbox-components.js";
+import { NestedContainerRuntime } from "./nested-container-runtime.js";
+import { PreviewTransport } from "./preview-transport.js";
+import { WorkspaceLifecycle } from "./workspace-lifecycle.js";
 import { attemptInactivityMilliseconds } from "./coordinator.js";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
 
@@ -61,11 +65,6 @@ const containerRegistryHosts = [
   "ghcr.io",
   "pkg-containers.githubusercontent.com",
 ] as const;
-const containerCa = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
-const dockerBuilder = "roundhouse-host-v1";
-const dockerBuilderImage =
-  "moby/buildkit@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec";
-const dockerBuilderConfig = "/etc/roundhouse-buildkitd.toml";
 // getSandbox(..., { enableDefaultSession: false }) applies this token to exec
 // calls on the client stub. Calls made inside a Sandbox subclass do not pass
 // through that enhancer, so use the same SDK command contract here. The SDK's
@@ -491,6 +490,24 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
     return this.getProcess(processId, sessionlessExecutionToken);
   }
 
+  private componentHost(): SandboxComponentHost {
+    return {
+      trace: (attemptId, phase, startedAt, detail) =>
+        this.traceSetup(attemptId, phase, startedAt, detail),
+      exec: (command, options) => this.execSessionless(command, options),
+      getProcess: (processId) => this.getProcessSessionless(processId),
+      startProcess: (command, options) => this.startProcess(command, options),
+      getProcessLogs: (processId) => this.getProcessLogs(processId),
+      exists: (path) => this.exists(path, sessionlessExecutionToken),
+      killAllProcesses: () => this.killAllProcesses(),
+      createBackup: (options) => this.createBackup(options),
+      restoreBackup: (backup) => this.restoreBackup(backup),
+      containerFetch: (url, init, port) => this.containerFetch(url, init, port),
+      awaitWithHeartbeat: (attemptId, phase, operation) =>
+        this.awaitWithHeartbeat(attemptId, phase, operation),
+    };
+  }
+
   private async traceSetup(
     attemptId: string | undefined,
     phase: string,
@@ -558,229 +575,10 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
     attemptId: string,
     backup: DirectoryBackup,
   ): Promise<void> {
-    const startedAt = Date.now();
-    await this.traceSetup(attemptId, "workspace_restore_started", undefined, {
-      backupId: backup.id,
-    });
-    try {
-      const traceRuntimeFiles = async (phase: string): Promise<void> => {
-        const stepStartedAt = Date.now();
-        await this.traceSetup(attemptId, `${phase}_started`);
-        const paths = [
-          "/bin/bash",
-          "/lib/ld-musl-x86_64.so.1",
-          "/usr/bin/curl",
-          "/usr/bin/fusermount3",
-          "/usr/bin/squashfuse",
-          "/usr/bin/fuse-overlayfs",
-        ];
-        const results = await Promise.all(
-          paths.map(async (path) => ({
-            path,
-            exists: (await this.exists(path, sessionlessExecutionToken)).exists,
-          })),
-        );
-        await this.traceSetup(attemptId, `${phase}_completed`, stepStartedAt, {
-          files: results,
-        });
-      };
-      await traceRuntimeFiles("workspace_restore_files_before_cleanup");
-      let stepStartedAt = Date.now();
-      await this.traceSetup(attemptId, "workspace_process_cleanup_started");
-      await this.killAllProcesses();
-      await this.traceSetup(
-        attemptId,
-        "workspace_process_cleanup_completed",
-        stepStartedAt,
-      );
-      await traceRuntimeFiles("workspace_restore_files_after_cleanup");
-      stepStartedAt = Date.now();
-      await this.traceSetup(
-        attemptId,
-        "workspace_restore_capability_check_started",
-      );
-      const capabilities = await this.execSessionless(
-        'for tool in curl fusermount3 squashfuse fuse-overlayfs; do command -v "$tool" || exit 1; done',
-        {
-          cwd: "/",
-          origin: "internal",
-          timeout: 5_000,
-        },
-      );
-      await this.traceSetup(
-        attemptId,
-        "workspace_restore_capability_check_completed",
-        stepStartedAt,
-        {
-          success: capabilities.success,
-          exitCode: capabilities.exitCode,
-          tools: capabilities.stdout.trim().split(/\s+/).filter(Boolean),
-          detail: capabilities.stderr.slice(-1_000),
-        },
-      );
-      if (!capabilities.success)
-        throw new Error("workspace_restore_capability_check_failed");
-      stepStartedAt = Date.now();
-      await this.traceSetup(
-        attemptId,
-        "workspace_backup_restore_started",
-        undefined,
-        {
-          backupId: backup.id,
-        },
-      );
-      await this.awaitWithHeartbeat(
-        attemptId,
-        "workspace_backup_restore",
-        this.restoreBackup(backup),
-      );
-      await this.traceSetup(
-        attemptId,
-        "workspace_backup_restore_completed",
-        stepStartedAt,
-        { backupId: backup.id },
-      );
-      const materializeStartedAt = Date.now();
-      const stagingDir = "/workspace/.roundhouse-restored-workspace";
-      stepStartedAt = Date.now();
-      await this.traceSetup(
-        attemptId,
-        "workspace_restore_staging_prepare_started",
-        undefined,
-        { stagingDir },
-      );
-      const prepared = await this.execSessionless(
-        `rm -rf ${stagingDir} && mkdir -p ${stagingDir}`,
-        {
-          cwd: "/",
-          origin: "internal",
-          timeout: 30_000,
-        },
-      );
-      await this.traceSetup(
-        attemptId,
-        "workspace_restore_staging_prepare_completed",
-        stepStartedAt,
-        {
-          stagingDir,
-          success: prepared.success,
-          exitCode: prepared.exitCode,
-          detail: prepared.stderr.slice(-1_000),
-        },
-      );
-      if (!prepared.success)
-        throw new Error("workspace_restore_staging_prepare_failed");
-      stepStartedAt = Date.now();
-      await this.traceSetup(
-        attemptId,
-        "workspace_restore_materialize_copy_started",
-        undefined,
-        { stagingDir },
-      );
-      const copied = await this.awaitWithHeartbeat(
-        attemptId,
-        "workspace_restore_materialize_copy",
-        this.execSessionless(`cp -a /workspace/roundhouse/. ${stagingDir}/`, {
-          cwd: "/",
-          origin: "internal",
-          timeout: 30 * 60_000,
-        }),
-      );
-      await this.traceSetup(
-        attemptId,
-        "workspace_restore_materialize_copy_completed",
-        stepStartedAt,
-        {
-          stagingDir,
-          success: copied.success,
-          exitCode: copied.exitCode,
-          detail: copied.stderr.slice(-1_000),
-        },
-      );
-      if (!copied.success)
-        throw new Error("workspace_restore_materialize_copy_failed");
-      stepStartedAt = Date.now();
-      await this.traceSetup(
-        attemptId,
-        "workspace_restore_mount_release_started",
-      );
-      const unmounted = await this.execSessionless(
-        "/usr/bin/fusermount3 -u /workspace/roundhouse",
-        {
-          cwd: "/",
-          origin: "internal",
-          timeout: 30_000,
-        },
-      );
-      await this.traceSetup(
-        attemptId,
-        "workspace_restore_mount_release_completed",
-        stepStartedAt,
-        {
-          success: unmounted.success,
-          exitCode: unmounted.exitCode,
-          detail: unmounted.stderr.slice(-1_000),
-        },
-      );
-      if (!unmounted.success)
-        throw new Error("workspace_restore_mount_release_failed");
-      stepStartedAt = Date.now();
-      await this.traceSetup(
-        attemptId,
-        "workspace_restore_native_activation_started",
-        undefined,
-        { stagingDir },
-      );
-      const activated = await this.execSessionless(
-        `rm -rf /workspace/roundhouse && mv ${stagingDir} /workspace/roundhouse`,
-        {
-          cwd: "/",
-          origin: "internal",
-          timeout: 30_000,
-        },
-      );
-      await this.traceSetup(
-        attemptId,
-        "workspace_restore_native_activation_completed",
-        stepStartedAt,
-        {
-          stagingDir,
-          success: activated.success,
-          exitCode: activated.exitCode,
-          detail: activated.stderr.slice(-1_000),
-        },
-      );
-      if (!activated.success)
-        throw new Error("workspace_restore_native_activation_failed");
-      await this.traceSetup(
-        attemptId,
-        "workspace_restore_materialization_completed",
-        materializeStartedAt,
-        { stagingDir },
-      );
-      stepStartedAt = Date.now();
-      await this.traceSetup(attemptId, "workspace_docker_restore_started");
-      await this.ensureDocker(attemptId);
-      await this.traceSetup(
-        attemptId,
-        "workspace_docker_restore_completed",
-        stepStartedAt,
-      );
-      await this.traceSetup(
-        attemptId,
-        "workspace_restore_completed",
-        startedAt,
-        { backupId: backup.id },
-      );
-    } catch (error) {
-      await this.traceSetup(attemptId, "workspace_restore_failed", startedAt, {
-        backupId: backup.id,
-        errorType:
-          error instanceof Error ? error.constructor.name : typeof error,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      throw error;
-    }
+    const host = this.componentHost();
+    await new WorkspaceLifecycle(host, (runtimeAttemptId) =>
+      new NestedContainerRuntime(host).ensure(runtimeAttemptId),
+    ).restore(attemptId, backup);
   }
 
   async prepareAttempt(
@@ -868,106 +666,9 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
     attemptId: string,
     runId: string,
   ): Promise<DirectoryBackup> {
-    const startedAt = Date.now();
-    await this.traceSetup(attemptId, "workspace_backup_started", undefined, {
-      runId,
-    });
-    try {
-      let stepStartedAt = Date.now();
-      await this.traceSetup(attemptId, "workspace_container_list_started");
-      const running = await this.execSessionless("docker ps -q", {
-        origin: "internal",
-        timeout: 5_000,
-      });
-      const containerIds = running.success
-        ? running.stdout
-            .split(/\s+/)
-            .filter((id) => /^[a-f0-9]{12,64}$/.test(id))
-        : [];
-      await this.traceSetup(
-        attemptId,
-        "workspace_container_list_completed",
-        stepStartedAt,
-        {
-          success: running.success,
-          exitCode: running.exitCode,
-          containerCount: containerIds.length,
-          detail: running.stderr.slice(-1_000),
-        },
-      );
-      for (const containerId of containerIds) {
-        stepStartedAt = Date.now();
-        await this.traceSetup(
-          attemptId,
-          "workspace_container_stop_started",
-          undefined,
-          {
-            containerId,
-          },
-        );
-        const stopped = await this.execSessionless(
-          `docker stop ${containerId}`,
-          {
-            origin: "internal",
-            timeout: 30_000,
-          },
-        );
-        await this.traceSetup(
-          attemptId,
-          "workspace_container_stop_completed",
-          stepStartedAt,
-          {
-            containerId,
-            success: stopped.success,
-            exitCode: stopped.exitCode,
-            detail: stopped.stderr.slice(-1_000),
-          },
-        );
-        if (!stopped.success)
-          throw new Error("workspace_container_stop_failed");
-      }
-      stepStartedAt = Date.now();
-      await this.traceSetup(attemptId, "workspace_process_cleanup_started");
-      await this.killAllProcesses();
-      await this.traceSetup(
-        attemptId,
-        "workspace_process_cleanup_completed",
-        stepStartedAt,
-      );
-      stepStartedAt = Date.now();
-      await this.traceSetup(attemptId, "workspace_backup_creation_started");
-      const backup = await this.awaitWithHeartbeat(
-        attemptId,
-        "workspace_backup_creation",
-        this.createBackup({
-          dir: "/workspace/roundhouse",
-          name: `roundhouse-${runId}`,
-          gitignore: false,
-          ttl: 30 * 24 * 60 * 60,
-        }),
-      );
-      await this.traceSetup(
-        attemptId,
-        "workspace_backup_creation_completed",
-        stepStartedAt,
-        { backupId: backup.id },
-      );
-      await this.traceSetup(
-        attemptId,
-        "workspace_backup_completed",
-        startedAt,
-        { runId, backupId: backup.id },
-      );
-      return backup;
-    } catch (error) {
-      await this.traceSetup(attemptId, "workspace_backup_failed", startedAt, {
-        runId,
-        errorType:
-          error instanceof Error ? error.constructor.name : typeof error,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      throw error;
-    }
+    return new WorkspaceLifecycle(this.componentHost(), (runtimeAttemptId) =>
+      this.ensureDocker(runtimeAttemptId),
+    ).backup(attemptId, runId);
   }
 
   async fetchPreview(
@@ -980,37 +681,12 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
     headers: [string, string][];
     body: ArrayBuffer;
   }> {
-    const startedAt = Date.now();
-    const parsedUrl = new URL(url);
-    await this.traceSetup(attemptId, "preview_fetch_started", undefined, {
-      method: init.method ?? "GET",
-      path: parsedUrl.pathname,
+    return new PreviewTransport(this.componentHost()).fetch(
+      attemptId,
+      url,
       port,
-    });
-    try {
-      const response = await this.containerFetch(url, init, port);
-      const headers: [string, string][] = [];
-      response.headers.forEach((value, name) => headers.push([name, value]));
-      const body = await response.arrayBuffer();
-      await this.traceSetup(attemptId, "preview_fetch_completed", startedAt, {
-        method: init.method ?? "GET",
-        path: parsedUrl.pathname,
-        port,
-        status: response.status,
-        bodyBytes: body.byteLength,
-      });
-      return { status: response.status, headers, body };
-    } catch (error) {
-      await this.traceSetup(attemptId, "preview_fetch_failed", startedAt, {
-        method: init.method ?? "GET",
-        path: parsedUrl.pathname,
-        port,
-        errorType:
-          error instanceof Error ? error.constructor.name : typeof error,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      throw error;
-    }
+      init,
+    );
   }
 
   async runAttempt(
@@ -1195,412 +871,8 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
     }
   }
 
-  private async ensureDocker(attemptId?: string): Promise<Process> {
-    const startedAt = Date.now();
-    let stepStartedAt = Date.now();
-    await this.traceSetup(attemptId, "docker_process_lookup_started");
-    let docker = await this.getProcessSessionless("roundhouse-docker");
-    const initialStatus = docker ? await docker.getStatus() : undefined;
-    await this.traceSetup(
-      attemptId,
-      "docker_process_lookup_completed",
-      stepStartedAt,
-      { found: Boolean(docker), status: initialStatus ?? null },
-    );
-    if (docker && !["starting", "running"].includes(initialStatus ?? "")) {
-      stepStartedAt = Date.now();
-      await this.traceSetup(
-        attemptId,
-        "docker_stale_process_kill_started",
-        undefined,
-        {
-          status: initialStatus,
-        },
-      );
-      await docker.kill().catch(() => undefined);
-      await this.traceSetup(
-        attemptId,
-        "docker_stale_process_kill_completed",
-        stepStartedAt,
-      );
-      docker = null;
-    }
-    if (!docker) {
-      stepStartedAt = Date.now();
-      await this.traceSetup(attemptId, "docker_process_start_started");
-      docker = await this.startProcess(
-        "/home/rootless/boot-docker-for-dind.sh",
-        { processId: "roundhouse-docker" },
-      );
-      const startedStatus = await docker.getStatus();
-      await this.traceSetup(
-        attemptId,
-        "docker_process_start_completed",
-        stepStartedAt,
-        {
-          processId: docker.id,
-          pid: docker.pid,
-          status: startedStatus,
-        },
-      );
-    }
-    stepStartedAt = Date.now();
-    await this.traceSetup(attemptId, "runtime_capacity_probe_started");
-    const capacity = await this.execSessionless(
-      "df -k /workspace && getconf _NPROCESSORS_ONLN",
-      { origin: "internal", timeout: 5_000 },
-    );
-    await this.traceSetup(
-      attemptId,
-      "runtime_capacity_probe_completed",
-      stepStartedAt,
-      {
-        success: capacity.success,
-        exitCode: capacity.exitCode,
-        stdout: capacity.stdout.slice(-2_000),
-        stderr: capacity.stderr.slice(-1_000),
-      },
-    );
-    if (!capacity.success) throw new Error("runtime_capacity_probe_failed");
-    let probes = 0;
-    let lastWaitingTraceAt = 0;
-    while (Date.now() - startedAt < 30_000) {
-      const probeStartedAt = Date.now();
-      probes += 1;
-      await this.traceSetup(
-        attemptId,
-        "docker_daemon_probe_started",
-        undefined,
-        { probe: probes },
-      );
-      let status;
-      try {
-        status = await this.execSessionless("docker version", {
-          origin: "internal",
-          timeout: 5_000,
-        });
-      } catch (error) {
-        await this.traceSetup(
-          attemptId,
-          "docker_daemon_probe_failed",
-          probeStartedAt,
-          {
-            probe: probes,
-            errorType:
-              error instanceof Error ? error.constructor.name : typeof error,
-            error: error instanceof Error ? error.message : String(error),
-          },
-        );
-        await new Promise((resolve) => setTimeout(resolve, 250));
-        continue;
-      }
-      await this.traceSetup(
-        attemptId,
-        "docker_daemon_probe_completed",
-        probeStartedAt,
-        {
-          probe: probes,
-          success: status.success,
-          exitCode: status.exitCode,
-          detail: status.stderr.slice(-1_000),
-        },
-      );
-      if (status.success) {
-        const driverStartedAt = Date.now();
-        await this.traceSetup(attemptId, "docker_storage_driver_probe_started");
-        const driver = await this.execSessionless(
-          "docker info --format '{{.Driver}}'",
-          {
-            cwd: "/",
-            origin: "internal",
-            timeout: 5_000,
-          },
-        );
-        await this.traceSetup(
-          attemptId,
-          "docker_storage_driver_probe_completed",
-          driverStartedAt,
-          {
-            success: driver.success,
-            exitCode: driver.exitCode,
-            driver: driver.stdout.trim(),
-            detail: driver.stderr.slice(-1_000),
-          },
-        );
-        if (!driver.success)
-          throw new Error("docker_storage_driver_probe_failed");
-        await this.traceSetup(attemptId, "docker_daemon_ready", startedAt, {
-          probes,
-          probeDurationMs: Date.now() - probeStartedAt,
-        });
-        await this.ensureDockerBuilder(attemptId);
-        return docker;
-      }
-      if (
-        lastWaitingTraceAt === 0 ||
-        Date.now() - lastWaitingTraceAt >= 5_000
-      ) {
-        lastWaitingTraceAt = Date.now();
-        const process = await this.getProcessSessionless("roundhouse-docker");
-        const processStatus = process ? await process.getStatus() : null;
-        await this.traceSetup(attemptId, "docker_daemon_waiting", startedAt, {
-          probes,
-          probeDurationMs: Date.now() - probeStartedAt,
-          exitCode: status.exitCode,
-          processStatus,
-          detail: status.stderr.slice(-1_000),
-        });
-        if (processStatus && !["starting", "running"].includes(processStatus)) {
-          const logs = await this.getProcessLogs("roundhouse-docker");
-          await this.traceSetup(
-            attemptId,
-            "docker_process_exited_before_ready",
-            startedAt,
-            {
-              processStatus,
-              stdout: logs.stdout.slice(-4_000),
-              stderr: logs.stderr.slice(-4_000),
-            },
-          );
-          throw new Error("docker_process_exited_before_ready");
-        }
-      }
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
-    const process = await this.getProcessSessionless("roundhouse-docker");
-    const processStatus = process ? await process.getStatus() : null;
-    const logs = process
-      ? await this.getProcessLogs("roundhouse-docker")
-      : undefined;
-    await this.traceSetup(attemptId, "docker_daemon_timeout", startedAt, {
-      probes,
-      processStatus,
-      ...(logs
-        ? {
-            stdout: logs.stdout.slice(-4_000),
-            stderr: logs.stderr.slice(-4_000),
-          }
-        : {}),
-    });
-    throw new Error("docker_start_timeout");
-  }
-
-  private async ensureDockerBuilder(attemptId?: string): Promise<void> {
-    const startedAt = Date.now();
-    await this.traceSetup(
-      attemptId,
-      "docker_builder_inspect_started",
-      undefined,
-      { builder: dockerBuilder },
-    );
-    let stepStartedAt = Date.now();
-    const existing = await this.execSessionless(
-      `docker buildx inspect ${dockerBuilder}`,
-      {
-        origin: "internal",
-      },
-    );
-    await this.traceSetup(
-      attemptId,
-      "docker_builder_inspect_completed",
-      stepStartedAt,
-      {
-        builder: dockerBuilder,
-        success: existing.success,
-        exitCode: existing.exitCode,
-        detail: existing.stderr.slice(-1_000),
-      },
-    );
-    if (!existing.success) {
-      stepStartedAt = Date.now();
-      const builderContainer = `buildx_buildkit_${dockerBuilder}0`;
-      await this.traceSetup(
-        attemptId,
-        "docker_builder_stale_container_inspect_started",
-        undefined,
-        { builder: dockerBuilder, container: builderContainer },
-      );
-      const staleContainer = await this.execSessionless(
-        `docker container inspect ${builderContainer}`,
-        { origin: "internal" },
-      );
-      await this.traceSetup(
-        attemptId,
-        "docker_builder_stale_container_inspect_completed",
-        stepStartedAt,
-        {
-          builder: dockerBuilder,
-          container: builderContainer,
-          found: staleContainer.success,
-          exitCode: staleContainer.exitCode,
-          detail: staleContainer.stderr.slice(-1_000),
-        },
-      );
-      if (staleContainer.success) {
-        stepStartedAt = Date.now();
-        await this.traceSetup(
-          attemptId,
-          "docker_builder_stale_container_remove_started",
-          undefined,
-          { builder: dockerBuilder, container: builderContainer },
-        );
-        const removed = await this.execSessionless(
-          `docker rm --force ${builderContainer}`,
-          { origin: "internal" },
-        );
-        await this.traceSetup(
-          attemptId,
-          "docker_builder_stale_container_remove_completed",
-          stepStartedAt,
-          {
-            builder: dockerBuilder,
-            container: builderContainer,
-            success: removed.success,
-            exitCode: removed.exitCode,
-            detail: removed.stderr.slice(-1_000),
-          },
-        );
-        if (!removed.success)
-          throw new Error("docker_builder_stale_container_remove_failed");
-      }
-      stepStartedAt = Date.now();
-      await this.traceSetup(
-        attemptId,
-        "docker_builder_create_started",
-        undefined,
-        {
-          builder: dockerBuilder,
-          image: dockerBuilderImage,
-          config: dockerBuilderConfig,
-          registryCa: containerCa,
-        },
-      );
-      const created = await this.execSessionless(
-        `docker buildx create --name ${dockerBuilder} --driver docker-container --driver-opt network=host --driver-opt image=${dockerBuilderImage} --buildkitd-config ${dockerBuilderConfig} --buildkitd-flags '--oci-worker-net=host' --use --bootstrap`,
-        { origin: "internal", timeout: 180_000 },
-      );
-      await this.traceSetup(
-        attemptId,
-        "docker_builder_create_completed",
-        stepStartedAt,
-        {
-          builder: dockerBuilder,
-          success: created.success,
-          exitCode: created.exitCode,
-          detail: created.stderr.slice(-4_000),
-        },
-      );
-      if (!created.success) {
-        await this.traceSetup(
-          attemptId,
-          "docker_builder_create_failed",
-          startedAt,
-          { detail: created.stderr.slice(-4_000) },
-        );
-        throw new Error(
-          `docker_builder_create_failed: ${created.stderr.slice(-4_000)}`,
-        );
-      }
-    } else {
-      stepStartedAt = Date.now();
-      await this.traceSetup(
-        attemptId,
-        "docker_builder_select_started",
-        undefined,
-        { builder: dockerBuilder },
-      );
-      const selected = await this.execSessionless(
-        `docker buildx use ${dockerBuilder}`,
-        {
-          origin: "internal",
-        },
-      );
-      await this.traceSetup(
-        attemptId,
-        "docker_builder_select_completed",
-        stepStartedAt,
-        {
-          builder: dockerBuilder,
-          success: selected.success,
-          exitCode: selected.exitCode,
-          detail: selected.stderr.slice(-1_000),
-        },
-      );
-      if (!selected.success) {
-        throw new Error(
-          `docker_builder_select_failed: ${selected.stderr.slice(-4_000)}`,
-        );
-      }
-      stepStartedAt = Date.now();
-      await this.traceSetup(
-        attemptId,
-        "docker_builder_bootstrap_started",
-        undefined,
-        { builder: dockerBuilder, image: dockerBuilderImage },
-      );
-      const bootstrapped = await this.execSessionless(
-        `docker buildx inspect --bootstrap ${dockerBuilder}`,
-        { origin: "internal", timeout: 180_000 },
-      );
-      await this.traceSetup(
-        attemptId,
-        "docker_builder_bootstrap_completed",
-        stepStartedAt,
-        {
-          builder: dockerBuilder,
-          success: bootstrapped.success,
-          exitCode: bootstrapped.exitCode,
-          detail: bootstrapped.stderr.slice(-4_000),
-        },
-      );
-      if (!bootstrapped.success) {
-        throw new Error(
-          `docker_builder_bootstrap_failed: ${bootstrapped.stderr.slice(-4_000)}`,
-        );
-      }
-    }
-    stepStartedAt = Date.now();
-    await this.traceSetup(
-      attemptId,
-      "docker_builder_registry_ca_verify_started",
-      undefined,
-      { builder: dockerBuilder, registry: "ghcr.io" },
-    );
-    const caVerified = await this.execSessionless(
-      `outer_ca=$(sha256sum ${containerCa} | cut -d ' ' -f 1) && inner_ca=$(docker exec buildx_buildkit_${dockerBuilder}0 sha256sum /etc/buildkit/certs/ghcr.io/cloudflare-containers-ca.crt | cut -d ' ' -f 1) && builder_config=$(docker exec buildx_buildkit_${dockerBuilder}0 cat /etc/buildkit/buildkitd.toml) && printf 'outer_ca=%s\\ninner_ca=%s\\nbuilder_config=%s\\n' "$outer_ca" "$inner_ca" "$builder_config" && test "$outer_ca" = "$inner_ca"`,
-      { origin: "internal", timeout: 5_000 },
-    );
-    await this.traceSetup(
-      attemptId,
-      "docker_builder_registry_ca_verify_completed",
-      stepStartedAt,
-      {
-        builder: dockerBuilder,
-        registry: "ghcr.io",
-        success: caVerified.success,
-        exitCode: caVerified.exitCode,
-        detail: caVerified.stdout.slice(-4_000),
-        error: caVerified.stderr.slice(-1_000),
-      },
-    );
-    if (!caVerified.success) {
-      throw new Error(
-        `docker_builder_registry_ca_missing: ${caVerified.stderr.slice(-1_000)}`,
-      );
-    }
-    await this.traceSetup(attemptId, "docker_builder_ready", startedAt, {
-      builder: dockerBuilder,
-      image: dockerBuilderImage,
-    });
-    console.log(
-      JSON.stringify({
-        message: "docker_builder_ready",
-        ...(attemptId ? { attemptId } : {}),
-        builder: dockerBuilder,
-        image: dockerBuilderImage,
-        durationMs: Date.now() - startedAt,
-      }),
-    );
+  private ensureDocker(attemptId?: string): Promise<Process> {
+    return new NestedContainerRuntime(this.componentHost()).ensure(attemptId);
   }
 
   async validateCheckpoint(attempt: AttemptAssignment): Promise<number> {

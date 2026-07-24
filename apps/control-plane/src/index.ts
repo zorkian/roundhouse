@@ -185,12 +185,70 @@ export async function destroyAttemptSandbox(
   await containers.get(containers.idFromName(name)).destroy();
 }
 
+type SandboxDestructionTrace = (
+  attemptId: string,
+  phase: string,
+  detail: Readonly<Record<string, unknown>>,
+) => Promise<void>;
+
+async function destroyAttemptSandboxWithTrace(
+  containers: AttemptNamespace,
+  name: string,
+  attemptId: string,
+  trace?: SandboxDestructionTrace,
+): Promise<void> {
+  const startedAt = Date.now();
+  const emit = async (
+    phase: string,
+    detail: Readonly<Record<string, unknown>> = {},
+  ): Promise<void> => {
+    const payload = {
+      phase,
+      sandboxName: name,
+      durationMs: Date.now() - startedAt,
+      ...detail,
+    };
+    const log = { message: "sandbox_destruction_trace", attemptId, ...payload };
+    if (phase.endsWith("_failed")) console.error(JSON.stringify(log));
+    else console.log(JSON.stringify(log));
+    if (!trace) return;
+    try {
+      await trace(attemptId, phase, payload);
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          message: "sandbox_destruction_trace_record_failed",
+          attemptId,
+          phase,
+          sandboxName: name,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
+  };
+  await emit("sandbox_destroy_started");
+  try {
+    await destroyAttemptSandbox(containers, name);
+    await emit("sandbox_destroy_completed");
+  } catch (error) {
+    await emit("sandbox_destroy_failed", {
+      errorType: error instanceof Error ? error.constructor.name : typeof error,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+}
+
 export function scheduleAttemptSandboxDestruction(
   containers: AttemptNamespace,
   name: string,
   context: Pick<ExecutionContext, "waitUntil">,
+  attemptId = name,
+  trace?: SandboxDestructionTrace,
 ): void {
-  context.waitUntil(destroyAttemptSandbox(containers, name));
+  context.waitUntil(
+    destroyAttemptSandboxWithTrace(containers, name, attemptId, trace),
+  );
 }
 
 export async function recoverExpiredAttempts(
@@ -1502,6 +1560,13 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
             env.ATTEMPT_SANDBOXES,
             attempt ? sandboxName(attempt) : closure.attemptId,
             context,
+            closure.attemptId,
+            async (attemptId, phase, detail) => {
+              await repository.recordAttemptEvent(attemptId, "sandbox_trace", {
+                phase,
+                ...detail,
+              });
+            },
           );
         }
       } else
@@ -1544,6 +1609,13 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
             env.ATTEMPT_SANDBOXES,
             sandboxName(attempt),
             context,
+            attempt.id,
+            async (attemptId, phase, detail) => {
+              await repository.recordAttemptEvent(attemptId, "sandbox_trace", {
+                phase,
+                ...detail,
+              });
+            },
           );
         }
       }

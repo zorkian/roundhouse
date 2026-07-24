@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createServer } from "node:http";
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -429,6 +429,12 @@ export function normalizedDevContainerConfig(config, image) {
   };
 }
 
+export function devContainerConfigIdentity(config) {
+  return createHash("sha256")
+    .update(JSON.stringify(stable(config)))
+    .digest("hex");
+}
+
 function devcontainerResult(output) {
   for (const line of output.trim().split(/\r?\n/).reverse()) {
     try {
@@ -531,7 +537,18 @@ async function prepareDevContainer(directory, progress) {
       return undefined;
     }
   });
-  if (state?.runtimeVersion !== devcontainerRuntimeVersion)
+  const source = await measured(
+    progress,
+    "devcontainer_config_read",
+    async () => parseJsonc(await readFile(sourceConfig, "utf8")),
+  );
+  if (typeof source?.image !== "string")
+    throw new Error("devcontainer_image_required");
+  const sourceConfigIdentity = devContainerConfigIdentity(source);
+  if (
+    state?.runtimeVersion !== devcontainerRuntimeVersion ||
+    state?.sourceConfigIdentity !== sourceConfigIdentity
+  )
     state = await measured(
       progress,
       "devcontainer_runtime_config_refresh",
@@ -542,13 +559,6 @@ async function prepareDevContainer(directory, progress) {
           !/^[a-f0-9]{12,64}$/.test(staleContainerId)
         )
           throw new Error("devcontainer_state_container_id_invalid");
-        const source = await measured(
-          progress,
-          "devcontainer_config_read",
-          async () => parseJsonc(await readFile(sourceConfig, "utf8")),
-        );
-        if (typeof source?.image !== "string")
-          throw new Error("devcontainer_image_required");
         let digest =
           state?.image === source.image &&
           /^[^@\s]+@sha256:[a-f0-9]{64}$/.test(state?.imageDigest ?? "")
@@ -609,6 +619,7 @@ async function prepareDevContainer(directory, progress) {
           image: source.image,
           imageDigest: digest,
           runtimeVersion: devcontainerRuntimeVersion,
+          sourceConfigIdentity,
           containerId: undefined,
         };
       },

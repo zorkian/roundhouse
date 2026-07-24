@@ -19,7 +19,8 @@ when information or judgment is genuinely required.
 1. An authorized maintainer starts Roundhouse on a GitHub issue.
 2. It qualifies the report, asks focused questions when needed, and attempts to
    reproduce bugs before planning a fix.
-3. An agent implements the accepted plan in an isolated container and runs the
+3. An agent implements the accepted plan inside the repository's supported Dev
+   Container, nested within an isolated Cloudflare Sandbox, and runs the
    repository's validation commands.
 4. Roundhouse validates and promotes the resulting Git checkpoint, then opens
    a draft pull request.
@@ -37,6 +38,14 @@ The credential boundary is central to the design: implementation agents do not
 receive GitHub App, Cloudflare administration, deployment, or model-provider
 credentials. Promotion happens separately, with a short-lived GitHub token,
 only after the candidate checkpoint has been validated from a clean clone.
+
+The outer Cloudflare Sandbox VM is the security boundary. The nested Dev
+Container provides the repository's development environment but is not a
+second isolation boundary: repository lifecycle commands and the agent share
+the outer Sandbox's filesystem and implementation-stage network access.
+Implementation may reach arbitrary project-selected package and image hosts;
+read-only stages remain allowlisted. The current prototype is therefore
+limited to explicitly enrolled public repositories.
 
 ## Project status
 
