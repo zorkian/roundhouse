@@ -13,6 +13,7 @@ import { signCallback } from "./callback.js";
 import { coordinate } from "./coordinator.js";
 import {
   acceptGitHubCheckSuite,
+  acceptGitHubPullRequest,
   GitHubCiAutomation,
   type GitHubAutomationRepository,
 } from "./github-ci.js";
@@ -46,6 +47,10 @@ class AutomationRepository
 async function setupCi(
   reviewStatus: "clean" | "changes_requested" = "clean",
   withNonblockingSpecialist = false,
+  merge?: {
+    mode: "automatic" | "maintainer";
+    method: "merge" | "squash" | "rebase";
+  },
 ) {
   const repository = new AutomationRepository();
   await repository.create(
@@ -63,6 +68,7 @@ async function setupCi(
         version: 1,
         hash: "b".repeat(64),
         paths: { allowed: ["**"], protected: [".github/workflows/**"] },
+        ...(merge ? { merge } : {}),
       },
     }),
   );
@@ -515,6 +521,30 @@ describe("GitHub exact-head CI and merge", () => {
       revision: 8,
       currentHead: mergeCommit,
     });
+  });
+
+  it("leaves a clean pull request for a maintainer when automatic merge is disabled", async () => {
+    const { repository, run } = await setupCi("clean", false, {
+      mode: "maintainer",
+      method: "squash",
+    });
+    const api = github();
+    const automation = new GitHubCiAutomation(repository, api.api);
+    await expect(automation.reconcileCi(run, 100)).resolves.toBe("recorded");
+    await coordinate(
+      repository,
+      { submit: async () => undefined },
+      { runId: run.id, expectedRevision: run.revision },
+      101,
+    );
+    const merging = await repository.get(run.id);
+    if (!merging) throw new Error("merge_run_missing");
+    expect(merging).toMatchObject({
+      status: "waiting",
+      stage: "merge",
+      waitingReason: "maintainer_merge",
+    });
+    expect(api.put).not.toHaveBeenCalled();
   });
 
   it("waits while an exact-head check is incomplete", async () => {
@@ -1351,6 +1381,55 @@ describe("GitHub exact-head CI and merge", () => {
     ).resolves.toBe("duplicate");
     expect(wakeups).toEqual([
       { runId: run.id, expectedRevision: run.revision },
+    ]);
+  });
+
+  it("wakes a maintainer-merge run when GitHub reports the pull request merged", async () => {
+    const { repository, run } = await setupCi("clean", false, {
+      mode: "maintainer",
+      method: "squash",
+    });
+    const api = github();
+    await new GitHubCiAutomation(repository, api.api).reconcileCi(run, 100);
+    await coordinate(
+      repository,
+      { submit: async () => undefined },
+      { runId: run.id, expectedRevision: run.revision },
+      101,
+    );
+    const merging = await repository.get(run.id);
+    if (!merging) throw new Error("merge_run_missing");
+    const body = JSON.stringify({
+      action: "closed",
+      repository: { id: 123, full_name: "zorkian/roundhouse" },
+      installation: { id: 456 },
+      pull_request: {
+        merged: true,
+        head: { ref: "roundhouse/issue-42", sha: head },
+      },
+    });
+    const signature = await signCallback("webhook-secret", body);
+    const wakeups: Wakeup[] = [];
+    await expect(
+      acceptGitHubPullRequest(
+        new Request("https://roundhouse.invalid/github/webhook", {
+          method: "POST",
+          headers: {
+            "x-github-delivery": "pull-request-delivery",
+            "x-github-event": "pull_request",
+            "x-hub-signature-256": `sha256=${signature}`,
+          },
+          body,
+        }),
+        env,
+        repository,
+        async (wakeup) => {
+          wakeups.push(wakeup);
+        },
+      ),
+    ).resolves.toBe("accepted");
+    expect(wakeups).toEqual([
+      { runId: merging.id, expectedRevision: merging.revision + 1 },
     ]);
   });
 });

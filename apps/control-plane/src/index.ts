@@ -4,6 +4,7 @@
 import {
   immutableAttemptId,
   isModelRoute,
+  profileModelForAttempt,
   reviewerForRole,
   runSchemaVersion,
   type Attempt,
@@ -31,7 +32,11 @@ import {
 import { D1RunRepository, type D1Like } from "./d1-store.js";
 import { renderDashboard } from "./dashboard.js";
 import { renderRunDetails } from "./run-details.js";
-import { acceptGitHubCheckSuite, GitHubCiAutomation } from "./github-ci.js";
+import {
+  acceptGitHubCheckSuite,
+  acceptGitHubPullRequest,
+  GitHubCiAutomation,
+} from "./github-ci.js";
 import {
   acceptGitHubComment,
   acceptGitHubIssueClosed,
@@ -549,7 +554,12 @@ class SandboxDispatcher implements AttemptDispatcher {
   private async resolveModelRoute(
     attempt: Attempt,
     taskType: string,
+    run: RunSnapshot,
   ): Promise<ModelRoute> {
+    const requested = run.profile
+      ? profileModelForAttempt(run.profile, attempt.stage, attempt.role)
+      : undefined;
+    const startedAt = Date.now();
     const response = await observeResponse(
       await this.modelBroker.fetch(
         new Request("https://broker.roundhouse.internal/route", {
@@ -559,6 +569,13 @@ class SandboxDispatcher implements AttemptDispatcher {
             role: attempt.role,
             taskType,
             complexity: "unknown",
+            ...(requested
+              ? {
+                  requestedModel: requested.id,
+                  requestedReasoning: requested.reasoning,
+                  profileHash: run.profile?.hash,
+                }
+              : {}),
           }),
         }),
       ),
@@ -571,6 +588,21 @@ class SandboxDispatcher implements AttemptDispatcher {
     if (!response.ok) throw new Error(`model_route_http_${response.status}`);
     const route = (await response.json()) as ModelRoute;
     if (!isModelRoute(route)) throw new Error("invalid_model_route");
+    console.log(
+      JSON.stringify({
+        message: "model_route_resolved",
+        attemptId: attempt.id,
+        role: attempt.role,
+        requestedModel: requested?.id ?? null,
+        requestedReasoning: requested?.reasoning ?? null,
+        resolvedProvider: route.provider,
+        resolvedModel: route.model,
+        resolvedReasoning: route.thinkingLevel,
+        routingRule: route.rule,
+        profileHash: run.profile?.hash ?? null,
+        durationMs: Date.now() - startedAt,
+      }),
+    );
     await this.runs.recordModelRouting(attempt.id, route);
     return route;
   }
@@ -590,7 +622,7 @@ class SandboxDispatcher implements AttemptDispatcher {
     const route =
       attempt.role === "integrate"
         ? undefined
-        : await this.resolveModelRoute(attempt, taskType);
+        : await this.resolveModelRoute(attempt, taskType, run);
     const repository = await this.artifacts.ensure(
       workspaceName(attempt.runId),
     );
@@ -753,7 +785,9 @@ class SandboxDispatcher implements AttemptDispatcher {
     const reproduction = reproductionAttempt?.result?.reproduction;
     const plan = planAttempt?.result?.plan;
     const implementation = implementationAttempt?.result?.implementation;
-    const review = reviewAttempt ? aggregatedReview(reviewAttempts) : undefined;
+    const review = reviewAttempt
+      ? aggregatedReview(reviewAttempts, run.profile)
+      : undefined;
     const ci = ciAttempt?.result?.ci;
     const integrateEvidence =
       attempt.role === "conflict-resolution"
@@ -1551,9 +1585,17 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
           repository,
           enqueue,
         );
+      else if (event === "pull_request")
+        outcome = await acceptGitHubPullRequest(
+          request,
+          env,
+          repository,
+          enqueue,
+        );
       else if (event === "issues") {
         const closure = await acceptGitHubIssueClosed(request, env, repository);
         outcome = closure.outcome;
+        if (closure.wakeup) await enqueue(closure.wakeup);
         if (closure.attemptId) {
           const attempt = await repository.getAttempt(closure.attemptId);
           scheduleAttemptSandboxDestruction(

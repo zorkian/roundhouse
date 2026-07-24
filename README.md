@@ -26,7 +26,9 @@ when information or judgment is genuinely required.
    a draft pull request.
 5. Independent reviewers inspect the exact candidate commit. Actionable
    findings send the change back through implementation and validation.
-6. Repository CI must pass for that same commit before Roundhouse can merge it.
+6. Repository CI must pass for that same commit before Roundhouse can merge it
+   automatically or leave it ready for a maintainer, according to the
+   repository profile.
 
 GitHub remains the source of truth for issues, pull requests, CI, and merged
 code. A Cloudflare Worker coordinates each run, D1 stores workflow state, and
@@ -46,6 +48,21 @@ the outer Sandbox's filesystem and implementation-stage network access.
 Implementation may reach arbitrary project-selected package and image hosts;
 read-only stages remain allowlisted. The current prototype is therefore
 limited to explicitly enrolled public repositories.
+
+## Repository configuration
+
+An enrolled repository owns its reviewed configuration in
+`.roundhouse/profile.yaml`. Profile V2 defines allowed and protected paths,
+operators, merge mode and method, the development container, canonical
+validation commands, per-stage models, reviewers, and repository instructions.
+Long instructions live in explicitly referenced files under
+`.roundhouse/prompts/`.
+
+Roundhouse loads the profile and every referenced instruction from one exact
+default-branch commit, hashes their normalized contents, and snapshots them
+onto the run. Roundhouse cannot modify `.roundhouse/**` or the selected Dev
+Container configuration. Fixed Roundhouse isolation, tool, read-only, and
+result-submission rules take precedence over repository instructions.
 
 ## Project status
 

@@ -117,6 +117,28 @@ describe("model broker", () => {
     },
   );
 
+  it("honors a model and reasoning level selected by a repository profile", () => {
+    expect(
+      resolveRoute(
+        {
+          role: "implement",
+          taskType: "implementation",
+          complexity: "unknown",
+          requestedModel: "google/gemini-3.0-pro",
+          requestedReasoning: "medium",
+          profileHash: "a".repeat(64),
+        },
+        env,
+      ),
+    ).toEqual({
+      provider: "google",
+      model: "google/gemini-3.0-pro",
+      protocol: "google-generative-ai",
+      thinkingLevel: "medium",
+      rule: "profile-implement-v2",
+    });
+  });
+
   it("serves route resolution before a container is dispatched", async () => {
     const response = await brokerRequest(
       new Request("https://broker.invalid/route", {

@@ -610,16 +610,21 @@ implementation, and review to explicit model-plus-effort pairs and recorded
 them in evidence. V2 keeps that behavior but removes model literals from stage
 schemas and runner branches.
 
-The active Roundhouse policy contains a versioned routing map:
+Each Profile V2 document contains an explicit versioned routing map:
 
 ```yaml
-models:
-  qualification: { provider: openai, model: ..., effort: medium }
-  reproduction: { provider: openai, model: ..., effort: medium }
-  planning: { provider: openai, model: ..., effort: medium }
-  implementation: { provider: openai, model: ..., effort: medium }
-  reviewers:
-    code-quality: { provider: openai, model: ..., effort: medium }
+stages:
+  qualification:
+    model: { id: openai/..., reasoning: medium }
+  investigation:
+    model: { id: openai/..., reasoning: medium }
+  planning:
+    model: { id: openai/..., reasoning: medium }
+  implementation:
+    model: { id: moonshotai/..., reasoning: medium }
+reviewers:
+  holistic:
+    model: { id: openai/..., reasoning: medium }
 ```
 
 The prototype embeds Pi as the provider-neutral coding harness. The route binds
@@ -802,22 +807,38 @@ stops the merge.
 ## 8. Repository profile
 
 Enrollment points Roundhouse to one reviewed, versioned profile in the target
-repository. The current prototype schema is deliberately limited to version 1
-path policy: `paths.allowed` and `paths.protected`. Either list may be empty;
-an empty allowed list permits no source changes, while an empty protected list
-adds no repository-specific protected paths. Roundhouse always protects the
-`.roundhouse` profile directory itself.
+repository. Profile V2 defines:
 
-Later observed needs may extend the profile with:
+- allowed and protected paths;
+- operators authorized by repository permission, explicit GitHub user, or
+  GitHub team;
+- automatic or maintainer merge and the automatic merge method;
+- an optional explicit Dev Container configuration;
+- repository-wide and per-stage instruction files;
+- models and reasoning levels for qualification, investigation, planning,
+  implementation, and each reviewer;
+- enabled reviewers, holistic specialist selection, and blocking severities;
+  and
+- canonical validation commands expressed as argument arrays.
 
-- repository identity and default branch;
-- authorized actor roles;
-- allowed/protected path and semantic risk rules;
-- reproduction and validation commands with timeouts;
-- permitted package-install behavior and egress destinations;
-- required reviewers and activation conditions;
-- automatic-merge policy; and
-- retention periods.
+Either path list may be empty; an empty allowed list permits no source changes,
+while an empty protected list adds no repository-specific protected paths.
+Roundhouse always protects `.roundhouse/**` and the selected Dev Container
+configuration.
+
+Long instructions live under `.roundhouse/prompts/` and are referenced
+explicitly by the profile. The loader reads the profile and every referenced
+instruction from the same exact commit. Their normalized contents are included
+in the immutable profile hash and run snapshot. Fixed Roundhouse isolation,
+tool, read-only, and result-submission instructions take precedence over
+repository instructions.
+
+An operator may start or explicitly resume Roundhouse. Ordinary issue
+participants may answer a question only when the run is waiting for
+clarification. GitHub repository permissions remain the authority for a human
+merge. Under maintainer merge mode, Roundhouse leaves a clean, CI-passing pull
+request ready and completes the run after GitHub reports that a maintainer
+merged it.
 
 Profiles are data, not executable control-plane code. Commands use argument
 arrays or reviewed repository scripts; the control plane does not concatenate

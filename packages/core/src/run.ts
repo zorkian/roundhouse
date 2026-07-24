@@ -33,6 +33,7 @@ export const waitingReasons = [
   "maintainer_judgment",
   "budget",
   "external_check",
+  "maintainer_merge",
   "retry_exhausted",
   "profile_error",
 ] as const;

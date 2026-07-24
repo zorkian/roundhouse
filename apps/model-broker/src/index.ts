@@ -43,6 +43,9 @@ interface RoutingEnvelope {
   readonly role: string;
   readonly taskType: string;
   readonly complexity: string;
+  readonly requestedModel?: string;
+  readonly requestedReasoning?: ModelRoute["thinkingLevel"];
+  readonly profileHash?: string;
 }
 
 const defaultRoutes: Readonly<
@@ -108,8 +111,20 @@ function routingRule(role: string): string {
 function validEnvelope(value: unknown): value is RoutingEnvelope {
   if (!value || typeof value !== "object") return false;
   const envelope = value as Record<string, unknown>;
-  return [envelope.role, envelope.taskType, envelope.complexity].every(
-    (item) => typeof item === "string" && item.length > 0,
+  return (
+    [envelope.role, envelope.taskType, envelope.complexity].every(
+      (item) => typeof item === "string" && item.length > 0,
+    ) &&
+    (envelope.requestedModel === undefined ||
+      (typeof envelope.requestedModel === "string" &&
+        /^[a-z0-9._-]+\/[A-Za-z0-9._/-]+$/.test(envelope.requestedModel))) &&
+    (envelope.requestedReasoning === undefined ||
+      modelThinkingLevels.includes(
+        envelope.requestedReasoning as ModelRoute["thinkingLevel"],
+      )) &&
+    (envelope.profileHash === undefined ||
+      (typeof envelope.profileHash === "string" &&
+        /^[a-f0-9]{64}$/.test(envelope.profileHash)))
   );
 }
 
@@ -118,10 +133,17 @@ export function resolveRoute(
   env: BrokerEnv,
 ): ModelRoute {
   const configured = configuredRoutes(env)[envelope.role];
-  const model = configured?.model ?? env.ROUTING_MODEL;
-  const provider = configured?.provider ?? model.split("/", 1)[0] ?? "";
-  const protocol = configured?.protocol ?? defaultProtocol(provider);
-  const thinkingLevel = env.ROUTING_REASONING_EFFORT;
+  const model =
+    envelope.requestedModel ?? configured?.model ?? env.ROUTING_MODEL;
+  const provider =
+    (envelope.requestedModel ? undefined : configured?.provider) ??
+    model.split("/", 1)[0] ??
+    "";
+  const protocol = envelope.requestedModel
+    ? defaultProtocol(provider)
+    : (configured?.protocol ?? defaultProtocol(provider));
+  const thinkingLevel =
+    envelope.requestedReasoning ?? env.ROUTING_REASONING_EFFORT;
   if (
     !provider ||
     !model ||
@@ -134,7 +156,9 @@ export function resolveRoute(
     model,
     protocol,
     thinkingLevel: thinkingLevel as ModelRoute["thinkingLevel"],
-    rule: routingRule(envelope.role),
+    rule: envelope.requestedModel
+      ? `profile-${envelope.role}-v2`
+      : routingRule(envelope.role),
   };
 }
 
@@ -287,8 +311,33 @@ async function resolveRouteRequest(
       { status: 400 },
     );
   try {
-    return Response.json(resolveRoute(value, env));
-  } catch {
+    const route = resolveRoute(value, env);
+    console.log(
+      JSON.stringify({
+        message: "model_route_selected",
+        role: value.role,
+        taskType: value.taskType,
+        requestedModel: value.requestedModel ?? null,
+        requestedReasoning: value.requestedReasoning ?? null,
+        profileHash: value.profileHash ?? null,
+        provider: route.provider,
+        model: route.model,
+        protocol: route.protocol,
+        thinkingLevel: route.thinkingLevel,
+        rule: route.rule,
+      }),
+    );
+    return Response.json(route);
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        message: "model_route_selection_failed",
+        role: value.role,
+        requestedModel: value.requestedModel ?? null,
+        profileHash: value.profileHash ?? null,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
     return Response.json(
       { error: "invalid_routing_configuration" },
       { status: 500 },

@@ -633,7 +633,38 @@ export class GitHubStageReporter implements AttemptReporter {
 
   async report(run: RunSnapshot, attempt: Attempt): Promise<void> {
     if (attempt.stage === "implement" && run.status === "failed") return;
-    if (attempt.stage === "ci") return;
+    if (attempt.stage === "ci") {
+      if (run.status !== "waiting" || run.waitingReason !== "maintainer_merge")
+        return;
+      const pullRequest = await findPullRequest(this.github, run, "all");
+      const marker = `<!-- roundhouse:v2:maintainer-merge:${attempt.id} -->`;
+      const comments = await listComments(
+        this.github,
+        `/repos/${run.repository}/issues/${run.issueNumber}/comments`,
+      );
+      if (comments.some((comment) => comment.body?.includes(marker))) return;
+      await this.github.post(
+        `/repos/${run.repository}/issues/${run.issueNumber}/comments`,
+        {
+          body: this.withDetails(
+            run,
+            [
+              marker,
+              "## Ready for a maintainer to merge",
+              "",
+              "The change passed Roundhouse review and repository CI. Automatic merge is disabled for this repository.",
+              ...(pullRequest
+                ? [
+                    "",
+                    `[View pull request #${pullRequest.number}](${pullRequest.html_url})`,
+                  ]
+                : []),
+            ].join("\n"),
+          ),
+        },
+      );
+      return;
+    }
     if (attempt.stage === "integrate") return;
     if (attempt.stage === "merge") {
       if (run.status !== "succeeded") return;
@@ -812,27 +843,49 @@ async function loadRepositoryProfile(
   repository: string,
   commit: string,
 ): Promise<AppliedProfile> {
-  const file = await api.get<{
-    content?: string;
-    encoding?: string;
-    name?: string;
-    type?: string;
-  }>(
-    `/repos/${repository}/contents/${profileSourcePath}?ref=${encodeURIComponent(commit)}`,
+  const startedAt = Date.now();
+  const loadFile = async (path: string): Promise<string> => {
+    const fileStartedAt = Date.now();
+    const file = await api.get<{
+      content?: string;
+      encoding?: string;
+      name?: string;
+      type?: string;
+    }>(
+      `/repos/${repository}/contents/${path}?ref=${encodeURIComponent(commit)}`,
+    );
+    if (file.type !== "file" || file.encoding !== "base64" || !file.content)
+      throw new Error(`profile_content_missing:${path}`);
+    const content = new TextDecoder().decode(
+      Uint8Array.from(atob(file.content.replaceAll("\n", "")), (value) =>
+        value.charCodeAt(0),
+      ),
+    );
+    console.log(
+      JSON.stringify({
+        message: "repository_profile_file_loaded",
+        repository,
+        commit,
+        path,
+        bytes: new TextEncoder().encode(content).byteLength,
+        durationMs: Date.now() - fileStartedAt,
+      }),
+    );
+    return content;
+  };
+  const yaml = await loadFile(profileSourcePath);
+  const profile = await parseProfile(yaml, commit, loadFile);
+  console.log(
+    JSON.stringify({
+      message: "repository_profile_loaded",
+      repository,
+      commit,
+      version: profile.version,
+      profileHash: profile.hash,
+      durationMs: Date.now() - startedAt,
+    }),
   );
-  if (
-    file.name !== "profile.yaml" ||
-    file.type !== "file" ||
-    file.encoding !== "base64" ||
-    !file.content
-  )
-    throw new Error("profile_content_missing");
-  const yaml = new TextDecoder().decode(
-    Uint8Array.from(atob(file.content.replaceAll("\n", "")), (value) =>
-      value.charCodeAt(0),
-    ),
-  );
-  return parseProfile(yaml, commit);
+  return profile;
 }
 
 export function githubClientForRun(
@@ -900,6 +953,66 @@ async function concludedNoChangeQualification(
   return noChangeQualifications.has(
     String((qualification as Record<string, unknown>).classification),
   );
+}
+
+export async function operatorAuthorized(
+  api: GitHubApi,
+  repository: string,
+  actor: string,
+  profile?: AppliedProfile,
+): Promise<boolean> {
+  const startedAt = Date.now();
+  const operators = profile?.permissions?.operators;
+  const allowedPermissions = new Set<string>(
+    operators?.repositoryPermissions ?? ["admin", "maintain", "write"],
+  );
+  const normalizedActor = actor.toLowerCase();
+  let source = "";
+  if (operators?.users.some((user) => user.toLowerCase() === normalizedActor)) {
+    source = "user";
+  } else if (allowedPermissions.size) {
+    const permission = await api.get<{ permission?: string }>(
+      `/repos/${repository}/collaborators/${encodeURIComponent(actor)}/permission`,
+    );
+    if (allowedPermissions.has(permission.permission ?? ""))
+      source = "repository_permission";
+  }
+  if (!source) {
+    for (const team of operators?.teams ?? []) {
+      const [organization, slug] = team.split("/", 2) as [string, string];
+      try {
+        const membership = await api.get<{ state?: string }>(
+          `/orgs/${encodeURIComponent(organization)}/teams/${encodeURIComponent(slug)}/memberships/${encodeURIComponent(actor)}`,
+        );
+        if (membership.state === "active") {
+          source = "team";
+          break;
+        }
+      } catch (error) {
+        console.error(
+          JSON.stringify({
+            message: "repository_operator_team_check_failed",
+            repository,
+            actor,
+            team,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+      }
+    }
+  }
+  console.log(
+    JSON.stringify({
+      message: "repository_operator_authorized",
+      repository,
+      actor,
+      authorized: Boolean(source),
+      source: source || "none",
+      profileHash: profile?.hash ?? null,
+      durationMs: Date.now() - startedAt,
+    }),
+  );
+  return Boolean(source);
 }
 
 export async function acceptGitHubComment(
@@ -1039,27 +1152,35 @@ export async function acceptGitHubComment(
     );
     return "accepted";
   }
-  const permission = await api.get<{ permission?: string }>(
-    `/repos/${repositoryName}/collaborators/${encodeURIComponent(actor)}/permission`,
-  );
-  if (!new Set(["admin", "maintain", "write"]).has(permission.permission ?? ""))
-    return "unauthorized";
   const repo = await api.get<{ default_branch: string }>(
     `/repos/${repositoryName}`,
   );
   const commit = await api.get<{ sha: string }>(
     `/repos/${repositoryName}/commits/${encodeURIComponent(repo.default_branch)}`,
   );
+  let requestedProfile: AppliedProfile | undefined;
+  let requestedProfileError: string | undefined;
+  try {
+    requestedProfile = await loadRepositoryProfile(
+      api,
+      repositoryName,
+      commit.sha,
+    );
+  } catch (error) {
+    requestedProfileError = "Repository profile is missing or invalid";
+    console.error(
+      JSON.stringify({
+        message: "repository_profile_invalid",
+        repository: repositoryName,
+        commit: commit.sha,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
+  }
+  if (!(await operatorAuthorized(api, repositoryName, actor, requestedProfile)))
+    return "unauthorized";
   const existing = Boolean(run);
   if (!run) {
-    let profile: Awaited<ReturnType<typeof parseProfile>> | undefined;
-    let profileError: string | undefined;
-    try {
-      profile = await loadRepositoryProfile(api, repositoryName, commit.sha);
-    } catch (error) {
-      profileError = "Repository profile is missing or invalid";
-      console.error("repository_profile_invalid", error);
-    }
     const created = createRun({
       id,
       repository: repositoryName,
@@ -1068,8 +1189,10 @@ export async function acceptGitHubComment(
       githubDefaultBranch: repo.default_branch,
       issueNumber,
       baseCommit: commit.sha,
-      profileVersion: profile?.hash ?? commit.sha,
-      ...(profile ? { profile } : { profileError }),
+      profileVersion: requestedProfile?.hash ?? commit.sha,
+      ...(requestedProfile
+        ? { profile: requestedProfile }
+        : { profileError: requestedProfileError }),
       issue: {
         title: payload.issue?.title ?? "",
         body: payload.issue?.body ?? "",
@@ -1077,7 +1200,7 @@ export async function acceptGitHubComment(
         actor,
       },
     });
-    run = profile
+    run = requestedProfile
       ? created
       : { ...created, status: "waiting", waitingReason: "profile_error" };
     await repository.create(run);
@@ -1105,14 +1228,8 @@ export async function acceptGitHubComment(
       };
       let profile: AppliedProfile | undefined;
       if (!run.profile || run.waitingReason === "profile_error") {
-        try {
-          profile = await loadRepositoryProfile(
-            api,
-            repositoryName,
-            commit.sha,
-          );
-        } catch (error) {
-          console.error("repository_profile_invalid", error);
+        profile = requestedProfile;
+        if (!profile) {
           await postIntakeComment(
             api,
             run,
@@ -1184,6 +1301,7 @@ export async function acceptGitHubIssueClosed(
     | "ignored"
     | "unauthorized";
   readonly attemptId?: string;
+  readonly wakeup?: Wakeup;
 }> {
   const deliveryId = request.headers.get("x-github-delivery");
   const event = request.headers.get("x-github-event");
@@ -1227,6 +1345,27 @@ export async function acceptGitHubIssueClosed(
   const state = payload.action === "closed" ? "closed" : "open";
   await repository.setGitHubIssueState(run.id, state);
   if (payload.action === "reopened") return { outcome: "reopened" };
+  if (
+    run.stage === "merge" &&
+    run.profile?.merge?.mode === "maintainer" &&
+    (run.status === "active" ||
+      (run.status === "waiting" && run.waitingReason === "maintainer_merge"))
+  ) {
+    const resumed =
+      run.status === "active"
+        ? run
+        : await repository.transition(run.id, run.revision, {
+            status: "active",
+            stage: "merge",
+            acceptedHead: run.currentHead,
+          });
+    return resumed
+      ? {
+          outcome: "closed",
+          wakeup: { runId: resumed.id, expectedRevision: resumed.revision },
+        }
+      : { outcome: "duplicate" };
+  }
   if (run.status !== "active" && run.status !== "waiting")
     return { outcome: "closed" };
   const attemptId =
