@@ -17,6 +17,7 @@ import {
   acceptGitHubIssueClosed,
   GitHubClient,
   GitHubStageReporter,
+  operatorAuthorized,
   verifyGitHubWebhook,
   type GitHubApi,
   type GitHubEnv,
@@ -198,6 +199,62 @@ async function concludeQualification(
 }
 
 describe("GitHub intake", () => {
+  it("authorizes explicit profile users without repository permission", async () => {
+    const get = vi.fn(async () => {
+      throw new Error("repository_permission_must_not_be_required");
+    });
+    await expect(
+      operatorAuthorized(
+        { get } as unknown as GitHubApi,
+        "zorkian/roundhouse",
+        "Profile-Operator",
+        {
+          sourcePath: ".roundhouse/profile.yaml",
+          sourceCommit: "a".repeat(40),
+          version: 2,
+          hash: "b".repeat(64),
+          paths: { allowed: ["**"], protected: [] },
+          permissions: {
+            operators: {
+              repositoryPermissions: [],
+              users: ["profile-operator"],
+              teams: [],
+            },
+          },
+        },
+      ),
+    ).resolves.toBe(true);
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it("authorizes active members of an explicit profile team", async () => {
+    const get = vi.fn(async (path: string) => {
+      if (path.includes("/memberships/")) return { state: "active" };
+      throw new Error(`unexpected_get:${path}`);
+    });
+    await expect(
+      operatorAuthorized(
+        { get } as unknown as GitHubApi,
+        "dreamwidth/dreamwidth",
+        "contributor",
+        {
+          sourcePath: ".roundhouse/profile.yaml",
+          sourceCommit: "a".repeat(40),
+          version: 2,
+          hash: "b".repeat(64),
+          paths: { allowed: ["**"], protected: [] },
+          permissions: {
+            operators: {
+              repositoryPermissions: [],
+              users: [],
+              teams: ["dreamwidth/maintainers"],
+            },
+          },
+        },
+      ),
+    ).resolves.toBe(true);
+  });
+
   it("cancels active work when its GitHub issue closes", async () => {
     const repository = new IntakeRepository();
     await repository.create(
@@ -234,6 +291,51 @@ describe("GitHub intake", () => {
         repository,
       ),
     ).resolves.toEqual({ outcome: "duplicate" });
+  });
+
+  it("reconciles rather than cancels a maintainer merge when GitHub closes the issue", async () => {
+    const repository = new IntakeRepository();
+    const id = "run_123_issue_42";
+    await repository.create(
+      createRun({
+        id,
+        repository: "zorkian/roundhouse",
+        githubRepositoryId: 123,
+        githubInstallationId: 456,
+        issueNumber: 42,
+        baseCommit: "a".repeat(40),
+        profileVersion: "v2",
+        profile: {
+          sourcePath: ".roundhouse/profile.yaml",
+          sourceCommit: "a".repeat(40),
+          version: 2,
+          hash: "b".repeat(64),
+          paths: { allowed: ["**"], protected: [] },
+          merge: { mode: "maintainer", method: "squash" },
+        },
+      }),
+    );
+    await repository.transition(id, 1, {
+      status: "waiting",
+      stage: "merge",
+      waitingReason: "maintainer_merge",
+      acceptedHead: "a".repeat(40),
+    });
+    await expect(
+      acceptGitHubIssueClosed(
+        await closureDelivery("maintainer-merge-close"),
+        env,
+        repository,
+      ),
+    ).resolves.toEqual({
+      outcome: "closed",
+      wakeup: { runId: id, expectedRevision: 3 },
+    });
+    await expect(repository.get(id)).resolves.toMatchObject({
+      status: "active",
+      stage: "merge",
+      revision: 3,
+    });
   });
 
   it("closes and reopens a failed issue without changing or restarting its run", async () => {

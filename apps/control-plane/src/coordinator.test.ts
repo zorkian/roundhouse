@@ -200,6 +200,87 @@ describe("single coordinator", () => {
     });
   });
 
+  it("does not dispatch a specialist disabled by the repository profile", async () => {
+    const store = new MemoryRunRepository();
+    const run = {
+      ...createRun({
+        ...input,
+        profile: {
+          ...input.profile,
+          reviewers: {
+            holistic: {
+              enabled: true,
+              model: { id: "openai/gpt-5.6-sol", reasoning: "low" as const },
+              blockingSeverities: ["high" as const],
+            },
+            security: {
+              enabled: false,
+              selectedBy: "holistic" as const,
+              model: { id: "openai/gpt-5.6-sol", reasoning: "low" as const },
+              blockingSeverities: ["high" as const],
+            },
+            data: {
+              enabled: false,
+              selectedBy: "holistic" as const,
+              model: { id: "openai/gpt-5.6-sol", reasoning: "low" as const },
+              blockingSeverities: ["high" as const],
+            },
+          },
+        },
+      }),
+      revision: 5,
+      stage: "review" as const,
+      currentHead: "b".repeat(40),
+    };
+    await store.create(run);
+    store.attempts.set("holistic", {
+      id: "holistic",
+      runId: input.id,
+      runRevision: 5,
+      kind: "agent",
+      stage: "review",
+      role: "review-holistic",
+      state: "completed",
+      deadlineAt: 1_000,
+      baseCommit: input.baseCommit,
+      expectedHead: run.currentHead,
+      acceptedHead: run.currentHead,
+      result: {
+        review: {
+          status: "clean",
+          summary: "Looks good",
+          findings: [],
+          selections: [
+            {
+              role: "review-security",
+              applicable: true,
+              rationale: "Authorization changed",
+            },
+            {
+              role: "review-data",
+              applicable: false,
+              rationale: "No data changes",
+            },
+          ],
+        },
+      },
+    });
+    const submit = vi.fn(async () => undefined);
+    await expect(
+      coordinate(
+        store,
+        { submit },
+        { runId: input.id, expectedRevision: 5 },
+        100,
+      ),
+    ).resolves.toBe("dispatched");
+    expect(submit).not.toHaveBeenCalled();
+    await expect(store.get(input.id)).resolves.toMatchObject({
+      status: "active",
+      stage: "integrate",
+    });
+  });
+
   it("blocks only findings at a reviewer's configured severities", async () => {
     const store = new MemoryRunRepository();
     const run = {

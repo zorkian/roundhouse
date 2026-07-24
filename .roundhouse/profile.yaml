@@ -1,6 +1,81 @@
-version: 1
+version: 2
+
 paths:
   allowed:
     - "**"
   protected:
     - ".github/workflows/**"
+
+merge:
+  mode: automatic
+  method: merge
+
+permissions:
+  operators:
+    repository_permissions:
+      - admin
+      - maintain
+      - write
+    users: []
+    teams: []
+
+instructions:
+  project: prompts/project.md
+
+stages:
+  qualification:
+    model:
+      id: openai/gpt-5.6-sol
+      reasoning: low
+  investigation:
+    model:
+      id: openai/gpt-5.6-sol
+      reasoning: low
+  planning:
+    model:
+      id: openai/gpt-5.6-sol
+      reasoning: low
+  implementation:
+    model:
+      id: moonshotai/kimi-k3
+      reasoning: low
+
+reviewers:
+  holistic:
+    enabled: true
+    model:
+      id: openai/gpt-5.6-sol
+      reasoning: low
+    blocking_severities:
+      - critical
+      - high
+      - medium
+  security:
+    enabled: true
+    selected_by: holistic
+    model:
+      id: openai/gpt-5.6-sol
+      reasoning: low
+    blocking_severities:
+      - critical
+      - high
+      - medium
+  data:
+    enabled: true
+    selected_by: holistic
+    model:
+      id: openai/gpt-5.6-sol
+      reasoning: low
+    blocking_severities:
+      - critical
+      - high
+      - medium
+
+validation:
+  commands:
+    - name: repository checks
+      run:
+        - pnpm
+        - check
+
+development_environment: {}

@@ -383,6 +383,36 @@ describe("V2 agent runner", () => {
     expect(prompt).toContain('"conclusion":"failure"');
   });
 
+  it("applies immutable repository instructions and validation commands", () => {
+    const prompt = implementationPrompt({
+      id: "attempt_profile",
+      profile: {
+        hash: "a".repeat(64),
+        instructions: {
+          project: {
+            sourcePath: ".roundhouse/prompts/project.md",
+            content: "Capture before and after screenshots for visual changes.",
+          },
+        },
+        stages: {
+          implementation: {
+            instructions: {
+              sourcePath: ".roundhouse/prompts/implementation.md",
+              content: "Use the repository development environment.",
+            },
+          },
+        },
+        validation: {
+          commands: [{ name: "tests", run: ["pnpm", "test"] }],
+        },
+      },
+    });
+    expect(prompt).toContain("Trusted repository instructions");
+    expect(prompt).toContain("Capture before and after screenshots");
+    expect(prompt).toContain("Use the repository development environment");
+    expect(prompt).toContain('"run":["pnpm","test"]');
+  });
+
   it("requires requested screenshot evidence before implementation can submit", () => {
     const assignment = {
       issue: {

@@ -1,7 +1,7 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import { reviewers, type Attempt } from "@roundhouse/core";
+import { reviewers, type AppliedProfile, type Attempt } from "@roundhouse/core";
 
 export interface AggregatedReviewFinding {
   readonly reviewer: string;
@@ -23,13 +23,18 @@ export interface AggregatedReview {
 
 export function aggregatedReviewStatus(
   attempts: readonly Attempt[],
+  profile?: AppliedProfile,
 ): AggregatedReview["status"] {
   const changesRequested = attempts.some((attempt) => {
     const review = attempt.result?.review as
       Record<string, unknown> | undefined;
+    const profileName = attempt.role.replace("review-", "") as
+      "holistic" | "security" | "data";
     const blocking = new Set<string>(
-      reviewers.find((reviewer) => reviewer.role === attempt.role)
-        ?.blockingSeverities ?? [],
+      profile?.reviewers?.[profileName]?.blockingSeverities ??
+        reviewers.find((reviewer) => reviewer.role === attempt.role)
+          ?.blockingSeverities ??
+        [],
     );
     return (
       Array.isArray(review?.findings) &&
@@ -46,7 +51,8 @@ export function aggregatedReviewStatus(
 
 export function aggregatedReview(
   attempts: readonly Attempt[],
-  status = aggregatedReviewStatus(attempts),
+  profile?: AppliedProfile,
+  status = aggregatedReviewStatus(attempts, profile),
 ): AggregatedReview {
   const findings = attempts.flatMap((attempt) => {
     const review = attempt.result?.review as

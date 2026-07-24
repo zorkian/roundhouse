@@ -140,6 +140,19 @@ interface CheckSuitePayload {
   };
 }
 
+interface PullRequestPayload {
+  readonly action?: string;
+  readonly repository?: { readonly id?: number; readonly full_name?: string };
+  readonly installation?: { readonly id?: number };
+  readonly pull_request?: {
+    readonly merged?: boolean;
+    readonly head?: {
+      readonly ref?: string;
+      readonly sha?: string;
+    };
+  };
+}
+
 function exactAttempt(
   attempt: Attempt | undefined,
   stage: "review" | "ci",
@@ -169,6 +182,7 @@ async function aggregateReview(
   if (!latest) return undefined;
   return aggregateReviewAttempts(
     await repository.attemptsForRevision(run.id, latest.runRevision),
+    run.profile,
   );
 }
 
@@ -613,6 +627,25 @@ export class GitHubCiAutomation {
       (pull.draft || !checksSucceeded(checks, run.currentHead))
     )
       return "pending";
+    if (!pull.merged && run.profile?.merge?.mode === "maintainer") {
+      console.log(
+        JSON.stringify({
+          message: "github_merge_waiting_for_maintainer",
+          runId: run.id,
+          revision: run.revision,
+          pullRequest: pull.number,
+          head: run.currentHead,
+          profileHash: run.profile.hash,
+        }),
+      );
+      const waiting = await this.repository.transition(run.id, run.revision, {
+        status: "waiting",
+        stage: "merge",
+        waitingReason: "maintainer_merge",
+        acceptedHead: run.currentHead,
+      });
+      return waiting ? "recorded" : "stale";
+    }
 
     const claimed = await this.repository.claimLease(
       run.id,
@@ -647,7 +680,7 @@ export class GitHubCiAutomation {
           readonly sha?: string;
         }>(`/repos/${run.repository}/pulls/${pull.number}/merge`, {
           sha: run.currentHead,
-          merge_method: "merge",
+          merge_method: run.profile?.merge?.method ?? "merge",
         });
     if (!result.merged || !result.sha || !/^[a-f0-9]{40}$/.test(result.sha))
       throw new Error("github_pull_request_not_merged");
@@ -724,5 +757,76 @@ export async function acceptGitHubCheckSuite(
   });
   if (!fresh) return "duplicate";
   await enqueue({ runId: run.id, expectedRevision: run.revision });
+  return "accepted";
+}
+
+export async function acceptGitHubPullRequest(
+  request: Request,
+  env: GitHubEnv,
+  repository: GitHubAutomationRepository,
+  enqueue: (wakeup: Wakeup) => Promise<void>,
+): Promise<"accepted" | "duplicate" | "ignored" | "unauthorized"> {
+  const deliveryId = request.headers.get("x-github-delivery");
+  const event = request.headers.get("x-github-event");
+  const signature = request.headers.get("x-hub-signature-256") ?? "";
+  if (!deliveryId || event !== "pull_request") return "ignored";
+  const raw = await request.text();
+  if (
+    !(await verifyGitHubWebhook(
+      raw,
+      signature,
+      env.ROUNDHOUSE_GITHUB_WEBHOOK_SECRET,
+    ))
+  )
+    return "unauthorized";
+  const payload = JSON.parse(raw) as PullRequestPayload;
+  const repositoryName = payload.repository?.full_name;
+  const repositoryId = payload.repository?.id;
+  if (
+    payload.action !== "closed" ||
+    payload.pull_request?.merged !== true ||
+    !repositoryName ||
+    !repositoryId ||
+    !payload.installation?.id
+  )
+    return "ignored";
+  const id = runIdFromBranch(repositoryId, payload.pull_request.head?.ref);
+  const run = id ? await repository.get(id) : undefined;
+  if (
+    !id ||
+    !run ||
+    run.repository !== repositoryName ||
+    run.githubInstallationId !== payload.installation.id ||
+    !["active", "waiting"].includes(run.status) ||
+    run.stage !== "merge" ||
+    payload.pull_request.head?.sha !== run.currentHead
+  )
+    return "ignored";
+  const fresh = await repository.recordGitHubDelivery(id, deliveryId, {
+    event,
+    issueNumber: run.issueNumber,
+    head: run.currentHead,
+    action: "merged",
+  });
+  if (!fresh) return "duplicate";
+  const resumed =
+    run.status === "waiting"
+      ? await repository.transition(run.id, run.revision, {
+          status: "active",
+          stage: "merge",
+          acceptedHead: run.currentHead,
+        })
+      : run;
+  if (!resumed) return "ignored";
+  console.log(
+    JSON.stringify({
+      message: "github_maintainer_merge_observed",
+      runId: run.id,
+      revision: resumed.revision,
+      head: run.currentHead,
+      profileHash: run.profile?.hash ?? null,
+    }),
+  );
+  await enqueue({ runId: resumed.id, expectedRevision: resumed.revision });
   return "accepted";
 }

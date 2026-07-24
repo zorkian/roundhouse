@@ -5,6 +5,7 @@ import {
   immutableAttemptId,
   reviewerAttemptId,
   reviewers,
+  type AppliedProfile,
   type Attempt,
   type RunRepository,
   type RunSnapshot,
@@ -230,7 +231,7 @@ export function integrateTransition(attempt: Attempt) {
   return { status: "failed", stage: "integrate" } as const;
 }
 
-export function ciTransition(attempt: Attempt) {
+export function ciTransition(attempt: Attempt, profile?: AppliedProfile) {
   const outcome = attempt.result?.ci as Record<string, unknown> | undefined;
   if (
     outcome?.head !== attempt.expectedHead ||
@@ -255,6 +256,13 @@ export function ciTransition(attempt: Attempt) {
   }
   if (outcome.status !== "success")
     return { status: "failed", stage: "ci" } as const;
+  if (profile?.merge?.mode === "maintainer")
+    return {
+      status: "waiting",
+      stage: "merge",
+      waitingReason: "maintainer_merge",
+      acceptedHead: attempt.acceptedHead,
+    } as const;
   return {
     status: "active",
     stage: "merge",
@@ -278,14 +286,14 @@ export function mergeTransition(attempt: Attempt) {
   } as const;
 }
 
-function completedTransition(attempt: Attempt) {
+function completedTransition(attempt: Attempt, profile?: AppliedProfile) {
   if (attempt.stage === "qualify") return qualificationTransition(attempt);
   if (attempt.stage === "reproduce") return reproductionTransition(attempt);
   if (attempt.stage === "plan") return planTransition(attempt);
   if (attempt.stage === "implement") return implementationTransition(attempt);
   if (attempt.stage === "review") return reviewTransition(attempt);
   if (attempt.stage === "integrate") return integrateTransition(attempt);
-  if (attempt.stage === "ci") return ciTransition(attempt);
+  if (attempt.stage === "ci") return ciTransition(attempt, profile);
   if (attempt.stage === "merge") return mergeTransition(attempt);
   return undefined;
 }
@@ -314,26 +322,34 @@ function selectedSpecialists(attempt: Attempt): readonly string[] | undefined {
   );
 }
 
-function aggregateReviews(attempts: readonly Attempt[]): Attempt {
+function aggregateReviews(
+  attempts: readonly Attempt[],
+  profile?: AppliedProfile,
+): Attempt {
   const source = attempts[attempts.length - 1]!;
   return {
     ...source,
     result: {
-      review: aggregatedReview(attempts),
+      review: aggregatedReview(attempts, profile),
     },
   };
 }
 
 export function aggregateReviewAttempts(
   attempts: readonly Attempt[],
+  profile?: AppliedProfile,
 ): Attempt | undefined {
   const holistic = attempts.find(
     (attempt) =>
       attempt.role === "review-holistic" && attempt.state === "completed",
   );
   if (!holistic) return undefined;
-  const selected = selectedSpecialists(holistic);
-  if (!selected) return undefined;
+  const decisions = selectedSpecialists(holistic);
+  if (!decisions) return undefined;
+  const selected = decisions.filter((role) => {
+    const name = role.replace("review-", "") as "security" | "data";
+    return profile?.reviewers?.[name]?.enabled !== false;
+  });
   const specialists = selected.map((role) =>
     attempts.find(
       (attempt) => attempt.role === role && attempt.state === "completed",
@@ -351,7 +367,7 @@ export function aggregateReviewAttempts(
     )
   )
     return undefined;
-  return aggregateReviews(required);
+  return aggregateReviews(required, profile);
 }
 
 export async function coordinate(
@@ -395,7 +411,13 @@ export async function coordinate(
       );
     }
     const allowed = new Set(
-      reviewers.slice(1).map((reviewer) => reviewer.role),
+      reviewers.slice(1).flatMap((reviewer) => {
+        const name = reviewer.role.replace("review-", "") as
+          "security" | "data";
+        return run.profile?.reviewers?.[name]?.enabled === false
+          ? []
+          : [reviewer.role];
+      }),
     );
     const selection = selectedSpecialists(holistic);
     if (!selection) {
@@ -410,6 +432,16 @@ export async function coordinate(
     const selected = selection.filter((role) =>
       allowed.has(role as "review-security" | "review-data"),
     ) as ("review-security" | "review-data")[];
+    console.log(
+      JSON.stringify({
+        message: "review_profile_selection_applied",
+        runId: run.id,
+        revision: run.revision,
+        profileHash: run.profile.hash,
+        enabledSpecialists: [...allowed],
+        selectedSpecialists: selected,
+      }),
+    );
     for (const role of selected) {
       const attempt = current.find((candidate) => candidate.role === role);
       if (!attempt || attempt.state !== "completed")
@@ -423,7 +455,7 @@ export async function coordinate(
           reporter,
         );
     }
-    const aggregate = aggregateReviewAttempts(current);
+    const aggregate = aggregateReviewAttempts(current, run.profile);
     if (!aggregate) return "stale";
     const next = await repository.transition(
       run.id,
@@ -437,7 +469,7 @@ export async function coordinate(
   const attemptId = immutableAttemptId(run.id, run.revision);
   const previous = await repository.getAttempt(attemptId);
   if (previous?.state === "completed") {
-    const transition = completedTransition(previous);
+    const transition = completedTransition(previous, run.profile);
     if (!transition) return "stale";
     const next = await repository.transition(run.id, run.revision, transition);
     if (!next) return "stale";
