@@ -5,7 +5,6 @@ import {
   advanceWorkflow,
   immutableAttemptId,
   reviewerAttemptId,
-  reviewers,
   type AppliedProfile,
   type Attempt,
   type RunRepository,
@@ -13,6 +12,7 @@ import {
   type RunStage,
   type RunTransition,
   type WorkflowNode,
+  type WorkflowReview,
   type Wakeup,
 } from "@roundhouse/core";
 import { aggregatedReview } from "./aggregated-review.js";
@@ -28,10 +28,18 @@ export interface AttemptReporter {
 
 export const attemptInactivityMilliseconds = 10 * 60_000;
 
-function startNotificationApplies(attempt: Attempt): boolean {
+function startNotificationApplies(run: RunSnapshot, attempt: Attempt): boolean {
+  const review =
+    attempt.nodeId && run.profile?.workflow
+      ? run.profile.workflow.nodes[attempt.nodeId]?.review
+      : undefined;
+  const primaryReviewer = review?.reviewers.find(
+    (reviewer) => reviewer.activation === "always",
+  )?.id;
   return (
     attempt.stage === "implement" ||
-    (attempt.stage === "review" && attempt.role === "review-holistic")
+    (attempt.stage === "review" &&
+      attempt.role === (primaryReviewer ?? "review-holistic"))
   );
 }
 
@@ -44,7 +52,8 @@ async function reportStarted(
   run: RunSnapshot,
   attempt: Attempt,
 ): Promise<void> {
-  if (!reporter?.reportStarted || !startNotificationApplies(attempt)) return;
+  if (!reporter?.reportStarted || !startNotificationApplies(run, attempt))
+    return;
   try {
     await reporter.reportStarted(run, attempt);
   } catch (error) {
@@ -439,7 +448,10 @@ async function recordWorkflowTransition(
   });
 }
 
-function selectedSpecialists(attempt: Attempt): readonly string[] | undefined {
+function selectedReviewers(
+  attempt: Attempt,
+  expected: readonly string[],
+): readonly string[] | undefined {
   const review = attempt.result?.review as Record<string, unknown> | undefined;
   const selections = review?.selections;
   if (!Array.isArray(selections)) return undefined;
@@ -448,7 +460,7 @@ function selectedSpecialists(attempt: Attempt): readonly string[] | undefined {
     if (!selection || typeof selection !== "object") return undefined;
     const value = selection as Record<string, unknown>;
     if (
-      !["review-security", "review-data"].includes(String(value.role)) ||
+      !expected.includes(String(value.role)) ||
       typeof value.applicable !== "boolean" ||
       typeof value.rationale !== "string" ||
       decisions.has(String(value.role))
@@ -456,8 +468,7 @@ function selectedSpecialists(attempt: Attempt): readonly string[] | undefined {
       return undefined;
     decisions.set(String(value.role), value.applicable);
   }
-  if (!decisions.has("review-security") || !decisions.has("review-data"))
-    return undefined;
+  if (expected.some((role) => !decisions.has(role))) return undefined;
   return [...decisions].flatMap(([role, applicable]) =>
     applicable ? [role] : [],
   );
@@ -466,12 +477,13 @@ function selectedSpecialists(attempt: Attempt): readonly string[] | undefined {
 function aggregateReviews(
   attempts: readonly Attempt[],
   profile?: AppliedProfile,
+  configured?: WorkflowReview,
 ): Attempt {
   const source = attempts[attempts.length - 1]!;
   return {
     ...source,
     result: {
-      review: aggregatedReview(attempts, profile),
+      review: aggregatedReview(attempts, profile, configured),
     },
   };
 }
@@ -479,36 +491,69 @@ function aggregateReviews(
 export function aggregateReviewAttempts(
   attempts: readonly Attempt[],
   profile?: AppliedProfile,
+  configured?: WorkflowReview,
 ): Attempt | undefined {
-  const holistic = attempts.find(
-    (attempt) =>
-      attempt.role === "review-holistic" && attempt.state === "completed",
+  const legacy = !configured;
+  const definitions = configured?.reviewers ?? [
+    {
+      id: "review-holistic",
+      activation: "always",
+      selects: ["review-security", "review-data"],
+    },
+    {
+      id: "review-security",
+      activation: "selected",
+      selectedBy: "review-holistic",
+      selects: [],
+    },
+    {
+      id: "review-data",
+      activation: "selected",
+      selectedBy: "review-holistic",
+      selects: [],
+    },
+  ];
+  const always = definitions.filter(
+    (reviewer) => reviewer.activation === "always",
   );
-  if (!holistic) return undefined;
-  const decisions = selectedSpecialists(holistic);
-  if (!decisions) return undefined;
-  const selected = decisions.filter((role) => {
-    const name = role.replace("review-", "") as "security" | "data";
-    return profile?.reviewers?.[name]?.enabled !== false;
-  });
-  const specialists = selected.map((role) =>
-    attempts.find(
-      (attempt) => attempt.role === role && attempt.state === "completed",
-    ),
+  const completed = new Map(
+    attempts
+      .filter((attempt) => attempt.state === "completed")
+      .map((attempt) => [attempt.role, attempt]),
   );
-  if (specialists.some((attempt) => !attempt)) return undefined;
-  const required = [holistic, ...(specialists as Attempt[])];
-  const candidateHead = required[required.length - 1]!.expectedHead;
+  if (always.some((reviewer) => !completed.has(reviewer.id))) return undefined;
+  const selected = new Set(always.map((reviewer) => reviewer.id));
+  for (const selector of definitions.filter(
+    (reviewer) => reviewer.selects.length,
+  )) {
+    const attempt = completed.get(selector.id);
+    if (!attempt) return undefined;
+    const decisions = selectedReviewers(attempt, selector.selects);
+    if (!decisions) return undefined;
+    for (const role of decisions) {
+      if (legacy) {
+        const name = role.replace("review-", "") as "security" | "data";
+        if (profile?.reviewers?.[name]?.enabled === false) continue;
+      }
+      selected.add(role);
+    }
+  }
+  const required = definitions
+    .filter((reviewer) => selected.has(reviewer.id))
+    .map((reviewer) => completed.get(reviewer.id));
+  if (required.some((attempt) => !attempt)) return undefined;
+  const exact = required as Attempt[];
+  const candidateHead = exact[exact.length - 1]!.expectedHead;
   if (
     !candidateHead ||
-    required.some(
+    exact.some(
       (attempt) =>
         attempt.expectedHead !== candidateHead ||
         attempt.acceptedHead !== candidateHead,
     )
   )
     return undefined;
-  return aggregateReviews(required, profile);
+  return aggregateReviews(exact, profile, configured);
 }
 
 export async function coordinate(
@@ -566,53 +611,59 @@ export async function coordinate(
   )
     throw new Error("run_workflow_stage_mismatch");
   if (currentWorkflowNode.executor === "review") {
+    const review = currentWorkflowNode.review!;
     const current = await repository.attemptsForRevision(run.id, run.revision);
-    const holisticRole = "review-holistic" as const;
-    const holistic = current.find((attempt) => attempt.role === holisticRole);
-    if (!holistic || holistic.state !== "completed") {
-      return dispatchReview(
-        repository,
-        dispatcher,
-        run,
-        holisticRole,
-        now,
-        leaseMilliseconds,
-        reporter,
-      );
-    }
-    const allowed = new Set(
-      reviewers.slice(1).flatMap((reviewer) => {
-        const name = reviewer.role.replace("review-", "") as
-          "security" | "data";
-        return run.profile?.reviewers?.[name]?.enabled === false
-          ? []
-          : [reviewer.role];
-      }),
+    const required = new Set(
+      review.reviewers
+        .filter((reviewer) => reviewer.activation === "always")
+        .map((reviewer) => reviewer.id),
     );
-    const selection = selectedSpecialists(holistic);
-    if (!selection) {
-      const next = await repository.transition(run.id, run.revision, {
-        status: "failed",
-        stage: "review",
-      });
-      if (!next) return "stale";
-      if (reporter) await reporter.report(next, holistic);
-      return "dispatched";
+    for (const selector of review.reviewers.filter(
+      (reviewer) => reviewer.selects.length,
+    )) {
+      const attempt = current.find(
+        (candidate) =>
+          candidate.role === selector.id && candidate.state === "completed",
+      );
+      if (!attempt) continue;
+      const selection = selectedReviewers(attempt, selector.selects);
+      if (!selection) {
+        const next = await repository.transition(run.id, run.revision, {
+          status: "failed",
+          stage: "review",
+        });
+        if (!next) return "stale";
+        if (reporter) await reporter.report(next, attempt);
+        return "dispatched";
+      }
+      selection.forEach((role) => required.add(role));
     }
-    const selected = selection.filter((role) =>
-      allowed.has(role as "review-security" | "review-data"),
-    ) as ("review-security" | "review-data")[];
     console.log(
       JSON.stringify({
-        message: "review_profile_selection_applied",
+        message: "workflow_review_fanout_resolved",
         runId: run.id,
         revision: run.revision,
-        profileHash: run.profile.hash,
-        enabledSpecialists: [...allowed],
-        selectedSpecialists: selected,
+        workflowHash: run.workflowHash,
+        nodeId: run.currentNodeId,
+        requiredReviewers: [...required],
+        candidateHead: run.currentHead,
       }),
     );
-    for (const role of selected) {
+    await repository.recordEvent?.(
+      run.id,
+      undefined,
+      "workflow_review_fanout",
+      {
+        workflowHash: run.workflowHash,
+        nodeId: run.currentNodeId,
+        requiredReviewers: [...required],
+        candidateHead: run.currentHead,
+      },
+    );
+    for (const definition of review.reviewers.filter((reviewer) =>
+      required.has(reviewer.id),
+    )) {
+      const role = definition.id;
       const attempt = current.find((candidate) => candidate.role === role);
       if (!attempt || attempt.state !== "completed")
         return dispatchReview(
@@ -625,8 +676,20 @@ export async function coordinate(
           reporter,
         );
     }
-    const aggregate = aggregateReviewAttempts(current, run.profile);
+    const aggregate = aggregateReviewAttempts(current, run.profile, review);
     if (!aggregate) return "stale";
+    await repository.recordEvent?.(
+      run.id,
+      aggregate.id,
+      "workflow_review_join",
+      {
+        workflowHash: run.workflowHash,
+        nodeId: run.currentNodeId,
+        candidateHead: run.currentHead,
+        reviewers: [...required],
+        status: (aggregate.result?.review as Record<string, unknown>)?.status,
+      },
+    );
     const next = await repository.transition(
       run.id,
       run.revision,
@@ -738,7 +801,7 @@ async function dispatchReview(
   repository: RunRepository,
   dispatcher: AttemptDispatcher,
   run: RunSnapshot,
-  role: "review-holistic" | "review-security" | "review-data",
+  role: string,
   now: number,
   leaseMilliseconds: number,
   reporter?: AttemptReporter,

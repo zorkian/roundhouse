@@ -149,6 +149,49 @@ nodes:
   review:
     executor: review
     role: review
+    review:
+      reviewers:
+        - id: review-holistic
+          label: Holistic design review
+          activation: always
+          selects:
+            - review-security
+            - review-data
+          mode: blocking
+          blocking_severities:
+            - critical
+            - high
+            - medium
+          model:
+            id: openai/gpt-5.6-sol
+            reasoning: low
+          prompt: prompts/review-holistic.md
+        - id: review-security
+          label: Security review
+          activation: selected
+          selected_by: review-holistic
+          mode: blocking
+          blocking_severities:
+            - critical
+            - high
+            - medium
+          model:
+            id: openai/gpt-5.6-sol
+            reasoning: low
+          prompt: prompts/review-security.md
+        - id: review-data
+          label: Data consistency review
+          activation: selected
+          selected_by: review-holistic
+          mode: blocking
+          blocking_severities:
+            - critical
+            - high
+            - medium
+          model:
+            id: openai/gpt-5.6-sol
+            reasoning: low
+          prompt: prompts/review-data.md
     capabilities:
       - repository.read
       - context.read

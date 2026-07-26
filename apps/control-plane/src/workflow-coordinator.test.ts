@@ -274,8 +274,17 @@ describe("workflow-backed coordinator transitions", () => {
       stage: "merge",
       currentHead: mergeCommit,
     });
-    expect(store.events).toHaveLength(8);
-    expect(store.events[0]).toMatchObject({
+    const transitions = store.events.filter(
+      (event) => event.kind === "workflow_transition",
+    );
+    expect(transitions).toHaveLength(8);
+    expect(
+      store.events.filter((event) => event.kind === "workflow_review_fanout"),
+    ).toHaveLength(2);
+    expect(
+      store.events.filter((event) => event.kind === "workflow_review_join"),
+    ).toHaveLength(1);
+    expect(transitions[0]).toMatchObject({
       runId: initial.id,
       kind: "workflow_transition",
       payload: {

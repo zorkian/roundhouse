@@ -65,10 +65,11 @@ The development deployment currently supports:
 
 The current lifecycle runs through a compiled repository workflow graph.
 Profile V2 configures validation, merge behavior, operators, paths, project
-instructions, development environment, and the still-fixed reviewer policy.
+instructions, and the development environment.
 Workflow agent nodes configure typed inputs, result schemas, prompts, models,
-capabilities, conditions, and edges. The current review executor still has
-three fixed reviewer identities and cannot add reviewers until Slice 7.3.
+capabilities, conditions, and edges. Review nodes configure generic
+always-on/selected reviewers, blocking/advisory/shadow modes, prompts, models,
+severity policy, and exact-head-bound fan-out/join evidence.
 
 Current intentional limitations:
 
@@ -303,8 +304,8 @@ The deployed Profile V2 defines:
 - an optional Dev Container configuration;
 - repository-wide instructions;
 - workflow agent prompts, models, typed inputs, and result schemas;
-- reviewer prompts, models, and reasoning levels;
-- fixed reviewer activation and blocking severities; and
+- workflow reviewer prompts, models, activation, operating modes, and blocking
+  severities; and
 - validation commands as argument arrays.
 
 Roundhouse always protects `.roundhouse/**` and the selected Dev Container
@@ -429,6 +430,13 @@ resolved inputs, authority, result, condition, and selected edge.
 Replace the fixed reviewer identities with generic review nodes,
 fan-out/join, stable finding evidence, and operating modes. Migrate the current
 three reviewers without changing their effective policy.
+
+Implemented: reviewer identities and policy now live only in the immutable
+workflow snapshot. The runtime resolves configured fan-out, validates selector
+results, joins only completed attempts bound to one exact candidate head, and
+records durable fan-out/join events. Findings carry stable fingerprints and
+candidate-head evidence; blocking, advisory, and shadow modes share one
+contract.
 
 Exit gate: a repository adds a reviewer through configuration; every outcome is
 exact-head-bound; remediation invalidates and reruns required gates.

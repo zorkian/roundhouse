@@ -54,10 +54,12 @@ limited to explicitly enrolled public repositories.
 An enrolled repository owns its reviewed configuration in
 `.roundhouse/profile.yaml`. Profile V2 defines allowed and protected paths,
 operators, merge mode and method, the development container, canonical
-validation commands, reviewers, and repository-wide instructions. The
+validation commands, and repository-wide instructions. The
 repository-owned `.roundhouse/workflow.yaml` defines the lifecycle graph and
 each agent node's typed inputs, result schema, model, prompt, capabilities, and
-transitions. Long instructions live in explicitly referenced files under
+transitions. Review nodes define any number of always-on or conditionally
+selected reviewers, their blocking/advisory/shadow mode, model, prompt, and
+severity policy. Long instructions live in explicitly referenced files under
 `.roundhouse/prompts/`.
 
 Roundhouse loads the profile and every referenced instruction from one exact
@@ -67,11 +69,9 @@ Container configuration. Fixed Roundhouse isolation, tool, read-only, and
 result-submission rules take precedence over repository instructions.
 
 The lifecycle now runs through that declarative graph rather than a compiled
-stage switch. Agent nodes are repository-composable; the
-holistic/security/data review fan-out is still the next fixed subsystem to
-move into generic graph nodes. Repositories do not supply executable
-control-plane code or expand Roundhouse's credential and capability
-boundaries.
+stage switch. Agent and review fan-out/join nodes are repository-composable.
+Repositories do not supply executable control-plane code or expand
+Roundhouse's credential and capability boundaries.
 
 ## Project status
 

@@ -657,6 +657,8 @@ class SandboxDispatcher implements AttemptDispatcher {
         : undefined;
     const requested =
       node?.agent?.model ??
+      node?.review?.reviewers.find((reviewer) => reviewer.id === attempt.role)
+        ?.model ??
       (run.profile
         ? profileModelForAttempt(run.profile, attempt.stage, attempt.role)
         : undefined);
@@ -933,7 +935,13 @@ class SandboxDispatcher implements AttemptDispatcher {
     const plan = planAttempt?.result?.plan;
     const implementation = implementationAttempt?.result?.implementation;
     const review = reviewAttempt
-      ? aggregatedReview(reviewAttempts, run.profile)
+      ? aggregatedReview(
+          reviewAttempts,
+          run.profile,
+          reviewAttempt.nodeId
+            ? run.profile?.workflow?.nodes[reviewAttempt.nodeId]?.review
+            : undefined,
+        )
       : undefined;
     const ci = ciAttempt?.result?.ci;
     const integrateEvidence =
@@ -969,13 +977,17 @@ class SandboxDispatcher implements AttemptDispatcher {
             review,
           }
         : undefined;
-    const reviewer = reviewerForRole(attempt.role);
+    const configuredReviewer = workflowNode?.review?.reviewers.find(
+      (candidate) => candidate.id === attempt.role,
+    );
+    const reviewer = configuredReviewer ?? reviewerForRole(attempt.role);
     const sameRevisionReviews =
       attempt.stage === "review"
         ? await this.runs.attemptsForRevision(run.id, run.revision)
         : [];
+    const selectorRole = configuredReviewer?.selectedBy ?? "review-holistic";
     const holisticSelection = sameRevisionReviews.find(
-      (candidate) => candidate.role === "review-holistic",
+      (candidate) => candidate.role === selectorRole,
     )?.result?.review;
     if (!workflowNode?.agent && attempt.stage === "reproduce" && !qualification)
       throw new Error("reproduction_qualification_missing");

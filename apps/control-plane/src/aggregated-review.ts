@@ -1,7 +1,12 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import { reviewers, type AppliedProfile, type Attempt } from "@roundhouse/core";
+import {
+  reviewers,
+  type AppliedProfile,
+  type Attempt,
+  type WorkflowReview,
+} from "@roundhouse/core";
 
 export interface AggregatedReviewFinding {
   readonly reviewer: string;
@@ -9,6 +14,11 @@ export interface AggregatedReviewFinding {
   readonly details: string;
   readonly severity: string;
   readonly file?: string;
+  readonly evidence: {
+    readonly candidateHead: string;
+    readonly reviewer: string;
+    readonly fingerprint: string;
+  };
 }
 
 export interface AggregatedReview {
@@ -18,12 +28,14 @@ export interface AggregatedReview {
   readonly reviewers: readonly {
     readonly role: string;
     readonly routing: Attempt["routing"];
+    readonly candidateHead: string;
   }[];
 }
 
 export function aggregatedReviewStatus(
   attempts: readonly Attempt[],
   profile?: AppliedProfile,
+  configured?: WorkflowReview,
 ): AggregatedReview["status"] {
   const changesRequested = attempts.some((attempt) => {
     const review = attempt.result?.review as
@@ -31,12 +43,18 @@ export function aggregatedReviewStatus(
     const profileName = attempt.role.replace("review-", "") as
       "holistic" | "security" | "data";
     const blocking = new Set<string>(
-      profile?.reviewers?.[profileName]?.blockingSeverities ??
+      configured?.reviewers.find((reviewer) => reviewer.id === attempt.role)
+        ?.blockingSeverities ??
+        profile?.reviewers?.[profileName]?.blockingSeverities ??
         reviewers.find((reviewer) => reviewer.role === attempt.role)
           ?.blockingSeverities ??
         [],
     );
+    const mode = configured?.reviewers.find(
+      (reviewer) => reviewer.id === attempt.role,
+    )?.mode;
     return (
+      (mode === undefined || mode === "blocking") &&
       Array.isArray(review?.findings) &&
       review.findings.some(
         (finding) =>
@@ -52,9 +70,15 @@ export function aggregatedReviewStatus(
 export function aggregatedReview(
   attempts: readonly Attempt[],
   profile?: AppliedProfile,
-  status = aggregatedReviewStatus(attempts, profile),
+  configured?: WorkflowReview,
+  status = aggregatedReviewStatus(attempts, profile, configured),
 ): AggregatedReview {
   const findings = attempts.flatMap((attempt) => {
+    if (
+      configured?.reviewers.find((reviewer) => reviewer.id === attempt.role)
+        ?.mode === "shadow"
+    )
+      return [];
     const review = attempt.result?.review as
       Record<string, unknown> | undefined;
     if (!Array.isArray(review?.findings)) return [];
@@ -62,6 +86,19 @@ export function aggregatedReview(
       if (!finding || typeof finding !== "object") return [];
       const value = finding as Record<string, unknown>;
       const file = String(value.file ?? "").trim();
+      const evidenceSource = [
+        attempt.role,
+        attempt.expectedHead,
+        String(value.title ?? "Finding").trim(),
+        String(value.details ?? "").trim(),
+        String(value.severity ?? "").trim(),
+        file,
+      ].join("\u001f");
+      let fingerprint = 2166136261;
+      for (let index = 0; index < evidenceSource.length; index += 1) {
+        fingerprint ^= evidenceSource.charCodeAt(index);
+        fingerprint = Math.imul(fingerprint, 16777619);
+      }
       return [
         {
           reviewer: attempt.role,
@@ -69,6 +106,11 @@ export function aggregatedReview(
           details: String(value.details ?? ""),
           severity: String(value.severity ?? ""),
           ...(file ? { file } : {}),
+          evidence: {
+            candidateHead: attempt.expectedHead,
+            reviewer: attempt.role,
+            fingerprint: `fnv1a-${(fingerprint >>> 0).toString(16).padStart(8, "0")}`,
+          },
         },
       ];
     });
@@ -84,6 +126,7 @@ export function aggregatedReview(
     reviewers: attempts.map((attempt) => ({
       role: attempt.role,
       routing: attempt.routing,
+      candidateHead: attempt.expectedHead,
     })),
   };
 }

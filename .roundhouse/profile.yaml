@@ -24,40 +24,6 @@ permissions:
 instructions:
   project: prompts/project.md
 
-reviewers:
-  holistic:
-    enabled: true
-    model:
-      id: openai/gpt-5.6-sol
-      reasoning: low
-    instructions: prompts/review-holistic.md
-    blocking_severities:
-      - critical
-      - high
-      - medium
-  security:
-    enabled: true
-    selected_by: holistic
-    model:
-      id: openai/gpt-5.6-sol
-      reasoning: low
-    instructions: prompts/review-security.md
-    blocking_severities:
-      - critical
-      - high
-      - medium
-  data:
-    enabled: true
-    selected_by: holistic
-    model:
-      id: openai/gpt-5.6-sol
-      reasoning: low
-    instructions: prompts/review-data.md
-    blocking_severities:
-      - critical
-      - high
-      - medium
-
 validation:
   commands:
     - name: repository checks

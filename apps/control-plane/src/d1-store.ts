@@ -61,7 +61,7 @@ export interface RunDetails {
   })[];
   readonly usage?: readonly (ModelUsage & { readonly createdAt?: number })[];
   readonly events?: readonly {
-    readonly attemptId: string;
+    readonly attemptId?: string;
     readonly kind: string;
     readonly payload: Readonly<Record<string, unknown>>;
     readonly createdAt: number;
@@ -280,19 +280,19 @@ export class D1RunRepository implements RunRepository {
   private async eventsForRun(runId: string): Promise<RunDetails["events"]> {
     const result = await this.db
       .prepare(
-        "SELECT attempt_id,kind,payload_json,created_at FROM events WHERE run_id=?1 AND (kind IN ('workflow_transition','workflow_agent_resolved') OR (attempt_id IS NOT NULL AND (kind='attempt_lease_expired' OR (kind='attempt_progress' AND json_extract(payload_json,'$.phase')='workspace_started')))) ORDER BY created_at,id",
+        "SELECT attempt_id,kind,payload_json,created_at FROM events WHERE run_id=?1 AND (kind IN ('workflow_transition','workflow_agent_resolved','workflow_review_fanout','workflow_review_join') OR (attempt_id IS NOT NULL AND (kind='attempt_lease_expired' OR (kind='attempt_progress' AND json_extract(payload_json,'$.phase')='workspace_started')))) ORDER BY created_at,id",
       )
       .bind(runId)
       .all<{
-        attempt_id: string;
+        attempt_id: string | null;
         kind: string;
         payload_json: string;
         created_at: number;
       }>();
     return (result.results ?? [])
-      .filter((event) => event.attempt_id && event.kind && event.payload_json)
+      .filter((event) => event.kind && event.payload_json)
       .map((event) => ({
-        attemptId: event.attempt_id,
+        ...(event.attempt_id ? { attemptId: event.attempt_id } : {}),
         kind: event.kind,
         payload: JSON.parse(event.payload_json) as Record<string, unknown>,
         createdAt: event.created_at,

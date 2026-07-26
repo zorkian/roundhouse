@@ -75,6 +75,54 @@ nodes:
 `;
 
 describe("workflow compiler", () => {
+  it("adds arbitrary repository-defined reviewers without source changes", async () => {
+    const reviewSource = `
+version: 1
+triggers:
+  github.issue.started: review
+nodes:
+  review:
+    executor: review
+    review:
+      reviewers:
+        - id: review-holistic
+          label: Holistic
+          activation: always
+          selects: [review-accessibility]
+          mode: blocking
+          blocking_severities: [critical, high, medium]
+          model: { id: openai/gpt-5.6-sol, reasoning: low }
+        - id: review-accessibility
+          label: Accessibility
+          activation: selected
+          selected_by: review-holistic
+          mode: advisory
+          blocking_severities: [critical, high]
+          model: { id: openai/gpt-5.6-sol, reasoning: high }
+          prompt: prompts/review-accessibility.md
+    capabilities: [repository.read, context.read]
+    outputs: [review.status]
+    transitions:
+      - terminal: succeeded
+`;
+    const workflow = await compileWorkflow(
+      reviewSource,
+      commit,
+      async () => "Review keyboard and screen-reader behavior.",
+    );
+    expect(workflow.nodes.review?.review?.reviewers[1]).toMatchObject({
+      id: "review-accessibility",
+      activation: "selected",
+      selectedBy: "review-holistic",
+      mode: "advisory",
+      model: { id: "openai/gpt-5.6-sol", reasoning: "high" },
+      prompt: {
+        sourcePath: ".roundhouse/prompts/review-accessibility.md",
+        content: "Review keyboard and screen-reader behavior.",
+      },
+    });
+  });
+
   it("compiles a typed graph and selects structured branches", async () => {
     const workflow = await compileWorkflow(source, commit);
     expect(workflow.sourceCommit).toBe(commit);

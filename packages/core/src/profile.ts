@@ -314,7 +314,6 @@ async function v2Profile(
     "merge",
     "paths",
     "permissions",
-    "reviewers",
     "validation",
     "version",
     "workflow",
@@ -398,19 +397,6 @@ async function v2Profile(
   );
 
   if (
-    !isRecord(value.reviewers) ||
-    !hasOnlyKeys(value.reviewers, [...profileReviewerNames])
-  )
-    throw new Error("profile_reviewers_invalid");
-  const reviewerValues = value.reviewers;
-  const rawReviewers = Object.fromEntries(
-    profileReviewerNames.map((name) => [
-      name,
-      reviewerConfig(reviewerValues[name], name),
-    ]),
-  ) as Record<ProfileReviewerName, ReturnType<typeof reviewerConfig>>;
-
-  if (
     !isRecord(value.validation) ||
     !hasOnlyKeys(value.validation, ["commands"]) ||
     !Array.isArray(value.validation.commands)
@@ -447,31 +433,6 @@ async function v2Profile(
             throw new Error("profile_devcontainer_invalid");
           })();
 
-  const reviewers = Object.fromEntries(
-    await Promise.all(
-      profileReviewerNames.map(async (name) => {
-        const reviewer = rawReviewers[name];
-        return [
-          name,
-          {
-            enabled: reviewer.enabled,
-            ...(reviewer.selectedBy ? { selectedBy: reviewer.selectedBy } : {}),
-            model: reviewer.model,
-            ...(reviewer.instructions
-              ? {
-                  instructions: await instruction(
-                    reviewer.instructions,
-                    loadFile,
-                  ),
-                }
-              : {}),
-            blockingSeverities: reviewer.blockingSeverities,
-          },
-        ];
-      }),
-    ),
-  ) as Record<ProfileReviewerName, ProfileReviewer>;
-
   return {
     version: 2,
     workflow,
@@ -492,7 +453,6 @@ async function v2Profile(
         ? { project: await instruction(projectSource, loadFile) }
         : {}),
     },
-    reviewers,
     validation: { commands },
     developmentEnvironment: {
       ...(devcontainer ? { devcontainer } : {}),

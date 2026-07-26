@@ -209,34 +209,10 @@ describe("single coordinator", () => {
     });
   });
 
-  it("does not dispatch a specialist disabled by the repository profile", async () => {
+  it("does not dispatch a conditional reviewer that was not selected", async () => {
     const store = new MemoryRunRepository();
     const run = {
-      ...createRun({
-        ...input,
-        profile: {
-          ...input.profile,
-          reviewers: {
-            holistic: {
-              enabled: true,
-              model: { id: "openai/gpt-5.6-sol", reasoning: "low" as const },
-              blockingSeverities: ["high" as const],
-            },
-            security: {
-              enabled: false,
-              selectedBy: "holistic" as const,
-              model: { id: "openai/gpt-5.6-sol", reasoning: "low" as const },
-              blockingSeverities: ["high" as const],
-            },
-            data: {
-              enabled: false,
-              selectedBy: "holistic" as const,
-              model: { id: "openai/gpt-5.6-sol", reasoning: "low" as const },
-              blockingSeverities: ["high" as const],
-            },
-          },
-        },
-      }),
+      ...createRun(input),
       revision: 5,
       stage: "review" as const,
       currentNodeId: "review",
@@ -263,8 +239,8 @@ describe("single coordinator", () => {
           selections: [
             {
               role: "review-security",
-              applicable: true,
-              rationale: "Authorization changed",
+              applicable: false,
+              rationale: "No security changes",
             },
             {
               role: "review-data",

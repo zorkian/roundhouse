@@ -274,7 +274,9 @@ export function immutableAttemptId(runId: string, revision: number): string {
 export function reviewerAttemptId(
   runId: string,
   revision: number,
-  role: ReviewerRole,
+  role: string,
 ): string {
+  if (!/^[a-z][a-z0-9-]{0,63}$/.test(role))
+    throw new Error("reviewer_role_invalid");
   return `${immutableAttemptId(runId, revision)}_${role}`;
 }

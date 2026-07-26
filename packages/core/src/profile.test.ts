@@ -38,22 +38,6 @@ permissions:
     teams: [dreamwidth/maintainers]
 instructions:
   project: prompts/project.md
-reviewers:
-  holistic:
-    enabled: true
-    model: { id: openai/gpt-5.6-sol, reasoning: low }
-    instructions: prompts/review-holistic.md
-    blocking_severities: [critical, high, medium]
-  security:
-    enabled: true
-    selected_by: holistic
-    model: { id: openai/gpt-5.6-sol, reasoning: low }
-    blocking_severities: [critical, high, medium]
-  data:
-    enabled: false
-    selected_by: holistic
-    model: { id: openai/gpt-5.6-sol, reasoning: low }
-    blocking_severities: [critical, high]
 validation:
   commands:
     - name: tests
@@ -106,13 +90,6 @@ describe("repository profile parsing", () => {
         project: {
           sourcePath: ".roundhouse/prompts/project.md",
           content: "Project instructions",
-        },
-      },
-      reviewers: {
-        data: {
-          enabled: false,
-          selectedBy: "holistic",
-          blockingSeverities: ["critical", "high"],
         },
       },
       validation: {

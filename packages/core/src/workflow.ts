@@ -126,6 +126,29 @@ nodes:
   review:
     executor: review
     role: review
+    review:
+      reviewers:
+        - id: review-holistic
+          label: Holistic design review
+          activation: always
+          selects: [review-security, review-data]
+          mode: blocking
+          blocking_severities: [critical, high, medium]
+          model: { id: openai/gpt-5.6-sol, reasoning: low }
+        - id: review-security
+          label: Security review
+          activation: selected
+          selected_by: review-holistic
+          mode: blocking
+          blocking_severities: [critical, high, medium]
+          model: { id: openai/gpt-5.6-sol, reasoning: low }
+        - id: review-data
+          label: Data consistency review
+          activation: selected
+          selected_by: review-holistic
+          mode: blocking
+          blocking_severities: [critical, high, medium]
+          model: { id: openai/gpt-5.6-sol, reasoning: low }
     capabilities: [repository.read, context.read]
     outputs: [review.status]
     transitions:
@@ -247,6 +270,8 @@ export const workflowAgentSchemas = [
   "roundhouse.plan.v1",
   "roundhouse.implementation.v1",
 ] as const;
+export const workflowReviewModes = ["blocking", "advisory", "shadow"] as const;
+export const workflowReviewActivations = ["always", "selected"] as const;
 
 export type WorkflowTriggerKind = (typeof workflowTriggerKinds)[number];
 export type WorkflowExecutorKind = (typeof workflowExecutorKinds)[number];
@@ -255,6 +280,9 @@ export type WorkflowConditionOperator =
   (typeof workflowConditionOperators)[number];
 export type WorkflowAgentTask = (typeof workflowAgentTasks)[number];
 export type WorkflowAgentSchema = (typeof workflowAgentSchemas)[number];
+export type WorkflowReviewMode = (typeof workflowReviewModes)[number];
+export type WorkflowReviewActivation =
+  (typeof workflowReviewActivations)[number];
 
 export type WorkflowScalar = string | number | boolean | null;
 
@@ -312,10 +340,30 @@ export interface WorkflowAgent {
   };
 }
 
+export interface WorkflowReviewer {
+  readonly id: string;
+  readonly label: string;
+  readonly activation: WorkflowReviewActivation;
+  readonly selectedBy?: string;
+  readonly selects: readonly string[];
+  readonly mode: WorkflowReviewMode;
+  readonly blockingSeverities: readonly string[];
+  readonly model: WorkflowAgent["model"];
+  readonly prompt?: {
+    readonly sourcePath: string;
+    readonly content: string;
+  };
+}
+
+export interface WorkflowReview {
+  readonly reviewers: readonly WorkflowReviewer[];
+}
+
 export interface WorkflowNode {
   readonly executor: WorkflowExecutorKind;
   readonly role?: string;
   readonly agent?: WorkflowAgent;
+  readonly review?: WorkflowReview;
   readonly capabilities: readonly string[];
   readonly outputs: readonly string[];
   readonly transitions: readonly WorkflowTransition[];
@@ -621,6 +669,118 @@ async function agent(
   };
 }
 
+async function review(
+  value: unknown,
+  loadFile?: WorkflowFileLoader,
+): Promise<WorkflowReview> {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["reviewers"]) ||
+    !Array.isArray(value.reviewers) ||
+    value.reviewers.length === 0
+  )
+    throw new Error("workflow_review_invalid");
+  const reviewers = await Promise.all(
+    value.reviewers.map(async (candidate): Promise<WorkflowReviewer> => {
+      if (
+        !isRecord(candidate) ||
+        !hasOnlyKeys(
+          candidate,
+          ["id", "label", "activation", "mode", "blocking_severities", "model"],
+          ["selected_by", "selects", "prompt"],
+        ) ||
+        typeof candidate.id !== "string" ||
+        !/^[a-z][a-z0-9-]{0,63}$/.test(candidate.id) ||
+        typeof candidate.label !== "string" ||
+        !candidate.label.trim() ||
+        !workflowReviewActivations.includes(
+          candidate.activation as WorkflowReviewActivation,
+        ) ||
+        !workflowReviewModes.includes(candidate.mode as WorkflowReviewMode) ||
+        !isRecord(candidate.model) ||
+        !hasOnlyKeys(candidate.model, ["id", "reasoning"]) ||
+        typeof candidate.model.id !== "string" ||
+        !/^[a-z0-9._-]+\/[A-Za-z0-9._/-]+$/.test(candidate.model.id) ||
+        !["off", "minimal", "low", "medium", "high"].includes(
+          String(candidate.model.reasoning),
+        )
+      )
+        throw new Error("workflow_reviewer_invalid");
+      const blockingSeverities = stringList(
+        candidate.blocking_severities,
+        "workflow_reviewer_severities_invalid",
+      );
+      if (
+        blockingSeverities.some(
+          (severity) =>
+            !["critical", "high", "medium", "low"].includes(severity),
+        )
+      )
+        throw new Error("workflow_reviewer_severities_invalid");
+      const selects =
+        candidate.selects === undefined
+          ? []
+          : stringList(candidate.selects, "workflow_reviewer_selects_invalid");
+      const sourcePath =
+        candidate.prompt === undefined
+          ? undefined
+          : workflowReference(
+              candidate.prompt,
+              "workflow_reviewer_prompt_invalid",
+            );
+      if (sourcePath && !sourcePath.startsWith(".roundhouse/prompts/"))
+        throw new Error("workflow_reviewer_prompt_invalid");
+      if (sourcePath && !loadFile)
+        throw new Error("workflow_file_loader_missing");
+      const content = sourcePath ? await loadFile!(sourcePath) : undefined;
+      if (content !== undefined && !content.trim())
+        throw new Error("workflow_reviewer_prompt_empty");
+      return {
+        id: candidate.id,
+        label: candidate.label,
+        activation: candidate.activation as WorkflowReviewActivation,
+        ...(candidate.selected_by === undefined
+          ? {}
+          : typeof candidate.selected_by === "string"
+            ? { selectedBy: candidate.selected_by }
+            : (() => {
+                throw new Error("workflow_reviewer_selected_by_invalid");
+              })()),
+        selects,
+        mode: candidate.mode as WorkflowReviewMode,
+        blockingSeverities,
+        model: {
+          id: candidate.model.id,
+          reasoning: candidate.model
+            .reasoning as WorkflowAgent["model"]["reasoning"],
+        },
+        ...(sourcePath && content !== undefined
+          ? { prompt: { sourcePath, content } }
+          : {}),
+      };
+    }),
+  );
+  const byId = new Map(reviewers.map((reviewer) => [reviewer.id, reviewer]));
+  if (byId.size !== reviewers.length)
+    throw new Error("workflow_reviewer_duplicate");
+  for (const reviewer of reviewers) {
+    if (
+      (reviewer.activation === "selected") !== Boolean(reviewer.selectedBy) ||
+      reviewer.selects.some(
+        (selected) =>
+          !byId.has(selected) ||
+          selected === reviewer.id ||
+          byId.get(selected)?.selectedBy !== reviewer.id,
+      ) ||
+      (reviewer.selectedBy !== undefined &&
+        (!byId.has(reviewer.selectedBy) ||
+          !byId.get(reviewer.selectedBy)?.selects.includes(reviewer.id)))
+    )
+      throw new Error("workflow_reviewer_selection_invalid");
+  }
+  return { reviewers };
+}
+
 async function node(
   value: unknown,
   loadFile?: WorkflowFileLoader,
@@ -630,7 +790,7 @@ async function node(
     !hasOnlyKeys(
       value,
       ["executor", "transitions"],
-      ["role", "agent", "capabilities", "outputs"],
+      ["role", "agent", "review", "capabilities", "outputs"],
     ) ||
     !workflowExecutorKinds.includes(value.executor as WorkflowExecutorKind) ||
     (value.role !== undefined &&
@@ -646,6 +806,8 @@ async function node(
     (value.agent !== undefined)
   )
     throw new Error("workflow_agent_required");
+  if ((executor === "review") !== (value.review !== undefined))
+    throw new Error("workflow_review_required");
   const capabilities =
     value.capabilities === undefined
       ? []
@@ -672,6 +834,9 @@ async function node(
     ...(value.agent === undefined
       ? {}
       : { agent: await agent(value.agent, executor, loadFile) }),
+    ...(value.review === undefined
+      ? {}
+      : { review: await review(value.review, loadFile) }),
     capabilities,
     outputs,
     transitions: value.transitions.map(transition),

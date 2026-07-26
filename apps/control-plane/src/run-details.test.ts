@@ -309,10 +309,29 @@ describe("run details", () => {
           },
           createdAt: 4,
         },
+        {
+          kind: "workflow_review_fanout",
+          payload: {
+            candidateHead: "candidate-sha",
+            requiredReviewers: ["review-holistic", "review-accessibility"],
+          },
+          createdAt: 5,
+        },
+        {
+          attemptId: "review",
+          kind: "workflow_review_join",
+          payload: {
+            candidateHead: "candidate-sha",
+            status: "clean",
+          },
+          createdAt: 6,
+        },
       ],
     };
     const html = renderRunDetails(details);
     expect(html).toContain("candidate-sha");
+    expect(html).toContain("Review workflow evidence");
+    expect(html).toContain("review-accessibility");
     expect(html).toContain("merged-sha");
     expect(html).toContain("test-model");
     expect(html).toContain("120 tokens");
@@ -337,7 +356,7 @@ describe("run details", () => {
     expect(html).toContain("Workflow evidence");
     expect(html).toContain("nodes.plan.plan");
     expect(html).toContain("fromNodeId");
-    expect(html).toContain("</dl>\n<section><h2>Attempt history</h2>");
+    expect(html).toContain("</section><section><h2>Attempt history</h2>");
     expect(html).toContain(
       "@media(max-width:700px){body{box-sizing:border-box;margin:1rem auto;max-width:none;padding:0 .75rem;width:100%}summary{grid-template-columns:1fr 1fr}.phase{grid-column:auto}dl{grid-template-columns:minmax(0,1fr)}",
     );
