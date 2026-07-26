@@ -703,7 +703,9 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
         prepared.controlPlaneUrl,
       );
       if (response.status !== 200)
-        throw new Error(`sandbox_execution_http_${response.status}`);
+        throw new Error(
+          `sandbox_execution_http_${response.status}: ${response.responseBody}`,
+        );
       const completion = attemptCompletion(
         JSON.parse(response.responseBody) as unknown,
         prepared,
@@ -918,22 +920,32 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
           attemptId: attempt.id,
         },
       );
-      await this.traceSetup(
-        attempt.id,
-        "runner_assignment_completed",
-        stepStartedAt,
-        { path, status: response.status },
-      );
-      await this.traceSetup(
-        attempt.id,
-        "run_attempt_completed",
-        setupStartedAt,
-        { status: response.status },
-      );
-      return {
+      const result = {
         status: response.status,
         responseBody: await response.text(),
       };
+      await this.traceSetup(
+        attempt.id,
+        response.ok
+          ? "runner_assignment_completed"
+          : "runner_assignment_failed",
+        stepStartedAt,
+        {
+          path,
+          status: result.status,
+          ...(response.ok ? {} : { responseBody: result.responseBody }),
+        },
+      );
+      await this.traceSetup(
+        attempt.id,
+        response.ok ? "run_attempt_completed" : "run_attempt_failed",
+        setupStartedAt,
+        {
+          status: result.status,
+          ...(response.ok ? {} : { responseBody: result.responseBody }),
+        },
+      );
+      return result;
     } catch (error) {
       await this.traceSetup(attempt.id, "run_attempt_failed", setupStartedAt, {
         errorType:

@@ -2698,8 +2698,16 @@ export function createRunnerServer(executeAssignment = completeAssignment) {
             reply.writeHead(completed.status, completed.headers);
             reply.end(completed.body);
           },
-          () => {
-            const failed = response(500, { error: "attempt_failed" });
+          (error) => {
+            const errorType =
+              error instanceof Error ? error.constructor.name : typeof error;
+            const detail =
+              error instanceof Error ? error.message : String(error);
+            const failed = response(500, {
+              error: "attempt_failed",
+              errorType,
+              detail,
+            });
             reply.writeHead(failed.status, failed.headers);
             reply.end(failed.body);
           },
