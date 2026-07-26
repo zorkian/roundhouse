@@ -90,11 +90,11 @@ qualify and investigate an issue, plan and implement a change, validate and
 review the exact commit, run repository CI, and merge it. It is not ready for
 general production use.
 
-The approved next work is the workflow-graph migration described in Phase 7 of
-the V2 plan. The same foundation is designed to accept future typed adapters
-for organizational context, scanners, deployment observation, alert triage,
-and audit export; those integrations are not implemented or approved merely
-because the extension points exist.
+The Phase 7 workflow-graph foundation described in the V2 plan is deployed in
+development. No post-Phase-7 integration is approved yet. The foundation can
+accept future typed adapters for organizational context, scanners, deployment
+observation, alert triage, and audit export; those integrations are not
+implemented or approved merely because the extension points exist.
 
 V1 is preserved at the `v1-poc-final` tag. The [V2 plan](docs/v2-plan.md) is
 the normative product and architecture document.
