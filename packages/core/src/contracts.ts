@@ -3,6 +3,7 @@
 
 import type {
   IssueSnapshot,
+  RunResumeSignal,
   RunSnapshot,
   RunStage,
   RunTransition,
@@ -207,6 +208,7 @@ export interface RunRepository {
     issue: IssueSnapshot,
     profile?: AppliedProfile,
     continuationHead?: string,
+    signal?: RunResumeSignal,
   ): Promise<RunSnapshot | undefined>;
   claimLease(
     runId: string,

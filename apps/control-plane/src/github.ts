@@ -9,6 +9,7 @@ import {
   type AppliedProfile,
   type Attempt,
   type RunSnapshot,
+  type RunResumeSignal,
   type RunTransition,
   type Wakeup,
 } from "@roundhouse/core";
@@ -25,6 +26,7 @@ export interface GitHubIntakeRepository {
     issue: NonNullable<RunSnapshot["issue"]>,
     profile?: AppliedProfile,
     continuationHead?: string,
+    signal?: RunResumeSignal,
   ): Promise<RunSnapshot | undefined>;
   latestCompletedAttempt(
     runId: string,
@@ -1067,8 +1069,15 @@ export async function acceptGitHubComment(
       !run?.issue
     )
       return "ignored";
+    const currentNode =
+      run.currentNodeId && run.profile?.workflow
+        ? run.profile.workflow.nodes[run.currentNodeId]
+        : undefined;
     const resumable =
-      (run.status === "waiting" && run.waitingReason === "clarification") ||
+      (run.status === "waiting" &&
+        run.waitingReason === "clarification" &&
+        (currentNode?.executor !== "human" ||
+          currentNode.human?.audience === "participant")) ||
       (await concludedNoChangeQualification(repository, run)) ||
       (run.status === "succeeded" &&
         (run.stage === "merge" || run.stage === "implement") &&
@@ -1140,6 +1149,17 @@ export async function acceptGitHubComment(
       },
       profile,
       continuationHead,
+      currentNode?.executor === "human" && run.waitingReason
+        ? {
+            kind: "human",
+            reason: run.waitingReason,
+            actor,
+            body: comment,
+            ...(payload.comment?.html_url
+              ? { url: payload.comment.html_url }
+              : {}),
+          }
+        : undefined,
     );
     if (!run) return "ignored";
     await enqueue({ runId: id, expectedRevision: run.revision });
@@ -1252,6 +1272,20 @@ export async function acceptGitHubComment(
         run.status === "succeeded" &&
           (run.stage === "merge" || run.stage === "implement")
           ? commit.sha
+          : undefined,
+        run.currentNodeId &&
+          run.profile?.workflow?.nodes[run.currentNodeId]?.executor ===
+            "human" &&
+          run.waitingReason
+          ? {
+              kind: "human",
+              reason: run.waitingReason,
+              actor,
+              body: comment,
+              ...(payload.comment?.html_url
+                ? { url: payload.comment.html_url }
+                : {}),
+            }
           : undefined,
       );
       if (!resumed) return "duplicate";

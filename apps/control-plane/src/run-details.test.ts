@@ -326,12 +326,24 @@ describe("run details", () => {
           },
           createdAt: 6,
         },
+        {
+          attemptId: "human",
+          kind: "workflow_boundary_audit",
+          payload: {
+            kind: "human.resume",
+            actor: "citizen",
+            boundHead: "candidate-sha",
+          },
+          createdAt: 7,
+        },
       ],
     };
     const html = renderRunDetails(details);
     expect(html).toContain("candidate-sha");
     expect(html).toContain("Review workflow evidence");
     expect(html).toContain("review-accessibility");
+    expect(html).toContain("Human and external boundary evidence");
+    expect(html).toContain("human.resume");
     expect(html).toContain("merged-sha");
     expect(html).toContain("test-model");
     expect(html).toContain("120 tokens");
@@ -356,7 +368,7 @@ describe("run details", () => {
     expect(html).toContain("Workflow evidence");
     expect(html).toContain("nodes.plan.plan");
     expect(html).toContain("fromNodeId");
-    expect(html).toContain("</section><section><h2>Attempt history</h2>");
+    expect(html).toContain("<section><h2>Attempt history</h2>");
     expect(html).toContain(
       "@media(max-width:700px){body{box-sizing:border-box;margin:1rem auto;max-width:none;padding:0 .75rem;width:100%}summary{grid-template-columns:1fr 1fr}.phase{grid-column:auto}dl{grid-template-columns:minmax(0,1fr)}",
     );

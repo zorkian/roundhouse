@@ -447,6 +447,14 @@ Implement the generic human wait/resume contract, context-provider interface,
 external wait/check interface, and canonical audit envelope. Enable only
 adapters needed by an approved journey.
 
+Implemented foundation: human nodes declare their waiting reason and
+participant/operator audience; a typed resume signal is consumed once on a new
+durable revision. Named external adapters resume only the matching waiting node
+and event. Context providers return source/version attribution, and all new
+boundary events use a common workflow/node/head/actor audit envelope that is
+logged, stored, and shown in run details. No production external or
+organizational-context adapter is enabled by default.
+
 Exit gate: ordinary GitHub prose resumes a configured human node; a fake
 external event resumes durably; context and audit data are attributable; and
 neither interface can expand authority.

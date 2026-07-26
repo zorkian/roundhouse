@@ -12,6 +12,7 @@ import {
   type ModelUsage,
   type ModelRoute,
   type RunRepository,
+  type RunResumeSignal,
   type RunSnapshot,
   type RunStage,
   type RunTransition,
@@ -280,7 +281,7 @@ export class D1RunRepository implements RunRepository {
   private async eventsForRun(runId: string): Promise<RunDetails["events"]> {
     const result = await this.db
       .prepare(
-        "SELECT attempt_id,kind,payload_json,created_at FROM events WHERE run_id=?1 AND (kind IN ('workflow_transition','workflow_agent_resolved','workflow_review_fanout','workflow_review_join') OR (attempt_id IS NOT NULL AND (kind='attempt_lease_expired' OR (kind='attempt_progress' AND json_extract(payload_json,'$.phase')='workspace_started')))) ORDER BY created_at,id",
+        "SELECT attempt_id,kind,payload_json,created_at FROM events WHERE run_id=?1 AND (kind IN ('workflow_transition','workflow_agent_resolved','workflow_review_fanout','workflow_review_join','workflow_boundary_audit') OR (attempt_id IS NOT NULL AND (kind='attempt_lease_expired' OR (kind='attempt_progress' AND json_extract(payload_json,'$.phase')='workspace_started')))) ORDER BY created_at,id",
       )
       .bind(runId)
       .all<{
@@ -380,6 +381,7 @@ export class D1RunRepository implements RunRepository {
     issue: IssueSnapshot,
     profile?: AppliedProfile,
     continuationHead?: string,
+    signal?: RunResumeSignal,
   ): Promise<RunSnapshot | undefined> {
     const current = await this.get(runId);
     if (!current || current.revision !== expectedRevision) return undefined;
@@ -389,6 +391,7 @@ export class D1RunRepository implements RunRepository {
       issue,
       profile,
       continuationHead,
+      signal,
     );
     const result = await this.db
       .prepare(

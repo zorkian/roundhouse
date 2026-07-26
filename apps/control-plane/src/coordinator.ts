@@ -309,6 +309,22 @@ function stageForWorkflowNode(nodeId: string, node: WorkflowNode): RunStage {
   if (node.executor === "github.checks") return "ci";
   if (node.executor === "github.merge") return "merge";
   if (node.role === "integrate") return "integrate";
+  if (
+    node.role &&
+    [
+      "qualify",
+      "reproduce",
+      "plan",
+      "implement",
+      "validate",
+      "review",
+      "integrate",
+      "publish",
+      "ci",
+      "merge",
+    ].includes(node.role)
+  )
+    return node.role as RunStage;
   throw new Error(`workflow_node_has_no_execution_stage:${nodeId}`);
 }
 
@@ -321,28 +337,39 @@ function integrationWorkflowOutput(attempt: Attempt): string | undefined {
 
 function evidenceForAttempt(
   attempt: Attempt,
+  node: WorkflowNode,
   profile?: AppliedProfile,
 ): Pick<RunTransition, "acceptedHead" | "heads"> {
-  if (attempt.stage === "implement") return implementationTransition(attempt);
-  if (attempt.stage === "review") return reviewTransition(attempt);
-  if (attempt.stage === "integrate") return integrateTransition(attempt);
-  if (attempt.stage === "ci") {
+  const identity = (
+    transition: RunTransition,
+  ): Pick<RunTransition, "acceptedHead" | "heads"> => ({
+    ...(transition.acceptedHead
+      ? { acceptedHead: transition.acceptedHead }
+      : {}),
+    ...(transition.heads ? { heads: transition.heads } : {}),
+  });
+  if (node.agent?.task === "implementation")
+    return identity(implementationTransition(attempt));
+  if (node.executor === "review") return identity(reviewTransition(attempt));
+  if (node.executor === "validate" && node.role === "integrate")
+    return identity(integrateTransition(attempt));
+  if (node.executor === "github.checks") {
     const ci = attempt.result?.ci as Record<string, unknown> | undefined;
     if (ci?.status === "reintegrate")
       return {
         acceptedHead: attempt.acceptedHead,
         heads: { integrationHead: null, targetBaseHead: null },
       };
-    return ciTransition(attempt, profile);
+    return identity(ciTransition(attempt, profile));
   }
-  if (attempt.stage === "merge") {
+  if (node.executor === "github.merge") {
     const merge = attempt.result?.merge as Record<string, unknown> | undefined;
     if (merge?.status === "reintegrate")
       return {
         acceptedHead: attempt.acceptedHead,
         heads: { integrationHead: null, targetBaseHead: null },
       };
-    return mergeTransition(attempt);
+    return identity(mergeTransition(attempt));
   }
   return {};
 }
@@ -397,7 +424,7 @@ export function graphCompletedTransition(run: RunSnapshot, attempt: Attempt) {
   );
   const destination = workflow.nodes[advance.currentNodeId]!;
   const stage = stageForWorkflowNode(advance.currentNodeId, destination);
-  const evidence = evidenceForAttempt(attempt, run.profile);
+  const evidence = evidenceForAttempt(attempt, node, run.profile);
   console.log(
     JSON.stringify({
       message: "workflow_transition_selected",
@@ -446,6 +473,55 @@ async function recordWorkflowTransition(
     outputHead: attempt.acceptedHead ?? attempt.expectedHead,
     runRevision: next.revision,
   });
+}
+
+async function settleImmediateWorkflowWait(
+  repository: RunRepository,
+  run: RunSnapshot,
+): Promise<RunSnapshot> {
+  if (run.status !== "active" || !run.currentNodeId || !run.profile?.workflow)
+    return run;
+  const node = run.profile.workflow.nodes[run.currentNodeId];
+  const waitingReason =
+    node?.executor === "human"
+      ? node.human?.reason
+      : node?.executor === "external.wait" ||
+          node?.executor === "external.check"
+        ? "external_check"
+        : node?.executor === "github.merge" &&
+            run.profile.merge?.mode === "maintainer"
+          ? "maintainer_merge"
+          : undefined;
+  if (!waitingReason) return run;
+  const evidence = {
+    auditVersion: 1,
+    kind: "wait",
+    runId: run.id,
+    runRevision: run.revision,
+    workflowHash: run.workflowHash,
+    nodeId: run.currentNodeId,
+    executor: node?.executor,
+    boundHead: run.currentHead,
+    actor: "roundhouse",
+    evidence: { waitingReason },
+  };
+  console.log(
+    JSON.stringify({ message: "workflow_boundary_waiting", ...evidence }),
+  );
+  await repository.recordEvent?.(
+    run.id,
+    undefined,
+    "workflow_boundary_audit",
+    evidence,
+  );
+  return (
+    (await repository.transition(run.id, run.revision, {
+      status: "waiting",
+      stage: run.stage,
+      currentNodeId: run.currentNodeId,
+      waitingReason,
+    })) ?? run
+  );
 }
 
 function selectedReviewers(
@@ -610,6 +686,134 @@ export async function coordinate(
     stageForWorkflowNode(run.currentNodeId!, currentWorkflowNode) !== run.stage
   )
     throw new Error("run_workflow_stage_mismatch");
+  if (
+    currentWorkflowNode.executor === "human" ||
+    currentWorkflowNode.executor === "external.wait" ||
+    currentWorkflowNode.executor === "external.check"
+  ) {
+    const signal = run.resumeSignal;
+    const humanMatches =
+      currentWorkflowNode.executor === "human" &&
+      signal?.kind === "human" &&
+      signal.reason === currentWorkflowNode.human?.reason;
+    const externalMatches =
+      currentWorkflowNode.executor !== "human" &&
+      signal?.kind === "external" &&
+      signal.adapter === currentWorkflowNode.external?.adapter &&
+      signal.event === currentWorkflowNode.external?.event;
+    const audit = (
+      kind: string,
+      actor: string,
+      evidence: Readonly<Record<string, unknown>>,
+    ) => ({
+      auditVersion: 1,
+      kind,
+      runId: run.id,
+      runRevision: run.revision,
+      workflowHash: run.workflowHash,
+      nodeId: run.currentNodeId,
+      executor: currentWorkflowNode.executor,
+      boundHead: run.currentHead,
+      actor,
+      evidence,
+    });
+    if (!humanMatches && !externalMatches) {
+      const waitingReason =
+        currentWorkflowNode.human?.reason ?? "external_check";
+      console.log(
+        JSON.stringify({
+          message: "workflow_boundary_waiting",
+          ...audit("wait", "roundhouse", {
+            waitingReason,
+            ...(currentWorkflowNode.external
+              ? {
+                  adapter: currentWorkflowNode.external.adapter,
+                  event: currentWorkflowNode.external.event,
+                }
+              : {
+                  audience: currentWorkflowNode.human?.audience,
+                  promptSource:
+                    currentWorkflowNode.human?.prompt?.sourcePath ?? null,
+                }),
+          }),
+        }),
+      );
+      await repository.recordEvent?.(
+        run.id,
+        undefined,
+        "workflow_boundary_audit",
+        audit("wait", "roundhouse", { waitingReason }),
+      );
+      const next = await repository.transition(run.id, run.revision, {
+        status: "waiting",
+        stage: run.stage,
+        currentNodeId: run.currentNodeId,
+        waitingReason,
+      });
+      return next ? "dispatched" : "stale";
+    }
+    const attemptId = immutableAttemptId(run.id, run.revision);
+    const result = humanMatches
+      ? {
+          human: {
+            status: "answered",
+            actor: signal.actor,
+            body: signal.body,
+            ...(signal.url ? { url: signal.url } : {}),
+          },
+        }
+      : {
+          [currentWorkflowNode.external!.resultKey]:
+            signal.kind === "external" ? signal.payload : {},
+        };
+    const attempt: Attempt = {
+      id: attemptId,
+      runId: run.id,
+      runRevision: run.revision,
+      kind: "external",
+      nodeId: run.currentNodeId,
+      executor: currentWorkflowNode.executor,
+      stage: run.stage,
+      role: currentWorkflowNode.role ?? currentWorkflowNode.executor,
+      state: "completed",
+      deadlineAt: now,
+      baseCommit: run.baseCommit,
+      expectedHead: run.currentHead,
+      acceptedHead: run.currentHead,
+      result,
+    };
+    await repository.createAttempt(attempt);
+    const actor = signal.actor;
+    const envelope = audit(
+      humanMatches ? "human.resume" : "external.resume",
+      actor,
+      humanMatches
+        ? { reason: signal.kind === "human" ? signal.reason : null }
+        : {
+            adapter: signal.kind === "external" ? signal.adapter : null,
+            event: signal.kind === "external" ? signal.event : null,
+          },
+    );
+    console.log(
+      JSON.stringify({ message: "workflow_boundary_resumed", ...envelope }),
+    );
+    await repository.recordEvent?.(
+      run.id,
+      attempt.id,
+      "workflow_boundary_audit",
+      envelope,
+    );
+    const next = await repository.transition(
+      run.id,
+      run.revision,
+      graphCompletedTransition(run, attempt),
+    );
+    if (!next) return "stale";
+    await recordWorkflowTransition(repository, run, attempt, next);
+    const settled = await settleImmediateWorkflowWait(repository, next);
+    if (reporter) await reporter.report(settled, attempt);
+    return "dispatched";
+  }
   if (currentWorkflowNode.executor === "review") {
     const review = currentWorkflowNode.review!;
     const current = await repository.attemptsForRevision(run.id, run.revision);
@@ -697,7 +901,8 @@ export async function coordinate(
     );
     if (!next) return "stale";
     await recordWorkflowTransition(repository, run, aggregate, next);
-    if (reporter) await reporter.report(next, aggregate);
+    const settled = await settleImmediateWorkflowWait(repository, next);
+    if (reporter) await reporter.report(settled, aggregate);
     return "dispatched";
   }
   const attemptId = immutableAttemptId(run.id, run.revision);
@@ -707,7 +912,8 @@ export async function coordinate(
     const next = await repository.transition(run.id, run.revision, transition);
     if (!next) return "stale";
     await recordWorkflowTransition(repository, run, previous, next);
-    if (reporter) await reporter.report(next, previous);
+    const settled = await settleImmediateWorkflowWait(repository, next);
+    if (reporter) await reporter.report(settled, previous);
     return "dispatched";
   }
   if (

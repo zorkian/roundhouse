@@ -359,11 +359,28 @@ export interface WorkflowReview {
   readonly reviewers: readonly WorkflowReviewer[];
 }
 
+export interface WorkflowHuman {
+  readonly reason: WaitingReason;
+  readonly audience: "participant" | "operator";
+  readonly prompt?: {
+    readonly sourcePath: string;
+    readonly content: string;
+  };
+}
+
+export interface WorkflowExternal {
+  readonly adapter: string;
+  readonly event: string;
+  readonly resultKey: string;
+}
+
 export interface WorkflowNode {
   readonly executor: WorkflowExecutorKind;
   readonly role?: string;
   readonly agent?: WorkflowAgent;
   readonly review?: WorkflowReview;
+  readonly human?: WorkflowHuman;
+  readonly external?: WorkflowExternal;
   readonly capabilities: readonly string[];
   readonly outputs: readonly string[];
   readonly transitions: readonly WorkflowTransition[];
@@ -781,6 +798,60 @@ async function review(
   return { reviewers };
 }
 
+async function human(
+  value: unknown,
+  loadFile?: WorkflowFileLoader,
+): Promise<WorkflowHuman> {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["reason", "audience"], ["prompt"]) ||
+    ![
+      "clarification",
+      "plan_approval",
+      "final_approval",
+      "maintainer_judgment",
+    ].includes(String(value.reason)) ||
+    !["participant", "operator"].includes(String(value.audience))
+  )
+    throw new Error("workflow_human_invalid");
+  const sourcePath =
+    value.prompt === undefined
+      ? undefined
+      : workflowReference(value.prompt, "workflow_human_prompt_invalid");
+  if (sourcePath && !sourcePath.startsWith(".roundhouse/prompts/"))
+    throw new Error("workflow_human_prompt_invalid");
+  if (sourcePath && !loadFile) throw new Error("workflow_file_loader_missing");
+  const content = sourcePath ? await loadFile!(sourcePath) : undefined;
+  if (content !== undefined && !content.trim())
+    throw new Error("workflow_human_prompt_empty");
+  return {
+    reason: value.reason as WorkflowHuman["reason"],
+    audience: value.audience as WorkflowHuman["audience"],
+    ...(sourcePath && content !== undefined
+      ? { prompt: { sourcePath, content } }
+      : {}),
+  };
+}
+
+function external(value: unknown): WorkflowExternal {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["adapter", "event", "result"]) ||
+    typeof value.adapter !== "string" ||
+    !/^[a-z][a-z0-9-]{0,63}$/.test(value.adapter) ||
+    typeof value.event !== "string" ||
+    !/^[a-z][a-z0-9._-]{0,127}$/.test(value.event) ||
+    typeof value.result !== "string" ||
+    !/^[A-Za-z][A-Za-z0-9_-]*$/.test(value.result)
+  )
+    throw new Error("workflow_external_invalid");
+  return {
+    adapter: value.adapter,
+    event: value.event,
+    resultKey: value.result,
+  };
+}
+
 async function node(
   value: unknown,
   loadFile?: WorkflowFileLoader,
@@ -790,7 +861,15 @@ async function node(
     !hasOnlyKeys(
       value,
       ["executor", "transitions"],
-      ["role", "agent", "review", "capabilities", "outputs"],
+      [
+        "role",
+        "agent",
+        "review",
+        "human",
+        "external",
+        "capabilities",
+        "outputs",
+      ],
     ) ||
     !workflowExecutorKinds.includes(value.executor as WorkflowExecutorKind) ||
     (value.role !== undefined &&
@@ -808,6 +887,13 @@ async function node(
     throw new Error("workflow_agent_required");
   if ((executor === "review") !== (value.review !== undefined))
     throw new Error("workflow_review_required");
+  if ((executor === "human") !== (value.human !== undefined))
+    throw new Error("workflow_human_required");
+  if (
+    ["external.wait", "external.check"].includes(executor) !==
+    (value.external !== undefined)
+  )
+    throw new Error("workflow_external_required");
   const capabilities =
     value.capabilities === undefined
       ? []
@@ -837,6 +923,12 @@ async function node(
     ...(value.review === undefined
       ? {}
       : { review: await review(value.review, loadFile) }),
+    ...(value.human === undefined
+      ? {}
+      : { human: await human(value.human, loadFile) }),
+    ...(value.external === undefined
+      ? {}
+      : { external: external(value.external) }),
     capabilities,
     outputs,
     transitions: value.transitions.map(transition),
@@ -903,6 +995,22 @@ function validateGraph(
           throw new Error("workflow_agent_input_reference_invalid");
       }
     }
+    if (
+      definition.human &&
+      !definition.outputs.some(
+        (output) => output === "human" || output.startsWith("human."),
+      )
+    )
+      throw new Error("workflow_human_output_undeclared");
+    if (
+      definition.external &&
+      !definition.outputs.some(
+        (output) =>
+          output === definition.external!.resultKey ||
+          output.startsWith(`${definition.external!.resultKey}.`),
+      )
+    )
+      throw new Error("workflow_external_output_undeclared");
     if (
       definition.executor === "terminal" &&
       definition.transitions.some((item) => item.to || item.wait)

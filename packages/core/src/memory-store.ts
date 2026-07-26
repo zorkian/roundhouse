@@ -3,7 +3,12 @@
 
 import type { Attempt, Lease, RunRepository, Wakeup } from "./contracts.js";
 import type { AppliedProfile } from "./profile.js";
-import type { IssueSnapshot, RunSnapshot, RunStage } from "./run.js";
+import type {
+  IssueSnapshot,
+  RunResumeSignal,
+  RunSnapshot,
+  RunStage,
+} from "./run.js";
 import { resumeRun, transitionRun, type RunTransition } from "./run.js";
 
 export class MemoryRunRepository implements RunRepository {
@@ -45,6 +50,7 @@ export class MemoryRunRepository implements RunRepository {
     issue: IssueSnapshot,
     profile?: AppliedProfile,
     continuationHead?: string,
+    signal?: RunResumeSignal,
   ): Promise<RunSnapshot | undefined> {
     const run = this.runs.get(runId);
     if (!run || run.revision !== expectedRevision) return undefined;
@@ -54,6 +60,7 @@ export class MemoryRunRepository implements RunRepository {
       issue,
       profile,
       continuationHead,
+      signal,
     );
     this.runs.set(runId, next);
     this.leases.delete(runId);

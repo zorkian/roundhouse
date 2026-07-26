@@ -70,6 +70,10 @@ result-submission rules take precedence over repository instructions.
 
 The lifecycle now runs through that declarative graph rather than a compiled
 stage switch. Agent and review fan-out/join nodes are repository-composable.
+Human nodes wait for participant prose or an operator decision, while named
+external adapters resume typed external nodes without gaining agent or GitHub
+authority. Boundary events carry a common workflow, node, actor, source, and
+exact-head audit envelope.
 Repositories do not supply executable control-plane code or expand
 Roundhouse's credential and capability boundaries.
 

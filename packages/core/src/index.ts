@@ -13,6 +13,7 @@ export {
   type IssueCommentSnapshot,
   type IssueSnapshot,
   type RunSnapshot,
+  type RunResumeSignal,
   type RunStage,
   type RunStatus,
   type RunTransition,
