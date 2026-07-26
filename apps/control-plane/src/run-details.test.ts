@@ -151,6 +151,7 @@ describe("run details", () => {
     });
     expect(calls[2]?.sql).toContain("u.created_at");
     expect(calls[3]?.sql).toContain("ORDER BY created_at,id");
+    expect(calls[3]?.sql).toContain("workflow_agent_resolved");
 
     await expect(
       new D1RunRepository(db).detailsByIssue("zorkian/roundhouse", 282),
@@ -201,6 +202,8 @@ describe("run details", () => {
           runId: "run_1",
           runRevision: 3,
           kind: "agent",
+          nodeId: "implement",
+          executor: "agent.write",
           stage: "implement",
           role: "developer",
           state: "completed",
@@ -279,9 +282,68 @@ describe("run details", () => {
           updatedAt: 10,
         },
       ],
+      events: [
+        {
+          attemptId: "implementation",
+          kind: "workflow_agent_resolved",
+          payload: {
+            nodeId: "implement",
+            task: "implementation",
+            inputs: {
+              plan: {
+                selector: "nodes.plan.plan",
+                present: true,
+                sourceAttemptId: "plan",
+              },
+            },
+          },
+          createdAt: 3,
+        },
+        {
+          attemptId: "implementation",
+          kind: "workflow_transition",
+          payload: {
+            fromNodeId: "implement",
+            toNodeId: "review",
+            condition: { exists: "attempt.acceptedHead" },
+          },
+          createdAt: 4,
+        },
+        {
+          kind: "workflow_review_fanout",
+          payload: {
+            candidateHead: "candidate-sha",
+            requiredReviewers: ["review-holistic", "review-accessibility"],
+          },
+          createdAt: 5,
+        },
+        {
+          attemptId: "review",
+          kind: "workflow_review_join",
+          payload: {
+            candidateHead: "candidate-sha",
+            status: "clean",
+          },
+          createdAt: 6,
+        },
+        {
+          attemptId: "human",
+          kind: "workflow_boundary_audit",
+          payload: {
+            kind: "human.resume",
+            actor: "citizen",
+            boundHead: "candidate-sha",
+          },
+          createdAt: 7,
+        },
+      ],
     };
     const html = renderRunDetails(details);
     expect(html).toContain("candidate-sha");
+    expect(html).toContain("Review workflow evidence");
+    expect(html).toContain("review-accessibility");
+    expect(html).toContain("Human and external boundary evidence");
+    expect(html).toContain("human.resume");
     expect(html).toContain("merged-sha");
     expect(html).toContain("test-model");
     expect(html).toContain("120 tokens");
@@ -303,7 +365,10 @@ describe("run details", () => {
       "https://github.com/zorkian/roundhouse/pull/99/files",
     );
     expect(html).toContain('<a href="https://example.test">test</a>');
-    expect(html).toContain("</dl>\n<section><h2>Attempt history</h2>");
+    expect(html).toContain("Workflow evidence");
+    expect(html).toContain("nodes.plan.plan");
+    expect(html).toContain("fromNodeId");
+    expect(html).toContain("<section><h2>Attempt history</h2>");
     expect(html).toContain(
       "@media(max-width:700px){body{box-sizing:border-box;margin:1rem auto;max-width:none;padding:0 .75rem;width:100%}summary{grid-template-columns:1fr 1fr}.phase{grid-column:auto}dl{grid-template-columns:minmax(0,1fr)}",
     );

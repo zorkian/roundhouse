@@ -2,6 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { parseDocument } from "yaml";
+import {
+  compileWorkflow,
+  defaultIssueWorkflowSource,
+  type CompiledWorkflow,
+  workflowSourcePath,
+} from "./workflow.js";
 
 export const profileSourcePath = ".roundhouse/profile.yaml" as const;
 export const profileStageNames = [
@@ -57,6 +63,9 @@ export interface AppliedProfile {
   readonly sourceCommit: string;
   readonly version: 1 | 2;
   readonly hash: string;
+  // Optional only so historical/profile-error snapshots remain readable.
+  // Every successfully parsed profile includes a compiled workflow.
+  readonly workflow?: CompiledWorkflow;
   readonly paths: {
     readonly allowed: readonly string[];
     readonly protected: readonly string[];
@@ -188,19 +197,6 @@ async function instruction(
   return { sourcePath, content };
 }
 
-function stageConfig(
-  value: unknown,
-  error: string,
-): { model: ProfileModel; instructions?: string } {
-  if (!isRecord(value) || !hasOnlyKeys(value, ["model"], ["instructions"]))
-    throw new Error(error);
-  const source = instructionSource(value.instructions, error);
-  return {
-    model: model(value.model, error),
-    ...(source ? { instructions: source } : {}),
-  };
-}
-
 function reviewerConfig(
   value: unknown,
   name: ProfileReviewerName,
@@ -241,9 +237,10 @@ function reviewerConfig(
   };
 }
 
-function v1Profile(
+async function v1Profile(
   value: Record<string, unknown>,
-): Omit<AppliedProfile, "sourcePath" | "sourceCommit" | "hash"> {
+  sourceCommit: string,
+): Promise<Omit<AppliedProfile, "sourcePath" | "sourceCommit" | "hash">> {
   if (
     !hasOnlyKeys(value, ["paths", "version"]) ||
     !isRecord(value.paths) ||
@@ -270,6 +267,7 @@ function v1Profile(
   ) as unknown as Record<ProfileStageName, ProfileStage>;
   return {
     version: 1,
+    workflow: await compileWorkflow(defaultIssueWorkflowSource, sourceCommit),
     paths: { allowed, protected: protectedPaths },
     merge: { mode: "automatic", method: "merge" },
     permissions: {
@@ -307,6 +305,7 @@ function v1Profile(
 
 async function v2Profile(
   value: Record<string, unknown>,
+  sourceCommit: string,
   loadFile?: ProfileFileLoader,
 ): Promise<Omit<AppliedProfile, "sourcePath" | "sourceCommit" | "hash">> {
   const topLevel = [
@@ -315,10 +314,9 @@ async function v2Profile(
     "merge",
     "paths",
     "permissions",
-    "reviewers",
-    "stages",
     "validation",
     "version",
+    "workflow",
   ];
   if (!hasOnlyKeys(value, topLevel)) throw new Error("profile_schema_invalid");
   if (
@@ -389,32 +387,14 @@ async function v2Profile(
     value.instructions.project,
     "profile_project_instructions_invalid",
   );
-
-  if (
-    !isRecord(value.stages) ||
-    !hasOnlyKeys(value.stages, [...profileStageNames])
-  )
-    throw new Error("profile_stages_invalid");
-  const stageValues = value.stages;
-  const rawStages = Object.fromEntries(
-    profileStageNames.map((name) => [
-      name,
-      stageConfig(stageValues[name], `profile_stage_${name}_invalid`),
-    ]),
-  ) as Record<ProfileStageName, { model: ProfileModel; instructions?: string }>;
-
-  if (
-    !isRecord(value.reviewers) ||
-    !hasOnlyKeys(value.reviewers, [...profileReviewerNames])
-  )
-    throw new Error("profile_reviewers_invalid");
-  const reviewerValues = value.reviewers;
-  const rawReviewers = Object.fromEntries(
-    profileReviewerNames.map((name) => [
-      name,
-      reviewerConfig(reviewerValues[name], name),
-    ]),
-  ) as Record<ProfileReviewerName, ReturnType<typeof reviewerConfig>>;
+  if (value.workflow !== "workflow.yaml")
+    throw new Error("profile_workflow_invalid");
+  if (!loadFile) throw new Error("profile_workflow_loader_missing");
+  const workflow = await compileWorkflow(
+    await loadFile(workflowSourcePath),
+    sourceCommit,
+    loadFile,
+  );
 
   if (
     !isRecord(value.validation) ||
@@ -453,51 +433,9 @@ async function v2Profile(
             throw new Error("profile_devcontainer_invalid");
           })();
 
-  const stages = Object.fromEntries(
-    await Promise.all(
-      profileStageNames.map(async (name) => {
-        const stage = rawStages[name];
-        return [
-          name,
-          {
-            model: stage.model,
-            ...(stage.instructions
-              ? {
-                  instructions: await instruction(stage.instructions, loadFile),
-                }
-              : {}),
-          },
-        ];
-      }),
-    ),
-  ) as Record<ProfileStageName, ProfileStage>;
-  const reviewers = Object.fromEntries(
-    await Promise.all(
-      profileReviewerNames.map(async (name) => {
-        const reviewer = rawReviewers[name];
-        return [
-          name,
-          {
-            enabled: reviewer.enabled,
-            ...(reviewer.selectedBy ? { selectedBy: reviewer.selectedBy } : {}),
-            model: reviewer.model,
-            ...(reviewer.instructions
-              ? {
-                  instructions: await instruction(
-                    reviewer.instructions,
-                    loadFile,
-                  ),
-                }
-              : {}),
-            blockingSeverities: reviewer.blockingSeverities,
-          },
-        ];
-      }),
-    ),
-  ) as Record<ProfileReviewerName, ProfileReviewer>;
-
   return {
     version: 2,
+    workflow,
     paths: { allowed, protected: protectedPaths },
     merge: {
       mode: value.merge.mode as MergeMode,
@@ -515,8 +453,6 @@ async function v2Profile(
         ? { project: await instruction(projectSource, loadFile) }
         : {}),
     },
-    stages,
-    reviewers,
     validation: { commands },
     developmentEnvironment: {
       ...(devcontainer ? { devcontainer } : {}),
@@ -535,7 +471,9 @@ export async function parseProfile(
   if (!isRecord(value) || ![1, 2].includes(value.version as number))
     throw new Error("profile_schema_invalid");
   const normalized =
-    value.version === 1 ? v1Profile(value) : await v2Profile(value, loadFile);
+    value.version === 1
+      ? await v1Profile(value, sourceCommit)
+      : await v2Profile(value, sourceCommit, loadFile);
   const canonical = JSON.stringify(normalized);
   const digest = await crypto.subtle.digest(
     "SHA-256",

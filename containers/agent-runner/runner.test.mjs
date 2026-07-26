@@ -406,10 +406,19 @@ describe("V2 agent runner", () => {
           commands: [{ name: "tests", run: ["pnpm", "test"] }],
         },
       },
+      workflowNode: {
+        agent: {
+          prompt: {
+            sourcePath: ".roundhouse/prompts/workflow-implementation.md",
+            content: "Use the typed workflow implementation contract.",
+          },
+        },
+      },
     });
     expect(prompt).toContain("Trusted repository instructions");
     expect(prompt).toContain("Capture before and after screenshots");
-    expect(prompt).toContain("Use the repository development environment");
+    expect(prompt).toContain("Use the typed workflow implementation contract");
+    expect(prompt).not.toContain("Use the repository development environment");
     expect(prompt).toContain('"run":["pnpm","test"]');
   });
 

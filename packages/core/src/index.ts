@@ -13,6 +13,7 @@ export {
   type IssueCommentSnapshot,
   type IssueSnapshot,
   type RunSnapshot,
+  type RunResumeSignal,
   type RunStage,
   type RunStatus,
   type RunTransition,
@@ -20,4 +21,5 @@ export {
 } from "./run.js";
 export * from "./contracts.js";
 export * from "./profile.js";
+export * from "./workflow.js";
 export { MemoryRunRepository } from "./memory-store.js";

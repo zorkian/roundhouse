@@ -54,8 +54,12 @@ limited to explicitly enrolled public repositories.
 An enrolled repository owns its reviewed configuration in
 `.roundhouse/profile.yaml`. Profile V2 defines allowed and protected paths,
 operators, merge mode and method, the development container, canonical
-validation commands, per-stage models, reviewers, and repository instructions.
-Long instructions live in explicitly referenced files under
+validation commands, and repository-wide instructions. The
+repository-owned `.roundhouse/workflow.yaml` defines the lifecycle graph and
+each agent node's typed inputs, result schema, model, prompt, capabilities, and
+transitions. Review nodes define any number of always-on or conditionally
+selected reviewers, their blocking/advisory/shadow mode, model, prompt, and
+severity policy. Long instructions live in explicitly referenced files under
 `.roundhouse/prompts/`.
 
 Roundhouse loads the profile and every referenced instruction from one exact
@@ -64,12 +68,33 @@ onto the run. Roundhouse cannot modify `.roundhouse/**` or the selected Dev
 Container configuration. Fixed Roundhouse isolation, tool, read-only, and
 result-submission rules take precedence over repository instructions.
 
+The lifecycle now runs through that declarative graph rather than a compiled
+stage switch. Agent and review fan-out/join nodes are repository-composable.
+Human nodes wait for participant prose or an operator decision, while named
+external adapters resume typed external nodes without gaining agent or GitHub
+authority. Boundary events carry a common workflow, node, actor, source, and
+exact-head audit envelope.
+Repositories do not supply executable control-plane code or expand
+Roundhouse's credential and capability boundaries.
+
+The development dashboard links each enrolled repository to a workflow page
+that visualizes nodes, routes, and authority from an immutable run snapshot.
+It serializes that snapshot back to repository YAML, validates edits with the
+same compiler, and uses GitHub's authenticated editor to create the proposed
+branch and pull request. D1 never becomes workflow configuration authority.
+
 ## Project status
 
 Roundhouse is an active V2 prototype. The end-to-end development workflow can
 qualify and investigate an issue, plan and implement a change, validate and
 review the exact commit, run repository CI, and merge it. It is not ready for
 general production use.
+
+The approved next work is the workflow-graph migration described in Phase 7 of
+the V2 plan. The same foundation is designed to accept future typed adapters
+for organizational context, scanners, deployment observation, alert triage,
+and audit export; those integrations are not implemented or approved merely
+because the extension points exist.
 
 V1 is preserved at the `v1-poc-final` tag. The [V2 plan](docs/v2-plan.md) is
 the normative product and architecture document.

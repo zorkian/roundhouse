@@ -14,7 +14,17 @@ paths:
   protected:
     - ".github/workflows/**"
 `;
+const validWorkflow = `version: 1
+triggers:
+  github.issue.started: done
+nodes:
+  done:
+    executor: terminal
+    transitions:
+      - terminal: succeeded
+`;
 const validV2 = `version: 2
+workflow: workflow.yaml
 paths:
   allowed: ["**"]
   protected: [".github/workflows/**"]
@@ -28,33 +38,6 @@ permissions:
     teams: [dreamwidth/maintainers]
 instructions:
   project: prompts/project.md
-stages:
-  qualification:
-    model: { id: openai/gpt-5.6-sol, reasoning: low }
-  investigation:
-    model: { id: openai/gpt-5.6-sol, reasoning: low }
-  planning:
-    model: { id: openai/gpt-5.6-sol, reasoning: low }
-    instructions: prompts/planning.md
-  implementation:
-    model: { id: moonshotai/kimi-k3, reasoning: low }
-    instructions: prompts/implementation.md
-reviewers:
-  holistic:
-    enabled: true
-    model: { id: openai/gpt-5.6-sol, reasoning: low }
-    instructions: prompts/review-holistic.md
-    blocking_severities: [critical, high, medium]
-  security:
-    enabled: true
-    selected_by: holistic
-    model: { id: openai/gpt-5.6-sol, reasoning: low }
-    blocking_severities: [critical, high, medium]
-  data:
-    enabled: false
-    selected_by: holistic
-    model: { id: openai/gpt-5.6-sol, reasoning: low }
-    blocking_severities: [critical, high]
 validation:
   commands:
     - name: tests
@@ -75,6 +58,7 @@ describe("repository profile parsing", () => {
 
   it("loads and snapshots a complete version 2 profile", async () => {
     const files = new Map([
+      [".roundhouse/workflow.yaml", validWorkflow],
       [".roundhouse/prompts/project.md", "Project instructions"],
       [".roundhouse/prompts/planning.md", "Planning instructions"],
       [".roundhouse/prompts/implementation.md", "Implementation instructions"],
@@ -90,6 +74,10 @@ describe("repository profile parsing", () => {
     });
     expect(profile).toMatchObject({
       version: 2,
+      workflow: {
+        sourcePath: ".roundhouse/workflow.yaml",
+        sourceCommit: commit,
+      },
       merge: { mode: "maintainer", method: "squash" },
       permissions: {
         operators: {
@@ -102,21 +90,6 @@ describe("repository profile parsing", () => {
         project: {
           sourcePath: ".roundhouse/prompts/project.md",
           content: "Project instructions",
-        },
-      },
-      stages: {
-        implementation: {
-          model: { id: "moonshotai/kimi-k3", reasoning: "low" },
-          instructions: {
-            sourcePath: ".roundhouse/prompts/implementation.md",
-          },
-        },
-      },
-      reviewers: {
-        data: {
-          enabled: false,
-          selectedBy: "holistic",
-          blockingSeverities: ["critical", "high"],
         },
       },
       validation: {
@@ -137,9 +110,15 @@ describe("repository profile parsing", () => {
     expect(profile).toMatchObject({
       version: 2,
       merge: { mode: "automatic", method: "merge" },
-      stages: {
-        implementation: {
-          model: { id: "moonshotai/kimi-k3", reasoning: "low" },
+      workflow: {
+        nodes: {
+          plan: {
+            agent: {
+              task: "planning",
+              model: { id: "openai/gpt-5.6-sol", reasoning: "low" },
+              prompt: { sourcePath: ".roundhouse/prompts/planning.md" },
+            },
+          },
         },
       },
       validation: {
@@ -149,11 +128,18 @@ describe("repository profile parsing", () => {
     expect(profile.instructions?.project?.content).toContain(
       "capture before-and-after screenshots",
     );
+    expect(profile.workflow?.nodes.plan?.agent?.prompt?.content).toContain(
+      "Plan the smallest end-to-end change",
+    );
   });
 
   it("includes referenced instruction contents in the profile hash", async () => {
     const load = (project: string) => async (path: string) =>
-      path.endsWith("project.md") ? project : path;
+      path.endsWith("workflow.yaml")
+        ? validWorkflow
+        : path.endsWith("project.md")
+          ? project
+          : path;
     const first = await parseProfile(validV2, commit, load("First"));
     const second = await parseProfile(validV2, commit, load("Second"));
     expect(first.hash).not.toBe(second.hash);
@@ -205,7 +191,9 @@ paths:
   });
 
   it("always protects the selected development container", async () => {
-    const profile = await parseProfile(validV2, commit, async (path) => path);
+    const profile = await parseProfile(validV2, commit, async (path) =>
+      path.endsWith("workflow.yaml") ? validWorkflow : path,
+    );
     expect(() =>
       assertPathAllowed(profile, ".devcontainer/devcontainer.json"),
     ).toThrow("protected_path_changed");

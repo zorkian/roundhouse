@@ -3,13 +3,24 @@
 
 import type { Attempt, Lease, RunRepository, Wakeup } from "./contracts.js";
 import type { AppliedProfile } from "./profile.js";
-import type { IssueSnapshot, RunSnapshot, RunStage } from "./run.js";
+import type {
+  IssueSnapshot,
+  RunResumeSignal,
+  RunSnapshot,
+  RunStage,
+} from "./run.js";
 import { resumeRun, transitionRun, type RunTransition } from "./run.js";
 
 export class MemoryRunRepository implements RunRepository {
   readonly runs = new Map<string, RunSnapshot>();
   readonly attempts = new Map<string, Attempt>();
   readonly leases = new Map<string, Lease>();
+  readonly events: {
+    readonly runId: string;
+    readonly attemptId?: string;
+    readonly kind: string;
+    readonly payload: Readonly<Record<string, unknown>>;
+  }[] = [];
 
   async create(run: RunSnapshot): Promise<void> {
     if (this.runs.has(run.id)) throw new Error("run_exists");
@@ -39,6 +50,7 @@ export class MemoryRunRepository implements RunRepository {
     issue: IssueSnapshot,
     profile?: AppliedProfile,
     continuationHead?: string,
+    signal?: RunResumeSignal,
   ): Promise<RunSnapshot | undefined> {
     const run = this.runs.get(runId);
     if (!run || run.revision !== expectedRevision) return undefined;
@@ -48,6 +60,7 @@ export class MemoryRunRepository implements RunRepository {
       issue,
       profile,
       continuationHead,
+      signal,
     );
     this.runs.set(runId, next);
     this.leases.delete(runId);
@@ -167,6 +180,22 @@ export class MemoryRunRepository implements RunRepository {
       .sort((left, right) => right.runRevision - left.runRevision)[0];
   }
 
+  async latestCompletedNodeAttempt(
+    runId: string,
+    nodeId: string,
+    beforeRevision: number,
+  ): Promise<Attempt | undefined> {
+    return [...this.attempts.values()]
+      .filter(
+        (attempt) =>
+          attempt.runId === runId &&
+          attempt.nodeId === nodeId &&
+          attempt.state === "completed" &&
+          attempt.runRevision < beforeRevision,
+      )
+      .sort((left, right) => right.runRevision - left.runRevision)[0];
+  }
+
   async consumedCiEvidence(
     runId: string,
     evidenceKey: string,
@@ -208,5 +237,19 @@ export class MemoryRunRepository implements RunRepository {
         ? [{ runId, expectedRevision: lease.runRevision }]
         : [],
     );
+  }
+
+  async recordEvent(
+    runId: string,
+    attemptId: string | undefined,
+    kind: string,
+    payload: Readonly<Record<string, unknown>>,
+  ): Promise<void> {
+    this.events.push({
+      runId,
+      ...(attemptId ? { attemptId } : {}),
+      kind,
+      payload,
+    });
   }
 }

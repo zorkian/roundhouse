@@ -2,13 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import {
+  advanceWorkflow,
   immutableAttemptId,
   reviewerAttemptId,
-  reviewers,
   type AppliedProfile,
   type Attempt,
   type RunRepository,
   type RunSnapshot,
+  type RunStage,
+  type RunTransition,
+  type WorkflowNode,
+  type WorkflowReview,
   type Wakeup,
 } from "@roundhouse/core";
 import { aggregatedReview } from "./aggregated-review.js";
@@ -24,10 +28,18 @@ export interface AttemptReporter {
 
 export const attemptInactivityMilliseconds = 10 * 60_000;
 
-function startNotificationApplies(attempt: Attempt): boolean {
+function startNotificationApplies(run: RunSnapshot, attempt: Attempt): boolean {
+  const review =
+    attempt.nodeId && run.profile?.workflow
+      ? run.profile.workflow.nodes[attempt.nodeId]?.review
+      : undefined;
+  const primaryReviewer = review?.reviewers.find(
+    (reviewer) => reviewer.activation === "always",
+  )?.id;
   return (
     attempt.stage === "implement" ||
-    (attempt.stage === "review" && attempt.role === "review-holistic")
+    (attempt.stage === "review" &&
+      attempt.role === (primaryReviewer ?? "review-holistic"))
   );
 }
 
@@ -40,7 +52,8 @@ async function reportStarted(
   run: RunSnapshot,
   attempt: Attempt,
 ): Promise<void> {
-  if (!reporter?.reportStarted || !startNotificationApplies(attempt)) return;
+  if (!reporter?.reportStarted || !startNotificationApplies(run, attempt))
+    return;
   try {
     await reporter.reportStarted(run, attempt);
   } catch (error) {
@@ -286,19 +299,235 @@ export function mergeTransition(attempt: Attempt) {
   } as const;
 }
 
-function completedTransition(attempt: Attempt, profile?: AppliedProfile) {
-  if (attempt.stage === "qualify") return qualificationTransition(attempt);
-  if (attempt.stage === "reproduce") return reproductionTransition(attempt);
-  if (attempt.stage === "plan") return planTransition(attempt);
-  if (attempt.stage === "implement") return implementationTransition(attempt);
-  if (attempt.stage === "review") return reviewTransition(attempt);
-  if (attempt.stage === "integrate") return integrateTransition(attempt);
-  if (attempt.stage === "ci") return ciTransition(attempt, profile);
-  if (attempt.stage === "merge") return mergeTransition(attempt);
-  return undefined;
+function stageForWorkflowNode(nodeId: string, node: WorkflowNode): RunStage {
+  if (node.agent?.task === "qualification") return "qualify";
+  if (node.agent?.task === "investigation") return "reproduce";
+  if (node.agent?.task === "planning") return "plan";
+  if (node.agent?.task === "implementation") return "implement";
+  if (node.executor === "review") return "review";
+  if (node.executor === "github.publish") return "publish";
+  if (node.executor === "github.checks") return "ci";
+  if (node.executor === "github.merge") return "merge";
+  if (node.role === "integrate") return "integrate";
+  if (
+    node.role &&
+    [
+      "qualify",
+      "reproduce",
+      "plan",
+      "implement",
+      "validate",
+      "review",
+      "integrate",
+      "publish",
+      "ci",
+      "merge",
+    ].includes(node.role)
+  )
+    return node.role as RunStage;
+  throw new Error(`workflow_node_has_no_execution_stage:${nodeId}`);
 }
 
-function selectedSpecialists(attempt: Attempt): readonly string[] | undefined {
+function integrationWorkflowOutput(attempt: Attempt): string | undefined {
+  const transition = integrateTransition(attempt);
+  if (transition.status === "failed") return undefined;
+  if (transition.stage === "ci") return "ready";
+  return "needs_resolution";
+}
+
+function evidenceForAttempt(
+  attempt: Attempt,
+  node: WorkflowNode,
+  profile?: AppliedProfile,
+): Pick<RunTransition, "acceptedHead" | "heads"> {
+  const identity = (
+    transition: RunTransition,
+  ): Pick<RunTransition, "acceptedHead" | "heads"> => ({
+    ...(transition.acceptedHead
+      ? { acceptedHead: transition.acceptedHead }
+      : {}),
+    ...(transition.heads ? { heads: transition.heads } : {}),
+  });
+  if (node.agent?.task === "implementation")
+    return identity(implementationTransition(attempt));
+  if (node.executor === "review") return identity(reviewTransition(attempt));
+  if (node.executor === "validate" && node.role === "integrate")
+    return identity(integrateTransition(attempt));
+  if (node.executor === "github.checks") {
+    const ci = attempt.result?.ci as Record<string, unknown> | undefined;
+    if (ci?.status === "reintegrate")
+      return {
+        acceptedHead: attempt.acceptedHead,
+        heads: { integrationHead: null, targetBaseHead: null },
+      };
+    return identity(ciTransition(attempt, profile));
+  }
+  if (node.executor === "github.merge") {
+    const merge = attempt.result?.merge as Record<string, unknown> | undefined;
+    if (merge?.status === "reintegrate")
+      return {
+        acceptedHead: attempt.acceptedHead,
+        heads: { integrationHead: null, targetBaseHead: null },
+      };
+    return identity(mergeTransition(attempt));
+  }
+  return {};
+}
+
+function workflowAdvanceForAttempt(run: RunSnapshot, attempt: Attempt) {
+  const workflow = run.profile?.workflow;
+  const nodeId = run.currentNodeId;
+  if (!workflow || !nodeId || run.workflowHash !== workflow.hash)
+    throw new Error("run_workflow_snapshot_missing");
+  const node = workflow.nodes[nodeId];
+  if (!node) throw new Error("run_workflow_node_missing");
+  const integrationStatus =
+    node.executor === "validate" && node.role === "integrate"
+      ? integrationWorkflowOutput(attempt)
+      : undefined;
+  const output = integrationStatus
+    ? {
+        ...attempt.result,
+        integration: {
+          ...(attempt.result?.integration as
+            Record<string, unknown> | undefined),
+          status: integrationStatus,
+        },
+      }
+    : attempt.result;
+  const implementation = attempt.result?.implementation as
+    Record<string, unknown> | undefined;
+  const advance = advanceWorkflow(workflow, nodeId, {
+    output: output ?? {},
+    attempt: {
+      expectedHead: attempt.expectedHead,
+      acceptedHead: attempt.acceptedHead,
+      changed:
+        Boolean(attempt.acceptedHead) &&
+        attempt.acceptedHead !== attempt.expectedHead,
+      hasScreenshots:
+        Array.isArray(implementation?.screenshots) &&
+        implementation.screenshots.length > 0,
+    },
+    run: {
+      revision: run.revision,
+      mergeMode: run.profile?.merge?.mode ?? "automatic",
+    },
+  });
+  return { workflow, nodeId, node, advance };
+}
+
+export function graphCompletedTransition(run: RunSnapshot, attempt: Attempt) {
+  const { workflow, nodeId, node, advance } = workflowAdvanceForAttempt(
+    run,
+    attempt,
+  );
+  const destination = workflow.nodes[advance.currentNodeId]!;
+  const stage = stageForWorkflowNode(advance.currentNodeId, destination);
+  const evidence = evidenceForAttempt(attempt, node, run.profile);
+  console.log(
+    JSON.stringify({
+      message: "workflow_transition_selected",
+      runId: run.id,
+      revision: run.revision,
+      attemptId: attempt.id,
+      workflowHash: workflow.hash,
+      fromNodeId: nodeId,
+      toNodeId: advance.currentNodeId,
+      status: advance.status,
+      waitingReason: advance.waitingReason ?? null,
+      condition: advance.selected.when ?? null,
+      executor: node.executor,
+    }),
+  );
+  return {
+    status: advance.status,
+    stage,
+    currentNodeId: advance.currentNodeId,
+    ...(advance.waitingReason ? { waitingReason: advance.waitingReason } : {}),
+    ...evidence,
+  };
+}
+
+async function recordWorkflowTransition(
+  repository: RunRepository,
+  run: RunSnapshot,
+  attempt: Attempt,
+  next: RunSnapshot,
+): Promise<void> {
+  if (!run.profile?.workflow || !run.currentNodeId) return;
+  const { workflow, nodeId, node, advance } = workflowAdvanceForAttempt(
+    run,
+    attempt,
+  );
+  await repository.recordEvent?.(run.id, attempt.id, "workflow_transition", {
+    workflowHash: workflow.hash,
+    fromNodeId: nodeId,
+    toNodeId: advance.currentNodeId,
+    executor: node.executor,
+    capabilities: node.capabilities,
+    condition: advance.selected.when ?? null,
+    status: next.status,
+    waitingReason: next.waitingReason ?? null,
+    inputHead: attempt.expectedHead,
+    outputHead: attempt.acceptedHead ?? attempt.expectedHead,
+    runRevision: next.revision,
+  });
+}
+
+async function settleImmediateWorkflowWait(
+  repository: RunRepository,
+  run: RunSnapshot,
+): Promise<RunSnapshot> {
+  if (run.status !== "active" || !run.currentNodeId || !run.profile?.workflow)
+    return run;
+  const node = run.profile.workflow.nodes[run.currentNodeId];
+  const waitingReason =
+    node?.executor === "human"
+      ? node.human?.reason
+      : node?.executor === "external.wait" ||
+          node?.executor === "external.check"
+        ? "external_check"
+        : node?.executor === "github.merge" &&
+            run.profile.merge?.mode === "maintainer"
+          ? "maintainer_merge"
+          : undefined;
+  if (!waitingReason) return run;
+  const evidence = {
+    auditVersion: 1,
+    kind: "wait",
+    runId: run.id,
+    runRevision: run.revision,
+    workflowHash: run.workflowHash,
+    nodeId: run.currentNodeId,
+    executor: node?.executor,
+    boundHead: run.currentHead,
+    actor: "roundhouse",
+    evidence: { waitingReason },
+  };
+  console.log(
+    JSON.stringify({ message: "workflow_boundary_waiting", ...evidence }),
+  );
+  await repository.recordEvent?.(
+    run.id,
+    undefined,
+    "workflow_boundary_audit",
+    evidence,
+  );
+  return (
+    (await repository.transition(run.id, run.revision, {
+      status: "waiting",
+      stage: run.stage,
+      currentNodeId: run.currentNodeId,
+      waitingReason,
+    })) ?? run
+  );
+}
+
+function selectedReviewers(
+  attempt: Attempt,
+  expected: readonly string[],
+): readonly string[] | undefined {
   const review = attempt.result?.review as Record<string, unknown> | undefined;
   const selections = review?.selections;
   if (!Array.isArray(selections)) return undefined;
@@ -307,7 +536,7 @@ function selectedSpecialists(attempt: Attempt): readonly string[] | undefined {
     if (!selection || typeof selection !== "object") return undefined;
     const value = selection as Record<string, unknown>;
     if (
-      !["review-security", "review-data"].includes(String(value.role)) ||
+      !expected.includes(String(value.role)) ||
       typeof value.applicable !== "boolean" ||
       typeof value.rationale !== "string" ||
       decisions.has(String(value.role))
@@ -315,8 +544,7 @@ function selectedSpecialists(attempt: Attempt): readonly string[] | undefined {
       return undefined;
     decisions.set(String(value.role), value.applicable);
   }
-  if (!decisions.has("review-security") || !decisions.has("review-data"))
-    return undefined;
+  if (expected.some((role) => !decisions.has(role))) return undefined;
   return [...decisions].flatMap(([role, applicable]) =>
     applicable ? [role] : [],
   );
@@ -325,12 +553,13 @@ function selectedSpecialists(attempt: Attempt): readonly string[] | undefined {
 function aggregateReviews(
   attempts: readonly Attempt[],
   profile?: AppliedProfile,
+  configured?: WorkflowReview,
 ): Attempt {
   const source = attempts[attempts.length - 1]!;
   return {
     ...source,
     result: {
-      review: aggregatedReview(attempts, profile),
+      review: aggregatedReview(attempts, profile, configured),
     },
   };
 }
@@ -338,36 +567,69 @@ function aggregateReviews(
 export function aggregateReviewAttempts(
   attempts: readonly Attempt[],
   profile?: AppliedProfile,
+  configured?: WorkflowReview,
 ): Attempt | undefined {
-  const holistic = attempts.find(
-    (attempt) =>
-      attempt.role === "review-holistic" && attempt.state === "completed",
+  const legacy = !configured;
+  const definitions = configured?.reviewers ?? [
+    {
+      id: "review-holistic",
+      activation: "always",
+      selects: ["review-security", "review-data"],
+    },
+    {
+      id: "review-security",
+      activation: "selected",
+      selectedBy: "review-holistic",
+      selects: [],
+    },
+    {
+      id: "review-data",
+      activation: "selected",
+      selectedBy: "review-holistic",
+      selects: [],
+    },
+  ];
+  const always = definitions.filter(
+    (reviewer) => reviewer.activation === "always",
   );
-  if (!holistic) return undefined;
-  const decisions = selectedSpecialists(holistic);
-  if (!decisions) return undefined;
-  const selected = decisions.filter((role) => {
-    const name = role.replace("review-", "") as "security" | "data";
-    return profile?.reviewers?.[name]?.enabled !== false;
-  });
-  const specialists = selected.map((role) =>
-    attempts.find(
-      (attempt) => attempt.role === role && attempt.state === "completed",
-    ),
+  const completed = new Map(
+    attempts
+      .filter((attempt) => attempt.state === "completed")
+      .map((attempt) => [attempt.role, attempt]),
   );
-  if (specialists.some((attempt) => !attempt)) return undefined;
-  const required = [holistic, ...(specialists as Attempt[])];
-  const candidateHead = required[required.length - 1]!.expectedHead;
+  if (always.some((reviewer) => !completed.has(reviewer.id))) return undefined;
+  const selected = new Set(always.map((reviewer) => reviewer.id));
+  for (const selector of definitions.filter(
+    (reviewer) => reviewer.selects.length,
+  )) {
+    const attempt = completed.get(selector.id);
+    if (!attempt) return undefined;
+    const decisions = selectedReviewers(attempt, selector.selects);
+    if (!decisions) return undefined;
+    for (const role of decisions) {
+      if (legacy) {
+        const name = role.replace("review-", "") as "security" | "data";
+        if (profile?.reviewers?.[name]?.enabled === false) continue;
+      }
+      selected.add(role);
+    }
+  }
+  const required = definitions
+    .filter((reviewer) => selected.has(reviewer.id))
+    .map((reviewer) => completed.get(reviewer.id));
+  if (required.some((attempt) => !attempt)) return undefined;
+  const exact = required as Attempt[];
+  const candidateHead = exact[exact.length - 1]!.expectedHead;
   if (
     !candidateHead ||
-    required.some(
+    exact.some(
       (attempt) =>
         attempt.expectedHead !== candidateHead ||
         attempt.acceptedHead !== candidateHead,
     )
   )
     return undefined;
-  return aggregateReviews(required, profile);
+  return aggregateReviews(exact, profile, configured);
 }
 
 export async function coordinate(
@@ -395,54 +657,217 @@ export async function coordinate(
     });
     return "stale";
   }
-  if (run.stage === "review") {
-    const current = await repository.attemptsForRevision(run.id, run.revision);
-    const holisticRole = "review-holistic" as const;
-    const holistic = current.find((attempt) => attempt.role === holisticRole);
-    if (!holistic || holistic.state !== "completed") {
-      return dispatchReview(
-        repository,
-        dispatcher,
-        run,
-        holisticRole,
-        now,
-        leaseMilliseconds,
-        reporter,
-      );
-    }
-    const allowed = new Set(
-      reviewers.slice(1).flatMap((reviewer) => {
-        const name = reviewer.role.replace("review-", "") as
-          "security" | "data";
-        return run.profile?.reviewers?.[name]?.enabled === false
-          ? []
-          : [reviewer.role];
-      }),
-    );
-    const selection = selectedSpecialists(holistic);
-    if (!selection) {
-      const next = await repository.transition(run.id, run.revision, {
-        status: "failed",
-        stage: "review",
-      });
-      if (!next) return "stale";
-      if (reporter) await reporter.report(next, holistic);
-      return "dispatched";
-    }
-    const selected = selection.filter((role) =>
-      allowed.has(role as "review-security" | "review-data"),
-    ) as ("review-security" | "review-data")[];
-    console.log(
+  const workflow = run.profile.workflow;
+  const currentWorkflowNode =
+    workflow && run.currentNodeId
+      ? workflow.nodes[run.currentNodeId]
+      : undefined;
+  if (!workflow || !currentWorkflowNode || run.workflowHash !== workflow.hash) {
+    console.error(
       JSON.stringify({
-        message: "review_profile_selection_applied",
+        message: "run_workflow_snapshot_invalid",
         runId: run.id,
         revision: run.revision,
         profileHash: run.profile.hash,
-        enabledSpecialists: [...allowed],
-        selectedSpecialists: selected,
+        workflowHash: run.workflowHash ?? null,
+        profileWorkflowHash: workflow?.hash ?? null,
+        currentNodeId: run.currentNodeId ?? null,
       }),
     );
-    for (const role of selected) {
+    const next = await repository.transition(run.id, run.revision, {
+      status: "waiting",
+      stage: run.stage,
+      waitingReason: "profile_error",
+    });
+    return next ? "dispatched" : "stale";
+  }
+  if (
+    currentWorkflowNode &&
+    stageForWorkflowNode(run.currentNodeId!, currentWorkflowNode) !== run.stage
+  )
+    throw new Error("run_workflow_stage_mismatch");
+  if (
+    currentWorkflowNode.executor === "human" ||
+    currentWorkflowNode.executor === "external.wait" ||
+    currentWorkflowNode.executor === "external.check"
+  ) {
+    const signal = run.resumeSignal;
+    const humanMatches =
+      currentWorkflowNode.executor === "human" &&
+      signal?.kind === "human" &&
+      signal.reason === currentWorkflowNode.human?.reason;
+    const externalMatches =
+      currentWorkflowNode.executor !== "human" &&
+      signal?.kind === "external" &&
+      signal.adapter === currentWorkflowNode.external?.adapter &&
+      signal.event === currentWorkflowNode.external?.event;
+    const audit = (
+      kind: string,
+      actor: string,
+      evidence: Readonly<Record<string, unknown>>,
+    ) => ({
+      auditVersion: 1,
+      kind,
+      runId: run.id,
+      runRevision: run.revision,
+      workflowHash: run.workflowHash,
+      nodeId: run.currentNodeId,
+      executor: currentWorkflowNode.executor,
+      boundHead: run.currentHead,
+      actor,
+      evidence,
+    });
+    if (!humanMatches && !externalMatches) {
+      const waitingReason =
+        currentWorkflowNode.human?.reason ?? "external_check";
+      console.log(
+        JSON.stringify({
+          message: "workflow_boundary_waiting",
+          ...audit("wait", "roundhouse", {
+            waitingReason,
+            ...(currentWorkflowNode.external
+              ? {
+                  adapter: currentWorkflowNode.external.adapter,
+                  event: currentWorkflowNode.external.event,
+                }
+              : {
+                  audience: currentWorkflowNode.human?.audience,
+                  promptSource:
+                    currentWorkflowNode.human?.prompt?.sourcePath ?? null,
+                }),
+          }),
+        }),
+      );
+      await repository.recordEvent?.(
+        run.id,
+        undefined,
+        "workflow_boundary_audit",
+        audit("wait", "roundhouse", { waitingReason }),
+      );
+      const next = await repository.transition(run.id, run.revision, {
+        status: "waiting",
+        stage: run.stage,
+        currentNodeId: run.currentNodeId,
+        waitingReason,
+      });
+      return next ? "dispatched" : "stale";
+    }
+    const attemptId = immutableAttemptId(run.id, run.revision);
+    const result = humanMatches
+      ? {
+          human: {
+            status: "answered",
+            actor: signal.actor,
+            body: signal.body,
+            ...(signal.url ? { url: signal.url } : {}),
+          },
+        }
+      : {
+          [currentWorkflowNode.external!.resultKey]:
+            signal.kind === "external" ? signal.payload : {},
+        };
+    const attempt: Attempt = {
+      id: attemptId,
+      runId: run.id,
+      runRevision: run.revision,
+      kind: "external",
+      nodeId: run.currentNodeId,
+      executor: currentWorkflowNode.executor,
+      stage: run.stage,
+      role: currentWorkflowNode.role ?? currentWorkflowNode.executor,
+      state: "completed",
+      deadlineAt: now,
+      baseCommit: run.baseCommit,
+      expectedHead: run.currentHead,
+      acceptedHead: run.currentHead,
+      result,
+    };
+    await repository.createAttempt(attempt);
+    const actor = signal.actor;
+    const envelope = audit(
+      humanMatches ? "human.resume" : "external.resume",
+      actor,
+      humanMatches
+        ? { reason: signal.kind === "human" ? signal.reason : null }
+        : {
+            adapter: signal.kind === "external" ? signal.adapter : null,
+            event: signal.kind === "external" ? signal.event : null,
+          },
+    );
+    console.log(
+      JSON.stringify({ message: "workflow_boundary_resumed", ...envelope }),
+    );
+    await repository.recordEvent?.(
+      run.id,
+      attempt.id,
+      "workflow_boundary_audit",
+      envelope,
+    );
+    const next = await repository.transition(
+      run.id,
+      run.revision,
+      graphCompletedTransition(run, attempt),
+    );
+    if (!next) return "stale";
+    await recordWorkflowTransition(repository, run, attempt, next);
+    const settled = await settleImmediateWorkflowWait(repository, next);
+    if (reporter) await reporter.report(settled, attempt);
+    return "dispatched";
+  }
+  if (currentWorkflowNode.executor === "review") {
+    const review = currentWorkflowNode.review!;
+    const current = await repository.attemptsForRevision(run.id, run.revision);
+    const required = new Set(
+      review.reviewers
+        .filter((reviewer) => reviewer.activation === "always")
+        .map((reviewer) => reviewer.id),
+    );
+    for (const selector of review.reviewers.filter(
+      (reviewer) => reviewer.selects.length,
+    )) {
+      const attempt = current.find(
+        (candidate) =>
+          candidate.role === selector.id && candidate.state === "completed",
+      );
+      if (!attempt) continue;
+      const selection = selectedReviewers(attempt, selector.selects);
+      if (!selection) {
+        const next = await repository.transition(run.id, run.revision, {
+          status: "failed",
+          stage: "review",
+        });
+        if (!next) return "stale";
+        if (reporter) await reporter.report(next, attempt);
+        return "dispatched";
+      }
+      selection.forEach((role) => required.add(role));
+    }
+    console.log(
+      JSON.stringify({
+        message: "workflow_review_fanout_resolved",
+        runId: run.id,
+        revision: run.revision,
+        workflowHash: run.workflowHash,
+        nodeId: run.currentNodeId,
+        requiredReviewers: [...required],
+        candidateHead: run.currentHead,
+      }),
+    );
+    await repository.recordEvent?.(
+      run.id,
+      undefined,
+      "workflow_review_fanout",
+      {
+        workflowHash: run.workflowHash,
+        nodeId: run.currentNodeId,
+        requiredReviewers: [...required],
+        candidateHead: run.currentHead,
+      },
+    );
+    for (const definition of review.reviewers.filter((reviewer) =>
+      required.has(reviewer.id),
+    )) {
+      const role = definition.id;
       const attempt = current.find((candidate) => candidate.role === role);
       if (!attempt || attempt.state !== "completed")
         return dispatchReview(
@@ -455,43 +880,54 @@ export async function coordinate(
           reporter,
         );
     }
-    const aggregate = aggregateReviewAttempts(current, run.profile);
+    const aggregate = aggregateReviewAttempts(current, run.profile, review);
     if (!aggregate) return "stale";
+    await repository.recordEvent?.(
+      run.id,
+      aggregate.id,
+      "workflow_review_join",
+      {
+        workflowHash: run.workflowHash,
+        nodeId: run.currentNodeId,
+        candidateHead: run.currentHead,
+        reviewers: [...required],
+        status: (aggregate.result?.review as Record<string, unknown>)?.status,
+      },
+    );
     const next = await repository.transition(
       run.id,
       run.revision,
-      reviewTransition(aggregate),
+      graphCompletedTransition(run, aggregate),
     );
     if (!next) return "stale";
-    if (reporter) await reporter.report(next, aggregate);
+    await recordWorkflowTransition(repository, run, aggregate, next);
+    const settled = await settleImmediateWorkflowWait(repository, next);
+    if (reporter) await reporter.report(settled, aggregate);
     return "dispatched";
   }
   const attemptId = immutableAttemptId(run.id, run.revision);
   const previous = await repository.getAttempt(attemptId);
   if (previous?.state === "completed") {
-    const transition = completedTransition(previous, run.profile);
-    if (!transition) return "stale";
+    const transition = graphCompletedTransition(run, previous);
     const next = await repository.transition(run.id, run.revision, transition);
     if (!next) return "stale";
-    if (reporter) await reporter.report(next, previous);
+    await recordWorkflowTransition(repository, run, previous, next);
+    const settled = await settleImmediateWorkflowWait(repository, next);
+    if (reporter) await reporter.report(settled, previous);
     return "dispatched";
   }
   if (
-    !new Set([
-      "qualify",
-      "reproduce",
-      "plan",
-      "implement",
-      "review",
-      "integrate",
-    ]).has(run.stage)
+    !new Set(["agent.read", "agent.write", "validate"]).has(
+      currentWorkflowNode.executor,
+    )
   )
     return "stale";
   // A conflicted mechanical integration is followed by exactly one narrowly
   // scoped conflict-resolution attempt for the same reviewed candidate; any
   // other integrate wakeup retries the no-model mechanical merge.
   const integrateRole = async (): Promise<string> => {
-    if (run.stage !== "integrate") return run.stage;
+    if (currentWorkflowNode.role !== "integrate")
+      return currentWorkflowNode.role ?? run.stage;
     const previous = await repository.latestCompletedAttempt(
       run.id,
       "integrate",
@@ -535,6 +971,8 @@ export async function coordinate(
     runId: run.id,
     runRevision: run.revision,
     kind: "agent",
+    nodeId: run.currentNodeId,
+    executor: currentWorkflowNode.executor,
     stage: run.stage,
     role,
     state: "created",
@@ -569,7 +1007,7 @@ async function dispatchReview(
   repository: RunRepository,
   dispatcher: AttemptDispatcher,
   run: RunSnapshot,
-  role: "review-holistic" | "review-security" | "review-data",
+  role: string,
   now: number,
   leaseMilliseconds: number,
   reporter?: AttemptReporter,
@@ -594,6 +1032,9 @@ async function dispatchReview(
     runId: run.id,
     runRevision: run.revision,
     kind: "agent",
+    ...(run.currentNodeId && run.profile?.workflow
+      ? { nodeId: run.currentNodeId, executor: "review" as const }
+      : {}),
     stage: "review",
     role,
     state: "created",

@@ -3,23 +3,55 @@
 
 import { describe, expect, it } from "vitest";
 import { createRun, resumeRun, transitionRun, waitingReasons } from "./run.js";
+import { compileWorkflow, defaultIssueWorkflowSource } from "./workflow.js";
 
+const commit = "a".repeat(40);
+const workflow = await compileWorkflow(defaultIssueWorkflowSource, commit);
 const input = {
   id: "run_01",
   repository: "zorkian/roundhouse",
   issueNumber: 246,
-  baseCommit: "a".repeat(40),
+  baseCommit: commit,
   profileVersion: "v2-initial",
   profile: {
     sourcePath: ".roundhouse/profile.yaml",
     sourceCommit: "a".repeat(40),
     version: 1,
     hash: "v2-initial",
+    workflow,
     paths: { allowed: ["**"], protected: [] },
   },
 } as const;
 
 describe("V2 run contract", () => {
+  it("binds a workflow-backed run to its exact hash and trigger node", async () => {
+    const workflow = await compileWorkflow(
+      `version: 1
+triggers:
+  github.issue.started: intake
+nodes:
+  intake:
+    executor: terminal
+    transitions:
+      - terminal: succeeded
+`,
+      input.baseCommit,
+    );
+    expect(
+      createRun({
+        ...input,
+        profile: {
+          ...input.profile,
+          version: 2,
+          workflow,
+        },
+      }),
+    ).toMatchObject({
+      workflowHash: workflow.hash,
+      currentNodeId: "intake",
+    });
+  });
+
   it("creates the one initial qualification state", () => {
     expect(createRun(input)).toEqual({
       schemaVersion: 2,
@@ -27,6 +59,8 @@ describe("V2 run contract", () => {
       currentHead: input.baseCommit,
       status: "active",
       stage: "qualify",
+      workflowHash: workflow.hash,
+      currentNodeId: "qualify",
       revision: 1,
     });
   });

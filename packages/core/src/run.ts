@@ -41,6 +41,21 @@ export const waitingReasons = [
 export type RunStatus = (typeof runStatuses)[number];
 export type RunStage = (typeof runStages)[number];
 export type WaitingReason = (typeof waitingReasons)[number];
+export type RunResumeSignal =
+  | {
+      readonly kind: "human";
+      readonly reason: WaitingReason;
+      readonly actor: string;
+      readonly body: string;
+      readonly url?: string;
+    }
+  | {
+      readonly kind: "external";
+      readonly adapter: string;
+      readonly event: string;
+      readonly actor: string;
+      readonly payload: Readonly<Record<string, unknown>>;
+    };
 
 export interface RunSnapshot {
   readonly schemaVersion: typeof runSchemaVersion;
@@ -59,10 +74,13 @@ export interface RunSnapshot {
   readonly profileVersion: string;
   readonly profile?: AppliedProfile;
   readonly profileError?: string;
+  readonly workflowHash?: string;
+  readonly currentNodeId?: string;
   readonly status: RunStatus;
   readonly stage: RunStage;
   readonly revision: number;
   readonly waitingReason?: WaitingReason;
+  readonly resumeSignal?: RunResumeSignal;
   readonly issue?: IssueSnapshot;
 }
 
@@ -97,6 +115,7 @@ export interface CreateRunInput {
 export interface RunTransition {
   readonly status: RunStatus;
   readonly stage: RunStage;
+  readonly currentNodeId?: string;
   readonly waitingReason?: WaitingReason;
   readonly acceptedHead?: string;
   // Identity heads may be set to a commit or explicitly cleared with null
@@ -146,17 +165,29 @@ function assertCreateInput(input: CreateRunInput): void {
 
 export function createRun(input: CreateRunInput): RunSnapshot {
   assertCreateInput(input);
+  const workflow = input.profile?.workflow;
   return {
     schemaVersion: runSchemaVersion,
     ...input,
     currentHead: input.baseCommit,
     status: "active",
     stage: "qualify",
+    ...(workflow
+      ? {
+          workflowHash: workflow.hash,
+          currentNodeId: workflow.triggers["github.issue.started"],
+        }
+      : {}),
     revision: 1,
   };
 }
 
 function assertTransition(transition: RunTransition): void {
+  if (
+    transition.currentNodeId !== undefined &&
+    !/^[a-z][a-z0-9-]{0,63}$/.test(transition.currentNodeId)
+  )
+    throw new Error("invalid_current_node_id");
   if (transition.status === "waiting" && !transition.waitingReason)
     throw new Error("waiting_reason_required");
   if (transition.status !== "waiting" && transition.waitingReason)
@@ -180,7 +211,11 @@ export function transitionRun(
   if (terminalStatuses.has(run.status)) throw new Error("run_is_terminal");
   assertTransition(transition);
 
-  const { waitingReason: _waitingReason, ...current } = run;
+  const {
+    waitingReason: _waitingReason,
+    resumeSignal: _resumeSignal,
+    ...current
+  } = run;
   const { acceptedHead, heads, ...nextTransition } = transition;
   const next: RunSnapshot = {
     ...current,
@@ -202,6 +237,7 @@ export function resumeRun(
   issue: IssueSnapshot,
   profile?: AppliedProfile,
   continuationHead?: string,
+  signal?: RunResumeSignal,
 ): RunSnapshot {
   if (run.revision !== expectedRevision) throw new Error("stale_run_revision");
   const completedWork =
@@ -222,8 +258,16 @@ export function resumeRun(
     (run.waitingReason === "profile_error" && !profile)
   )
     throw new Error("resume_profile_required");
+  const activeProfile = profile ?? run.profile;
+  if (
+    run.currentNodeId &&
+    activeProfile?.workflow &&
+    !activeProfile.workflow.nodes[run.currentNodeId]
+  )
+    throw new Error("resume_workflow_node_missing");
   const {
     waitingReason: _waitingReason,
+    resumeSignal: _resumeSignal,
     candidateHead,
     reviewedHead,
     targetBaseHead,
@@ -246,8 +290,18 @@ export function resumeRun(
       : {}),
     status: "active",
     stage: completedWork ? "implement" : run.stage,
+    ...(completedWork && run.profile?.workflow
+      ? {
+          currentNodeId: "implement",
+          workflowHash: run.profile.workflow.hash,
+        }
+      : {}),
+    ...(!completedWork && activeProfile?.workflow
+      ? { workflowHash: activeProfile.workflow.hash }
+      : {}),
     revision: run.revision + 1,
     issue,
+    ...(signal ? { resumeSignal: signal } : {}),
   };
   if (!profile) return resumed;
   const { profileError: _profileError, ...withValidProfile } = resumed;

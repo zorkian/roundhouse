@@ -1,5 +1,7 @@
 version: 2
 
+workflow: workflow.yaml
+
 paths:
   allowed:
     - "**"
@@ -21,62 +23,6 @@ permissions:
 
 instructions:
   project: prompts/project.md
-
-stages:
-  qualification:
-    model:
-      id: openai/gpt-5.6-sol
-      reasoning: low
-    instructions: prompts/qualification.md
-  investigation:
-    model:
-      id: openai/gpt-5.6-sol
-      reasoning: low
-    instructions: prompts/investigation.md
-  planning:
-    model:
-      id: openai/gpt-5.6-sol
-      reasoning: low
-    instructions: prompts/planning.md
-  implementation:
-    model:
-      id: moonshotai/kimi-k3
-      reasoning: low
-    instructions: prompts/implementation.md
-
-reviewers:
-  holistic:
-    enabled: true
-    model:
-      id: openai/gpt-5.6-sol
-      reasoning: low
-    instructions: prompts/review-holistic.md
-    blocking_severities:
-      - critical
-      - high
-      - medium
-  security:
-    enabled: true
-    selected_by: holistic
-    model:
-      id: openai/gpt-5.6-sol
-      reasoning: low
-    instructions: prompts/review-security.md
-    blocking_severities:
-      - critical
-      - high
-      - medium
-  data:
-    enabled: true
-    selected_by: holistic
-    model:
-      id: openai/gpt-5.6-sol
-      reasoning: low
-    instructions: prompts/review-data.md
-    blocking_severities:
-      - critical
-      - high
-      - medium
 
 validation:
   commands:

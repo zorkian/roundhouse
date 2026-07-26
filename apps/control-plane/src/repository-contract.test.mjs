@@ -92,6 +92,12 @@ class LocalD1 {
         "utf8",
       ),
     );
+    this.database.exec(
+      readFileSync(
+        new URL("../migrations/0011_workflow_graph.sql", import.meta.url),
+        "utf8",
+      ),
+    );
   }
 
   prepare(sql) {
@@ -156,6 +162,8 @@ function repositoryContract(label, createRepository) {
         runId: run.id,
         runRevision: 1,
         kind: "agent",
+        nodeId: "qualify",
+        executor: "agent.read",
         stage: "qualify",
         role: "qualification",
         state: "created",
@@ -168,6 +176,8 @@ function repositoryContract(label, createRepository) {
         repository.createAttempt({ ...attempt, deadlineAt: 300 }),
       ).resolves.toBe("exists");
       await expect(repository.getAttempt(attempt.id)).resolves.toMatchObject({
+        nodeId: "qualify",
+        executor: "agent.read",
         state: "created",
         deadlineAt: 300,
       });
@@ -190,6 +200,13 @@ function repositoryContract(label, createRepository) {
       await expect(
         repository.latestCompletedAttempt(run.id, "qualify", 2),
       ).resolves.toMatchObject({ id: attempt.id, runRevision: 1 });
+      await expect(
+        repository.latestCompletedNodeAttempt(run.id, "qualify", 2),
+      ).resolves.toMatchObject({
+        id: attempt.id,
+        nodeId: "qualify",
+        runRevision: 1,
+      });
       await expect(
         repository.completeAttempt(attempt.id, 1, "b".repeat(40), {
           outcome: "ok",

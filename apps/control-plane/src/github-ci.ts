@@ -170,6 +170,16 @@ function exactAttempt(
   );
 }
 
+function atWorkflowExecutor(
+  run: RunSnapshot,
+  executor: "github.checks" | "github.merge",
+): boolean {
+  const workflow = run.profile?.workflow;
+  if (!workflow) return false;
+  if (run.workflowHash !== workflow.hash || !run.currentNodeId) return false;
+  return workflow.nodes[run.currentNodeId]?.executor === executor;
+}
+
 async function aggregateReview(
   repository: RunRepository,
   run: RunSnapshot,
@@ -302,21 +312,55 @@ export class GitHubCiAutomation {
   // integration with the same reviewed candidate instead of restarting
   // general implementation.
   private async reintegrate(run: RunSnapshot): Promise<"recorded" | "stale"> {
-    // Atomically clear the superseded integration/base identities so the
-    // run never pairs a pending integration with an obsolete validated head.
-    const next = await this.repository.transition(run.id, run.revision, {
-      status: "active",
-      stage: "integrate",
-      heads: { integrationHead: null, targetBaseHead: null },
-    });
-    return next ? "recorded" : "stale";
+    const workflow = run.profile?.workflow;
+    if (!workflow || !run.currentNodeId) return "stale";
+    const executor = workflow.nodes[run.currentNodeId]?.executor;
+    if (executor !== "github.checks" && executor !== "github.merge")
+      return "stale";
+    const attempt: Attempt = {
+      id: immutableAttemptId(run.id, run.revision),
+      runId: run.id,
+      runRevision: run.revision,
+      kind: "external",
+      nodeId: run.currentNodeId,
+      executor,
+      stage: run.stage,
+      role: executor === "github.checks" ? "github-checks" : "github-merge",
+      state: "created",
+      deadlineAt: Date.now(),
+      baseCommit: run.baseCommit,
+      expectedHead: run.currentHead,
+    };
+    await this.repository.createAttempt(attempt);
+    const completed = await this.repository.completeAttempt(
+      attempt.id,
+      run.revision,
+      run.currentHead,
+      executor === "github.checks"
+        ? {
+            ci: {
+              status: "reintegrate",
+              head: run.currentHead,
+              reason: "target_base_changed",
+            },
+          }
+        : {
+            merge: {
+              status: "reintegrate",
+              head: run.currentHead,
+              reason: "target_base_changed",
+            },
+          },
+    );
+    return completed === "stale" ? "stale" : "recorded";
   }
 
   async reconcileCi(
     run: RunSnapshot,
     now = Date.now(),
   ): Promise<"recorded" | "pending" | "stale"> {
-    if (run.status !== "active" || run.stage !== "ci") return "stale";
+    if (run.status !== "active" || !atWorkflowExecutor(run, "github.checks"))
+      return "stale";
     const review = await aggregateReview(this.repository, run);
     if (!exactAttempt(review, "review", this.reviewedHead(run), "clean"))
       return "stale";
@@ -365,7 +409,7 @@ export class GitHubCiAutomation {
       !current ||
       current.revision !== run.revision ||
       current.status !== "active" ||
-      current.stage !== "ci" ||
+      !atWorkflowExecutor(current, "github.checks") ||
       current.currentHead !== run.currentHead ||
       !exactAttempt(currentReview, "review", this.reviewedHead(run), "clean") ||
       !pull ||
@@ -556,6 +600,12 @@ export class GitHubCiAutomation {
       runId: run.id,
       runRevision: run.revision,
       kind: "external",
+      ...(run.currentNodeId && run.profile?.workflow
+        ? {
+            nodeId: run.currentNodeId,
+            executor: run.profile.workflow.nodes[run.currentNodeId]!.executor,
+          }
+        : {}),
       stage: "ci",
       role: "github-checks",
       state: "created",
@@ -591,7 +641,8 @@ export class GitHubCiAutomation {
     now = Date.now(),
     leaseMilliseconds = 30 * 60_000,
   ): Promise<"recorded" | "pending" | "stale"> {
-    if (run.status !== "active" || run.stage !== "merge") return "stale";
+    if (run.status !== "active" || !atWorkflowExecutor(run, "github.merge"))
+      return "stale";
     const attemptId = immutableAttemptId(run.id, run.revision);
     const previous = await this.repository.getAttempt(attemptId);
     if (previous?.state === "completed") return "recorded";
@@ -663,6 +714,12 @@ export class GitHubCiAutomation {
       runId: run.id,
       runRevision: run.revision,
       kind: "external",
+      ...(run.currentNodeId && run.profile?.workflow
+        ? {
+            nodeId: run.currentNodeId,
+            executor: run.profile.workflow.nodes[run.currentNodeId]!.executor,
+          }
+        : {}),
       stage: "merge",
       role: "github-merge",
       state: "created",
@@ -746,7 +803,7 @@ export async function acceptGitHubCheckSuite(
     run.repository !== repositoryName ||
     run.githubInstallationId !== payload.installation?.id ||
     run.status !== "active" ||
-    run.stage !== "ci" ||
+    !atWorkflowExecutor(run, "github.checks") ||
     payload.check_suite?.head_sha !== run.currentHead
   )
     return "ignored";
@@ -798,7 +855,7 @@ export async function acceptGitHubPullRequest(
     run.repository !== repositoryName ||
     run.githubInstallationId !== payload.installation.id ||
     !["active", "waiting"].includes(run.status) ||
-    run.stage !== "merge" ||
+    !atWorkflowExecutor(run, "github.merge") ||
     payload.pull_request.head?.sha !== run.currentHead
   )
     return "ignored";

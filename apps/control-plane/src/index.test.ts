@@ -1,7 +1,13 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import { createRun, MemoryRunRepository, type Attempt } from "@roundhouse/core";
+import {
+  compileWorkflow,
+  createRun,
+  defaultIssueWorkflowSource,
+  MemoryRunRepository,
+  type Attempt,
+} from "@roundhouse/core";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("cloudflare:workers", async (importOriginal) => ({
@@ -19,6 +25,7 @@ import {
   controlPlaneService,
   handleRequest,
   recoverExpiredAttempts,
+  resolveWorkflowAgentInputs,
   sandboxPreviewPath,
   scheduleAttemptSandboxDestruction,
   successorWakeup,
@@ -27,6 +34,12 @@ import {
 import { ciDiagnosticsNotice } from "./github-ci.js";
 import worker from "./index.js";
 import type { D1Like } from "./d1-store.js";
+
+const workflowCommit = "a".repeat(40);
+const workflow = await compileWorkflow(
+  defaultIssueWorkflowSource,
+  workflowCommit,
+);
 
 function detailsDb(found = true): D1Like {
   // Multi-repository enrollment stores the numeric GitHub repository ID in
@@ -392,6 +405,106 @@ describe("V2 control plane", () => {
     ).toBeTypeOf("function");
   });
 
+  it("resolves typed workflow inputs from exact durable node results", async () => {
+    const repository = new MemoryRunRepository();
+    const profile = {
+      sourcePath: ".roundhouse/profile.yaml" as const,
+      sourceCommit: workflowCommit,
+      version: 1 as const,
+      hash: "profile",
+      workflow,
+      paths: { allowed: ["**"], protected: [] },
+    };
+    const initial = createRun({
+      id: "run_inputs",
+      repository: "zorkian/roundhouse",
+      issueNumber: 1,
+      baseCommit: workflowCommit,
+      profileVersion: profile.hash,
+      profile,
+      issue: {
+        title: "Typed inputs",
+        body: "Use durable evidence",
+        url: "https://github.test/issues/1",
+        actor: "maintainer",
+      },
+    });
+    const results = [
+      ["qualify", "qualification", { classification: "bug" }],
+      ["investigate", "reproduction", { status: "confirmed" }],
+      ["plan", "plan", { status: "ready" }],
+    ] as const;
+    for (const [index, [nodeId, key, result]] of results.entries()) {
+      const attempt: Attempt = {
+        id: `attempt_${nodeId}`,
+        runId: initial.id,
+        runRevision: index + 1,
+        kind: "agent",
+        nodeId,
+        executor: "agent.read",
+        stage:
+          nodeId === "qualify"
+            ? "qualify"
+            : nodeId === "investigate"
+              ? "reproduce"
+              : "plan",
+        role: nodeId,
+        state: "created",
+        deadlineAt: 1,
+        baseCommit: initial.baseCommit,
+        expectedHead: initial.currentHead,
+      };
+      repository.attempts.set(attempt.id, {
+        ...attempt,
+        state: "completed",
+        acceptedHead: attempt.expectedHead,
+        result: { [key]: result },
+      });
+    }
+    const run = {
+      ...initial,
+      revision: 4,
+      stage: "implement" as const,
+      currentNodeId: "implement",
+    };
+    const attempt: Attempt = {
+      id: "attempt_implement",
+      runId: run.id,
+      runRevision: run.revision,
+      kind: "agent",
+      nodeId: "implement",
+      executor: "agent.write",
+      stage: "implement",
+      role: "implement",
+      state: "created",
+      deadlineAt: 1,
+      baseCommit: run.baseCommit,
+      expectedHead: run.currentHead,
+    };
+    const resolved = await resolveWorkflowAgentInputs(
+      repository,
+      run,
+      attempt,
+      workflow.nodes.implement!.agent!,
+    );
+    expect(resolved.values).toMatchObject({
+      issue: { title: "Typed inputs" },
+      qualification: { classification: "bug" },
+      reproduction: { status: "confirmed" },
+      plan: { status: "ready" },
+    });
+    expect(resolved.evidence.plan).toMatchObject({
+      selector: "nodes.plan.plan",
+      present: true,
+      sourceAttemptId: "attempt_plan",
+      sourceHead: workflowCommit,
+    });
+    expect(resolved.evidence.review).toEqual({
+      selector: "nodes.review.review",
+      present: false,
+    });
+  });
+
   it("allows only required attempt services and the package registry", () => {
     expect(
       attemptAllowedHosts(
@@ -400,6 +513,7 @@ describe("V2 control plane", () => {
             remote: "https://artifacts.test/repository.git",
             hostname: "artifacts.test",
           },
+          executor: "agent.read",
           stage: "plan",
           publish: { hostname: "github.com" },
         },
@@ -423,6 +537,7 @@ describe("V2 control plane", () => {
           remote: "https://artifacts.test/repository.git",
           hostname: "artifacts.test",
         },
+        executor: "agent.write",
         stage: "implement",
       }),
     ).toEqual(["*"]);
@@ -437,28 +552,28 @@ describe("V2 control plane", () => {
     expect(
       artifactNeedsSync(
         { empty: false, head: "a".repeat(40) },
-        { stage: "implement" },
+        { executor: "agent.write" },
         run,
       ),
     ).toBe(true);
     expect(
       artifactNeedsSync(
         { empty: false, head: merged },
-        { stage: "implement" },
+        { executor: "agent.write" },
         run,
       ),
     ).toBe(false);
     expect(
       artifactNeedsSync(
         { empty: false, head: "a".repeat(40) },
-        { stage: "review" },
+        { executor: "review" },
         run,
       ),
     ).toBe(false);
     expect(
       artifactNeedsSync(
         { empty: false, head: "a".repeat(40) },
-        { stage: "implement" },
+        { executor: "agent.write" },
         { ...run, candidateHead: "c".repeat(40) },
       ),
     ).toBe(false);

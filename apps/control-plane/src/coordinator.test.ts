@@ -3,6 +3,8 @@
 
 import {
   createRun,
+  compileWorkflow,
+  defaultIssueWorkflowSource,
   MemoryRunRepository,
   type Attempt,
   type RunSnapshot,
@@ -28,17 +30,23 @@ import {
   reproductionTransition,
 } from "./coordinator.js";
 
+const sourceCommit = "a".repeat(40);
+const workflow = await compileWorkflow(
+  defaultIssueWorkflowSource,
+  sourceCommit,
+);
 const input = {
   id: "run_slice",
   repository: "zorkian/roundhouse",
   issueNumber: 1,
-  baseCommit: "a".repeat(40),
+  baseCommit: sourceCommit,
   profileVersion: "v2",
   profile: {
     sourcePath: ".roundhouse/profile.yaml" as const,
-    sourceCommit: "a".repeat(40),
+    sourceCommit,
     version: 1 as const,
     hash: "b".repeat(64),
+    workflow,
     paths: { allowed: ["**"], protected: [".github/workflows/**"] },
   },
 };
@@ -155,6 +163,7 @@ describe("single coordinator", () => {
       ...createRun(input),
       revision: 5,
       stage: "review" as const,
+      currentNodeId: "review",
       currentHead: "b".repeat(40),
     };
     await store.create(run);
@@ -200,36 +209,13 @@ describe("single coordinator", () => {
     });
   });
 
-  it("does not dispatch a specialist disabled by the repository profile", async () => {
+  it("does not dispatch a conditional reviewer that was not selected", async () => {
     const store = new MemoryRunRepository();
     const run = {
-      ...createRun({
-        ...input,
-        profile: {
-          ...input.profile,
-          reviewers: {
-            holistic: {
-              enabled: true,
-              model: { id: "openai/gpt-5.6-sol", reasoning: "low" as const },
-              blockingSeverities: ["high" as const],
-            },
-            security: {
-              enabled: false,
-              selectedBy: "holistic" as const,
-              model: { id: "openai/gpt-5.6-sol", reasoning: "low" as const },
-              blockingSeverities: ["high" as const],
-            },
-            data: {
-              enabled: false,
-              selectedBy: "holistic" as const,
-              model: { id: "openai/gpt-5.6-sol", reasoning: "low" as const },
-              blockingSeverities: ["high" as const],
-            },
-          },
-        },
-      }),
+      ...createRun(input),
       revision: 5,
       stage: "review" as const,
+      currentNodeId: "review",
       currentHead: "b".repeat(40),
     };
     await store.create(run);
@@ -253,8 +239,8 @@ describe("single coordinator", () => {
           selections: [
             {
               role: "review-security",
-              applicable: true,
-              rationale: "Authorization changed",
+              applicable: false,
+              rationale: "No security changes",
             },
             {
               role: "review-data",
@@ -287,6 +273,7 @@ describe("single coordinator", () => {
       ...createRun(input),
       revision: 5,
       stage: "review" as const,
+      currentNodeId: "review",
       currentHead: "b".repeat(40),
     };
     await store.create(run);
@@ -548,6 +535,7 @@ describe("single coordinator", () => {
       ...createRun(input),
       revision: 4,
       stage: "implement" as const,
+      currentNodeId: "implement",
     };
     await store.create(run);
     const order: string[] = [];
@@ -614,6 +602,7 @@ describe("single coordinator", () => {
       ...createRun(input),
       revision: 4,
       stage: "implement" as const,
+      currentNodeId: "implement",
     };
     await store.create(run);
     let started = 0;
@@ -645,6 +634,7 @@ describe("single coordinator", () => {
       ...createRun(input),
       revision: 4,
       stage: "implement" as const,
+      currentNodeId: "implement",
     };
     await store.create(run);
     store.markDispatched = async () => {
@@ -675,6 +665,7 @@ describe("single coordinator", () => {
       ...createRun(input),
       revision: 4,
       stage: "implement" as const,
+      currentNodeId: "implement",
     };
     await store.create(run);
     let started = 0;
@@ -722,6 +713,7 @@ describe("single coordinator", () => {
       ...createRun(input),
       revision: 4,
       stage: "implement" as const,
+      currentNodeId: "implement",
     };
     await store.create(run);
     const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -759,6 +751,7 @@ describe("single coordinator", () => {
       ...createRun(input),
       revision: 4,
       stage: "implement" as const,
+      currentNodeId: "implement",
     };
     await store.create(run);
     let submitted = 0;
@@ -818,6 +811,7 @@ describe("single coordinator", () => {
       ...createRun(input),
       revision: 4,
       stage: "implement" as const,
+      currentNodeId: "implement",
     };
     await store.create(run);
     await store.createAttempt({
@@ -863,6 +857,7 @@ describe("single coordinator", () => {
       ...createRun(input),
       revision: 5,
       stage: "review" as const,
+      currentNodeId: "review",
       currentHead: "b".repeat(40),
     };
     await store.create(run);
@@ -946,6 +941,7 @@ describe("single coordinator", () => {
       ...createRun(input),
       revision: 5,
       stage: "review" as const,
+      currentNodeId: "review",
       currentHead: "b".repeat(40),
     };
     await store.create(run);
@@ -1010,6 +1006,7 @@ describe("single coordinator", () => {
       ...createRun(input),
       revision: 5,
       stage: "review" as const,
+      currentNodeId: "review",
       currentHead: "b".repeat(40),
     };
     await store.create(run);
@@ -1450,6 +1447,7 @@ describe("single coordinator", () => {
       ...createRun(input),
       revision: 6,
       stage: "integrate" as const,
+      currentNodeId: "integrate",
       currentHead: candidate,
       candidateHead: candidate,
       reviewedHead: candidate,
@@ -1692,6 +1690,7 @@ describe("single coordinator", () => {
       ...createRun(input),
       revision: 8,
       stage: "integrate" as const,
+      currentNodeId: "integrate",
       currentHead: candidate,
       candidateHead: candidate,
       reviewedHead: candidate,

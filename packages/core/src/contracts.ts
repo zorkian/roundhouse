@@ -3,11 +3,13 @@
 
 import type {
   IssueSnapshot,
+  RunResumeSignal,
   RunSnapshot,
   RunStage,
   RunTransition,
 } from "./run.js";
 import type { AppliedProfile } from "./profile.js";
+import type { WorkflowExecutorKind } from "./workflow.js";
 
 export const attemptKinds = ["agent", "external"] as const;
 export const attemptStates = [
@@ -37,6 +39,8 @@ export interface Attempt {
   readonly runId: string;
   readonly runRevision: number;
   readonly kind: AttemptKind;
+  readonly nodeId?: string;
+  readonly executor?: WorkflowExecutorKind;
   readonly stage: RunStage;
   readonly role: string;
   readonly state: AttemptState;
@@ -204,6 +208,7 @@ export interface RunRepository {
     issue: IssueSnapshot,
     profile?: AppliedProfile,
     continuationHead?: string,
+    signal?: RunResumeSignal,
   ): Promise<RunSnapshot | undefined>;
   claimLease(
     runId: string,
@@ -235,6 +240,11 @@ export interface RunRepository {
     stage: RunStage,
     beforeRevision: number,
   ): Promise<Attempt | undefined>;
+  latestCompletedNodeAttempt(
+    runId: string,
+    nodeId: string,
+    beforeRevision: number,
+  ): Promise<Attempt | undefined>;
   /**
    * Returns true when a completed CI attempt recorded before the given
    * revision already contains this failure-evidence key, so repeated webhook
@@ -251,6 +261,12 @@ export interface RunRepository {
     revision: number,
   ): Promise<readonly Attempt[]>;
   expiredLeases(now: number): Promise<readonly Wakeup[]>;
+  recordEvent?(
+    runId: string,
+    attemptId: string | undefined,
+    kind: string,
+    payload: Readonly<Record<string, unknown>>,
+  ): Promise<void>;
 }
 
 export function immutableAttemptId(runId: string, revision: number): string {
@@ -260,7 +276,9 @@ export function immutableAttemptId(runId: string, revision: number): string {
 export function reviewerAttemptId(
   runId: string,
   revision: number,
-  role: ReviewerRole,
+  role: string,
 ): string {
+  if (!/^[a-z][a-z0-9-]{0,63}$/.test(role))
+    throw new Error("reviewer_role_invalid");
   return `${immutableAttemptId(runId, revision)}_${role}`;
 }

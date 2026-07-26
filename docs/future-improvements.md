@@ -5,7 +5,7 @@
 
 - Status: Ideas to revisit; none are approved to start
 - Audience: Maintainers and future implementers
-- Last updated: 2026-07-23
+- Last updated: 2026-07-25
 
 This document preserves promising improvements that arose while operating the
 V2 prototype. It is not a roadmap, acceptance plan, or implementation queue.
@@ -15,6 +15,9 @@ return to an item only when a maintainer explicitly chooses it as a slice.
 The prototype-first rule in the [V2 plan](v2-plan.md) still applies. When an
 item is selected, use the smallest design supported by observed behavior and
 do not add adjacent hardening or generalized machinery without evidence.
+The repository-defined workflow graph in Phase 7 is approved architecture and
+therefore is not tracked here. Its extension points do not approve any of the
+integrations that may eventually use them.
 
 ## Asset-capable visual previews and human feedback
 
@@ -36,9 +39,11 @@ revision.
 
 ### Improvement to revisit
 
-Consider a deliberate visual-feedback waiting point before merge. A maintainer
-could inspect a screenshot, respond in ordinary GitHub prose, and receive a
-new screenshot from the restored implementation workspace.
+After the graph migration, consider composing a deliberate `human`
+visual-feedback node before merge. A maintainer could inspect a screenshot,
+respond in ordinary GitHub prose, and receive a new screenshot from the
+restored implementation workspace. This should use the generic wait/resume
+contract rather than create another global lifecycle state.
 
 Do not start by building WebSocket support, multi-service routing, generic
 public previews, scripted login flows, device farms, or a general reverse
@@ -62,7 +67,9 @@ fidelity rather than a latency improvement.
 Add a Cloudflare Workers Analytics Engine dataset for operational timings and
 visualize it through the Analytics Engine SQL API, Grafana, or a small
 Roundhouse dashboard. D1 should remain the durable per-run event record;
-Analytics Engine would provide aggregate time-series analysis.
+Analytics Engine would provide aggregate time-series analysis. It can consume
+the canonical audit envelope planned for the workflow graph, but the sink and
+dashboard remain deferred.
 
 Initial measurements should cover:
 

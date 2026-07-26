@@ -189,6 +189,48 @@ function executionDisplay(
   return `<h4>Executions</h4><ol class="executions">${episodes.join("")}</ol>`;
 }
 
+function workflowEvidence(
+  details: RunDetails,
+  attempt: RunDetails["attempts"][number],
+): string {
+  const events = (details.events ?? []).filter(
+    (event) =>
+      event.attemptId === attempt.id &&
+      ["workflow_agent_resolved", "workflow_transition"].includes(event.kind),
+  );
+  if (!events.length) return "";
+  const resolved = events.find(
+    (event) => event.kind === "workflow_agent_resolved",
+  )?.payload;
+  const transition = events.find(
+    (event) => event.kind === "workflow_transition",
+  )?.payload;
+  return `<h4>Workflow evidence</h4><dl><dt>Node</dt><dd><code>${escapeHtml(attempt.nodeId ?? "Unavailable")}</code></dd><dt>Executor</dt><dd>${escapeHtml(attempt.executor ?? "Unavailable")}</dd><dt>Resolved contract</dt><dd>${value(resolved)}</dd><dt>Selected transition</dt><dd>${value(transition)}</dd></dl>`;
+}
+
+function reviewWorkflowEvidence(details: RunDetails): string {
+  const events = (details.events ?? []).filter((event) =>
+    ["workflow_review_fanout", "workflow_review_join"].includes(event.kind),
+  );
+  if (!events.length) return "";
+  return `<section><h2>Review workflow evidence</h2>${events
+    .map(
+      (event) =>
+        `<h3>${escapeHtml(event.kind === "workflow_review_fanout" ? "Fan-out" : "Join")}</h3>${value(event.payload)}`,
+    )
+    .join("")}</section>`;
+}
+
+function boundaryWorkflowEvidence(details: RunDetails): string {
+  const events = (details.events ?? []).filter(
+    (event) => event.kind === "workflow_boundary_audit",
+  );
+  if (!events.length) return "";
+  return `<section><h2>Human and external boundary evidence</h2>${events
+    .map((event) => value(event.payload))
+    .join("")}</section>`;
+}
+
 export function renderRunDetails(details: RunDetails): string {
   const { run, attempts } = details;
   const issueTitle = run.issue?.title?.trim() || `Issue #${run.issueNumber}`;
@@ -229,11 +271,11 @@ export function renderRunDetails(details: RunDetails): string {
         attempt,
       ) => `<details><summary><span><span class="label">Revision</span>${escapeHtml(attempt.runRevision ?? "Unavailable")}</span><span class="phase">${escapeHtml(stageLabel(attempt.stage))}</span><span><span class="label">Started</span>${escapeHtml(timestamp(attempt.createdAt))}</span><span><span class="label">Elapsed</span>${escapeHtml(elapsed(attempt.createdAt, attempt.updatedAt))}</span><span><span class="label">Status</span>${escapeHtml(attempt.state)}</span></summary><div class="attempt-details">
 <dl><dt>Role</dt><dd>${escapeHtml(attempt.role ?? "Unavailable")}</dd><dt>Revision</dt><dd>${escapeHtml(attempt.runRevision ?? "Unavailable")}</dd><dt>Updated</dt><dd>${escapeHtml(timestamp(attempt.updatedAt))}</dd><dt>Base commit</dt><dd><code>${escapeHtml(attempt.baseCommit ?? "Unavailable")}</code></dd><dt>Expected head</dt><dd><code>${escapeHtml(attempt.expectedHead ?? "Unavailable")}</code></dd><dt>Accepted head</dt><dd><code>${escapeHtml(attempt.acceptedHead ?? "Unavailable")}</code></dd></dl>
-${executionDisplay(details, attempt)}<h4>Model usage total</h4><p>${usageDisplay(usage.filter((item) => item.attemptId === attempt.id))}</p>${usageTable(usage.filter((item) => item.attemptId === attempt.id))}<h4>Model routing</h4>${value(attempt.routing)}<h4>Result</h4>${attemptResult(attempt)}${attemptLinks(attempt)}</div></details>`,
+${executionDisplay(details, attempt)}${workflowEvidence(details, attempt)}<h4>Model usage total</h4><p>${usageDisplay(usage.filter((item) => item.attemptId === attempt.id))}</p>${usageTable(usage.filter((item) => item.attemptId === attempt.id))}<h4>Model routing</h4>${value(attempt.routing)}<h4>Result</h4>${attemptResult(attempt)}${attemptLinks(attempt)}</div></details>`,
     )
     .join("");
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(issueTitle)}</title><style>body{font:16px system-ui;line-height:1.5;max-width:1000px;margin:2rem auto;padding:0 1rem;color:#202124}h1,h2{line-height:1.2}section{border-top:1px solid #ddd;padding:1rem 0}details{border-top:1px solid #ddd}summary{cursor:pointer;display:grid;grid-template-columns:.6fr 1.2fr 2fr 1fr 1fr;gap:1rem;padding:1rem;align-items:center}summary:hover{background:#f6f8fa}.phase{font-weight:700}.label{display:block;color:#666;font-size:.75rem;text-transform:uppercase}.attempt-details{padding:0 1rem 1rem 2rem;border-left:3px solid #ddd;margin-left:1rem}dl{display:grid;grid-template-columns:10rem 1fr;gap:.35rem 1rem}dt{font-weight:600}dd{margin:0;overflow-wrap:anywhere}table{border-collapse:collapse;width:100%}th,td{text-align:left;border-bottom:1px solid #ddd;padding:.4rem}pre{background:#f6f8fa;padding:1rem;overflow:auto;white-space:pre-wrap}.muted{color:#666}code{overflow-wrap:anywhere}.status{display:inline-block;border-radius:999px;padding:.15rem .55rem;font-weight:700}.status.active{background:#e6f0ff;color:#175cd3}.status.waiting{background:#fff4d6;color:#8a5b00}.status.succeeded{background:#e8f7ee;color:#087443}.status.failed{background:#fee9e7;color:#b42318}.status.cancelled{background:#eef1f5;color:#344054}.usage-hint{border-bottom:1px dotted currentColor;cursor:help;display:inline-block;position:relative}.usage-breakdown{background:#202124;border-radius:.25rem;bottom:calc(100% + .35rem);color:#fff;display:none;font-size:.875rem;left:0;padding:.4rem .6rem;pointer-events:none;position:absolute;white-space:nowrap;z-index:1}.usage-hint:hover .usage-breakdown,.usage-hint:focus .usage-breakdown,.usage-hint:focus-within .usage-breakdown{display:block}@media(max-width:700px){body{box-sizing:border-box;margin:1rem auto;max-width:none;padding:0 .75rem;width:100%}summary{grid-template-columns:1fr 1fr}.phase{grid-column:auto}dl{grid-template-columns:minmax(0,1fr)}dd{margin-bottom:.5rem}.attempt-details{padding:0 0 1rem .75rem;margin-left:0;min-width:0}table{display:block;overflow-x:auto}.usage-breakdown{max-width:calc(100vw - 2rem);white-space:normal}}</style></head><body>
 <p><a href="/">← Dashboard</a></p><h1>${escapeHtml(issueTitle)}</h1><p>${escapeHtml(run.repository)} issue ${escapeHtml(run.issueNumber)}</p>
 <dl><dt>Status</dt><dd><span class="status ${escapeHtml(run.status)}">${escapeHtml(statusLabels[run.status])}</span></dd><dt>Current stage</dt><dd>${escapeHtml(currentStage)}</dd><dt>Authored candidate head</dt><dd><code>${escapeHtml(run.candidateHead ?? "Unavailable")}</code></dd><dt>Reviewed candidate head</dt><dd><code>${escapeHtml(run.reviewedHead ?? "Unavailable")}</code></dd><dt>Target base head</dt><dd><code>${escapeHtml(run.targetBaseHead ?? "Unavailable")}</code></dd><dt>Validated integration head</dt><dd><code>${escapeHtml(run.integrationHead ?? "Unavailable")}</code></dd><dt>Elapsed</dt><dd>${escapeHtml(elapsed(details.createdAt, details.updatedAt))}</dd><dt>Total usage</dt><dd>${usageDisplay(usage)}</dd><dt>Source issue</dt><dd>${link(run.issue?.url, `Issue #${run.issueNumber}`)}</dd><dt>Pull request</dt><dd>${link(prUrl, pr?.number ? `Pull request #${pr.number}` : "Pull request")}${prUrl ? ` · ${link(`${prUrl}/files`, "Files changed")}` : ""}</dd><dt>Created</dt><dd>${escapeHtml(new Date(details.createdAt).toISOString())}</dd><dt>Updated</dt><dd>${escapeHtml(new Date(details.updatedAt).toISOString())}</dd></dl>
-<section><h2>Attempt history</h2>${rows || '<p class="muted">No attempts recorded.</p>'}</section>${profileSection}</body></html>`;
+${reviewWorkflowEvidence(details)}${boundaryWorkflowEvidence(details)}<section><h2>Attempt history</h2>${rows || '<p class="muted">No attempts recorded.</p>'}</section>${profileSection}</body></html>`;
 }
