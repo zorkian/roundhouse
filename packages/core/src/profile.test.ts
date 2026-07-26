@@ -14,7 +14,17 @@ paths:
   protected:
     - ".github/workflows/**"
 `;
+const validWorkflow = `version: 1
+triggers:
+  github.issue.started: done
+nodes:
+  done:
+    executor: terminal
+    transitions:
+      - terminal: succeeded
+`;
 const validV2 = `version: 2
+workflow: workflow.yaml
 paths:
   allowed: ["**"]
   protected: [".github/workflows/**"]
@@ -75,6 +85,7 @@ describe("repository profile parsing", () => {
 
   it("loads and snapshots a complete version 2 profile", async () => {
     const files = new Map([
+      [".roundhouse/workflow.yaml", validWorkflow],
       [".roundhouse/prompts/project.md", "Project instructions"],
       [".roundhouse/prompts/planning.md", "Planning instructions"],
       [".roundhouse/prompts/implementation.md", "Implementation instructions"],
@@ -90,6 +101,10 @@ describe("repository profile parsing", () => {
     });
     expect(profile).toMatchObject({
       version: 2,
+      workflow: {
+        sourcePath: ".roundhouse/workflow.yaml",
+        sourceCommit: commit,
+      },
       merge: { mode: "maintainer", method: "squash" },
       permissions: {
         operators: {
@@ -153,7 +168,11 @@ describe("repository profile parsing", () => {
 
   it("includes referenced instruction contents in the profile hash", async () => {
     const load = (project: string) => async (path: string) =>
-      path.endsWith("project.md") ? project : path;
+      path.endsWith("workflow.yaml")
+        ? validWorkflow
+        : path.endsWith("project.md")
+          ? project
+          : path;
     const first = await parseProfile(validV2, commit, load("First"));
     const second = await parseProfile(validV2, commit, load("Second"));
     expect(first.hash).not.toBe(second.hash);
@@ -205,7 +224,9 @@ paths:
   });
 
   it("always protects the selected development container", async () => {
-    const profile = await parseProfile(validV2, commit, async (path) => path);
+    const profile = await parseProfile(validV2, commit, async (path) =>
+      path.endsWith("workflow.yaml") ? validWorkflow : path,
+    );
     expect(() =>
       assertPathAllowed(profile, ".devcontainer/devcontainer.json"),
     ).toThrow("protected_path_changed");

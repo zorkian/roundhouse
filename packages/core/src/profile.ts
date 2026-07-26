@@ -2,6 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { parseDocument } from "yaml";
+import {
+  compileWorkflow,
+  type CompiledWorkflow,
+  workflowSourcePath,
+} from "./workflow.js";
 
 export const profileSourcePath = ".roundhouse/profile.yaml" as const;
 export const profileStageNames = [
@@ -57,6 +62,7 @@ export interface AppliedProfile {
   readonly sourceCommit: string;
   readonly version: 1 | 2;
   readonly hash: string;
+  readonly workflow?: CompiledWorkflow;
   readonly paths: {
     readonly allowed: readonly string[];
     readonly protected: readonly string[];
@@ -307,6 +313,7 @@ function v1Profile(
 
 async function v2Profile(
   value: Record<string, unknown>,
+  sourceCommit: string,
   loadFile?: ProfileFileLoader,
 ): Promise<Omit<AppliedProfile, "sourcePath" | "sourceCommit" | "hash">> {
   const topLevel = [
@@ -319,6 +326,7 @@ async function v2Profile(
     "stages",
     "validation",
     "version",
+    "workflow",
   ];
   if (!hasOnlyKeys(value, topLevel)) throw new Error("profile_schema_invalid");
   if (
@@ -388,6 +396,13 @@ async function v2Profile(
   const projectSource = instructionSource(
     value.instructions.project,
     "profile_project_instructions_invalid",
+  );
+  if (value.workflow !== "workflow.yaml")
+    throw new Error("profile_workflow_invalid");
+  if (!loadFile) throw new Error("profile_workflow_loader_missing");
+  const workflow = await compileWorkflow(
+    await loadFile(workflowSourcePath),
+    sourceCommit,
   );
 
   if (
@@ -498,6 +513,7 @@ async function v2Profile(
 
   return {
     version: 2,
+    workflow,
     paths: { allowed, protected: protectedPaths },
     merge: {
       mode: value.merge.mode as MergeMode,
@@ -535,7 +551,9 @@ export async function parseProfile(
   if (!isRecord(value) || ![1, 2].includes(value.version as number))
     throw new Error("profile_schema_invalid");
   const normalized =
-    value.version === 1 ? v1Profile(value) : await v2Profile(value, loadFile);
+    value.version === 1
+      ? v1Profile(value)
+      : await v2Profile(value, sourceCommit, loadFile);
   const canonical = JSON.stringify(normalized);
   const digest = await crypto.subtle.digest(
     "SHA-256",

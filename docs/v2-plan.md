@@ -1,1308 +1,514 @@
 <!-- Copyright 2026 Mark Smith -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Roundhouse V2 plan
+# Roundhouse V2
 
 - Status: Active
 - Audience: Maintainers and implementers
-- Last updated: 2026-07-23
+- Last updated: 2026-07-25
 
-This is the product contract, architecture decision, transition plan, and
-acceptance plan for Roundhouse V2. It supersedes every V1 plan, ADR, manifest,
-spike note, and acceptance checklist. When implementation and this document
-disagree, either the implementation is wrong or this document must be updated
-in the same change.
+This is the current product, architecture, and implementation plan for
+Roundhouse V2. Git history and the `v1-poc-final` tag preserve earlier designs
+and completed migration work; this document intentionally does not.
 
-### Prototype-first development rule
+## 1. Product and development rule
 
-V2 is a prototype. The immediate objective is to make one real issue travel the
-entire functional path to a merged change as soon as possible, then observe how
-the system behaves in real operation.
+Roundhouse turns an issue in an explicitly enrolled public GitHub repository
+into a validated change. An authorized maintainer starts it once. Roundhouse
+then:
 
-We **must not** add hardening based only on imagined failures. That includes
-arbitrary attempt or conversation limits, retry and recovery systems, spend or
-resource governors, abuse controls, generalized policy frameworks, approval
-machinery, and predictive failure handling. When development or production
-operation exposes a concrete failure, we will decide whether to fix the local
-implementation or change the architecture and add only the smallest mechanism
-supported by that evidence. We will re-architect a bad boundary rather than
-stacking compensating hacks on top of it.
+1. qualifies the request and asks only material questions;
+2. investigates current behavior and reproduces bugs when possible;
+3. proposes an evidence-backed plan;
+4. implements the change in an isolated repository development environment;
+5. validates and independently reviews the exact candidate;
+6. repairs actionable failures and findings;
+7. integrates the current target branch;
+8. observes GitHub CI on the exact pull-request head; and
+9. merges automatically or leaves the pull request for a maintainer, according
+   to repository policy.
 
-This rule does not defer the small security kernel that makes prototype
-operation responsible: credentials stay out of agent containers, authority
-stays in the trusted control plane, untrusted execution stays isolated, and
-GitHub mutations remain authenticated and scoped.
+Clarification happens as ordinary issue conversation. It has no special answer
+command and no arbitrary round limit. Any participant may supply facts; only a
+configured operator may start or resume a run or authorize a consequential
+decision.
 
-## 1. Decision
+Roundhouse is a functional prototype. We build the smallest complete journey,
+observe it, and then address demonstrated failures. We do not pre-build retry
+limits, spend governors, abuse systems, recovery machinery, generalized policy,
+or other hardening for imagined failures. We will replace a bad boundary
+instead of layering compensating hacks on it.
 
-Roundhouse V1 is a successful proof of concept and an unsuitable foundation for
-incremental product development.
+Repository-defined workflow composition is approved product work, not
+speculative hardening. It lets repositories express real differences in their
+development processes while Roundhouse retains a small security kernel.
 
-V1 proved the hard part of the idea: three representative low-risk dogfood
-issues completed in 13–16 minutes with no human intervention after start. Each
-change was implemented, validated, published, independently reviewed, checked
-by exact-head CI, and automatically merged. The reproduced-bug journey included
-a failing pre-change reproduction and passing post-change regression.
+## 2. Deployed behavior
 
-V1 also showed that its orchestration cost is too high. Business state,
-delivery state, evidence state, retry state, and provider state became
-interdependent. A single Worker entry point grew to thousands of lines, the
-database accumulated stage-specific tables and migrations, internal hashes and
-identifiers leaked into ordinary interactions, and dozens of documents
-described successive versions of the system. Adding a product behavior often
-required changing many schemas and recovery paths.
+The development deployment currently supports:
 
-The V2 decision is a **controlled rewrite in this repository**:
+- GitHub issue intake, comments, pull requests, checks, and merge;
+- public repositories enrolled through the Roundhouse GitHub App and a
+  repository-owned Profile V2;
+- bugs, maintenance tasks, and small features;
+- natural-language clarification and resumption from every waiting state;
+- hosted public research for qualification, investigation, and planning;
+- durable Git workspaces and implementation checkpoints;
+- repository Dev Containers inside isolated Cloudflare Sandboxes;
+- repository validation commands and screenshot evidence;
+- a holistic reviewer with conditional security and data reviewers;
+- remediation, target-branch integration, exact-head CI, and automatic or
+  maintainer merge;
+- a GitHub-facing status conversation and a Roundhouse dashboard; and
+- structured boundary, command, model, API-response, timing, and lifecycle
+  logging.
 
-- preserve the product evidence and small, independently useful security
-  components;
-- replace the orchestration, data model, runner protocol, repository
-  configuration, and reviewer loop;
-- use Cloudflare Artifacts as the durable Git workspace and agent-handoff
-  primitive;
-- keep V1 recoverable through Git history and a final tag rather than a
-  parallel legacy tree or documentation archive; and
-- accept V2 only through maintainer journeys on Roundhouse and at least one
-  external open-source repository.
+The current lifecycle order and three reviewer identities are compiled into the
+coordinator. Profile V2 configures their prompts, models, activation, blocking
+severities, validation, merge behavior, operators, paths, and development
+environment. It cannot add stages or reviewer identities.
 
-This is not a blank-sheet rewrite of every component. It is a rewrite of the
-parts whose coupling made V1 hard to change.
+Current intentional limitations:
 
-## 2. Product promise
+- only explicitly enrolled public repositories are supported;
+- implementation has unrestricted outbound network access inside its isolated
+  Sandbox so repository image builds and lifecycle commands can use
+  project-specific hosts;
+- read-only stages use restricted access plus broker-mediated hosted research;
+- risk and approval types exist in old core/schema work but are not active
+  product behavior;
+- Roundhouse currently begins with an issue start and finishes at merge; and
+- deployment observation, production monitoring, organizational knowledge,
+  SIEM export, and arbitrary repository-specific workflows are not implemented.
 
-For a clear, eligible open-source bug report, an authorized maintainer starts
-Roundhouse once and can walk away. Roundhouse:
+## 3. Target workflow architecture
 
-1. reads the issue and relevant repository context;
-2. asks only questions whose answers materially affect the outcome;
-3. attempts to reproduce the reported behavior;
-4. records a truthful qualification result, including inability to reproduce;
-5. posts its understanding, evidence, implementation plan, and explained risk;
-6. waits for plan approval when policy says the plan is risky;
-7. implements the approved intent in an isolated workspace;
-8. runs repository formatting and validation and repairs failures;
-9. obtains all configured independent reviews of the exact candidate commit;
-10. repairs actionable review findings and repeats validation and affected
-    reviews;
-11. observes repository CI on the exact pull-request head; and
-12. automatically merges a low-risk passing head, or requests final human
-    review when policy does not permit automatic merge.
-
-Ordinary maintainers should see the issue, Roundhouse's current understanding,
-evidence, proposed change, checks, risk, and next action. They should not need
-to understand runs, attempts, leases, deliveries, model sessions, storage
-objects, or internal identifiers.
-
-### 2.1 Clarification is conversation
-
-Clarification happens in the existing issue. A reporter or maintainer answers
-in ordinary prose, and the same work item resumes from the new issue snapshot.
-Roundhouse may ask multiple focused questions at once and continues the
-conversation for as long as useful questions and responsive answers are moving
-the issue toward a supported outcome.
-
-When a person answers by directing Roundhouse to a named public source or asks
-it to look up a public fact, that is a research instruction rather than a
-missing answer. Qualification, current-behavior investigation, and planning may
-use broker-mediated hosted web search, prefer official or primary sources, and
-record the URLs they relied on. They do not repeat a question the conversation
-already answered or delegated. Search results remain untrusted evidence and
-cannot grant authority or instruct the agent to take actions.
-
-Clarification content supplies facts, not authority. Any GitHub user may offer
-information on a public issue. Only an actor authorized by repository policy
-may approve a plan, expand scope, spend additional budget, publish, or merge.
-
-### 2.2 Reproduction precedes the fix plan
-
-Bug reproduction is a first-class stage between qualification and planning. It
-must run before Roundhouse presents a plan as validated.
-
-A reproduction result is one of:
-
-- `reproduced`;
-- `not_reproduced_missing_information`;
-- `not_reproduced_environment`;
-- `not_reproduced_intermittent`;
-- `already_fixed`;
-- `expected_behavior`; or
-- `inconclusive_needs_judgment`.
-
-The issue shows a concise status, expected behavior, observed behavior, and the
-next action. Commands, raw output, relevant files, and other detailed evidence
-remain in durable attempt evidence for later inspection rather than cluttering
-the public conversation. Roundhouse never invents a reproduction or quietly
-treats “tests passed” as proof that the report was reproduced.
-
-When reproduction cannot proceed because information is missing, Roundhouse
-asks for it. When the result is already fixed, expected behavior, unsupported,
-or genuinely inconclusive, Roundhouse stops with evidence unless an authorized
-maintainer explicitly asks it to continue under a revised plan.
-
-Features and maintenance tasks use acceptance-criteria validation instead of a
-synthetic reproduction.
-
-### 2.3 Plans express outcomes, not brittle path contracts
-
-A plan includes:
-
-- Roundhouse's understanding of the problem;
-- acceptance criteria;
-- reproduction or qualification evidence;
-- the proposed behavioral change;
-- likely areas of the repository;
-- the validation strategy;
-- known uncertainties;
-- risk level and matched risk signals; and
-- whether human approval is required.
-
-Likely files are guidance. Repository policy—not a model's predicted file
-list—is the enforceable boundary. Discovering that a nearby test or helper must
-change is not a plan violation. Crossing a protected path, semantic boundary,
-budget, or material scope boundary requires replanning or approval.
-
-## 3. Operating boundary
-
-The first V2 release supports explicitly enrolled public GitHub repositories
-with reviewed repository profiles. For the prototype, installing the
-Roundhouse GitHub App and committing a valid `.roundhouse/profile.yaml` is the
-complete enrollment action. The signed webhook supplies the repository and
-installation identity; the control plane snapshots both in D1 and mints
-short-lived credentials only for that installation. Adding another repository
-does not require a Roundhouse source or Worker-configuration change.
-
-In scope:
-
-- GitHub issues, comments, pull requests, checks, reviews, and merge;
-- bugs, small maintenance tasks, and small features;
-- natural-language clarification in the issue;
-- repository-aware reproduction and validation;
-- low, medium, and high risk classification;
-- approval before risky implementation;
-- final human review for work not eligible for automatic merge;
-- multiple independently configured review roles;
-- Cloudflare Containers for isolated execution;
-- Cloudflare Artifacts for durable Git workspaces;
-- D1 for authoritative workflow state;
-- one external open-source repository before V2 acceptance; and
-- provider/model routing recorded for every agent attempt.
-
-Not in the first V2 release:
-
-- private or confidential repositories;
-- arbitrary unreviewed repositories;
-- automatic deployment, rollout, or execution of database migrations;
-- customer-grade multi-tenancy or billing;
-- a general-purpose workflow engine;
-- a marketplace of reviewer plugins;
-- a dashboard duplicating GitHub's issue, review, or maintainer experience;
-- self-modifying policy, prompts, permissions, or model routing;
-- claims that automated validation proves a change secure or correct.
-
-Roundhouse's responsibility ends at merge. Repository-owned release and
-deployment systems remain outside the product.
-
-## 4. Non-negotiable safety kernel
-
-V2 keeps these boundaries even when doing so costs implementation effort:
-
-1. Verify GitHub webhook signatures before parsing or acting on content.
-2. Deduplicate GitHub deliveries and all paid or externally mutating actions.
-3. Authorize every consequential action against the authenticated actor and
-   the bound repository profile.
-4. Bind a run to an enrolled repository and exact base commit.
-5. Treat issue text, comments, repository files, commands, test output, model
-   output, patches, and review findings as untrusted data.
-6. Never provide an agent container with GitHub App credentials, Cloudflare
-   administration credentials, deployment credentials, or authority over the
-   default branch.
-7. Give each attempt only short-lived, least-privilege credentials.
-8. Keep publication and merge in the trusted control plane.
-9. Validate repository policy and expected Git ancestry before publication.
-10. Bind validation, review, CI, approval, and merge to the exact current head.
-    A new head invalidates gates for the old head.
-11. Make cancellation, ambiguous state, and stale approval fail closed with one
-    visible next action.
-12. Do not retain credentials, authorization headers, or known secret values in
-    prompts, logs, Git commits, D1, R2, GitHub comments, or model output.
-
-The security objective is containment rather than magical prompt-injection
-prevention: untrusted input may influence a proposed patch, but it cannot grant
-credentials, expand repository authority, mutate a protected branch, merge a
-change, or escape the reviewed workflow.
-
-## 5. What V2 takes from V1
-
-### 5.1 Retain as concepts and selectively extract as code
-
-- GitHub webhook verification and delivery deduplication.
-- GitHub App authentication and the credentialed publication broker.
-- Separation between the control plane and untrusted agent execution.
-- Exact base/head identity and exact-head merge gates.
-- Repository path policy and actor authorization.
-- Disposable container execution.
-- Idempotent attempt identity, durable completion, and reconnection after a
-  Worker release or lost caller.
-- D1 compare-and-swap lease ownership with one lifecycle authority.
-- Secret redaction.
-- Validation and replay tests that exercise real failure classes.
-- The measured V1 dogfood evidence and latency targets.
-- Explicit per-stage model and reasoning-effort selection, recorded in attempt
-  evidence and verified against the actual result.
-
-Any V1 file reused in V2 must be small enough to understand independently,
-covered by a focused test, and moved behind a V2 contract. V2 will not import
-the V1 orchestration as a compatibility layer.
-
-### 5.2 Do not carry forward
-
-- The V1 control-plane entry point and its embedded orchestration.
-- Stage-specific lifecycle tables and overlapping state machines.
-- R2 patches or evidence bundles as a substitute for a Git workspace.
-- Hash ceremonies without a named deduplication, transport-integrity, or
-  publication-reconciliation purpose.
-- Exact-path plans as implementation authorization.
-- Commands requiring users to copy plan IDs, revisions, run IDs, or hashes.
-- Hard-coded repository names, URLs, validation commands, or branch rules.
-- Hard-coded model literals spread across runners and schemas.
-- One fixed “Claude review” record shape or a fixed two-cycle review workflow.
-- Infrastructure manifests and evidence logs committed as product
-  documentation.
-- V1's operator UI. V2 may expose a small read-only operational dashboard for
-  seeing run status and recorded evidence; GitHub remains the place where
-  people interact with issues, reviews, and pull requests.
-- Release/deployment orchestration as a Roundhouse product responsibility.
-
-## 6. V2 architecture
-
-V2 has two trusted Worker deployables, one agent-runner image, one pure core
-package, and a small number of managed resources. The second Worker is a
-private model broker, not another lifecycle service.
+The fixed lifecycle will become a repository-defined declarative workflow
+graph. It is a state machine rather than a strict DAG: branches, joins, human
+waits, clarification, validation, review, and repair may return to earlier
+nodes without an arbitrary traversal count.
 
 ```text
-GitHub webhook/comment/check
-          |
-          v
-  control-plane Worker
-  - verify + authorize
-  - update D1 run
-  - enqueue one wakeup
-          |
-          v
-  run coordinator <------ D1 (only workflow authority)
-          |
-          +------> Artifacts (one durable Git repo per run)
-          |
-          +------> run-scoped Cloudflare Sandbox VM
-          |       - outer runner and rootless Docker
-          |       - repository Dev Container
-          |         - embedded Pi coding agent
-          |         - application and database
-          |       - R2-backed workspace checkpoint
-          |               |
-          |               v
-          |       trusted outbound handler
-          |               |
-          |               v
-          |       private model-broker Worker
-          |       - role/task routing
-          |       - native provider protocol
-          |       - AI Gateway binding
-          |               |
-          |               v
-          |       Cloudflare AI Gateway
-          |       - Unified Billing
-          |       - no vendor key in Roundhouse
-          |
-          +------> Browser Rendering / screenshot evidence
-          |
-          +------> clean validation Sandbox
-                  - GitHub publication / CI / merge credential
+authenticated trigger
+        |
+        v
+profile + workflow compiler ---- rejects invalid authority or routes
+        |
+        v
+ D1 coordinator/interpreter <---- immutable node results and external events
+        |
+        +---- Roundhouse-owned agent/read/write/review executors
+        +---- deterministic validation and GitHub executors
+        +---- human waits and approved external adapters
+        |
+        v
+ declared terminal outcome
 ```
 
-Target source layout:
-
-```text
-apps/control-plane/       Worker, GitHub adapter, coordinator, D1, queue
-apps/model-broker/        private model routing and credential injection
-packages/core/            pure state transitions, policy, shared contracts
-containers/agent-runner/  qualification, reproduction, implementation, review
-tests/journeys/           end-to-end scenarios with real contract boundaries
-docs/v2-plan.md           this document
-```
-
-The precise folders may change once, during transition, if the resulting
-boundary is smaller. They must not proliferate into one package per stage.
-
-Before dispatch, the control plane asks the broker to resolve a semantic role
-and task envelope, records the resulting provider, model, native protocol,
-thinking level, and rule on the attempt, and includes that immutable route in
-the assignment. Pi calls a virtual model hostname with a dummy credential and
-an attempt-bound capability. Cloudflare Container outbound interception
-verifies that capability and the live D1 attempt, replaces container-supplied
-routing metadata with the recorded route, and forwards through a private
-[service binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/).
-The broker uses a Workers AI binding to call third-party models through
-[AI Gateway Unified Billing](https://developers.cloudflare.com/ai-gateway/features/unified-billing/).
-Cloudflare supplies provider authentication; Roundhouse stores neither a
-vendor API key nor a model-subscription token. The broker passes Pi's native
-OpenAI Responses, OpenAI Chat Completions, Anthropic Messages, or Google
-Generative AI request through without translating conversation history, and
-returns the provider-native response unchanged. It disables Gateway request
-logging and caching per request and requires ZDR for supported
-providers. The named environment gateway must also have logging disabled, ZDR
-enabled, and a spend limit before the live model path is deployed. The initial
-rule selects a provider, model, native protocol, and thinking level; later rules
-may select by semantic role, task type, and complexity without changing the
-runner or lifecycle schema.
-For read-only analysis stages, the broker attaches the provider's hosted web
-search tool for trusted
-qualification, current-behavior, and planning roles and removes it for other
-roles, so the boundary does not depend on client behavior. Pi consumes the
-provider's final answer through the same native stream. The result records the
-public sources actually used. Implementation and review do not receive the
-search capability. Read-only stage internet access remains disabled except for
-explicit Artifacts, package-registry, callback, and intercepted model hosts.
-Implementation runs permit arbitrary outbound destinations because
-repository-selected image builds and lifecycle commands may use
-project-specific package hosts. The outer Cloudflare Sandbox VM, not its
-network allowlist or nested Dev Container, is the implementation isolation
-boundary.
-
-### 6.1 One coordinator owns progress
-
-A coordinator invocation:
-
-1. loads the run and its revision from D1;
-2. determines the single next action from current state and recorded outcomes;
-3. reserves that action with a compare-and-swap transition;
-4. dispatches an idempotent external operation;
-5. records the result if the reservation still matches; and
-6. enqueues the run again when another automatic action is ready.
-
-Queue messages are wakeups containing a run ID and expected revision. They do
-not own business state or decide that a run is dead.
-Duplicate and stale messages are harmless.
-
-A scheduled recovery pass finds expired active reservations and enqueues them.
-It uses the same coordinator path; it is not a second recovery state machine.
-
-V2 uses Durable Objects only where Cloudflare Containers require them.
-Container Durable Objects provide instance routing and process lifecycle
-management; they do not own Roundhouse workflow state, retries, approvals, or
-business decisions. D1 remains the sole lifecycle authority. V2 will not
-initially use Cloudflare Workflows or additional application-level Durable
-Objects.
-
-Cloudflare requires each Container to be managed by a Durable Object, and its
-Container API supplies lifecycle, port-readiness, and idle-time controls. The
-adapter therefore uses an immutable attempt ID as the Durable Object name and
-returns after assignment instead of treating a Queue consumer as the attempt
-lifetime. Queue consumers have a 15-minute wall-clock limit. See the official
-[Container class](https://developers.cloudflare.com/containers/container-class/),
-[Durable Object Container](https://developers.cloudflare.com/durable-objects/api/container/),
-and [Queues limits](https://developers.cloudflare.com/queues/platform/limits/)
-documentation.
-
-### 6.2 Run and attempt model
-
-A **work item** is the enduring GitHub issue. A **run** is one execution of the
-V2 workflow against a snapshot of that issue and a repository profile. An
-**attempt** is one invocation of a stage, provider, or system action.
-
-The run has two orthogonal fields:
-
-- `status`: `active`, `waiting`, `succeeded`, `failed`, or `cancelled`;
-- `stage`: `qualify`, `reproduce`, `plan`, `implement`, `validate`, `review`,
-  `publish`, `ci`, or `merge`.
-
-A waiting run also has one reason. The prototype currently uses
-`clarification`; approval reasons will be added when their functional slices
-require them.
-
-This avoids encoding every combination as a new state. State-specific data is
-stored in a versioned run document and normalized only when it has a real
-query, authorization, or uniqueness requirement.
-
-### 6.3 Minimal D1 model
-
-V2 starts with no more than these seven tables:
-
-| Table          | Purpose                                                                 |
-| -------------- | ----------------------------------------------------------------------- |
-| `repositories` | Enrollment, GitHub identity, active profile version                     |
-| `work_items`   | GitHub issue identity and current run                                   |
-| `runs`         | Authoritative status, stage, revision, lease, inputs, workspace, budget |
-| `attempts`     | Idempotency, stage/role, model routing, timing, outcome, result         |
-| `approvals`    | Actor, purpose, run revision, plan or exact head, decision              |
-| `events`       | Small append-only audit and diagnostic timeline                         |
-| `outbox`       | Idempotent GitHub and Queue side effects awaiting delivery              |
-
-No stage receives its own table merely because its JSON schema is different.
-Large query needs must be demonstrated before adding a projection. A migration
-that adds a table must name the user journey or operational query requiring it.
-
-D1 stores small structured model outputs, summaries, commands, status, object
-references, and costs. It does not store Git repository contents or secrets.
-The D1 adapter uses ordered prepared-statement parameters and conditional
-updates for revision and lease compare-and-swap behavior, following the
-[D1 prepared statement contract](https://developers.cloudflare.com/d1/worker-api/prepared-statements/).
-
-### 6.4 Cloudflare Artifacts is the workspace layer
-
-Cloudflare Artifacts is a required V2 dependency. GitHub remains canonical for
-the upstream repository and public pull request; Artifacts is canonical for the
-private, durable workspace of an active run.
-
-Each run gets an isolated Artifacts repository containing:
-
-- the exact upstream base commit;
-- a stable Roundhouse work branch;
-- checkpoint commits produced by successful attempts;
-- the exact candidate commit reviewed and validated at each cycle.
-
-The control plane stores only repository identity, exact base, accepted head,
-and lifecycle timestamps in D1. It never stores a repo token. The current
-binding does not expose commit-graph or tree-diff inspection, so the control
-plane asks a fresh validation container to clone with a separate read token,
-then accepts or rejects the signed checkpoint itself.
-
-Credential rules:
-
-- mint a short-lived write token only for an authorized implementation or
-  repair attempt;
-- give reproduction and qualification no write capability unless explicitly
-  required for a scratch ref;
-- give reviewers a short-lived read token;
-- inject the token only after the attempt is authorized;
-- redact it from output and never retain it in a remote URL;
-- revoke it at completion or cancellation; and
-- verify expected ancestry and policy even though the run repo is untrusted
-  agent output.
-
-Tokens are passed as ephemeral `Authorization: Bearer` Git configuration in the
-runner process environment, never embedded in the remote URL. The control
-plane tracks only Cloudflare's immutable token ID long enough to revoke it.
-Recovery first revokes every active token on the isolated run repository, then
-issues a fresh token to a replacement assignment.
-
-Use separate namespaces for development and production. Names use opaque run
-identifiers, not issue titles or user-controlled text. One run repo has one
-active writer at a time. Reviewers may read concurrently after the candidate
-head is fixed.
-
-Artifacts replaces V1's R2 patch bundles and cross-container workspace
-handoffs. A new container clones the run repo and reconnects to the accepted
-checkpoint after loss or deployment. Reviewers inspect the exact Git commit.
-Remediation creates a new commit and naturally invalidates old gates.
-
-R2 is optional. It may hold screenshots, large raw logs, binary fixtures, or
-other non-Git payloads that exceed bounded D1 records. V2 does not provision or
-depend on R2 until a supported journey produces such a payload. R2 never owns
-run state or source handoff.
-
-The first Artifacts integration test must prove:
-
-1. create or import a public repository baseline;
-2. establish the exact requested base commit;
-3. create an isolated run repository;
-4. clone and push with a short-lived write token;
-5. clone the fixed head with a read-only review token;
-6. lose the first container and resume from the same commit in another;
-7. reject an unexpected head, ancestry, or protected-path change;
-8. revoke both token scopes;
-9. observe idempotent create/reconnect behavior; and
-10. delete the run repository under the retention policy.
-
-This validates our use of Artifacts; adoption is not conditional on the test
-outcome. A failing item is an integration defect or a workflow assumption to
-correct.
-
-Relevant Cloudflare documentation:
-
-- [Artifacts overview](https://developers.cloudflare.com/artifacts/)
-- [How Artifacts works](https://developers.cloudflare.com/artifacts/concepts/how-artifacts-works/)
-- [Artifacts best practices](https://developers.cloudflare.com/artifacts/concepts/best-practices/)
-- [Workers binding](https://developers.cloudflare.com/artifacts/api/workers-binding/)
-- [Git protocol and token scopes](https://developers.cloudflare.com/artifacts/api/git-protocol/)
-- [Limits](https://developers.cloudflare.com/artifacts/platform/limits/)
-- [Pricing and explicit deletion](https://developers.cloudflare.com/artifacts/platform/pricing/)
-
-The Workers binding creates, imports, retrieves, and deletes repositories and
-mints repo-scoped tokens. Git clients use `read` tokens for clone/fetch/pull
-and `write` tokens for push; tokens are supplied through an authorization
-header rather than persisted in a remote URL. These assumptions follow the
-[Workers binding](https://developers.cloudflare.com/artifacts/api/workers-binding/)
-and [Artifacts authentication](https://developers.cloudflare.com/artifacts/guides/authentication/)
-contracts.
-
-### 6.5 Agent runner
-
-One runner image supports stage modes through a narrow request/result contract.
-The runner does not know D1, GitHub App credentials, approval state, or merge
-policy. It receives:
-
-- attempt and run identities;
-- stage mode and role;
-- Artifacts remote plus the least-privilege token;
-- exact base or candidate commit;
-- immutable repository-profile snapshot;
-- issue, plan, reproduction, and prior-finding context;
-- selected provider, model, and reasoning effort;
-- permitted command classes and network destinations.
-
-The result includes exact input and output commits, structured outcome,
-commands and exit results, diagnostics, changed paths, actual model routing,
-timing and available usage, public source URLs used during read-only research,
-failure classification, and a redacted
-human summary.
-
-The runner may not publish to GitHub or decide the next workflow stage.
-
-The Cloudflare Sandbox VM is the agent security boundary. Qualification,
-current-behavior investigation, planning, review, and integration run the
-runner directly in that disposable Sandbox with stage-appropriate tools and
-allowlisted outbound access.
-
-Implementation additionally starts rootless Docker and adapts the enrolled
-repository's image-based `.devcontainer/devcontainer.json`. Pi, repository
-lifecycle commands, the application, and its database run inside that nested
-Dev Container. The Dev Container is a compatibility boundary, not a security
-boundary: all code within it is repository-controlled, and
-`initializeCommand` executes in the outer Sandbox as defined by the Dev
-Container lifecycle. Pi does not load repository-provided extensions, skills,
-or agent instructions. Privileged mode, devices, bind mounts, published
-ports, and repository-selected Docker networks are rejected or removed, while
-the outer Sandbox remains disposable and isolated from other runs.
-
-Implementation outbound access is unrestricted within that outer Sandbox so
-project image builds and lifecycle commands can install from repositories
-chosen by the enrolled project. Model credentials remain behind an
-attempt-bound outbound handler, Git state uses a scoped Artifacts credential,
-and the implementation environment never receives a GitHub App credential.
-GitHub publication occurs only from a separate clean validation Sandbox after
-exact-head, ancestry, and allowed/protected-path validation.
-
-Implementation workspaces, including dependency caches, named volumes, and
-application databases, are backed up to R2-backed Sandbox storage before
-compute is destroyed. A later implementation revision restores the checkpoint
-into a new Sandbox with the same run identity. The source Dev Container
-configuration is identified by content; a change recreates the adapted runtime
-instead of silently reusing stale configuration.
-
-Browser Rendering runs outside the agent Sandbox. A capability-protected
-synthetic preview origin forwards only the active run's same-origin and
-localhost application requests through the control plane to the private
-Sandbox port. Other browser origins are aborted. Screenshots are stored as
-public, unguessable evidence for the currently supported public-repository
-prototype.
-
-Qualification and other read-only stages receive read-only agent tools plus a
-read-scoped Artifacts credential. A read-only attempt cannot push a durable
-checkpoint; the control plane accepts only the unchanged, independently
-validated input commit. Pi's internal retry loops remain disabled rather than
-introducing unobserved retry policy.
-
-### 6.6 Model routing is policy
-
-The inspected V1 routing work is committed as `23e30bc`. It pinned planning,
-implementation, and review to explicit model-plus-effort pairs and recorded
-them in evidence. V2 keeps that behavior but removes model literals from stage
-schemas and runner branches.
-
-Each Profile V2 document contains an explicit versioned routing map:
-
-```yaml
-stages:
-  qualification:
-    model: { id: openai/..., reasoning: medium }
-  investigation:
-    model: { id: openai/..., reasoning: medium }
-  planning:
-    model: { id: openai/..., reasoning: medium }
-  implementation:
-    model: { id: moonshotai/..., reasoning: medium }
-reviewers:
-  holistic:
-    model: { id: openai/..., reasoning: medium }
-```
-
-The prototype embeds Pi as the provider-neutral coding harness. The route binds
-each model to one native protocol: OpenAI Responses, OpenAI Chat Completions,
-Anthropic Messages, or Google Generative AI. Pi owns provider-specific message
-and tool encoding. The broker authorizes the recorded route, supplies hosted
-research where the role permits it, invokes AI Gateway Unified Billing, logs
-the response, and otherwise passes native request and response bodies through.
-It does not maintain a lossy request-history translation layer.
-
-The resolved policy is snapshotted onto the run. An attempt binds provider,
-model, effort, prompt version, and tool-policy version atomically. Its result
-must report the actual routing; a mismatch fails visibly and cannot satisfy a
-gate.
-
-In-flight attempts keep their original snapshot. A policy edit affects new
-runs or an explicitly restarted stage, never silently reinterprets old
-evidence.
-
-The control plane enforces reviewer independence. At minimum, a required
-reviewer uses a different provider/model family from implementation unless
-repository policy records a temporary exception.
-
-## 7. Workflow behavior
-
-### 7.1 Qualification
-
-Qualification classifies the request as bug, feature, maintenance, duplicate,
-already satisfied, unsupported, or unclear. It reads the profile and only
-enough code and history to identify acceptance criteria and a reproduction
-strategy.
-
-It asks no question answerable from the issue, repository, or supplied public
-GitHub context.
-
-### 7.2 Current-behavior investigation
-
-For bugs, a read-oriented attempt executes the smallest safe procedure that can
-demonstrate the report. For features, it establishes whether the requested
-capability already exists and records the present baseline. For maintenance
-work, it inspects the current constraint or implementation that motivates the
-change. These paths share one internal pre-planning stage; they do not create
-separate workflow branches.
-
-The attempt may install repository-declared dependencies with the repository's
-declared package manager and lockfile. Its Sandbox can reach the configured
-package registry but not arbitrary internet destinations. The broader
-implementation-stage network policy described in section 6.5 does not apply to
-this read-only stage.
-
-For a bug, a successful reproduction records a regression strategy that
-validation must run after implementation. A change cannot receive the “fix
-validated” recommendation unless that regression passes on the candidate, or
-a maintainer approved an explicit non-reproduction path.
-
-### 7.3 Planning and risk
-
-Risk is the more restrictive of deterministic policy and model-assisted
-semantic assessment. The model explains risk but cannot lower a deterministic
-floor.
-
-Default floors:
-
-- **High:** authentication, authorization, access control, cryptography,
-  credentials, security boundaries, billing, data deletion, database schema or
-  migrations, CI/release/deployment authority, Roundhouse policy, or a
-  broad/uncertain blast radius.
-- **Medium:** dependencies and lockfiles, public APIs, persistent data formats,
-  concurrency, cross-service contracts, performance-sensitive paths, or a
-  change larger than repository low-risk thresholds.
-- **Low:** narrow behavior with a demonstrated regression, local tests, no
-  protected signals, and bounded rollback.
-
-Repository policy may elevate risk and add protected areas. It cannot lower
-Roundhouse's non-overridable global floors.
-
-| Risk   | Before implementation | Before merge         | Automatic merge                  |
-| ------ | --------------------- | -------------------- | -------------------------------- |
-| Low    | No approval           | No approval          | Yes, after every exact-head gate |
-| Medium | Plan approval         | Final human approval | No                               |
-| High   | Plan approval         | Final human approval | No                               |
-
-An approval binds plan revision, profile version, base commit, scope, and risk.
-Material change invalidates it. Final approval binds the exact reviewed,
-validated, CI-passing head.
-
-### 7.4 Implementation and validation
-
-Implementation starts at the accepted Artifacts checkpoint and seeks the
-smallest complete change satisfying the approved outcome.
-
-Validation is profile-defined and layered:
-
-1. formatter in write mode when supported;
-2. diff and repository-policy validation;
-3. reproduced-bug regression or targeted acceptance test;
-4. lint/static analysis/typecheck/build selected by changed paths;
-5. targeted tests; and
-6. full local validation when the profile or risk requires it.
-
-Mechanical failures return to implementation with exact diagnostics. A repair
-produces a new commit and reruns affected validation. The model cannot relabel
-a failed command as success. We will add loop policy only if real operation
-shows that the natural implementation/validation conversation needs it.
-
-GitHub required checks remain the authoritative repository-wide validation on
-the published exact head.
-
-### 7.5 Independent reviewers
-
-Review is a list of configured roles, not a single hard-coded stage record.
-Initial production policy requires one independent code-quality reviewer. The
-contract supports later security, compliance, architecture, performance,
-accessibility, and repository-specific reviewers without adding workflow
-states or database tables.
-
-Each reviewer declares:
-
-- stable role ID and human label;
-- provider, model, effort, and prompt version;
-- inputs and tool permissions;
-- changed-path or risk conditions activating it;
-- finding severities it may block;
-- which outcomes require rerun; and
-
-Every reviewer examines the exact candidate, approved plan, reproduction,
-validation, and relevant repository policy. Findings have a stable fingerprint,
-severity, location when available, explanation, and proposed acceptance test.
-
-The coordinator aggregates required outcomes:
-
-- no blocking findings: pass that reviewer for the exact head;
-- actionable in-scope findings: create one remediation batch with all current
-  findings;
-- scope/risk expansion: replan and request approval;
-- duplicate or dispositioned findings: record without another loop;
-- conflicting findings: wait for maintainer judgment.
-
-After remediation, validation runs first, then every reviewer affected by the
-new head reruns. No reviewer can approve its own remediation, merge, grant
-capabilities, change risk policy, or silently widen scope.
-
-The prototype follows actionable findings until the change works or a real
-decision is needed. It does not impose a speculative number of review or
-remediation rounds.
-
-### 7.6 Publication, CI, and merge
-
-The trusted publication broker:
-
-1. reads the accepted commit from the Artifacts run repository;
-2. verifies ancestry, paths, size, profile, risk, approvals, validation, and
-   reviewer gates;
-3. creates or updates a constrained GitHub App branch;
-4. opens or updates one pull request;
-5. confirms GitHub's head is exactly the candidate; and
-6. records publication idempotently.
-
-A new head invalidates old CI, reviews, and final approval. For required GitHub
-checks on the exact head, completed successful and skipped checks allow the run
-to continue, an incomplete check remains pending, and an actual failed check
-stops progress and returns the run for correction.
-
-The final pull-request package shows:
-
-- source issue and accepted understanding;
-- before/after reproduction or approved exception;
-- plan and material deviations;
-- changed behavior and important files;
-- local validation and GitHub CI;
-- each required reviewer and finding dispositions;
-- risk signals, blast radius, rollback, and residual risk; and
-- one recommendation: `merge_automatically`, `awaiting_final_approval`,
-  `needs_changes`, `needs_maintainer_judgment`, or `do_not_merge`.
-
-Before automatic merge, the control plane re-reads the pull request, approvals,
-checks, and exact head. Ambiguity, conflict, stale gates, or a changed head
-stops the merge.
-
-## 8. Repository profile
-
-Enrollment points Roundhouse to one reviewed, versioned profile in the target
-repository. Profile V2 defines:
-
-- allowed and protected paths;
-- operators authorized by repository permission, explicit GitHub user, or
-  GitHub team;
-- automatic or maintainer merge and the automatic merge method;
-- an optional explicit Dev Container configuration;
-- repository-wide and per-stage instruction files;
-- models and reasoning levels for qualification, investigation, planning,
-  implementation, and each reviewer;
-- enabled reviewers, holistic specialist selection, and blocking severities;
-  and
-- canonical validation commands expressed as argument arrays.
-
-Either path list may be empty; an empty allowed list permits no source changes,
-while an empty protected list adds no repository-specific protected paths.
-Roundhouse always protects `.roundhouse/**` and the selected Dev Container
+The repository chooses composition. Roundhouse chooses what each executor is
+capable of doing.
+
+### 3.1 Repository source and compilation
+
+The repository owns:
+
+- `.roundhouse/profile.yaml` for enrollment policy, operators, paths, merge
+  defaults, development environment, validation definitions, and maximum
+  repository-granted capabilities;
+- `.roundhouse/workflow.yaml` for triggers, nodes, prompts, models, schemas,
+  conditions, and outcomes; and
+- referenced prompts and schemas under `.roundhouse/**`.
+
+Roundhouse loads these files from one exact commit, normalizes and validates
+them, resolves references, computes a hash, and snapshots the compiled workflow
+onto the run. An active run is never reinterpreted under changed repository
 configuration.
 
-Long instructions live under `.roundhouse/prompts/` and are referenced
-explicitly by the profile. The loader reads the profile and every referenced
-instruction from the same exact commit. Their normalized contents are included
-in the immutable profile hash and run snapshot. Fixed Roundhouse isolation,
-tool, read-only, and result-submission instructions take precedence over
-repository instructions.
+The workflow source contains:
 
-An operator may start or explicitly resume Roundhouse. Ordinary issue
-participants may answer a question only when the run is waiting for
-clarification. GitHub repository permissions remain the authority for a human
-merge. Under maintainer merge mode, Roundhouse leaves a clean, CI-passing pull
-request ready and completes the run after GitHub reports that a maintainer
-merged it.
+- typed triggers and a start node for each trigger;
+- stable node IDs and Roundhouse-owned executor kinds;
+- typed input selectors and structured output schemas;
+- optional prompts, models, context providers, and reduced capabilities;
+- ordered conditional transitions with a required fallback; and
+- explicit terminal outcomes.
 
-Profiles are data, not executable control-plane code. Commands use argument
-arrays or reviewed repository scripts; the control plane does not concatenate
-model output into a shell.
+Conditions are data, not executable policy. Initial operators cover boolean
+composition, existence, equality, membership, and ordered comparisons over
+declared outputs and deterministic signals. Conditions cannot execute code,
+shell commands, functions, network requests, or secret lookups.
 
-Profile edits apply only to new runs unless a maintainer explicitly restarts a
-waiting run under the new version. Changing the profile is high risk.
+Compilation rejects unknown types, invalid references, unreachable required
+nodes, non-terminal dead ends, undeclared output paths, capability escalation,
+model-controlled bypass of deterministic gates, inexact publication or merge,
+write-capable reviewers, model-capable mechanical GitHub mutations, and
+references outside `.roundhouse/**`.
 
-## 9. Deferred hardening and recovery
+### 3.2 Typed executors
 
-Failure hardening is deliberately deferred until the functional end-to-end
-prototype works and real operation gives us evidence. The categories and
-scenarios below are observations we may need to make, not authorization to
-pre-build retry counts, backoff, recovery state machines, resource limits, or
-fallback policy.
+Repositories compose these executor kinds within fixed maximum authority:
 
-Every failure is classified as transient infrastructure/provider,
-deterministic agent/result failure, validation/review finding, policy or
-authorization block, stale/conflicting external state, or internal invariant
-violation.
+| Kind                      | Maximum authority                                                 |
+| ------------------------- | ----------------------------------------------------------------- |
+| `agent.read`              | Read an exact checkpoint and approved context; no source mutation |
+| `agent.write`             | Write an isolated Artifacts checkpoint; no GitHub mutation        |
+| `review`                  | Read an exact candidate and return structured findings            |
+| `validate`                | Run deterministic commands and return exact results               |
+| `human`                   | Wait for clarification or an authenticated decision               |
+| `github.publish`          | Publish a validated exact candidate                               |
+| `github.checks`           | Observe checks for the exact published head                       |
+| `github.merge`            | Merge an exact head after required gates                          |
+| `external.wait` / `check` | Use one separately enabled, named, scoped adapter                 |
+| `fanout` / `join`         | Coordinate typed child attempts; no external authority            |
+| `terminal`                | Record a declared outcome                                         |
 
-For now, deterministic failures return useful diagnostics to the active
-implementation or human conversation. Internal invariant violations stop; they
-do not silently change the requested work.
+The first graph supports only the existing authenticated
+`github.issue.started` trigger. The trigger contract also accommodates later
+reviewed pull-request, deployment, alert, or scheduled adapters without
+changing the graph representation.
 
-The already-proven stable attempt identity and durable completion contract stay
-in place because they are part of the current architecture. Additional
-reconnection or recovery behavior must be justified by an observed failure.
+Context providers are named, typed, read-only, and attributable. The initial
+set exposes repository files, GitHub issue and pull-request context, prior node
+outputs, the current diff, profile data, and broker-mediated public research.
+Future providers may expose indexed organizational policy, architecture,
+ownership, incidents, or bounded logs. A workflow cannot name an arbitrary
+plugin, MCP server, URL, or secret as a provider.
 
-Test these outcomes:
+### 3.3 Durable execution
 
-- duplicate webhook and Queue delivery;
-- lost response after an external mutation;
-- Worker release during an active attempt;
-- container loss after an Artifacts checkpoint;
-- provider timeout and rate limit;
-- GitHub read, publication, check, and merge failures;
-- cancellation during every model-using stage;
-- stale approval and changed pull-request head; and
-- ambiguous or corrupted state stopping safely.
+D1 is the only workflow authority. Queue messages contain a run ID and expected
+revision and serve only as wakeups.
 
-## 10. Maintainer experience and observability
+For each node execution the coordinator:
 
-GitHub is the initial interface. One issue status comment and one pull-request
-summary are updated in place. New comments are reserved for questions,
-approvals, terminal outcomes, or information that cannot be surfaced by
-updating an existing artifact.
+1. loads the run revision and immutable workflow snapshot;
+2. resolves typed inputs from durable outputs;
+3. reserves the execution with compare-and-swap;
+4. dispatches an idempotent executor operation;
+5. records a result only while the reservation still matches;
+6. evaluates ordered conditions;
+7. records the selected edge; and
+8. activates the destination or terminal outcome.
 
-While active, status shows the plain-language stage, elapsed time, last useful
-progress, whether action is needed, the exact requested action, and a pull
-request link when one exists.
+A work item is the enduring external subject. A run is one execution of a
+compiled workflow against an immutable trigger, profile, and workflow snapshot.
+An attempt is the durable record of one node execution; fan-out attempts may
+own typed child attempts.
 
-Initial metrics:
+A waiting attempt records a typed requested action or external event.
+Resumption follows the workflow edge recorded for that node and never attempts
+to reconstruct a stage from current source configuration or comment wording.
 
-- journey outcome and failure classification;
-- stage and end-to-end latency;
-- human interventions;
-- attempts, retries, and duplicate suppression;
-- provider/model/effort and available usage/cost;
-- validation and reviewer finding rates;
-- recovery time;
-- pull-request acceptance and merge outcome;
-- Artifacts repository age/storage and cleanup failures; and
-- stale or ambiguous actions rejected.
+The interpreter replaces the compiled lifecycle switch. Development may reset
+D1 for the migration, and all enrolled development repositories will migrate
+together. Roundhouse will not operate old and new workflow runtimes in
+parallel.
 
-An operator should diagnose a failed run from its event timeline and attempts
-without inspecting raw D1 tables, Queue messages, or container internals.
+## 4. Security kernel
 
-Runner containers emit structured attempt and command lifecycle events to
-Cloudflare Logs. Each event identifies the attempt, stage, safe command
-operation, duration, exit status, and stdout/stderr byte counts. Raw command
-output, prompts, credentials, and repository content are not copied into logs.
-Operators can live-tail these events in Cloudflare or use Wrangler SSH for
-direct inspection of a currently running development container. The inactivity
-lease is a crash backstop, not the primary way to determine what a runner is
-doing.
+Workflow configuration may reduce authority but cannot change these rules:
 
-## 11. Complexity budget
+1. Authenticate GitHub webhooks before acting on content.
+2. Deduplicate deliveries and paid or externally mutating actions.
+3. Authorize consequential actions against the actor and bound profile.
+4. Bind every run to an enrolled repository and exact base commit.
+5. Treat issues, comments, repository content, tool output, model output,
+   patches, reviews, and research as untrusted data.
+6. Never give an agent GitHub App, Cloudflare administration, deployment,
+   default-branch, or model-provider credentials.
+7. Use short-lived, least-privilege attempt credentials.
+8. Keep publication and merge in the trusted control plane.
+9. Validate ancestry, allowed and protected paths, and exact candidate identity
+   from a clean environment before publication.
+10. Bind validation, review, CI, human gates, publication, and merge to the
+    exact relevant head; a new head invalidates old gates.
+11. Fail closed on cancellation, ambiguity, stale decisions, or changed heads
+    with one visible next action.
+12. Never persist credentials or known secret values in prompts, logs, Git,
+    D1, R2, GitHub, or model output.
+13. Snapshot the exact workflow and referenced policy files.
+14. Reject any repository request for unknown or excessive authority.
+15. Record every transition, condition result, capability set, workflow hash,
+    timing, outcome, and exact commit where applicable.
+16. Never let a model-derived route bypass a deterministic requirement.
 
-The budget is a simplicity constraint, not a reason to add runtime governors:
+Containment is the objective. Prompt injection may influence a proposed patch;
+it must not grant credentials, expand authority, publish outside the constrained
+branch, mutate protected policy, merge, deploy, or escape the reviewed
+workflow.
 
-- two Worker deployables: the lifecycle control plane and private model broker;
-- one runner image;
-- one D1 database;
-- one Queue plus dead-letter queue;
-- one Artifacts namespace per environment;
-- one AI Gateway per environment;
-- no required R2 bucket initially;
-- at most seven initial D1 tables;
-- one lifecycle owner;
-- no per-stage infrastructure service;
-- no compatibility layer for V1 workflows;
-- no runtime source file larger than roughly 800 lines without explicit review;
-- no user-facing internal IDs or hashes in routine commands;
-- no abstraction until there are two implementations or a boundary that must
-  be faked in journey tests;
-- no feature work without a named maintainer journey and exit test;
-- no speculative hardening before a real operational failure demonstrates the
-  need; and
-- no arbitrary caps on conversations, model calls, repairs, reviews, command
-  output, or evidence.
+The foundation deliberately excludes repository-supplied executor code,
+arbitrary plugins, arbitrary agent-to-agent communication, automatic mutation
+of protected Roundhouse policy, and deployment credentials in agent
+containers. Those are authority expansions rather than missing graph features.
 
-When a proposal exceeds this budget, simplify the proposal rather than silently
-amend the architecture.
+## 5. Runtime boundaries
 
-## 12. Transition and implementation sequence
+### 5.1 Control plane and storage
 
-Work proceeds in vertical slices. A phase is complete only when its exit gate
-passes; merged scaffolding without the journey is not progress.
+One Cloudflare Worker owns GitHub intake, authorization, workflow progress,
+publication, checks, merge, and the dashboard. D1 stores lifecycle state and
+small structured results. One Queue plus a dead-letter queue wakes the
+coordinator. Durable Objects exist only where the Cloudflare Sandbox/Container
+lifecycle requires them; they do not own workflow state.
 
-### Phase 0 — Freeze V1 and reset the repository
+Cloudflare Artifacts is the durable Git workspace for each run. It stores the
+exact upstream base, stable work branch, successful checkpoints, and exact
+candidate commits. The control plane stores identities and commit references,
+not repository contents or credentials. A new Sandbox can restore an active run
+from the accepted checkpoint.
 
-Phase 0 completed on 2026-07-17 with these fixed boundaries:
+R2 stores screenshots, workspace backups, and other non-Git evidence when
+needed. It does not own workflow state.
 
-- the final deployed V1 baseline is `f922198`, preserved as
-  `v1-poc-final`;
-- `codex/v2` was merged into `main` and deleted; `main` is now the sole active
-  local and GitHub branch before each new reviewed slice begins;
-- the model-routing branch and every other partial V1 branch were deliberately
-  discarded rather than retained or reconstructed;
-- GitHub's `Release development` and `Promote production` workflows are
-  disabled, and the pending V1 production promotion was cancelled;
-- ordinary `CI` remains enabled for reviewed V2 changes; and
-- no Cloudflare resource is deleted or repurposed. Any new V2 resource must
-  use a `v2` namespace in its name and route.
+### 5.2 Agent environment
 
-The V2 branch now contains only the target runtime skeleton:
+The outer Cloudflare Sandbox VM is the isolation boundary. For implementation,
+Roundhouse adapts the repository's image-based Dev Container inside that
+Sandbox. The Dev Container provides compatibility, not another security
+boundary: repository lifecycle commands and the agent share the outer
+Sandbox's authority.
 
-- `packages/core` for pure run-state contracts;
-- `apps/control-plane` for the V2-namespaced Worker; and
-- `containers/agent-runner` for the non-root runner image.
+Implementation receives a short-lived Artifacts writer, never a GitHub
+credential. Review and other read-only work receive only read authority. A
+separate clean validation Sandbox verifies Git ancestry and path policy before
+the trusted control plane publishes anything.
 
-No V2 module imports or wraps V1 orchestration code. Cloudflare resources will
-be created only when Phase 1 has a component that uses them.
+Implementation workspaces, dependency caches, volumes, and application data can
+be backed up before compute is destroyed and restored for later revisions.
+Browser Rendering reaches an active application through a capability-protected
+preview route and stores screenshots as run evidence.
 
-Actions:
+### 5.3 Models
 
-1. Tag the final V1 proof-of-concept commit.
-2. Create the V2 development branch. V1 production remains support-only until
-   cutover.
-3. Disable release deployment from the V2 branch.
-4. Make this plan and the README the only current documentation.
-5. Delete V1 plans, ADRs, manifests, spikes, and evidence; recover them from the
-   tag or Git history if needed.
-6. Record the final V1 routing commit and reapply its policy ideas through the
-   V2 core rather than retaining its cross-cutting code.
-7. Remove V1 runtime code from the V2 branch as small retained components are
-   extracted into the target layout.
+A private model broker authorizes each snapshotted route and invokes AI Gateway
+Unified Billing. The runner uses Pi as a provider-neutral harness with native
+OpenAI Responses, OpenAI Chat Completions, Anthropic Messages, or Google
+Generative AI protocols. The broker does not translate conversation history.
 
-Exit gate:
+Each attempt records provider, model, reasoning level, prompt version, tool
+policy, actual route, timing, and available usage. The implementation
+environment receives no provider credential. Hosted research is attached only
+to approved read roles. In-flight attempts keep their original route snapshot.
 
-- the V2 branch has one obvious product plan;
-- V1 remains recoverable and its production deployment is unchanged;
-- the target tree builds a minimal Worker and runner;
-- no V2 module imports V1 orchestration code.
+## 6. Repository policy and human interaction
 
-### Phase 1 — Executable core and Artifacts workspace
+The deployed Profile V2 defines:
 
-The merged foundation proves revision-bound D1 leases, one immutable attempt
-per wakeup, prompt Container dispatch through the mandatory thin Durable
-Object, replay safety, and lease-expiry recovery. The current Artifacts runtime
-cut adds the production Workers binding adapter, opaque run repositories,
-short-lived token issuance and revocation by immutable ID, authenticated Git
-clone/push, deterministic checkpoint commits, full-payload callback signing,
-fresh-container Git graph/path validation, exact accepted-head handoff, and
-idempotent replacement execution.
+- explicit allowed and protected paths;
+- operators by repository permission, GitHub user, or GitHub team;
+- automatic or maintainer merge and merge method;
+- an optional Dev Container configuration;
+- repository-wide and stage-specific prompts;
+- stage and reviewer models and reasoning levels;
+- fixed reviewer activation and blocking severities; and
+- validation commands as argument arrays.
 
-Attempt leases measure inactivity, not total wall-clock execution. Model calls
-and runner output renew the current lease. Ten minutes without either destroys
-the inactive Container before the same immutable stage is dispatched again.
-Completion callbacks use their own request timeout and remain valid after an
-earlier lease window, so long-running work is not rejected merely for taking
-more than a fixed number of minutes.
+Roundhouse always protects `.roundhouse/**` and the selected Dev Container
+configuration. Repository instructions cannot override isolation, tool,
+read-only, credential, or result-submission rules.
 
-The real Artifacts exercise used the new `roundhouse-v2-development` namespace
-and a disposable opaque repository. It established `df1d1fa` as the exact
-base, pushed an accepted checkpoint with a five-minute write token, cloned that
-checkpoint with a read token and a replacement writer, rejected read-token
-push, unexpected head, ancestry, and protected-path cases, verified that Git
-remotes retained no credentials, revoked every repo token, proved the revoked
-token failed, and deleted the repo. Immediate reuse of a just-deleted repo name
-returned private-beta error `10400`; a new opaque name worked. The production
-adapter must therefore reconcile create/get by stored opaque identity and must
-not rely on immediate name reuse.
+Operators may start and explicitly resume Roundhouse. Ordinary participants may
+answer a clarification while the run waits. GitHub permissions remain the
+authority for a human merge. Under maintainer merge mode, Roundhouse leaves a
+clean CI-passing pull request and completes when GitHub reports its merge.
 
-The V2 development namespace, D1 database, wakeup queue, and dead-letter queue
-are isolated from V1. The configuration carries the real V2 D1 identity and
-uses its V2-only workers.dev origin. Local migration validation, runner syntax,
-typechecking, and the deterministic contract suite pass. No production or V1
-resource was changed.
+The dashboard will eventually visualize the compiled workflow, selected path,
+current node, node evidence, capability set, and configuration revision. A
+future editor will propose repository-file changes through a GitHub pull
+request. D1 will not become a second configuration authority.
 
-Actions:
+## 7. Default issue-to-merge workflow
 
-1. Define pure run, attempt, approval, reviewer, risk, and transition contracts
-   in `packages/core`.
-2. Implement the seven-table D1 schema and in-memory/D1 adapters.
-3. Implement the coordinator with one wakeup queue and revision-bound leases.
-4. Integrate Artifacts creation/import, scoped tokens, clone/push, checkpoint
-   validation, reconnection, and cleanup.
-5. Exercise the ten-item Artifacts integration test from section 6.4.
-6. Use fake GitHub and runner adapters to execute one clear low-risk journey
-   deterministically.
+The initial repository workflow preserves the behavior deployed today:
 
-Exit gate:
+1. **Qualification:** classify the request and ask only questions not
+   answerable from available repository, issue, or approved public context.
+2. **Investigation:** reproduce a bug, establish a feature baseline, or inspect
+   a maintenance constraint. Record truthful evidence and a regression or
+   acceptance strategy.
+3. **Planning:** produce acceptance criteria, proposed behavior, likely areas,
+   validation strategy, uncertainty, and any real human decision.
+4. **Implementation:** make the smallest complete change in the repository
+   environment and create a durable checkpoint.
+5. **Validation:** apply formatting, path policy, regression/acceptance checks,
+   static/build checks, targeted tests, and profile-required validation.
+6. **Review:** run the configured independent reviewers on the exact candidate.
+   Actionable findings return through implementation and validation.
+7. **Integration:** incorporate the current target branch. Conflicts needing
+   judgment return to an agent or human node.
+8. **Publication and CI:** cleanly validate and publish the exact candidate,
+   then observe required GitHub checks on that same head.
+9. **Merge:** merge automatically or wait for GitHub maintainer merge according
+   to the profile.
 
-- replay produces the same transitions and side effects;
-- duplicate wakeups create no duplicate attempt or publication;
-- another container resumes the exact Artifacts checkpoint;
-- only D1 decides lifecycle state;
-- schema and resources stay inside the complexity budget.
+There is no speculative cap on clarification, implementation, validation,
+review, or remediation. A loop continues while it makes progress and waits when
+information or judgment is genuinely required.
 
-### Phase 2 — Qualification, clarification, reproduction, and planning
+The generic review executor will replace the fixed holistic/security/data
+identities. A configured reviewer will declare a stable ID, label, model,
+prompt, typed inputs, reduced capabilities, activation condition, blocking
+severities, and `shadow`, `advisory`, or `blocking` mode. Findings will add
+stable fingerprints, evidence locations, and proposed acceptance tests.
 
-The first Phase 2 slice stops deliberately after real qualification. It accepts
-an authorized deployment-configured start command (`/roundhouse-dev start` in
-development and `/roundhouse start` after production promotion) from a
-separately signed repository webhook, snapshots the exact default-branch
-commit, runs one read-only qualification through the private AI Gateway model
-broker, posts one reconciled qualification comment, and leaves an eligible run
-active at `reproduce`. The development GitHub App remains the outbound API authority;
-its existing V1 webhook URL is not redirected during this isolated slice.
-Production App configuration and every V1 resource remain unchanged.
+## 8. Fit with Anthropic's AI-native SDLC
 
-The deterministic implementation includes raw webhook signature verification,
-maintainer authorization, delivery and repeated-command deduplication, a
-read-only agent runner, private service-binding routing, and coordinator-owned
-qualification transitions. The current runner embeds Pi; the original slice
-used Codex before the provider-native migration. The development AI Gateway
-uses its existing account-level spend control. Streaming, structured-output,
-tool-call, and controlled GitHub qualification proofs pass. Subscription-token
-fallback is not part of this design.
+Anthropic's July 2026
+[AI-native SDLC](https://claude.com/blog/how-anthropic-secures-its-ai-native-software-development-lifecycle)
+combines contextual planning, isolated coding, deterministic and agentic
+testing, deployment-time checks, monitoring, incident response, and
+governance.
 
-The second slice consumes that durable qualification in a separate read-only
-reproduction attempt. It records commands, observed and expected behavior,
-relevant files, and uncertainties in durable structured evidence while keeping
-the GitHub response concise. A confirmed result advances to `plan`; a blocked
-or unsuccessful reproduction asks focused questions.
-The callback still only records a validated unchanged checkpoint, the
-coordinator remains the sole transition authority, and the broker selects the
-reproduction policy from the trusted role envelope. Planning is deliberately
-not dispatched by this slice.
+| Anthropic capability                            | Roundhouse foundation                                                               | Missing integration                                                 |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| Security planning with organizational context   | `agent.read` and attributable context providers                                     | Policy, architecture, ownership, and incident indexes               |
+| Repository guidance and isolated coding         | Snapshotted prompts, `agent.write`, Sandbox, and Dev Container                      | Safe private-repository execution and tighter implementation egress |
+| Closed-loop instruction improvement             | Attributable policy recommendation plus human node                                  | Trusted adapter proposing protected policy changes                  |
+| Narrow independent security agents              | Generic review fan-out/join, separate context, exact-head evidence, operating modes | Reviewer registry, proof/fingerprint contract, shadow reporting     |
+| SAST, invariants, and risk-weighted human gates | Deterministic validation, conditions, policy checks, and human nodes                | Specific scanners, risk policy, and approval journeys               |
+| Staging DAST                                    | Deployment triggers and scoped external check adapters                              | Deployment, staging, and scanner adapters                           |
+| Alert triage, logs, postmortem, and fixes       | Alert triggers, log context, agent nodes, issue/PR outputs                          | Alert, production-log, and incident-channel adapters                |
+| Governance, sampling, metrics, and SIEM         | Workflow hashes, operating modes, canonical audit events                            | Sampling, Analytics Engine, SIEM export, governance UI              |
 
-The third slice accepts ordinary prose from any GitHub user while a run is
-waiting for clarification. The comment is appended to the issue conversation,
-the same stage resumes, and the model decides from the complete context whether
-the answer resolves the question or another focused question is useful. There
-is no answer command or clarification-round count. Completed evidence is looked
-up by stage rather than assumed to occupy an adjacent revision. Confirmed
-reproduction dispatches a read-only planning attempt; a ready plan is posted
-concisely and advances to `implement`, while a plan needing information uses
-the same prose clarification path.
+The graph provides a place to connect these capabilities without another
+orchestration rewrite. It does not make undeveloped or unauthorized adapters
+exist. Roundhouse also does not become the deployment system: it may eventually
+observe a repository-owned deployment and run checks, while deployment
+authority remains elsewhere.
 
-The fourth slice gives the implementation attempt a short-lived Artifacts
-write token and lets the embedded coding agent edit and validate the checked-out repository inside
-the Cloudflare Container sandbox. The runner commits only the actual source
-change to Artifacts. A separate clean container clones that exact checkpoint,
-verifies its ancestry, changed-path declaration, and protected paths, then uses
-a short-lived development GitHub App token to promote the validated commit.
-The control plane opens a draft pull request and links it from the issue.
-Implementation commands and output stay in durable attempt evidence and are not
-copied into GitHub comments or the pull-request body.
-Every generated pull request includes GitHub's `Fixes #<issue>` closing
-reference so the change links back to its source issue and closes it when
-merged. When V2 has a real run-details page, the pull request also links to that
-page for the diff, commands, model routing, checkpoints, and other durable
-evidence. Until that page exists, Roundhouse omits the link rather than
-publishing a placeholder destination.
+Anthropic permits deliberate agent coordination over human-visible channels.
+Roundhouse does not provide arbitrary agent-to-agent access. Equivalent future
+coordination would require a typed, attributable channel adapter with its own
+identity and capability review.
 
-Actions:
+## 9. Workflow implementation plan
 
-1. Connect real GitHub webhook verification, issue snapshots, authorization,
-   status updates, and comment ingestion.
-2. Implement the minimal profile and enrollment validation.
-3. Run real qualification and reproduction attempts.
-4. Support natural-language clarification and same-run resumption.
-5. Produce an evidence-backed plan.
+Work proceeds in vertical slices. A slice is complete only when its user
+journey and boundary tests pass.
+
+### Slice 7.0 — Reconcile the contract
+
+Keep this plan and the README consistent with deployed behavior, the approved
+workflow target, the Anthropic comparison, and intentional exclusions.
+
+Exit gate: a reviewer can identify what exists, what is approved, what is
+deferred, and what authority is prohibited without consulting historical
+documents.
+
+### Slice 7.1 — Run the current lifecycle through the graph
+
+Implement the schema, condition evaluator, compiler, immutable snapshot,
+interpreter, and structured transition logging. Express the existing lifecycle
+as `.roundhouse/workflow.yaml`. Migrate Roundhouse and Dreamwidth development
+profiles and D1 together, then delete the compiled lifecycle switch.
 
 Exit gate:
 
-- one clear bug is reproduced before its plan;
-- one unclear bug asks useful questions and resumes from prose answers;
-- one non-reproducible or already-fixed report stops truthfully;
-- no interaction requires an internal identifier.
+- existing journeys pass through the interpreter with no intended behavior
+  change;
+- one branch and one loop resume correctly from D1;
+- invalid references, conditions, capability escalation, and exact-head bypass
+  fail compilation; and
+- no parallel workflow runtime remains.
 
-### Phase 3 — Implementation and validated draft pull request
+### Slice 7.2 — General agent composition
 
-Actions:
+Make `agent.read` and `agent.write` consume typed inputs and schemas and select
+repository prompts, models, context, and transitions.
 
-1. Implement the runner contract and immutable routing snapshot.
-2. Give implementation a short-lived Artifacts write token.
-3. Commit the actual candidate changes and verify ancestry and protected paths
-   from a clean clone.
-4. Promote only that validated commit with a short-lived GitHub App token held
-   outside the implementation container.
-5. Open a draft pull request; do not merge yet.
+Exit gate: a repository changes a meaningful route, prompt, model, branch, and
+return edge without Roundhouse source changes, and the timeline shows the
+resolved inputs, authority, result, condition, and selected edge.
 
-Exit gate:
+### Slice 7.3 — Generic review fan-out and join
 
-- one reproduced bug reaches a draft PR with a passing regression;
-- an out-of-policy patch is rejected before publication;
-- GitHub credentials never enter the implementation container.
+Replace the fixed reviewer identities with generic review nodes,
+fan-out/join, stable finding evidence, and operating modes. Migrate the current
+three reviewers without changing their effective policy.
 
-### Phase 4 — Exact-commit review
+Exit gate: a repository adds a reviewer through configuration; every outcome is
+exact-head-bound; remediation invalidates and reruns required gates.
 
-Actions:
+### Slice 7.4 — Human, external-event, context, and audit boundaries
 
-1. Run a read-only reviewer against the exact promoted candidate commit with
-   the issue, plan, implementation result, and repository diff.
-2. Advance a clean review to `ci` with the reviewed commit recorded in durable
-   evidence.
-3. Return actionable findings to implementation with no arbitrary round count.
-4. Validate and promote the repaired commit, update the same draft pull
-   request, and review the new exact commit.
-5. Keep the GitHub review concise while retaining complete findings in durable
-   attempt evidence for the future run-details page.
+Implement the generic human wait/resume contract, context-provider interface,
+external wait/check interface, and canonical audit envelope. Enable only
+adapters needed by an approved journey.
 
-Exit gate:
+Exit gate: ordinary GitHub prose resumes a configured human node; a fake
+external event resumes durably; context and audit data are attributable; and
+neither interface can expand authority.
 
-- clean review passes the exact candidate;
-- a seeded blocking finding is fixed, validated, and reviewed again;
-- remediation updates the existing draft pull request rather than creating a
-  duplicate;
-- changing the candidate invalidates the previous review naturally because the
-  next review is bound to the new commit.
+### Slice 7.5 — Repository-backed graph UI
 
-### Phase 5 — Exact-head CI and merge
+Add a dashboard graph view and editor using the same schema and compiler. Show
+node authority and routes and propose changes through a GitHub pull request.
 
-Actions:
+Exit gate: a maintainer can round-trip the active workflow without D1 becoming
+configuration authority or a protected change silently altering an active run.
 
-1. Reconcile GitHub checks when a clean review enters `ci` and when GitHub
-   reports a completed check suite.
-2. Record successful CI only when the reviewed head, run head, pull-request
-   head, and check-run head are identical.
-3. Mark the draft pull request ready after review and CI are clean for that
-   exact commit.
-4. Re-read the clean review, successful checks, pull request, and exact head
-   immediately before a SHA-bound merge.
-5. Record the merge commit and complete the run.
+After these slices, choose organizational context, scanners, staging DAST,
+alert triage, or governance export as separate vertical journeys. Their order
+is not approved by this plan.
 
-Exit gate:
+## 10. Acceptance and observability
 
-- one development issue reaches merge without intervention after clean review
-  and successful CI on the same exact head;
-- stale CI, review, or a changed head cannot authorize merge;
-- the merge commit is durable run evidence;
-- final GitHub status is concise and truthful.
+The existing product baseline must continue to demonstrate:
 
-On the exact head, completed successful and skipped checks allow the run to
-continue. An incomplete check remains pending, while an actual failed check
-stops progress and returns the run for correction.
+- a clear issue reaching exact-head CI and automatic or maintainer merge;
+- clarification resuming the same work item;
+- truthful handling of an unreproduced or already-satisfied request;
+- validation and adversarial-review remediation;
+- target-branch integration without stale review or CI authorization;
+- duplicate delivery and container replacement without duplicate publication;
+- malicious untrusted content failing to acquire credentials or authority; and
+- the same journeys on an external repository through configuration.
 
-### Phase 6 — Evidence-driven hardening, external pilot, and cutover
+The graph migration additionally demonstrates:
 
-This phase begins only after the functional issue-to-merge journey works. Its
-hardening work responds to failures actually observed during dogfood and the
-external pilot; the scenario list is for measurement, not speculative
-implementation.
+- default-workflow parity;
+- a structured branch and human-driven loop;
+- generic reviewer fan-out/join and exact-head invalidation;
+- compiler rejection of capability escalation and gate bypass;
+- replay from an exact workflow/profile snapshot after configuration changes;
+- durable wait/resume from a typed external event; and
+- repository-file round-trip through the dashboard editor.
 
-Actions:
+Every new boundary and step must log enough structured information to diagnose
+it on its first real run. At minimum, events identify the run, attempt,
+workflow hash, node, safe input and output references, capabilities, selected
+edge, exact commit, model route, command/API operation, timing, and outcome.
+Sensitive prompts, repository content, raw credentials, and authorization
+headers are not copied into general logs.
 
-1. Run the section 9 failure scenarios against development.
-2. Enroll one external public repository without Roundhouse source changes.
-3. Run the acceptance set below on one release candidate.
-4. Measure intervention, latency, model usage, findings, recovery, and cleanup.
-5. Obtain explicit maintainer acceptance that the workflow is useful.
-6. Replace V1 on the default branch, deploy V2, and retain the V1 tag.
-7. After the retention window, delete V1 Cloudflare resources and old
-   Artifacts/R2 data from an explicit inventory.
+The dashboard and event timeline must show current activity, elapsed time, last
+useful progress, waiting action, attempts, results, selected routes, and pull
+request state without requiring direct D1, Queue, or container inspection.
 
-Exit gate:
+## 11. Complexity and documentation
 
-- all release journeys pass;
-- no severity-1 or severity-2 product or boundary defect remains;
-- the external maintainer says the system saves more effort than it creates;
-- V1 has no active run before resource retirement;
-- current docs remain only the README and this plan.
+The implementation retains:
 
-## 13. Release acceptance set
+- one lifecycle control plane and one private model broker;
+- one graph interpreter and lifecycle owner;
+- one runner image and one Sandbox security boundary;
+- D1 as the only lifecycle authority;
+- Queue as wakeups rather than business state;
+- Artifacts as the durable Git workspace;
+- no per-stage infrastructure services;
+- no arbitrary workflow code or repository executors;
+- no compatibility runtime for the compiled lifecycle; and
+- no speculative limits or recovery machinery.
 
-One V2 release candidate must demonstrate:
+The maintained documentation is:
 
-1. **Clear low-risk bug:** reproduced, planned, implemented, repaired if needed,
-   reviewed, exact-head CI passed, and automatically merged with no human action
-   after start.
-2. **Clarified bug:** useful prose clarification resumes the same work item and
-   reaches a supported outcome.
-3. **Cannot reproduce:** accurate evidence and a truthful stop or maintainer
-   decision, with no invented fix.
-4. **Risky change:** deterministic signals force plan and final approval; stale
-   approval is rejected.
-5. **Validation repair:** seeded formatter, lint/typecheck/build, and targeted
-   test failures are repaired and rerun.
-6. **Adversarial repair:** an independent reviewer finds a substantive defect;
-   the new head is validated and reviewed again.
-7. **Multiple reviewers:** two roles aggregate correctly in a journey test
-   without a new workflow state or migration.
-8. **Recovery:** duplicate delivery, Worker release, lost response, and
-   container replacement resume without duplicate work or publication.
-9. **Boundary attack:** malicious issue/repository/review text cannot acquire a
-   credential, expand policy, approve, publish outside the branch namespace, or
-   merge.
-10. **External repository:** clear bug, clarification, risky-plan, and
-    review-remediation behavior works through configuration rather than
-    Roundhouse source changes.
+- `README.md` for the product, current status, and development entry points;
+- this document for current architecture, approved work, and acceptance; and
+- `docs/future-improvements.md` for explicitly deferred ideas with no authority
+  to start work.
 
-| Measure                                            | Target                             |
-| -------------------------------------------------- | ---------------------------------- |
-| Durable start acknowledgement                      | p95 ≤ 5 seconds                    |
-| First useful status                                | p95 ≤ 10 seconds                   |
-| Clear issue to initial plan                        | p50 ≤ 5 minutes; p95 ≤ 10 minutes  |
-| Clear low-risk issue to pull request               | p50 ≤ 30 minutes; p95 ≤ 60 minutes |
-| Clear low-risk issue to merge                      | p50 ≤ 45 minutes; p95 ≤ 90 minutes |
-| Active silence without useful status               | Never more than 2 minutes          |
-| Low-risk human interventions after start           | 0                                  |
-| Duplicate paid attempts/publications               | 0                                  |
-| Exact-head gate bypasses                           | 0                                  |
-| Seeded authorization/boundary escapes              | 0                                  |
-| Artifacts repos past retention without disposition | 0                                  |
-
-Latency includes Roundhouse's retries and waiting. Unrelated GitHub-hosted
-runner queue time may be reported separately but never hidden.
-
-## 14. Documentation and decision policy
-
-The maintained documentation set is:
-
-- `README.md`: what Roundhouse is, current status, local checks, and this link;
-- `docs/v2-plan.md`: product, architecture, decisions, plan, and acceptance.
-
-There is no in-repository V1 archive. Git history and the final V1 tag are the
-archive.
-
-Do not add a standalone ADR, manifest, spike report, evidence log, checklist,
-or operator note by default. Instead:
-
-- durable product/architecture decisions update the relevant section here;
-- experiments live in their issue or pull request and leave their decision
-  here;
-- live evidence stays on the issue, pull request, check run, or telemetry;
-- routine current operator commands belong in the README; and
-- Cloudflare resource configuration belongs with executable configuration,
-  not prose manifests.
-
-A new document is justified only when it has a distinct long-lived audience,
-an owner, and a maintenance path that these two documents cannot serve. Its
-pull request must explain why updating this plan is insufficient.
-
-## 15. Decision log
-
-This compact log replaces standalone ADRs.
-
-| Date       | Decision                                                                              |
-| ---------- | ------------------------------------------------------------------------------------- |
-| 2026-07-17 | Treat V1 as a proven POC and rewrite its orchestration for V2.                        |
-| 2026-07-17 | Keep the V1 control/execution credential boundary and exact-head gates.               |
-| 2026-07-17 | Use D1 as the only workflow authority and Queue only as wakeups.                      |
-| 2026-07-17 | Use one Artifacts repository per run for workspace and handoff.                       |
-| 2026-07-17 | Keep R2 optional for non-Git oversized/binary payloads.                               |
-| 2026-07-17 | Make reviewers data-driven; initially ship one independent code-quality reviewer.     |
-| 2026-07-17 | Make provider/model/effort routing versioned policy and immutable attempt evidence.   |
-| 2026-07-17 | Auto-merge only low risk; medium/high receives plan and final review.                 |
-| 2026-07-17 | Keep only the README and this plan as normative documentation.                        |
-| 2026-07-17 | Put model access and future model selection behind one private broker.                |
-| 2026-07-18 | Use AI Gateway Unified Billing; do not deploy model-subscription credentials.         |
-| 2026-07-18 | Build the functional prototype first; harden only from observed operational evidence. |
-| 2026-07-18 | Accept clarification as ordinary issue prose with no command or round count.          |
-| 2026-07-19 | Embed Pi and keep provider-native protocols across the container/broker boundary.     |
+Git history, issues, pull requests, telemetry, and the `v1-poc-final` tag hold
+historical decisions, experiments, evidence, and completed migration detail.
+They do not belong in this active context unless they still constrain the
+current architecture.

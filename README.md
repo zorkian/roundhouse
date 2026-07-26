@@ -64,12 +64,27 @@ onto the run. Roundhouse cannot modify `.roundhouse/**` or the selected Dev
 Container configuration. Fixed Roundhouse isolation, tool, read-only, and
 result-submission rules take precedence over repository instructions.
 
+Today the lifecycle order and holistic/security/data reviewer identities are
+fixed in the coordinator. The next approved architecture replaces that switch
+with a repository-owned `.roundhouse/workflow.yaml`: a declarative graph of
+typed Roundhouse executors, structured results, conditions, branches, and
+loops. Repositories will be able to compose stages, prompts, models, reviewers,
+human decisions, and later external events without supplying executable
+control-plane code or expanding Roundhouse's credential and capability
+boundaries.
+
 ## Project status
 
 Roundhouse is an active V2 prototype. The end-to-end development workflow can
 qualify and investigate an issue, plan and implement a change, validate and
 review the exact commit, run repository CI, and merge it. It is not ready for
 general production use.
+
+The approved next work is the workflow-graph migration described in Phase 7 of
+the V2 plan. The same foundation is designed to accept future typed adapters
+for organizational context, scanners, deployment observation, alert triage,
+and audit export; those integrations are not implemented or approved merely
+because the extension points exist.
 
 V1 is preserved at the `v1-poc-final` tag. The [V2 plan](docs/v2-plan.md) is
 the normative product and architecture document.
