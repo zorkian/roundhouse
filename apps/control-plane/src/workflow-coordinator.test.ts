@@ -240,5 +240,17 @@ describe("workflow-backed coordinator transitions", () => {
       stage: "merge",
       currentHead: mergeCommit,
     });
+    expect(store.events).toHaveLength(8);
+    expect(store.events[0]).toMatchObject({
+      runId: initial.id,
+      kind: "workflow_transition",
+      payload: {
+        workflowHash: initial.workflowHash,
+        fromNodeId: "qualify",
+        toNodeId: "investigate",
+        executor: "agent.read",
+        inputHead: initial.baseCommit,
+      },
+    });
   });
 });

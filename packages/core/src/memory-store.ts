@@ -10,6 +10,12 @@ export class MemoryRunRepository implements RunRepository {
   readonly runs = new Map<string, RunSnapshot>();
   readonly attempts = new Map<string, Attempt>();
   readonly leases = new Map<string, Lease>();
+  readonly events: {
+    readonly runId: string;
+    readonly attemptId?: string;
+    readonly kind: string;
+    readonly payload: Readonly<Record<string, unknown>>;
+  }[] = [];
 
   async create(run: RunSnapshot): Promise<void> {
     if (this.runs.has(run.id)) throw new Error("run_exists");
@@ -208,5 +214,19 @@ export class MemoryRunRepository implements RunRepository {
         ? [{ runId, expectedRevision: lease.runRevision }]
         : [],
     );
+  }
+
+  async recordEvent(
+    runId: string,
+    attemptId: string | undefined,
+    kind: string,
+    payload: Readonly<Record<string, unknown>>,
+  ): Promise<void> {
+    this.events.push({
+      runId,
+      ...(attemptId ? { attemptId } : {}),
+      kind,
+      payload,
+    });
   }
 }

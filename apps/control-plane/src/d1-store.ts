@@ -280,7 +280,7 @@ export class D1RunRepository implements RunRepository {
   private async eventsForRun(runId: string): Promise<RunDetails["events"]> {
     const result = await this.db
       .prepare(
-        "SELECT attempt_id,kind,payload_json,created_at FROM events WHERE run_id=?1 AND attempt_id IS NOT NULL AND (kind='attempt_lease_expired' OR (kind='attempt_progress' AND json_extract(payload_json,'$.phase')='workspace_started')) ORDER BY created_at,id",
+        "SELECT attempt_id,kind,payload_json,created_at FROM events WHERE run_id=?1 AND (kind='workflow_transition' OR (attempt_id IS NOT NULL AND (kind='attempt_lease_expired' OR (kind='attempt_progress' AND json_extract(payload_json,'$.phase')='workspace_started')))) ORDER BY created_at,id",
       )
       .bind(runId)
       .all<{
@@ -621,6 +621,20 @@ export class D1RunRepository implements RunRepository {
       .bind(kind, JSON.stringify(payload), this.now(), attemptId)
       .run();
     return (result.meta.changes ?? 0) === 1;
+  }
+
+  async recordEvent(
+    runId: string,
+    attemptId: string | undefined,
+    kind: string,
+    payload: Readonly<Record<string, unknown>>,
+  ): Promise<void> {
+    await this.db
+      .prepare(
+        "INSERT INTO events (run_id,attempt_id,kind,payload_json,created_at) VALUES (?1,?2,?3,?4,?5)",
+      )
+      .bind(runId, attemptId ?? null, kind, JSON.stringify(payload), this.now())
+      .run();
   }
 
   private async recordAttemptEventBestEffort(

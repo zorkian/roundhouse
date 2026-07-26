@@ -334,7 +334,7 @@ function evidenceForAttempt(
   return {};
 }
 
-export function graphCompletedTransition(run: RunSnapshot, attempt: Attempt) {
+function workflowAdvanceForAttempt(run: RunSnapshot, attempt: Attempt) {
   const workflow = run.profile?.workflow;
   const nodeId = run.currentNodeId;
   if (!workflow || !nodeId || run.workflowHash !== workflow.hash)
@@ -374,6 +374,14 @@ export function graphCompletedTransition(run: RunSnapshot, attempt: Attempt) {
       mergeMode: run.profile?.merge?.mode ?? "automatic",
     },
   });
+  return { workflow, nodeId, node, advance };
+}
+
+export function graphCompletedTransition(run: RunSnapshot, attempt: Attempt) {
+  const { workflow, nodeId, node, advance } = workflowAdvanceForAttempt(
+    run,
+    attempt,
+  );
   const destination = workflow.nodes[advance.currentNodeId]!;
   const stage = stageForWorkflowNode(advance.currentNodeId, destination);
   const evidence = evidenceForAttempt(attempt, run.profile);
@@ -399,6 +407,32 @@ export function graphCompletedTransition(run: RunSnapshot, attempt: Attempt) {
     ...(advance.waitingReason ? { waitingReason: advance.waitingReason } : {}),
     ...evidence,
   };
+}
+
+async function recordWorkflowTransition(
+  repository: RunRepository,
+  run: RunSnapshot,
+  attempt: Attempt,
+  next: RunSnapshot,
+): Promise<void> {
+  if (!run.profile?.workflow || !run.currentNodeId) return;
+  const { workflow, nodeId, node, advance } = workflowAdvanceForAttempt(
+    run,
+    attempt,
+  );
+  await repository.recordEvent?.(run.id, attempt.id, "workflow_transition", {
+    workflowHash: workflow.hash,
+    fromNodeId: nodeId,
+    toNodeId: advance.currentNodeId,
+    executor: node.executor,
+    capabilities: node.capabilities,
+    condition: advance.selected.when ?? null,
+    status: next.status,
+    waitingReason: next.waitingReason ?? null,
+    inputHead: attempt.expectedHead,
+    outputHead: attempt.acceptedHead ?? attempt.expectedHead,
+    runRevision: next.revision,
+  });
 }
 
 function selectedSpecialists(attempt: Attempt): readonly string[] | undefined {
@@ -585,6 +619,7 @@ export async function coordinate(
         : reviewTransition(aggregate),
     );
     if (!next) return "stale";
+    await recordWorkflowTransition(repository, run, aggregate, next);
     if (reporter) await reporter.report(next, aggregate);
     return "dispatched";
   }
@@ -598,6 +633,7 @@ export async function coordinate(
     if (!transition) return "stale";
     const next = await repository.transition(run.id, run.revision, transition);
     if (!next) return "stale";
+    await recordWorkflowTransition(repository, run, previous, next);
     if (reporter) await reporter.report(next, previous);
     return "dispatched";
   }

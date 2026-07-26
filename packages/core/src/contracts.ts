@@ -254,6 +254,12 @@ export interface RunRepository {
     revision: number,
   ): Promise<readonly Attempt[]>;
   expiredLeases(now: number): Promise<readonly Wakeup[]>;
+  recordEvent?(
+    runId: string,
+    attemptId: string | undefined,
+    kind: string,
+    payload: Readonly<Record<string, unknown>>,
+  ): Promise<void>;
 }
 
 export function immutableAttemptId(runId: string, revision: number): string {
