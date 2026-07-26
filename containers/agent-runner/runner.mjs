@@ -2186,7 +2186,7 @@ export async function createCheckpoint(assignment) {
 
 function validProfileSnapshot(profile) {
   return (
-    profile?.version === 1 &&
+    (profile?.version === 1 || profile?.version === 2) &&
     profile.paths &&
     Array.isArray(profile.paths.allowed) &&
     profile.paths.allowed.every((pattern) => typeof pattern === "string") &&

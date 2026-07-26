@@ -1069,6 +1069,19 @@ describe("V2 agent runner", () => {
         },
       }),
     ).resolves.toBeUndefined();
+    await expect(
+      validateCheckpoint({
+        ...validationAssignment,
+        id: "run_git_rev_1_profile_v2_validation",
+        profile: {
+          version: 2,
+          paths: {
+            allowed: ["**"],
+            protected: [],
+          },
+        },
+      }),
+    ).resolves.toBeUndefined();
     expect(
       execFileSync(
         "git",

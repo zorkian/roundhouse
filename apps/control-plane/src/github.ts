@@ -908,7 +908,7 @@ export async function verifyGitHubWebhook(
   return verifyCallback(secret, body, signature.slice(7));
 }
 
-async function postIntakeComment(
+export async function postRunCommentOnce(
   github: GitHubApi,
   run: RunSnapshot,
   marker: string,
@@ -930,7 +930,7 @@ async function postIntakeComment(
       },
     );
   } catch (error) {
-    console.error("github_intake_comment_failed", error);
+    console.error("github_run_comment_failed", error);
   }
 }
 
@@ -1114,7 +1114,7 @@ export async function acceptGitHubComment(
         profile = await loadRepositoryProfile(api, repositoryName, commit.sha);
       } catch (error) {
         console.error("repository_profile_invalid", error);
-        await postIntakeComment(
+        await postRunCommentOnce(
           api,
           run,
           `profile-error:${id}:${run.revision}`,
@@ -1163,7 +1163,7 @@ export async function acceptGitHubComment(
     );
     if (!run) return "ignored";
     await enqueue({ runId: id, expectedRevision: run.revision });
-    await postIntakeComment(
+    await postRunCommentOnce(
       api,
       run,
       `clarification:${id}:${run.revision}`,
@@ -1250,7 +1250,7 @@ export async function acceptGitHubComment(
       if (!run.profile || run.waitingReason === "profile_error") {
         profile = requestedProfile;
         if (!profile) {
-          await postIntakeComment(
+          await postRunCommentOnce(
             api,
             run,
             `profile-error:${id}:${run.revision}`,
@@ -1295,7 +1295,7 @@ export async function acceptGitHubComment(
     return "duplicate";
   }
   if (!run.profile) {
-    await postIntakeComment(
+    await postRunCommentOnce(
       api,
       run,
       `profile-error:${id}:${run.revision}`,
