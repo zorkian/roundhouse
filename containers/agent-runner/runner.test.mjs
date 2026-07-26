@@ -13,7 +13,8 @@ import {
   artifactWriteTokenRequest,
   bootstrapWorkspace,
   commandProgress,
-  completionRequest,
+  completionResult,
+  createAssignmentExecutor,
   checkpointWorkspace,
   devContainerConfigIdentity,
   implementationPrompt,
@@ -588,7 +589,7 @@ describe("V2 agent runner", () => {
     });
   });
 
-  it("accepts an immutable assignment promptly and deduplicates replay", () => {
+  it("validates an immutable assignment without starting background work", () => {
     const assignment = {
       id: "attempt_1",
       runId: "run_1",
@@ -618,17 +619,83 @@ describe("V2 agent runner", () => {
       body: JSON.stringify({
         accepted: true,
         attemptId: "attempt_1",
-        duplicate: false,
       }),
     });
-    expect(runnerResponse("POST", "/assign", assignment)).toMatchObject({
-      status: 202,
-      body: JSON.stringify({
-        accepted: true,
-        attemptId: "attempt_1",
-        duplicate: true,
-      }),
+  });
+
+  it("keeps assignment requests attached and shares one execution across duplicates", async () => {
+    let release;
+    let started;
+    const released = new Promise((resolveRelease) => {
+      release = resolveRelease;
     });
+    const executionStarted = new Promise((resolveStarted) => {
+      started = resolveStarted;
+    });
+    const assignment = {
+      id: "attempt_attached",
+      runId: "run_1",
+      runRevision: 1,
+      stage: "review",
+      deadlineAt: Date.now() + 60_000,
+      baseCommit: "a".repeat(40),
+      expectedHead: "a".repeat(40),
+      routing: {
+        provider: "openai",
+        model: "openai/gpt-5.6-sol",
+        protocol: "openai-responses",
+        thinkingLevel: "low",
+        rule: "review-default-v1",
+      },
+      artifact: {
+        repositoryId: "repo-id",
+        repository: "v2-run-1",
+        remote: "https://artifacts.invalid/v2-run-1",
+        tokenId: "token-id",
+        token: "secret-token",
+        access: "read",
+        ref: "refs/heads/roundhouse/run_1",
+      },
+    };
+    const completion = {
+      attemptId: assignment.id,
+      expectedRevision: assignment.runRevision,
+      checkpoint: {
+        repositoryId: assignment.artifact.repositoryId,
+        repository: assignment.artifact.repository,
+        baseCommit: assignment.baseCommit,
+        inputHead: assignment.expectedHead,
+        outputHead: assignment.expectedHead,
+        ref: assignment.artifact.ref,
+        changedPaths: [],
+      },
+      artifactTokenId: assignment.artifact.tokenId,
+      result: { outcome: "ok" },
+    };
+    const execute = vi.fn(async () => {
+      started();
+      await released;
+      return completion;
+    });
+    const executeAttached = createAssignmentExecutor(execute);
+    const headers = {
+      "x-roundhouse-control-plane-url": "https://control.invalid",
+      "x-roundhouse-attempt-secret": "attempt-secret",
+    };
+    const first = executeAttached(assignment, headers);
+    await executionStarted;
+    const second = executeAttached(assignment, headers);
+    let completed = false;
+    first.then(() => {
+      completed = true;
+    });
+    await new Promise((resolveWait) => setImmediate(resolveWait));
+    expect(completed).toBe(false);
+    expect(execute).toHaveBeenCalledTimes(1);
+    release();
+    await expect(first).resolves.toEqual(completion);
+    await expect(second).resolves.toEqual(completion);
+    expect(execute).toHaveBeenCalledTimes(1);
   });
 
   it("accepts a source bootstrap only with an exact HTTPS contract", () => {
@@ -739,8 +806,7 @@ describe("V2 agent runner", () => {
     ).toBe("1");
   });
 
-  it("builds an attempt-bound asynchronous completion callback", async () => {
-    const timeout = vi.spyOn(AbortSignal, "timeout");
+  it("returns an attempt-bound completion without persisting a capability", () => {
     const assignment = {
       id: "attempt_callback",
       runId: "run_1",
@@ -759,22 +825,12 @@ describe("V2 agent runner", () => {
       ref: "refs/heads/roundhouse/run_1",
       changedPaths: ["src/fix.ts"],
     };
-    const request = completionRequest(
-      assignment,
-      checkpoint,
-      "https://v2.invalid/attempts/callback",
-      "attempt-secret",
-    );
-    expect(request.method).toBe("POST");
-    expect(new URL(request.url).pathname).toBe("/attempts/callback");
-    expect(timeout).not.toHaveBeenCalled();
-    await expect(request.json()).resolves.toMatchObject({
+    expect(completionResult(assignment, checkpoint)).toEqual({
       attemptId: assignment.id,
       expectedRevision: 3,
       checkpoint,
       artifactTokenId: "token-id",
-      result: { checkpoint: checkpoint.outputHead },
-      signature: expect.stringMatching(/^[a-f0-9]{64}$/),
+      result: { outcome: "ok", checkpoint: checkpoint.outputHead },
     });
   });
 
@@ -785,7 +841,7 @@ describe("V2 agent runner", () => {
     };
     const request = artifactWriteTokenRequest(
       assignment,
-      "https://v2.invalid/attempts/callback",
+      "https://v2.invalid",
       "attempt-secret",
     );
     expect(request.method).toBe("POST");
@@ -811,7 +867,7 @@ describe("V2 agent runner", () => {
     };
     const activity = activityRequest(
       assignment,
-      "https://v2.invalid/attempts/callback",
+      "https://v2.invalid",
       "attempt-secret",
       {
         phase: "command_output",
@@ -834,22 +890,17 @@ describe("V2 agent runner", () => {
       stderrBytes: 0,
     });
 
-    const completion = completionRequest(
-      assignment,
-      {
-        repositoryId: "repo-id",
-        repository: "v2-run-1",
-        baseCommit: assignment.baseCommit,
-        inputHead: assignment.expectedHead,
-        outputHead: "b".repeat(40),
-        ref: "refs/heads/roundhouse/run_1",
-        changedPaths: ["src/fix.ts"],
-      },
-      "https://v2.invalid/attempts/callback",
-      "attempt-secret",
-    );
+    const completion = completionResult(assignment, {
+      repositoryId: "repo-id",
+      repository: "v2-run-1",
+      baseCommit: assignment.baseCommit,
+      inputHead: assignment.expectedHead,
+      outputHead: "b".repeat(40),
+      ref: "refs/heads/roundhouse/run_1",
+      changedPaths: ["src/fix.ts"],
+    });
     await new Promise((resolveWait) => setTimeout(resolveWait, 5));
-    expect(completion.signal.aborted).toBe(false);
+    expect(completion.attemptId).toBe(assignment.id);
   });
 
   it("checkpoints the implementation and promotes it from a clean clone", async () => {
