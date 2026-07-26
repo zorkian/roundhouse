@@ -3,6 +3,7 @@
 
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,6 +16,7 @@ import {
   commandProgress,
   completionResult,
   createAssignmentExecutor,
+  createRunnerServer,
   checkpointWorkspace,
   devContainerConfigIdentity,
   implementationPrompt,
@@ -696,6 +698,95 @@ describe("V2 agent runner", () => {
     await expect(first).resolves.toEqual(completion);
     await expect(second).resolves.toEqual(completion);
     expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("attaches an absolute-form container proxy assignment request", async () => {
+    const assignment = {
+      id: "attempt_absolute_url",
+      runId: "run_1",
+      runRevision: 1,
+      stage: "review",
+      deadlineAt: Date.now() + 60_000,
+      baseCommit: "a".repeat(40),
+      expectedHead: "a".repeat(40),
+      routing: {
+        provider: "openai",
+        model: "openai/gpt-5.6-sol",
+        protocol: "openai-responses",
+        thinkingLevel: "low",
+        rule: "review-default-v1",
+      },
+      artifact: {
+        repositoryId: "repo-id",
+        repository: "v2-run-1",
+        remote: "https://artifacts.invalid/v2-run-1",
+        tokenId: "token-id",
+        token: "secret-token",
+        access: "read",
+        ref: "refs/heads/roundhouse/run_1",
+      },
+    };
+    const completion = {
+      attemptId: assignment.id,
+      expectedRevision: assignment.runRevision,
+      checkpoint: {
+        repositoryId: assignment.artifact.repositoryId,
+        repository: assignment.artifact.repository,
+        baseCommit: assignment.baseCommit,
+        inputHead: assignment.expectedHead,
+        outputHead: assignment.expectedHead,
+        ref: assignment.artifact.ref,
+        changedPaths: [],
+      },
+      artifactTokenId: assignment.artifact.tokenId,
+      result: { outcome: "ok" },
+    };
+    const execute = vi.fn(async () => completion);
+    const server = createRunnerServer(execute);
+    await new Promise((resolveListen, rejectListen) => {
+      server.once("error", rejectListen);
+      server.listen(0, "127.0.0.1", resolveListen);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string")
+        throw new Error("runner_test_address_missing");
+      const result = await new Promise((resolveResponse, rejectResponse) => {
+        const request = httpRequest(
+          {
+            hostname: "127.0.0.1",
+            port: address.port,
+            method: "POST",
+            path: "http://runner/assign",
+            headers: {
+              "content-type": "application/json",
+              "x-roundhouse-control-plane-url": "https://control.invalid",
+              "x-roundhouse-attempt-secret": "attempt-secret",
+            },
+          },
+          (response) => {
+            const chunks = [];
+            response.on("data", (chunk) => chunks.push(chunk));
+            response.on("end", () =>
+              resolveResponse({
+                status: response.statusCode,
+                body: JSON.parse(Buffer.concat(chunks).toString()),
+              }),
+            );
+          },
+        );
+        request.once("error", rejectResponse);
+        request.end(JSON.stringify(assignment));
+      });
+      expect(result).toEqual({ status: 200, body: completion });
+      expect(execute).toHaveBeenCalledOnce();
+    } finally {
+      await new Promise((resolveClose, rejectClose) =>
+        server.close((error) =>
+          error ? rejectClose(error) : resolveClose(undefined),
+        ),
+      );
+    }
   });
 
   it("accepts a source bootstrap only with an exact HTTPS contract", () => {
