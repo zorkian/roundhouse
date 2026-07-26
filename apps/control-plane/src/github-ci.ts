@@ -170,6 +170,17 @@ function exactAttempt(
   );
 }
 
+function atWorkflowExecutor(
+  run: RunSnapshot,
+  executor: "github.checks" | "github.merge",
+  legacyStage: "ci" | "merge",
+): boolean {
+  const workflow = run.profile?.workflow;
+  if (!workflow) return run.stage === legacyStage;
+  if (run.workflowHash !== workflow.hash || !run.currentNodeId) return false;
+  return workflow.nodes[run.currentNodeId]?.executor === executor;
+}
+
 async function aggregateReview(
   repository: RunRepository,
   run: RunSnapshot,
@@ -302,6 +313,36 @@ export class GitHubCiAutomation {
   // integration with the same reviewed candidate instead of restarting
   // general implementation.
   private async reintegrate(run: RunSnapshot): Promise<"recorded" | "stale"> {
+    if (run.profile?.workflow && run.currentNodeId) {
+      const attempt: Attempt = {
+        id: immutableAttemptId(run.id, run.revision),
+        runId: run.id,
+        runRevision: run.revision,
+        kind: "external",
+        nodeId: run.currentNodeId,
+        executor: "github.checks",
+        stage: "ci",
+        role: "github-checks",
+        state: "created",
+        deadlineAt: Date.now(),
+        baseCommit: run.baseCommit,
+        expectedHead: run.currentHead,
+      };
+      await this.repository.createAttempt(attempt);
+      const completed = await this.repository.completeAttempt(
+        attempt.id,
+        run.revision,
+        run.currentHead,
+        {
+          ci: {
+            status: "reintegrate",
+            head: run.currentHead,
+            reason: "target_base_changed",
+          },
+        },
+      );
+      return completed === "stale" ? "stale" : "recorded";
+    }
     // Atomically clear the superseded integration/base identities so the
     // run never pairs a pending integration with an obsolete validated head.
     const next = await this.repository.transition(run.id, run.revision, {
@@ -316,7 +357,11 @@ export class GitHubCiAutomation {
     run: RunSnapshot,
     now = Date.now(),
   ): Promise<"recorded" | "pending" | "stale"> {
-    if (run.status !== "active" || run.stage !== "ci") return "stale";
+    if (
+      run.status !== "active" ||
+      !atWorkflowExecutor(run, "github.checks", "ci")
+    )
+      return "stale";
     const review = await aggregateReview(this.repository, run);
     if (!exactAttempt(review, "review", this.reviewedHead(run), "clean"))
       return "stale";
@@ -365,7 +410,7 @@ export class GitHubCiAutomation {
       !current ||
       current.revision !== run.revision ||
       current.status !== "active" ||
-      current.stage !== "ci" ||
+      !atWorkflowExecutor(current, "github.checks", "ci") ||
       current.currentHead !== run.currentHead ||
       !exactAttempt(currentReview, "review", this.reviewedHead(run), "clean") ||
       !pull ||
@@ -597,7 +642,11 @@ export class GitHubCiAutomation {
     now = Date.now(),
     leaseMilliseconds = 30 * 60_000,
   ): Promise<"recorded" | "pending" | "stale"> {
-    if (run.status !== "active" || run.stage !== "merge") return "stale";
+    if (
+      run.status !== "active" ||
+      !atWorkflowExecutor(run, "github.merge", "merge")
+    )
+      return "stale";
     const attemptId = immutableAttemptId(run.id, run.revision);
     const previous = await this.repository.getAttempt(attemptId);
     if (previous?.state === "completed") return "recorded";
@@ -758,7 +807,7 @@ export async function acceptGitHubCheckSuite(
     run.repository !== repositoryName ||
     run.githubInstallationId !== payload.installation?.id ||
     run.status !== "active" ||
-    run.stage !== "ci" ||
+    !atWorkflowExecutor(run, "github.checks", "ci") ||
     payload.check_suite?.head_sha !== run.currentHead
   )
     return "ignored";
@@ -810,7 +859,7 @@ export async function acceptGitHubPullRequest(
     run.repository !== repositoryName ||
     run.githubInstallationId !== payload.installation.id ||
     !["active", "waiting"].includes(run.status) ||
-    run.stage !== "merge" ||
+    !atWorkflowExecutor(run, "github.merge", "merge") ||
     payload.pull_request.head?.sha !== run.currentHead
   )
     return "ignored";

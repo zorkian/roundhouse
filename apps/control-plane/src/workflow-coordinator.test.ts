@@ -95,6 +95,40 @@ describe("workflow-backed coordinator transitions", () => {
     });
   });
 
+  it("routes a moved target base back through integration and clears stale heads", async () => {
+    const initial = await workflowRun();
+    const head = "b".repeat(40);
+    const run = {
+      ...initial,
+      stage: "ci" as const,
+      currentNodeId: "checks",
+      currentHead: head,
+      reviewedHead: head,
+      targetBaseHead: "c".repeat(40),
+      integrationHead: head,
+    };
+    expect(
+      graphCompletedTransition(run, {
+        ...completed(run, {
+          ci: {
+            status: "reintegrate",
+            head,
+            reason: "target_base_changed",
+          },
+        }),
+        kind: "external",
+        nodeId: "checks",
+        executor: "github.checks",
+        stage: "ci",
+      }),
+    ).toMatchObject({
+      status: "active",
+      stage: "integrate",
+      currentNodeId: "integrate",
+      heads: { targetBaseHead: null, integrationHead: null },
+    });
+  });
+
   it("drives the existing agent journey from compiled nodes instead of stage routing", async () => {
     const store = new MemoryRunRepository();
     const initial = await workflowRun();

@@ -148,6 +148,10 @@ nodes:
           equals: success
         to: merge
       - when:
+          path: output.ci.status
+          equals: reintegrate
+        to: integrate
+      - when:
           path: output.ci.reason
           in:
             - diagnostics_unavailable

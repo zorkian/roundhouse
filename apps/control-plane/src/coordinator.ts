@@ -329,7 +329,15 @@ function evidenceForAttempt(
   if (attempt.stage === "implement") return implementationTransition(attempt);
   if (attempt.stage === "review") return reviewTransition(attempt);
   if (attempt.stage === "integrate") return integrateTransition(attempt);
-  if (attempt.stage === "ci") return ciTransition(attempt, profile);
+  if (attempt.stage === "ci") {
+    const ci = attempt.result?.ci as Record<string, unknown> | undefined;
+    if (ci?.status === "reintegrate")
+      return {
+        acceptedHead: attempt.acceptedHead,
+        heads: { integrationHead: null, targetBaseHead: null },
+      };
+    return ciTransition(attempt, profile);
+  }
   if (attempt.stage === "merge") return mergeTransition(attempt);
   return {};
 }
