@@ -18,6 +18,14 @@ nodes:
   qualify:
     executor: agent.read
     role: qualify
+    agent:
+      task: qualification
+      inputs:
+        issue: trigger.issue
+      result:
+        key: qualification
+        schema: roundhouse.qualification.v1
+      model: { id: openai/gpt-5.6-sol, reasoning: low }
     capabilities: [repository.read, context.read, research.public]
     outputs: [qualification.classification]
     transitions:
@@ -34,6 +42,15 @@ nodes:
   investigate:
     executor: agent.read
     role: investigate
+    agent:
+      task: investigation
+      inputs:
+        issue: trigger.issue
+        qualification: nodes.qualify.qualification
+      result:
+        key: reproduction
+        schema: roundhouse.investigation.v1
+      model: { id: openai/gpt-5.6-sol, reasoning: low }
     capabilities: [repository.read, context.read, research.public]
     outputs: [reproduction.status]
     transitions:
@@ -50,6 +67,16 @@ nodes:
   plan:
     executor: agent.read
     role: plan
+    agent:
+      task: planning
+      inputs:
+        issue: trigger.issue
+        qualification: nodes.qualify.qualification
+        reproduction: nodes.investigate.reproduction
+      result:
+        key: plan
+        schema: roundhouse.plan.v1
+      model: { id: openai/gpt-5.6-sol, reasoning: low }
     capabilities: [repository.read, context.read, research.public]
     outputs: [plan.status]
     transitions:
@@ -66,6 +93,20 @@ nodes:
   implement:
     executor: agent.write
     role: implement
+    agent:
+      task: implementation
+      inputs:
+        issue: trigger.issue
+        qualification: nodes.qualify.qualification
+        reproduction: nodes.investigate.reproduction
+        plan: nodes.plan.plan
+        implementation: nodes.implement.implementation
+        review: nodes.review.review
+        ci: nodes.checks.ci
+      result:
+        key: implementation
+        schema: roundhouse.implementation.v1
+      model: { id: moonshotai/kimi-k3, reasoning: low }
     capabilities:
       [repository.read, artifact.write, commands.execute, network.project, preview.capture]
     outputs: [implementation.screenshots]
@@ -194,12 +235,26 @@ export const workflowConditionOperators = [
   "greater_than",
   "greater_than_or_equal",
 ] as const;
+export const workflowAgentTasks = [
+  "qualification",
+  "investigation",
+  "planning",
+  "implementation",
+] as const;
+export const workflowAgentSchemas = [
+  "roundhouse.qualification.v1",
+  "roundhouse.investigation.v1",
+  "roundhouse.plan.v1",
+  "roundhouse.implementation.v1",
+] as const;
 
 export type WorkflowTriggerKind = (typeof workflowTriggerKinds)[number];
 export type WorkflowExecutorKind = (typeof workflowExecutorKinds)[number];
 export type WorkflowTerminalStatus = (typeof workflowTerminalStatuses)[number];
 export type WorkflowConditionOperator =
   (typeof workflowConditionOperators)[number];
+export type WorkflowAgentTask = (typeof workflowAgentTasks)[number];
+export type WorkflowAgentSchema = (typeof workflowAgentSchemas)[number];
 
 export type WorkflowScalar = string | number | boolean | null;
 
@@ -240,13 +295,33 @@ export interface WorkflowTransition {
   readonly terminal?: WorkflowTerminalStatus;
 }
 
+export interface WorkflowAgent {
+  readonly task: WorkflowAgentTask;
+  readonly inputs: Readonly<Record<string, string>>;
+  readonly result: {
+    readonly key: string;
+    readonly schema: WorkflowAgentSchema;
+  };
+  readonly model: {
+    readonly id: string;
+    readonly reasoning: "off" | "minimal" | "low" | "medium" | "high";
+  };
+  readonly prompt?: {
+    readonly sourcePath: string;
+    readonly content: string;
+  };
+}
+
 export interface WorkflowNode {
   readonly executor: WorkflowExecutorKind;
   readonly role?: string;
+  readonly agent?: WorkflowAgent;
   readonly capabilities: readonly string[];
   readonly outputs: readonly string[];
   readonly transitions: readonly WorkflowTransition[];
 }
+
+export type WorkflowFileLoader = (path: string) => Promise<string>;
 
 export interface CompiledWorkflow {
   readonly sourcePath: typeof workflowSourcePath;
@@ -415,13 +490,147 @@ function stringList(value: unknown, error: string): string[] {
   return [...new Set(value)];
 }
 
-function node(value: unknown): WorkflowNode {
+const taskContracts: Readonly<
+  Record<
+    WorkflowAgentTask,
+    {
+      readonly executor: "agent.read" | "agent.write";
+      readonly requiredInputs: readonly string[];
+      readonly resultKey: string;
+      readonly schema: WorkflowAgentSchema;
+    }
+  >
+> = {
+  qualification: {
+    executor: "agent.read",
+    requiredInputs: ["issue"],
+    resultKey: "qualification",
+    schema: "roundhouse.qualification.v1",
+  },
+  investigation: {
+    executor: "agent.read",
+    requiredInputs: ["issue", "qualification"],
+    resultKey: "reproduction",
+    schema: "roundhouse.investigation.v1",
+  },
+  planning: {
+    executor: "agent.read",
+    requiredInputs: ["issue", "qualification", "reproduction"],
+    resultKey: "plan",
+    schema: "roundhouse.plan.v1",
+  },
+  implementation: {
+    executor: "agent.write",
+    requiredInputs: ["issue", "qualification", "reproduction", "plan"],
+    resultKey: "implementation",
+    schema: "roundhouse.implementation.v1",
+  },
+};
+
+export function requiredWorkflowAgentInputs(
+  task: WorkflowAgentTask,
+): readonly string[] {
+  return taskContracts[task].requiredInputs;
+}
+
+function workflowReference(value: unknown, error: string): string {
+  if (
+    typeof value !== "string" ||
+    value.startsWith("/") ||
+    value.includes("\\") ||
+    value
+      .split("/")
+      .some((segment) => !segment || segment === "." || segment === "..")
+  )
+    throw new Error(error);
+  return `.roundhouse/${value}`;
+}
+
+async function agent(
+  value: unknown,
+  executor: WorkflowExecutorKind,
+  loadFile?: WorkflowFileLoader,
+): Promise<WorkflowAgent> {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["task", "inputs", "result", "model"], ["prompt"]) ||
+    !workflowAgentTasks.includes(value.task as WorkflowAgentTask) ||
+    !isRecord(value.inputs) ||
+    Object.keys(value.inputs).length === 0 ||
+    Object.values(value.inputs).some(
+      (selector) =>
+        typeof selector !== "string" ||
+        !/^(?:trigger\.issue|nodes\.[a-z][a-z0-9-]{0,63}\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)$/.test(
+          selector,
+        ),
+    ) ||
+    !isRecord(value.result) ||
+    !hasOnlyKeys(value.result, ["key", "schema"]) ||
+    typeof value.result.key !== "string" ||
+    !/^[A-Za-z][A-Za-z0-9_-]*$/.test(value.result.key) ||
+    !workflowAgentSchemas.includes(
+      value.result.schema as WorkflowAgentSchema,
+    ) ||
+    !isRecord(value.model) ||
+    !hasOnlyKeys(value.model, ["id", "reasoning"]) ||
+    typeof value.model.id !== "string" ||
+    !/^[a-z0-9._-]+\/[A-Za-z0-9._/-]+$/.test(value.model.id) ||
+    !["off", "minimal", "low", "medium", "high"].includes(
+      String(value.model.reasoning),
+    )
+  )
+    throw new Error("workflow_agent_invalid");
+  const task = value.task as WorkflowAgentTask;
+  const inputs = value.inputs as Record<string, string>;
+  const contract = taskContracts[task];
+  if (
+    executor !== contract.executor ||
+    value.result.key !== contract.resultKey ||
+    value.result.schema !== contract.schema ||
+    contract.requiredInputs.some((input) => typeof inputs[input] !== "string")
+  )
+    throw new Error("workflow_agent_contract_invalid");
+  const sourcePath =
+    value.prompt === undefined
+      ? undefined
+      : workflowReference(value.prompt, "workflow_agent_prompt_invalid");
+  if (sourcePath && !sourcePath.startsWith(".roundhouse/prompts/"))
+    throw new Error("workflow_agent_prompt_invalid");
+  if (sourcePath && !loadFile) throw new Error("workflow_file_loader_missing");
+  const content = sourcePath ? await loadFile!(sourcePath) : undefined;
+  if (content !== undefined && !content.trim())
+    throw new Error("workflow_agent_prompt_empty");
+  return {
+    task,
+    inputs: Object.fromEntries(
+      Object.entries(inputs).sort(([left], [right]) =>
+        left.localeCompare(right),
+      ),
+    ) as Record<string, string>,
+    result: {
+      key: value.result.key,
+      schema: value.result.schema as WorkflowAgentSchema,
+    },
+    model: {
+      id: value.model.id,
+      reasoning: value.model.reasoning as WorkflowAgent["model"]["reasoning"],
+    },
+    ...(sourcePath && content !== undefined
+      ? { prompt: { sourcePath, content } }
+      : {}),
+  };
+}
+
+async function node(
+  value: unknown,
+  loadFile?: WorkflowFileLoader,
+): Promise<WorkflowNode> {
   if (
     !isRecord(value) ||
     !hasOnlyKeys(
       value,
       ["executor", "transitions"],
-      ["role", "capabilities", "outputs"],
+      ["role", "agent", "capabilities", "outputs"],
     ) ||
     !workflowExecutorKinds.includes(value.executor as WorkflowExecutorKind) ||
     (value.role !== undefined &&
@@ -432,6 +641,11 @@ function node(value: unknown): WorkflowNode {
   )
     throw new Error("workflow_node_invalid");
   const executor = value.executor as WorkflowExecutorKind;
+  if (
+    ["agent.read", "agent.write"].includes(executor) !==
+    (value.agent !== undefined)
+  )
+    throw new Error("workflow_agent_required");
   const capabilities =
     value.capabilities === undefined
       ? []
@@ -455,6 +669,9 @@ function node(value: unknown): WorkflowNode {
   return {
     executor,
     ...(value.role === undefined ? {} : { role: value.role }),
+    ...(value.agent === undefined
+      ? {}
+      : { agent: await agent(value.agent, executor, loadFile) }),
     capabilities,
     outputs,
     transitions: value.transitions.map(transition),
@@ -494,6 +711,32 @@ function validateGraph(
       for (const output of item.when ? outputPaths(item.when) : [])
         if (!definition.outputs.includes(output))
           throw new Error("workflow_condition_output_undeclared");
+    }
+    if (definition.agent) {
+      if (
+        !definition.outputs.some(
+          (output) =>
+            output === definition.agent!.result.key ||
+            output.startsWith(`${definition.agent!.result.key}.`),
+        )
+      )
+        throw new Error("workflow_agent_output_undeclared");
+      for (const selector of Object.values(definition.agent.inputs)) {
+        if (selector === "trigger.issue") continue;
+        const match = /^nodes\.([a-z][a-z0-9-]{0,63})\.(.+)$/.exec(selector);
+        const source = match ? nodes[match[1]!] : undefined;
+        if (
+          !match ||
+          !source ||
+          !source.outputs.some(
+            (output) =>
+              output === match[2] ||
+              output.startsWith(`${match[2]}.`) ||
+              match[2]!.startsWith(`${output}.`),
+          )
+        )
+          throw new Error("workflow_agent_input_reference_invalid");
+      }
     }
     if (
       definition.executor === "terminal" &&
@@ -588,6 +831,7 @@ export function advanceWorkflow(
 export async function compileWorkflow(
   yaml: string,
   sourceCommit: string,
+  loadFile?: WorkflowFileLoader,
 ): Promise<CompiledWorkflow> {
   if (!/^[a-f0-9]{40}$/.test(sourceCommit))
     throw new Error("workflow_source_commit_invalid");
@@ -614,10 +858,12 @@ export async function compileWorkflow(
     throw new Error("workflow_trigger_invalid");
   const triggers = value.triggers as Record<WorkflowTriggerKind, string>;
   const nodes = Object.fromEntries(
-    Object.entries(value.nodes).map(([nodeId, definition]) => [
-      nodeId,
-      node(definition),
-    ]),
+    await Promise.all(
+      Object.entries(value.nodes).map(async ([nodeId, definition]) => [
+        nodeId,
+        await node(definition, loadFile),
+      ]),
+    ),
   );
   validateGraph(triggers, nodes);
   const normalized = {

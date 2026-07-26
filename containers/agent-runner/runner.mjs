@@ -1464,10 +1464,13 @@ export const agentSystemPrompt = [
 function profileInstructionLines(assignment, stageName, reviewerName) {
   const profile = assignment.profile ?? {};
   const project = profile.instructions?.project;
+  const workflowPrompt = reviewerName
+    ? undefined
+    : assignment.workflowNode?.agent?.prompt;
   const stage = reviewerName
     ? profile.reviewers?.[reviewerName]
     : profile.stages?.[stageName];
-  const configured = [project, stage?.instructions].filter(
+  const configured = [project, workflowPrompt ?? stage?.instructions].filter(
     (item) => typeof item?.content === "string" && item.content.trim(),
   );
   if (!configured.length) return [];
@@ -2374,8 +2377,34 @@ async function completeAssignment(assignment, headers) {
   );
   await progress("workspace_ready");
   await progress("agent_started");
+  const agentTask = assignment.workflowNode?.agent?.task;
+  if (agentTask) {
+    const contract = {
+      qualification: ["qualification", "roundhouse.qualification.v1"],
+      investigation: ["reproduction", "roundhouse.investigation.v1"],
+      planning: ["plan", "roundhouse.plan.v1"],
+      implementation: ["implementation", "roundhouse.implementation.v1"],
+    }[agentTask];
+    if (
+      !contract ||
+      assignment.workflowNode.agent.result?.key !== contract[0] ||
+      assignment.workflowNode.agent.result?.schema !== contract[1]
+    )
+      throw new Error("workflow_agent_schema_mismatch");
+    runnerLog("info", "runner_workflow_agent_contract_applied", {
+      attemptId: assignment.id,
+      nodeId: assignment.nodeId,
+      executor: assignment.executor,
+      task: agentTask,
+      resultKey: contract[0],
+      schema: contract[1],
+      promptSource: assignment.workflowNode.agent.prompt?.sourcePath ?? null,
+      inputNames: Object.keys(assignment.inputs ?? {}).sort(),
+    });
+  }
   const evidence =
-    assignment.stage === "qualify"
+    agentTask === "qualification" ||
+    (!agentTask && assignment.stage === "qualify")
       ? {
           qualification: await qualify(
             agentAssignment,
@@ -2383,7 +2412,8 @@ async function completeAssignment(assignment, headers) {
             attemptSecret,
           ),
         }
-      : assignment.stage === "reproduce"
+      : agentTask === "investigation" ||
+          (!agentTask && assignment.stage === "reproduce")
         ? {
             reproduction: await reproduce(
               agentAssignment,
@@ -2392,9 +2422,11 @@ async function completeAssignment(assignment, headers) {
             ),
             requestClassification: requestClassification(agentAssignment),
           }
-        : assignment.stage === "plan"
+        : agentTask === "planning" ||
+            (!agentTask && assignment.stage === "plan")
           ? { plan: await plan(agentAssignment, directory, attemptSecret) }
-          : assignment.stage === "implement"
+          : agentTask === "implementation" ||
+              (!agentTask && assignment.stage === "implement")
             ? {
                 implementation: await implementationInDevContainer(
                   agentAssignment,

@@ -7,6 +7,17 @@ nodes:
   qualify:
     executor: agent.read
     role: qualify
+    agent:
+      task: qualification
+      inputs:
+        issue: trigger.issue
+      result:
+        key: qualification
+        schema: roundhouse.qualification.v1
+      model:
+        id: openai/gpt-5.6-sol
+        reasoning: low
+      prompt: prompts/qualification.md
     capabilities:
       - repository.read
       - context.read
@@ -30,6 +41,18 @@ nodes:
   investigate:
     executor: agent.read
     role: investigate
+    agent:
+      task: investigation
+      inputs:
+        issue: trigger.issue
+        qualification: nodes.qualify.qualification
+      result:
+        key: reproduction
+        schema: roundhouse.investigation.v1
+      model:
+        id: openai/gpt-5.6-sol
+        reasoning: low
+      prompt: prompts/investigation.md
     capabilities:
       - repository.read
       - context.read
@@ -52,6 +75,19 @@ nodes:
   plan:
     executor: agent.read
     role: plan
+    agent:
+      task: planning
+      inputs:
+        issue: trigger.issue
+        qualification: nodes.qualify.qualification
+        reproduction: nodes.investigate.reproduction
+      result:
+        key: plan
+        schema: roundhouse.plan.v1
+      model:
+        id: openai/gpt-5.6-sol
+        reasoning: low
+      prompt: prompts/planning.md
     capabilities:
       - repository.read
       - context.read
@@ -72,6 +108,23 @@ nodes:
   implement:
     executor: agent.write
     role: implement
+    agent:
+      task: implementation
+      inputs:
+        issue: trigger.issue
+        qualification: nodes.qualify.qualification
+        reproduction: nodes.investigate.reproduction
+        plan: nodes.plan.plan
+        implementation: nodes.implement.implementation
+        review: nodes.review.review
+        ci: nodes.checks.ci
+      result:
+        key: implementation
+        schema: roundhouse.implementation.v1
+      model:
+        id: moonshotai/kimi-k3
+        reasoning: low
+      prompt: prompts/implementation.md
     capabilities:
       - repository.read
       - artifact.write

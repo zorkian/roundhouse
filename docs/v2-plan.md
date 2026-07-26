@@ -63,10 +63,12 @@ The development deployment currently supports:
 - structured boundary, command, model, API-response, timing, and lifecycle
   logging.
 
-The current lifecycle order and three reviewer identities are compiled into the
-coordinator. Profile V2 configures their prompts, models, activation, blocking
-severities, validation, merge behavior, operators, paths, and development
-environment. It cannot add stages or reviewer identities.
+The current lifecycle runs through a compiled repository workflow graph.
+Profile V2 configures validation, merge behavior, operators, paths, project
+instructions, development environment, and the still-fixed reviewer policy.
+Workflow agent nodes configure typed inputs, result schemas, prompts, models,
+capabilities, conditions, and edges. The current review executor still has
+three fixed reviewer identities and cannot add reviewers until Slice 7.3.
 
 Current intentional limitations:
 
@@ -299,8 +301,9 @@ The deployed Profile V2 defines:
 - operators by repository permission, GitHub user, or GitHub team;
 - automatic or maintainer merge and merge method;
 - an optional Dev Container configuration;
-- repository-wide and stage-specific prompts;
-- stage and reviewer models and reasoning levels;
+- repository-wide instructions;
+- workflow agent prompts, models, typed inputs, and result schemas;
+- reviewer prompts, models, and reasoning levels;
 - fixed reviewer activation and blocking severities; and
 - validation commands as argument arrays.
 

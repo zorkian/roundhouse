@@ -18,11 +18,21 @@ nodes:
   qualify:
     executor: agent.read
     role: qualify
+    agent:
+      task: qualification
+      inputs:
+        issue: trigger.issue
+      result:
+        key: qualification
+        schema: roundhouse.qualification.v1
+      model: { id: openai/gpt-5.6-sol, reasoning: low }
     capabilities:
       - repository.read
       - context.read
     outputs:
       - qualification.classification
+      - reproduction.status
+      - plan.status
     transitions:
       - when:
           path: output.qualification.classification
@@ -36,6 +46,17 @@ nodes:
   implement:
     executor: agent.write
     role: implement
+    agent:
+      task: implementation
+      inputs:
+        issue: trigger.issue
+        qualification: nodes.qualify.qualification
+        reproduction: nodes.qualify.reproduction
+        plan: nodes.qualify.plan
+      result:
+        key: implementation
+        schema: roundhouse.implementation.v1
+      model: { id: moonshotai/kimi-k3, reasoning: low }
     capabilities:
       - repository.read
       - artifact.write
@@ -115,6 +136,53 @@ describe("workflow compiler", () => {
     ).toMatchObject({ status: "active", currentNodeId: "implement" });
   });
 
+  it("snapshots repository-selected prompt, model, branch, and return edge", async () => {
+    const configured = source
+      .replace(
+        "model: { id: openai/gpt-5.6-sol, reasoning: low }\n    capabilities:",
+        "model: { id: openai/gpt-5.6-sol, reasoning: high }\n      prompt: prompts/qualification.md\n    capabilities:",
+      )
+      .replace("in: [bug, feature, maintenance]", "in: [feature, maintenance]")
+      .replace(
+        `    transitions:
+      - when:
+          path: output.implementation.status
+          equals: complete
+        to: done`,
+        `    transitions:
+      - when:
+          path: output.implementation.status
+          equals: retry
+        to: qualify
+      - when:
+          path: output.implementation.status
+          equals: complete
+        to: done`,
+      );
+    const workflow = await compileWorkflow(configured, commit, async (path) =>
+      path === ".roundhouse/prompts/qualification.md"
+        ? "Repository qualification route"
+        : Promise.reject(new Error("unexpected_file")),
+    );
+    expect(workflow.nodes.qualify?.agent).toMatchObject({
+      model: { id: "openai/gpt-5.6-sol", reasoning: "high" },
+      prompt: {
+        sourcePath: ".roundhouse/prompts/qualification.md",
+        content: "Repository qualification route",
+      },
+    });
+    expect(
+      selectWorkflowTransition(workflow.nodes.qualify!, {
+        output: { qualification: { classification: "bug" } },
+      }),
+    ).toEqual({ terminal: "succeeded" });
+    expect(
+      selectWorkflowTransition(workflow.nodes.implement!, {
+        output: { implementation: { status: "retry" } },
+      }),
+    ).toMatchObject({ to: "qualify" });
+  });
+
   it("evaluates nested conditions without executable expressions", () => {
     expect(
       evaluateWorkflowCondition(
@@ -150,7 +218,7 @@ describe("workflow compiler", () => {
 
   it("rejects conditions over undeclared output", async () => {
     const changed = source.replace(
-      /outputs:\n      - qualification\.classification/,
+      /outputs:\n      - qualification\.classification\n      - reproduction\.status\n      - plan\.status/,
       "outputs: []",
     );
     await expect(compileWorkflow(changed, commit)).rejects.toThrow(

@@ -197,19 +197,6 @@ async function instruction(
   return { sourcePath, content };
 }
 
-function stageConfig(
-  value: unknown,
-  error: string,
-): { model: ProfileModel; instructions?: string } {
-  if (!isRecord(value) || !hasOnlyKeys(value, ["model"], ["instructions"]))
-    throw new Error(error);
-  const source = instructionSource(value.instructions, error);
-  return {
-    model: model(value.model, error),
-    ...(source ? { instructions: source } : {}),
-  };
-}
-
 function reviewerConfig(
   value: unknown,
   name: ProfileReviewerName,
@@ -328,7 +315,6 @@ async function v2Profile(
     "paths",
     "permissions",
     "reviewers",
-    "stages",
     "validation",
     "version",
     "workflow",
@@ -408,20 +394,8 @@ async function v2Profile(
   const workflow = await compileWorkflow(
     await loadFile(workflowSourcePath),
     sourceCommit,
+    loadFile,
   );
-
-  if (
-    !isRecord(value.stages) ||
-    !hasOnlyKeys(value.stages, [...profileStageNames])
-  )
-    throw new Error("profile_stages_invalid");
-  const stageValues = value.stages;
-  const rawStages = Object.fromEntries(
-    profileStageNames.map((name) => [
-      name,
-      stageConfig(stageValues[name], `profile_stage_${name}_invalid`),
-    ]),
-  ) as Record<ProfileStageName, { model: ProfileModel; instructions?: string }>;
 
   if (
     !isRecord(value.reviewers) ||
@@ -473,24 +447,6 @@ async function v2Profile(
             throw new Error("profile_devcontainer_invalid");
           })();
 
-  const stages = Object.fromEntries(
-    await Promise.all(
-      profileStageNames.map(async (name) => {
-        const stage = rawStages[name];
-        return [
-          name,
-          {
-            model: stage.model,
-            ...(stage.instructions
-              ? {
-                  instructions: await instruction(stage.instructions, loadFile),
-                }
-              : {}),
-          },
-        ];
-      }),
-    ),
-  ) as Record<ProfileStageName, ProfileStage>;
   const reviewers = Object.fromEntries(
     await Promise.all(
       profileReviewerNames.map(async (name) => {
@@ -536,7 +492,6 @@ async function v2Profile(
         ? { project: await instruction(projectSource, loadFile) }
         : {}),
     },
-    stages,
     reviewers,
     validation: { commands },
     developmentEnvironment: {

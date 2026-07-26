@@ -280,7 +280,7 @@ export class D1RunRepository implements RunRepository {
   private async eventsForRun(runId: string): Promise<RunDetails["events"]> {
     const result = await this.db
       .prepare(
-        "SELECT attempt_id,kind,payload_json,created_at FROM events WHERE run_id=?1 AND (kind='workflow_transition' OR (attempt_id IS NOT NULL AND (kind='attempt_lease_expired' OR (kind='attempt_progress' AND json_extract(payload_json,'$.phase')='workspace_started')))) ORDER BY created_at,id",
+        "SELECT attempt_id,kind,payload_json,created_at FROM events WHERE run_id=?1 AND (kind IN ('workflow_transition','workflow_agent_resolved') OR (attempt_id IS NOT NULL AND (kind='attempt_lease_expired' OR (kind='attempt_progress' AND json_extract(payload_json,'$.phase')='workspace_started')))) ORDER BY created_at,id",
       )
       .bind(runId)
       .all<{
@@ -554,6 +554,20 @@ export class D1RunRepository implements RunRepository {
         "SELECT id,run_id,run_revision,kind,node_id,executor,stage,role,state,deadline_at,base_commit,expected_head,accepted_head,result_json,routing_json FROM attempts WHERE run_id=?1 AND stage=?2 AND state='completed' AND run_revision<?3 ORDER BY run_revision DESC LIMIT 1",
       )
       .bind(runId, stage, beforeRevision)
+      .first<AttemptRow>();
+    return row ? attemptFromRow(row) : undefined;
+  }
+
+  async latestCompletedNodeAttempt(
+    runId: string,
+    nodeId: string,
+    beforeRevision: number,
+  ): Promise<Attempt | undefined> {
+    const row = await this.db
+      .prepare(
+        "SELECT id,run_id,run_revision,kind,node_id,executor,stage,role,state,deadline_at,base_commit,expected_head,accepted_head,result_json,routing_json FROM attempts WHERE run_id=?1 AND node_id=?2 AND state='completed' AND run_revision<?3 ORDER BY run_revision DESC LIMIT 1",
+      )
+      .bind(runId, nodeId, beforeRevision)
       .first<AttemptRow>();
     return row ? attemptFromRow(row) : undefined;
   }

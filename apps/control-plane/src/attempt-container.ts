@@ -127,7 +127,7 @@ export async function pauseForModelBudget(
 export function attemptAllowedHosts(
   attempt: Pick<
     AttemptAssignment,
-    "artifact" | "publish" | "source" | "stage" | "upstream"
+    "artifact" | "executor" | "publish" | "source" | "stage" | "upstream"
   >,
   callbackUrl?: string | null,
 ): string[] {
@@ -135,7 +135,7 @@ export function attemptAllowedHosts(
   // Its image build and lifecycle commands may install dependencies from
   // arbitrary project-selected package repositories. The sandbox VM remains
   // the isolation boundary, while credentials stay behind outbound handlers.
-  if (attempt.stage === "implement") return ["*"];
+  if (attempt.executor === "agent.write") return ["*"];
   return [
     modelHost,
     packageRegistryHost,
@@ -175,14 +175,9 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
   const attempt = await repository.getAttempt(attemptId);
   if (
     !attempt ||
-    ![
-      "qualify",
-      "reproduce",
-      "plan",
-      "implement",
-      "review",
-      "integrate",
-    ].includes(attempt.stage) ||
+    !["agent.read", "agent.write", "review", "validate"].includes(
+      attempt.executor ?? "",
+    ) ||
     // Mechanical integration is a no-model operation; only conflict
     // resolution and the integration-delta review may call a model.
     (attempt.stage === "integrate" &&

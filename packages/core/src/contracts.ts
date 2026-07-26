@@ -238,6 +238,11 @@ export interface RunRepository {
     stage: RunStage,
     beforeRevision: number,
   ): Promise<Attempt | undefined>;
+  latestCompletedNodeAttempt(
+    runId: string,
+    nodeId: string,
+    beforeRevision: number,
+  ): Promise<Attempt | undefined>;
   /**
    * Returns true when a completed CI attempt recorded before the given
    * revision already contains this failure-evidence key, so repeated webhook

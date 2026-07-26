@@ -38,17 +38,6 @@ permissions:
     teams: [dreamwidth/maintainers]
 instructions:
   project: prompts/project.md
-stages:
-  qualification:
-    model: { id: openai/gpt-5.6-sol, reasoning: low }
-  investigation:
-    model: { id: openai/gpt-5.6-sol, reasoning: low }
-  planning:
-    model: { id: openai/gpt-5.6-sol, reasoning: low }
-    instructions: prompts/planning.md
-  implementation:
-    model: { id: moonshotai/kimi-k3, reasoning: low }
-    instructions: prompts/implementation.md
 reviewers:
   holistic:
     enabled: true
@@ -119,14 +108,6 @@ describe("repository profile parsing", () => {
           content: "Project instructions",
         },
       },
-      stages: {
-        implementation: {
-          model: { id: "moonshotai/kimi-k3", reasoning: "low" },
-          instructions: {
-            sourcePath: ".roundhouse/prompts/implementation.md",
-          },
-        },
-      },
       reviewers: {
         data: {
           enabled: false,
@@ -152,9 +133,15 @@ describe("repository profile parsing", () => {
     expect(profile).toMatchObject({
       version: 2,
       merge: { mode: "automatic", method: "merge" },
-      stages: {
-        implementation: {
-          model: { id: "moonshotai/kimi-k3", reasoning: "low" },
+      workflow: {
+        nodes: {
+          plan: {
+            agent: {
+              task: "planning",
+              model: { id: "openai/gpt-5.6-sol", reasoning: "low" },
+              prompt: { sourcePath: ".roundhouse/prompts/planning.md" },
+            },
+          },
         },
       },
       validation: {
@@ -163,6 +150,9 @@ describe("repository profile parsing", () => {
     });
     expect(profile.instructions?.project?.content).toContain(
       "capture before-and-after screenshots",
+    );
+    expect(profile.workflow?.nodes.plan?.agent?.prompt?.content).toContain(
+      "Plan the smallest end-to-end change",
     );
   });
 

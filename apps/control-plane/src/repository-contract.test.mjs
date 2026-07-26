@@ -201,6 +201,13 @@ function repositoryContract(label, createRepository) {
         repository.latestCompletedAttempt(run.id, "qualify", 2),
       ).resolves.toMatchObject({ id: attempt.id, runRevision: 1 });
       await expect(
+        repository.latestCompletedNodeAttempt(run.id, "qualify", 2),
+      ).resolves.toMatchObject({
+        id: attempt.id,
+        nodeId: "qualify",
+        runRevision: 1,
+      });
+      await expect(
         repository.completeAttempt(attempt.id, 1, "b".repeat(40), {
           outcome: "ok",
         }),

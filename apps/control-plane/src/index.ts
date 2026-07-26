@@ -5,11 +5,14 @@ import {
   immutableAttemptId,
   isModelRoute,
   profileModelForAttempt,
+  requiredWorkflowAgentInputs,
   reviewerForRole,
   runSchemaVersion,
   type Attempt,
   type ModelRoute,
+  type RunRepository,
   type RunSnapshot,
+  type WorkflowAgent,
   type Wakeup,
 } from "@roundhouse/core";
 import {
@@ -525,16 +528,108 @@ async function conflictedIntegrationOutcome(
 
 export function artifactNeedsSync(
   artifact: { readonly empty: boolean; readonly head?: string },
-  attempt: Pick<Attempt, "stage">,
+  attempt: Pick<Attempt, "executor">,
   run: Pick<RunSnapshot, "baseCommit" | "currentHead" | "candidateHead">,
 ): boolean {
   return (
     artifact.empty ||
-    (attempt.stage === "implement" &&
+    (attempt.executor === "agent.write" &&
       run.currentHead === run.baseCommit &&
       !run.candidateHead &&
       artifact.head !== run.currentHead)
   );
+}
+
+interface ResolvedWorkflowInputs {
+  readonly values: Readonly<Record<string, unknown>>;
+  readonly evidence: Readonly<
+    Record<
+      string,
+      {
+        readonly selector: string;
+        readonly present: boolean;
+        readonly sourceAttemptId?: string;
+        readonly sourceHead?: string;
+      }
+    >
+  >;
+}
+
+function nestedValue(value: unknown, path: readonly string[]): unknown {
+  return path.reduce<unknown>(
+    (current, segment) =>
+      current && typeof current === "object"
+        ? (current as Record<string, unknown>)[segment]
+        : undefined,
+    value,
+  );
+}
+
+export async function resolveWorkflowAgentInputs(
+  repository: Pick<RunRepository, "latestCompletedNodeAttempt">,
+  run: RunSnapshot,
+  attempt: Attempt,
+  agent: WorkflowAgent,
+): Promise<ResolvedWorkflowInputs> {
+  const values: Record<string, unknown> = {};
+  const evidence: Record<
+    string,
+    {
+      selector: string;
+      present: boolean;
+      sourceAttemptId?: string;
+      sourceHead?: string;
+    }
+  > = {};
+  for (const [name, selector] of Object.entries(agent.inputs)) {
+    if (selector === "trigger.issue") {
+      const present = run.issue !== undefined;
+      if (present) values[name] = run.issue;
+      evidence[name] = { selector, present };
+      continue;
+    }
+    const match = /^nodes\.([a-z][a-z0-9-]{0,63})\.(.+)$/.exec(selector);
+    if (!match) throw new Error("workflow_agent_input_selector_invalid");
+    const source = await repository.latestCompletedNodeAttempt(
+      run.id,
+      match[1]!,
+      run.revision,
+    );
+    const resolved = source
+      ? nestedValue(source.result, match[2]!.split("."))
+      : undefined;
+    const present = resolved !== undefined;
+    if (present) values[name] = resolved;
+    evidence[name] = {
+      selector,
+      present,
+      ...(source
+        ? {
+            sourceAttemptId: source.id,
+            sourceHead: source.acceptedHead ?? source.expectedHead,
+          }
+        : {}),
+    };
+  }
+  const missing = requiredWorkflowAgentInputs(agent.task).filter(
+    (name) => values[name] === undefined,
+  );
+  if (missing.length) {
+    console.error(
+      JSON.stringify({
+        message: "workflow_agent_inputs_missing",
+        runId: run.id,
+        revision: run.revision,
+        attemptId: attempt.id,
+        nodeId: attempt.nodeId ?? null,
+        task: agent.task,
+        missing,
+        evidence,
+      }),
+    );
+    throw new Error(`workflow_agent_inputs_missing:${missing.join(",")}`);
+  }
+  return { values, evidence };
 }
 
 class SandboxDispatcher implements AttemptDispatcher {
@@ -556,9 +651,15 @@ class SandboxDispatcher implements AttemptDispatcher {
     taskType: string,
     run: RunSnapshot,
   ): Promise<ModelRoute> {
-    const requested = run.profile
-      ? profileModelForAttempt(run.profile, attempt.stage, attempt.role)
-      : undefined;
+    const node =
+      attempt.nodeId && run.profile?.workflow
+        ? run.profile.workflow.nodes[attempt.nodeId]
+        : undefined;
+    const requested =
+      node?.agent?.model ??
+      (run.profile
+        ? profileModelForAttempt(run.profile, attempt.stage, attempt.role)
+        : undefined);
     const startedAt = Date.now();
     const response = await observeResponse(
       await this.modelBroker.fetch(
@@ -608,15 +709,60 @@ class SandboxDispatcher implements AttemptDispatcher {
   }
 
   async submit(attempt: Attempt, run: RunSnapshot): Promise<void> {
+    const workflowNode =
+      attempt.nodeId && run.profile?.workflow
+        ? run.profile.workflow.nodes[attempt.nodeId]
+        : undefined;
+    if (
+      ["agent.read", "agent.write"].includes(attempt.executor ?? "") &&
+      !workflowNode?.agent
+    )
+      throw new Error("workflow_agent_contract_missing");
+    const resolvedInputs = workflowNode?.agent
+      ? await resolveWorkflowAgentInputs(
+          this.runs,
+          run,
+          attempt,
+          workflowNode.agent,
+        )
+      : undefined;
+    if (workflowNode?.agent && resolvedInputs) {
+      const resolution = {
+        phase: "workflow_agent_resolved",
+        workflowHash: run.workflowHash,
+        nodeId: attempt.nodeId,
+        executor: workflowNode.executor,
+        task: workflowNode.agent.task,
+        schema: workflowNode.agent.result.schema,
+        resultKey: workflowNode.agent.result.key,
+        promptSource: workflowNode.agent.prompt?.sourcePath ?? null,
+        requestedModel: workflowNode.agent.model.id,
+        requestedReasoning: workflowNode.agent.model.reasoning,
+        capabilities: workflowNode.capabilities,
+        inputs: resolvedInputs.evidence,
+      };
+      console.log(
+        JSON.stringify({
+          message: "workflow_agent_resolved",
+          runId: run.id,
+          revision: run.revision,
+          attemptId: attempt.id,
+          ...resolution,
+        }),
+      );
+      await this.runs.recordAttemptEvent(
+        attempt.id,
+        "workflow_agent_resolved",
+        resolution,
+      );
+    }
     const taskType =
-      attempt.stage === "plan"
-        ? "planning"
-        : attempt.stage === "implement" ||
-            attempt.role === "conflict-resolution"
-          ? "implementation"
-          : attempt.stage === "review" || attempt.role === "review-integration"
-            ? "review"
-            : "validation";
+      workflowNode?.agent?.task ??
+      (attempt.role === "conflict-resolution"
+        ? "implementation"
+        : attempt.stage === "review" || attempt.role === "review-integration"
+          ? "review"
+          : "validation");
     // Mechanical integration is a no-model operation; only conflict
     // resolution routes to an implementation model.
     const route =
@@ -724,8 +870,9 @@ class SandboxDispatcher implements AttemptDispatcher {
       );
     }
     const access =
-      ["implement", "integrate"].includes(attempt.stage) &&
-      attempt.role !== "review-integration"
+      attempt.executor === "agent.write" ||
+      (attempt.executor === "validate" &&
+        attempt.role === "conflict-resolution")
         ? "write"
         : "read";
     const token = await repository.createToken(access, 30 * 60);
@@ -830,11 +977,11 @@ class SandboxDispatcher implements AttemptDispatcher {
     const holisticSelection = sameRevisionReviews.find(
       (candidate) => candidate.role === "review-holistic",
     )?.result?.review;
-    if (attempt.stage === "reproduce" && !qualification)
+    if (!workflowNode?.agent && attempt.stage === "reproduce" && !qualification)
       throw new Error("reproduction_qualification_missing");
-    if (attempt.stage === "plan" && !reproduction)
+    if (!workflowNode?.agent && attempt.stage === "plan" && !reproduction)
       throw new Error("planning_reproduction_missing");
-    if (attempt.stage === "implement" && !plan)
+    if (!workflowNode?.agent && attempt.stage === "implement" && !plan)
       throw new Error("implementation_plan_missing");
     if (attempt.stage === "review" && !implementation)
       throw new Error("review_implementation_missing");
@@ -844,15 +991,19 @@ class SandboxDispatcher implements AttemptDispatcher {
       profile: run.profile,
       issue: run.issue,
       issueNumber: run.issueNumber,
-      context: attemptContext({
-        qualification,
-        reproduction,
-        plan,
-        implementation,
-        holisticSelection,
-        review,
-        ci,
-      }),
+      ...(workflowNode ? { workflowNode } : {}),
+      ...(resolvedInputs ? { inputs: resolvedInputs.values } : {}),
+      context:
+        resolvedInputs?.values ??
+        attemptContext({
+          qualification,
+          reproduction,
+          plan,
+          implementation,
+          holisticSelection,
+          review,
+          ci,
+        }),
       ...(route ? { routing: route } : {}),
       ...(reviewer ? { reviewer } : {}),
       artifact: {

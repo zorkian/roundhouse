@@ -291,14 +291,14 @@ export function mergeTransition(attempt: Attempt) {
 }
 
 function stageForWorkflowNode(nodeId: string, node: WorkflowNode): RunStage {
+  if (node.agent?.task === "qualification") return "qualify";
+  if (node.agent?.task === "investigation") return "reproduce";
+  if (node.agent?.task === "planning") return "plan";
+  if (node.agent?.task === "implementation") return "implement";
   if (node.executor === "review") return "review";
   if (node.executor === "github.publish") return "publish";
   if (node.executor === "github.checks") return "ci";
   if (node.executor === "github.merge") return "merge";
-  if (node.role === "qualify") return "qualify";
-  if (node.role === "investigate") return "reproduce";
-  if (node.role === "plan") return "plan";
-  if (node.role === "implement") return "implement";
   if (node.role === "integrate") return "integrate";
   throw new Error(`workflow_node_has_no_execution_stage:${nodeId}`);
 }
