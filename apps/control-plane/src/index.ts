@@ -385,6 +385,18 @@ export function artifactNeedsSync(
   );
 }
 
+export function attemptArtifactAccess(
+  attempt: Pick<Attempt, "executor" | "role">,
+): "read" | "write" {
+  if (attempt.executor === "agent.write") return "write";
+  if (
+    attempt.executor === "validate" &&
+    ["integrate", "conflict-resolution"].includes(attempt.role)
+  )
+    return "write";
+  return "read";
+}
+
 interface ResolvedWorkflowInputs {
   readonly values: Readonly<Record<string, unknown>>;
   readonly evidence: Readonly<
@@ -717,12 +729,7 @@ class SandboxDispatcher implements AttemptDispatcher {
         completed,
       );
     }
-    const access =
-      attempt.executor === "agent.write" ||
-      (attempt.executor === "validate" &&
-        attempt.role === "conflict-resolution")
-        ? "write"
-        : "read";
+    const access = attemptArtifactAccess(attempt);
     const token = await repository.createToken(access, 30 * 60);
     const qualificationAttempt = [
       "reproduce",

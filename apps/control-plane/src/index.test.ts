@@ -21,6 +21,7 @@ import {
 } from "./attempt-container.js";
 import {
   artifactNeedsSync,
+  attemptArtifactAccess,
   attemptContext,
   controlPlaneService,
   handleRequest,
@@ -588,6 +589,30 @@ describe("V2 control plane", () => {
         { ...run, candidateHead: "c".repeat(40) },
       ),
     ).toBe(false);
+  });
+
+  it("gives artifact write access only to executors that produce checkpoints", () => {
+    expect(
+      attemptArtifactAccess({ executor: "agent.write", role: "implement" }),
+    ).toBe("write");
+    expect(
+      attemptArtifactAccess({ executor: "validate", role: "integrate" }),
+    ).toBe("write");
+    expect(
+      attemptArtifactAccess({
+        executor: "validate",
+        role: "conflict-resolution",
+      }),
+    ).toBe("write");
+    expect(
+      attemptArtifactAccess({
+        executor: "review",
+        role: "review-integration",
+      }),
+    ).toBe("read");
+    expect(
+      attemptArtifactAccess({ executor: "validate", role: "validate" }),
+    ).toBe("read");
   });
 
   it("passes CI failure diagnostics to the repair assignment as untrusted evidence without credentials", () => {
