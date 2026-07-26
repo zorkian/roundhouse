@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import {
+  compileWorkflow,
   createRun,
+  defaultIssueWorkflowSource,
   MemoryRunRepository,
   type Attempt,
   type RunSnapshot,
@@ -21,6 +23,11 @@ import type { GitHubAutomationApi, GitHubEnv } from "./github.js";
 
 const head = "b".repeat(40);
 const mergeCommit = "c".repeat(40);
+const sourceCommit = "a".repeat(40);
+const workflow = await compileWorkflow(
+  defaultIssueWorkflowSource,
+  sourceCommit,
+);
 const env = {
   GITHUB_APP_ID: "development-app",
   GITHUB_START_COMMAND: "/roundhouse-dev start",
@@ -60,13 +67,14 @@ async function setupCi(
       githubRepositoryId: 123,
       githubInstallationId: 456,
       issueNumber: 42,
-      baseCommit: "a".repeat(40),
+      baseCommit: sourceCommit,
       profileVersion: "v2",
       profile: {
         sourcePath: ".roundhouse/profile.yaml",
-        sourceCommit: "a".repeat(40),
+        sourceCommit,
         version: 1,
         hash: "b".repeat(64),
+        workflow,
         paths: { allowed: ["**"], protected: [".github/workflows/**"] },
         ...(merge ? { merge } : {}),
       },
@@ -78,6 +86,12 @@ async function setupCi(
     await repository.transition(run.id, run.revision, {
       status: "active",
       stage,
+      currentNodeId:
+        stage === "reproduce"
+          ? "investigate"
+          : stage === "plan"
+            ? "plan"
+            : stage,
       ...(stage === "review" ? { acceptedHead: head } : {}),
     });
   }
@@ -152,6 +166,7 @@ async function setupCi(
   const ciRun = await repository.transition(reviewRun.id, reviewRun.revision, {
     status: "active",
     stage: "ci",
+    currentNodeId: "checks",
   });
   if (!ciRun) throw new Error("ci_run_missing");
   return { repository, run: ciRun };
@@ -423,6 +438,7 @@ async function returnToCi(
   const reviewing = await repository.transition(runId, implementing.revision, {
     status: "active",
     stage: "review",
+    currentNodeId: "review",
     acceptedHead,
   });
   if (!reviewing) throw new Error("review_run_missing");
@@ -458,6 +474,7 @@ async function returnToCi(
   const ci = await repository.transition(runId, reviewing.revision, {
     status: "active",
     stage: "ci",
+    currentNodeId: "checks",
   });
   if (!ci) throw new Error("ci_run_missing");
   return ci;
@@ -994,9 +1011,19 @@ describe("GitHub exact-head CI and merge", () => {
     const automation = new GitHubCiAutomation(repository, api.api);
 
     await expect(automation.reconcileCi(run, 100)).resolves.toBe("recorded");
+    await coordinate(
+      repository,
+      { submit: async () => undefined },
+      { runId: run.id, expectedRevision: run.revision },
+      101,
+    );
     await expect(
       repository.getAttempt(`${run.id}_rev_6`),
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({
+      state: "completed",
+      executor: "github.checks",
+      result: { ci: { status: "reintegrate" } },
+    });
     await expect(repository.get(run.id)).resolves.toMatchObject({
       status: "active",
       stage: "integrate",
@@ -1010,6 +1037,7 @@ describe("GitHub exact-head CI and merge", () => {
     const moved = await repository.transition(run.id, run.revision, {
       status: "active",
       stage: "ci",
+      currentNodeId: "checks",
       heads: { targetBaseHead: "e".repeat(40) },
     });
     if (!moved) throw new Error("run_missing");
@@ -1019,6 +1047,12 @@ describe("GitHub exact-head CI and merge", () => {
     await expect(
       new GitHubCiAutomation(repository, api.api).reconcileCi(moved, 100),
     ).resolves.toBe("recorded");
+    await coordinate(
+      repository,
+      { submit: async () => undefined },
+      { runId: moved.id, expectedRevision: moved.revision },
+      101,
+    );
     expect(api.get).not.toHaveBeenCalledWith(
       expect.stringContaining("/check-runs?"),
     );
@@ -1064,6 +1098,7 @@ describe("GitHub exact-head CI and merge", () => {
     const integrated = await repository.transition(run.id, run.revision, {
       status: "active",
       stage: "ci",
+      currentNodeId: "checks",
       heads: {
         targetBaseHead: "e".repeat(40),
         integrationHead: head,
@@ -1076,6 +1111,12 @@ describe("GitHub exact-head CI and merge", () => {
     await expect(
       new GitHubCiAutomation(repository, api.api).reconcileCi(integrated, 100),
     ).resolves.toBe("recorded");
+    await coordinate(
+      repository,
+      { submit: async () => undefined },
+      { runId: integrated.id, expectedRevision: integrated.revision },
+      101,
+    );
     const next = await repository.get(run.id);
     expect(next).toMatchObject({ status: "active", stage: "integrate" });
     expect(next?.targetBaseHead).toBeUndefined();
@@ -1138,6 +1179,7 @@ describe("GitHub exact-head CI and merge", () => {
       const resolved = await repository.transition(run.id, run.revision, {
         status: "active",
         stage: "integrate",
+        currentNodeId: "integrate",
         acceptedHead: integration,
         heads: { targetBaseHead: targetBase, integrationHead: integration },
       });
@@ -1161,6 +1203,7 @@ describe("GitHub exact-head CI and merge", () => {
     const next = await repository.transition(current.id, current.revision, {
       status: "active",
       stage: "ci",
+      currentNodeId: "checks",
       acceptedHead: integration,
       heads: {
         candidateHead: head,
@@ -1238,6 +1281,7 @@ describe("GitHub exact-head CI and merge", () => {
     const merged = await repository.transition(run.id, run.revision, {
       status: "active",
       stage: "merge",
+      currentNodeId: "merge",
     });
     if (!merged) throw new Error("merge_run_missing");
     await expect(automation.merge(merged, 200)).resolves.toBe("recorded");
@@ -1268,6 +1312,7 @@ describe("GitHub exact-head CI and merge", () => {
     const merging = await repository.transition(run.id, run.revision, {
       status: "active",
       stage: "merge",
+      currentNodeId: "merge",
     });
     if (!merging) throw new Error("merge_run_missing");
     const api = github(integration, "success", true, [], {
@@ -1276,6 +1321,12 @@ describe("GitHub exact-head CI and merge", () => {
     });
     const automation = new GitHubCiAutomation(repository, api.api);
     await expect(automation.merge(merging, 200)).resolves.toBe("recorded");
+    await coordinate(
+      repository,
+      { submit: async () => undefined },
+      { runId: merging.id, expectedRevision: merging.revision },
+      201,
+    );
     expect(api.put).not.toHaveBeenCalled();
     const next = await repository.get(run.id);
     expect(next).toMatchObject({
@@ -1319,6 +1370,7 @@ describe("GitHub exact-head CI and merge", () => {
     const merging = await repository.transition(run.id, run.revision, {
       status: "active",
       stage: "merge",
+      currentNodeId: "merge",
     });
     if (!merging) throw new Error("merge_run_missing");
     const api = github(integration, "success", true, [], {
@@ -1336,6 +1388,7 @@ describe("GitHub exact-head CI and merge", () => {
     const drifted = await repository.transition(run.id, run.revision, {
       status: "active",
       stage: "merge",
+      currentNodeId: "merge",
       acceptedHead: head,
       heads: { integrationHead: integration },
     });

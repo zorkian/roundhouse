@@ -4,6 +4,7 @@
 import { parseDocument } from "yaml";
 import {
   compileWorkflow,
+  defaultIssueWorkflowSource,
   type CompiledWorkflow,
   workflowSourcePath,
 } from "./workflow.js";
@@ -62,6 +63,8 @@ export interface AppliedProfile {
   readonly sourceCommit: string;
   readonly version: 1 | 2;
   readonly hash: string;
+  // Optional only so historical/profile-error snapshots remain readable.
+  // Every successfully parsed profile includes a compiled workflow.
   readonly workflow?: CompiledWorkflow;
   readonly paths: {
     readonly allowed: readonly string[];
@@ -247,9 +250,10 @@ function reviewerConfig(
   };
 }
 
-function v1Profile(
+async function v1Profile(
   value: Record<string, unknown>,
-): Omit<AppliedProfile, "sourcePath" | "sourceCommit" | "hash"> {
+  sourceCommit: string,
+): Promise<Omit<AppliedProfile, "sourcePath" | "sourceCommit" | "hash">> {
   if (
     !hasOnlyKeys(value, ["paths", "version"]) ||
     !isRecord(value.paths) ||
@@ -276,6 +280,7 @@ function v1Profile(
   ) as unknown as Record<ProfileStageName, ProfileStage>;
   return {
     version: 1,
+    workflow: await compileWorkflow(defaultIssueWorkflowSource, sourceCommit),
     paths: { allowed, protected: protectedPaths },
     merge: { mode: "automatic", method: "merge" },
     permissions: {
@@ -552,7 +557,7 @@ export async function parseProfile(
     throw new Error("profile_schema_invalid");
   const normalized =
     value.version === 1
-      ? v1Profile(value)
+      ? await v1Profile(value, sourceCommit)
       : await v2Profile(value, sourceCommit, loadFile);
   const canonical = JSON.stringify(normalized);
   const digest = await crypto.subtle.digest(

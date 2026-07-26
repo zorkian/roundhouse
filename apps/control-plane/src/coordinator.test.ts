@@ -3,6 +3,8 @@
 
 import {
   createRun,
+  compileWorkflow,
+  defaultIssueWorkflowSource,
   MemoryRunRepository,
   type Attempt,
   type RunSnapshot,
@@ -28,17 +30,23 @@ import {
   reproductionTransition,
 } from "./coordinator.js";
 
+const sourceCommit = "a".repeat(40);
+const workflow = await compileWorkflow(
+  defaultIssueWorkflowSource,
+  sourceCommit,
+);
 const input = {
   id: "run_slice",
   repository: "zorkian/roundhouse",
   issueNumber: 1,
-  baseCommit: "a".repeat(40),
+  baseCommit: sourceCommit,
   profileVersion: "v2",
   profile: {
     sourcePath: ".roundhouse/profile.yaml" as const,
-    sourceCommit: "a".repeat(40),
+    sourceCommit,
     version: 1 as const,
     hash: "b".repeat(64),
+    workflow,
     paths: { allowed: ["**"], protected: [".github/workflows/**"] },
   },
 };
@@ -155,6 +163,7 @@ describe("single coordinator", () => {
       ...createRun(input),
       revision: 5,
       stage: "review" as const,
+      currentNodeId: "review",
       currentHead: "b".repeat(40),
     };
     await store.create(run);
@@ -230,6 +239,7 @@ describe("single coordinator", () => {
       }),
       revision: 5,
       stage: "review" as const,
+      currentNodeId: "review",
       currentHead: "b".repeat(40),
     };
     await store.create(run);
@@ -287,6 +297,7 @@ describe("single coordinator", () => {
       ...createRun(input),
       revision: 5,
       stage: "review" as const,
+      currentNodeId: "review",
       currentHead: "b".repeat(40),
     };
     await store.create(run);
@@ -548,6 +559,7 @@ describe("single coordinator", () => {
       ...createRun(input),
       revision: 4,
       stage: "implement" as const,
+      currentNodeId: "implement",
     };
     await store.create(run);
     const order: string[] = [];
@@ -614,6 +626,7 @@ describe("single coordinator", () => {
       ...createRun(input),
       revision: 4,
       stage: "implement" as const,
+      currentNodeId: "implement",
     };
     await store.create(run);
     let started = 0;
@@ -645,6 +658,7 @@ describe("single coordinator", () => {
       ...createRun(input),
       revision: 4,
       stage: "implement" as const,
+      currentNodeId: "implement",
     };
     await store.create(run);
     store.markDispatched = async () => {
@@ -675,6 +689,7 @@ describe("single coordinator", () => {
       ...createRun(input),
       revision: 4,
       stage: "implement" as const,
+      currentNodeId: "implement",
     };
     await store.create(run);
     let started = 0;
@@ -722,6 +737,7 @@ describe("single coordinator", () => {
       ...createRun(input),
       revision: 4,
       stage: "implement" as const,
+      currentNodeId: "implement",
     };
     await store.create(run);
     const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -759,6 +775,7 @@ describe("single coordinator", () => {
       ...createRun(input),
       revision: 4,
       stage: "implement" as const,
+      currentNodeId: "implement",
     };
     await store.create(run);
     let submitted = 0;
@@ -818,6 +835,7 @@ describe("single coordinator", () => {
       ...createRun(input),
       revision: 4,
       stage: "implement" as const,
+      currentNodeId: "implement",
     };
     await store.create(run);
     await store.createAttempt({
@@ -863,6 +881,7 @@ describe("single coordinator", () => {
       ...createRun(input),
       revision: 5,
       stage: "review" as const,
+      currentNodeId: "review",
       currentHead: "b".repeat(40),
     };
     await store.create(run);
@@ -946,6 +965,7 @@ describe("single coordinator", () => {
       ...createRun(input),
       revision: 5,
       stage: "review" as const,
+      currentNodeId: "review",
       currentHead: "b".repeat(40),
     };
     await store.create(run);
@@ -1010,6 +1030,7 @@ describe("single coordinator", () => {
       ...createRun(input),
       revision: 5,
       stage: "review" as const,
+      currentNodeId: "review",
       currentHead: "b".repeat(40),
     };
     await store.create(run);
@@ -1450,6 +1471,7 @@ describe("single coordinator", () => {
       ...createRun(input),
       revision: 6,
       stage: "integrate" as const,
+      currentNodeId: "integrate",
       currentHead: candidate,
       candidateHead: candidate,
       reviewedHead: candidate,
@@ -1692,6 +1714,7 @@ describe("single coordinator", () => {
       ...createRun(input),
       revision: 8,
       stage: "integrate" as const,
+      currentNodeId: "integrate",
       currentHead: candidate,
       candidateHead: candidate,
       reviewedHead: candidate,

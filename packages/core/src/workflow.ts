@@ -6,6 +6,160 @@ import type { WaitingReason } from "./run.js";
 
 export const workflowSourcePath = ".roundhouse/workflow.yaml" as const;
 export const workflowVersion = 1 as const;
+// Profile V1 predates repository workflow files. It is accepted only as a
+// source-format compatibility boundary and is normalized into this same graph
+// before a run is created; the coordinator never has a second stage router.
+export const defaultIssueWorkflowSource = `version: 1
+
+triggers:
+  github.issue.started: qualify
+
+nodes:
+  qualify:
+    executor: agent.read
+    role: qualify
+    capabilities: [repository.read, context.read, research.public]
+    outputs: [qualification.classification]
+    transitions:
+      - when:
+          path: output.qualification.classification
+          in: [bug, feature, maintenance]
+        to: investigate
+      - when:
+          path: output.qualification.classification
+          equals: unclear
+        wait: clarification
+      - terminal: succeeded
+
+  investigate:
+    executor: agent.read
+    role: investigate
+    capabilities: [repository.read, context.read, research.public]
+    outputs: [reproduction.status]
+    transitions:
+      - when:
+          path: output.reproduction.status
+          equals: confirmed
+        to: plan
+      - when:
+          path: output.reproduction.status
+          in: [not_reproduced, blocked]
+        wait: clarification
+      - terminal: failed
+
+  plan:
+    executor: agent.read
+    role: plan
+    capabilities: [repository.read, context.read, research.public]
+    outputs: [plan.status]
+    transitions:
+      - when:
+          path: output.plan.status
+          equals: ready
+        to: implement
+      - when:
+          path: output.plan.status
+          equals: needs_clarification
+        wait: clarification
+      - terminal: failed
+
+  implement:
+    executor: agent.write
+    role: implement
+    capabilities:
+      [repository.read, artifact.write, commands.execute, network.project, preview.capture]
+    outputs: [implementation.screenshots]
+    transitions:
+      - when:
+          all:
+            - path: attempt.changed
+              equals: false
+            - path: attempt.hasScreenshots
+              equals: true
+        terminal: succeeded
+      - when:
+          exists: attempt.acceptedHead
+        to: review
+      - terminal: failed
+
+  review:
+    executor: review
+    role: review
+    capabilities: [repository.read, context.read]
+    outputs: [review.status]
+    transitions:
+      - when:
+          path: output.review.status
+          equals: clean
+        to: integrate
+      - when:
+          path: output.review.status
+          equals: changes_requested
+        to: implement
+      - terminal: failed
+
+  integrate:
+    executor: validate
+    role: integrate
+    capabilities: [repository.read, commands.execute]
+    outputs: [integration.status]
+    transitions:
+      - when:
+          path: output.integration.status
+          equals: ready
+        to: checks
+      - when:
+          path: output.integration.status
+          equals: changes_requested
+        to: implement
+      - when:
+          path: output.integration.status
+          equals: needs_resolution
+        to: integrate
+      - terminal: failed
+
+  checks:
+    executor: github.checks
+    capabilities: [github.checks.read]
+    outputs: [ci.status, ci.reason]
+    transitions:
+      - when:
+          path: output.ci.status
+          equals: success
+        to: merge
+      - when:
+          path: output.ci.status
+          equals: reintegrate
+        to: integrate
+      - when:
+          path: output.ci.reason
+          in: [diagnostics_unavailable, evidence_consumed]
+        wait: external_check
+      - when:
+          path: output.ci.status
+          equals: failure
+        to: implement
+      - wait: external_check
+
+  merge:
+    executor: github.merge
+    capabilities: [github.merge]
+    outputs: [merge.status]
+    transitions:
+      - when:
+          path: output.merge.status
+          equals: reintegrate
+        to: integrate
+      - when:
+          path: output.merge.status
+          equals: merged
+        terminal: succeeded
+      - when:
+          path: run.mergeMode
+          equals: maintainer
+        wait: maintainer_merge
+      - terminal: failed
+`;
 
 export const workflowTriggerKinds = ["github.issue.started"] as const;
 export const workflowExecutorKinds = [

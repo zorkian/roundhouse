@@ -172,6 +172,10 @@ nodes:
     transitions:
       - when:
           path: output.merge.status
+          equals: reintegrate
+        to: integrate
+      - when:
+          path: output.merge.status
           equals: merged
         terminal: succeeded
       - when:

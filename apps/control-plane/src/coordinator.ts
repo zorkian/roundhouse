@@ -290,18 +290,6 @@ export function mergeTransition(attempt: Attempt) {
   } as const;
 }
 
-function completedTransition(attempt: Attempt, profile?: AppliedProfile) {
-  if (attempt.stage === "qualify") return qualificationTransition(attempt);
-  if (attempt.stage === "reproduce") return reproductionTransition(attempt);
-  if (attempt.stage === "plan") return planTransition(attempt);
-  if (attempt.stage === "implement") return implementationTransition(attempt);
-  if (attempt.stage === "review") return reviewTransition(attempt);
-  if (attempt.stage === "integrate") return integrateTransition(attempt);
-  if (attempt.stage === "ci") return ciTransition(attempt, profile);
-  if (attempt.stage === "merge") return mergeTransition(attempt);
-  return undefined;
-}
-
 function stageForWorkflowNode(nodeId: string, node: WorkflowNode): RunStage {
   if (node.executor === "review") return "review";
   if (node.executor === "github.publish") return "publish";
@@ -338,7 +326,15 @@ function evidenceForAttempt(
       };
     return ciTransition(attempt, profile);
   }
-  if (attempt.stage === "merge") return mergeTransition(attempt);
+  if (attempt.stage === "merge") {
+    const merge = attempt.result?.merge as Record<string, unknown> | undefined;
+    if (merge?.status === "reintegrate")
+      return {
+        acceptedHead: attempt.acceptedHead,
+        heads: { integrationHead: null, targetBaseHead: null },
+      };
+    return mergeTransition(attempt);
+  }
   return {};
 }
 
@@ -540,24 +536,36 @@ export async function coordinate(
     });
     return "stale";
   }
+  const workflow = run.profile.workflow;
   const currentWorkflowNode =
-    run.profile.workflow && run.currentNodeId
-      ? run.profile.workflow.nodes[run.currentNodeId]
+    workflow && run.currentNodeId
+      ? workflow.nodes[run.currentNodeId]
       : undefined;
-  if (
-    run.profile.workflow &&
-    (!currentWorkflowNode || run.workflowHash !== run.profile.workflow.hash)
-  )
-    throw new Error("run_workflow_snapshot_invalid");
+  if (!workflow || !currentWorkflowNode || run.workflowHash !== workflow.hash) {
+    console.error(
+      JSON.stringify({
+        message: "run_workflow_snapshot_invalid",
+        runId: run.id,
+        revision: run.revision,
+        profileHash: run.profile.hash,
+        workflowHash: run.workflowHash ?? null,
+        profileWorkflowHash: workflow?.hash ?? null,
+        currentNodeId: run.currentNodeId ?? null,
+      }),
+    );
+    const next = await repository.transition(run.id, run.revision, {
+      status: "waiting",
+      stage: run.stage,
+      waitingReason: "profile_error",
+    });
+    return next ? "dispatched" : "stale";
+  }
   if (
     currentWorkflowNode &&
     stageForWorkflowNode(run.currentNodeId!, currentWorkflowNode) !== run.stage
   )
     throw new Error("run_workflow_stage_mismatch");
-  if (
-    currentWorkflowNode?.executor === "review" ||
-    (!currentWorkflowNode && run.stage === "review")
-  ) {
+  if (currentWorkflowNode.executor === "review") {
     const current = await repository.attemptsForRevision(run.id, run.revision);
     const holisticRole = "review-holistic" as const;
     const holistic = current.find((attempt) => attempt.role === holisticRole);
@@ -622,9 +630,7 @@ export async function coordinate(
     const next = await repository.transition(
       run.id,
       run.revision,
-      currentWorkflowNode
-        ? graphCompletedTransition(run, aggregate)
-        : reviewTransition(aggregate),
+      graphCompletedTransition(run, aggregate),
     );
     if (!next) return "stale";
     await recordWorkflowTransition(repository, run, aggregate, next);
@@ -634,11 +640,7 @@ export async function coordinate(
   const attemptId = immutableAttemptId(run.id, run.revision);
   const previous = await repository.getAttempt(attemptId);
   if (previous?.state === "completed") {
-    const transition =
-      run.profile.workflow && run.currentNodeId
-        ? graphCompletedTransition(run, previous)
-        : completedTransition(previous, run.profile);
-    if (!transition) return "stale";
+    const transition = graphCompletedTransition(run, previous);
     const next = await repository.transition(run.id, run.revision, transition);
     if (!next) return "stale";
     await recordWorkflowTransition(repository, run, previous, next);
@@ -646,22 +648,17 @@ export async function coordinate(
     return "dispatched";
   }
   if (
-    !new Set([
-      "qualify",
-      "reproduce",
-      "plan",
-      "implement",
-      "review",
-      "integrate",
-    ]).has(run.stage)
+    !new Set(["agent.read", "agent.write", "validate"]).has(
+      currentWorkflowNode.executor,
+    )
   )
     return "stale";
   // A conflicted mechanical integration is followed by exactly one narrowly
   // scoped conflict-resolution attempt for the same reviewed candidate; any
   // other integrate wakeup retries the no-model mechanical merge.
   const integrateRole = async (): Promise<string> => {
-    if (run.stage !== "integrate")
-      return currentWorkflowNode?.role ?? run.stage;
+    if (currentWorkflowNode.role !== "integrate")
+      return currentWorkflowNode.role ?? run.stage;
     const previous = await repository.latestCompletedAttempt(
       run.id,
       "integrate",
@@ -705,9 +702,8 @@ export async function coordinate(
     runId: run.id,
     runRevision: run.revision,
     kind: "agent",
-    ...(currentWorkflowNode
-      ? { nodeId: run.currentNodeId, executor: currentWorkflowNode.executor }
-      : {}),
+    nodeId: run.currentNodeId,
+    executor: currentWorkflowNode.executor,
     stage: run.stage,
     role,
     state: "created",

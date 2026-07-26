@@ -3,19 +3,22 @@
 
 import { describe, expect, it } from "vitest";
 import { createRun, resumeRun, transitionRun, waitingReasons } from "./run.js";
-import { compileWorkflow } from "./workflow.js";
+import { compileWorkflow, defaultIssueWorkflowSource } from "./workflow.js";
 
+const commit = "a".repeat(40);
+const workflow = await compileWorkflow(defaultIssueWorkflowSource, commit);
 const input = {
   id: "run_01",
   repository: "zorkian/roundhouse",
   issueNumber: 246,
-  baseCommit: "a".repeat(40),
+  baseCommit: commit,
   profileVersion: "v2-initial",
   profile: {
     sourcePath: ".roundhouse/profile.yaml",
     sourceCommit: "a".repeat(40),
     version: 1,
     hash: "v2-initial",
+    workflow,
     paths: { allowed: ["**"], protected: [] },
   },
 } as const;
@@ -56,6 +59,8 @@ nodes:
       currentHead: input.baseCommit,
       status: "active",
       stage: "qualify",
+      workflowHash: workflow.hash,
+      currentNodeId: "qualify",
       revision: 1,
     });
   });
