@@ -28,6 +28,7 @@ import {
 } from "./coordinator.js";
 import {
   acceptCallback,
+  CheckpointRejectedError,
   signCallback,
   verifyCallback,
   type AttemptCallback,
@@ -47,6 +48,7 @@ import {
   acceptGitHubIssueClosed,
   githubClientForRun,
   GitHubStageReporter,
+  postRunCommentOnce,
   type GitHubEnv,
 } from "./github.js";
 import { observeResponse } from "@roundhouse/response-observer";
@@ -1160,7 +1162,7 @@ class SandboxCheckpointValidator implements CheckpointValidator {
         : undefined;
     const token = await artifact.createToken("read", 5 * 60);
     try {
-      const status = await attemptSandbox(
+      const validation = await attemptSandbox(
         this.containers,
         `${attempt.id}-validation`,
       ).validateCheckpoint({
@@ -1204,7 +1206,12 @@ class SandboxCheckpointValidator implements CheckpointValidator {
             }
           : {}),
       });
-      if (status < 200 || status >= 300)
+      if (validation.status >= 400 && validation.status < 500)
+        throw new CheckpointRejectedError(
+          validation.status,
+          validation.responseBody,
+        );
+      if (validation.status < 200 || validation.status >= 300)
         throw new Error("checkpoint_git_validation_failed");
     } finally {
       await Promise.all([
@@ -1898,13 +1905,55 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
         ),
         input,
       );
-      if (outcome === "completed" || outcome === "duplicate") {
+      if (
+        outcome === "completed" ||
+        outcome === "duplicate" ||
+        outcome === "rejected"
+      ) {
         const attempt = await repository.getAttempt(input.attemptId);
         if (attempt) {
-          await env.RUN_WAKEUPS.send({
-            runId: attempt.runId,
-            expectedRevision: attempt.runRevision,
-          });
+          if (outcome === "completed" || outcome === "duplicate")
+            await env.RUN_WAKEUPS.send({
+              runId: attempt.runId,
+              expectedRevision: attempt.runRevision,
+            });
+          if (outcome === "rejected") {
+            const run = await repository.get(attempt.runId);
+            const failure = attempt.result?.failure;
+            await repository.recordAttemptEvent(
+              attempt.id,
+              "checkpoint_rejected",
+              {
+                phase: "checkpoint_rejection_settled",
+                runId: attempt.runId,
+                runRevision: run?.revision ?? null,
+                attemptRevision: attempt.runRevision,
+                stage: attempt.stage,
+                nodeId: attempt.nodeId,
+                failure: failure ?? null,
+              },
+            );
+            console.error(
+              JSON.stringify({
+                message: "checkpoint_rejection_callback_completed",
+                runId: attempt.runId,
+                attemptId: attempt.id,
+                runRevision: run?.revision ?? null,
+                attemptRevision: attempt.runRevision,
+                stage: attempt.stage,
+                nodeId: attempt.nodeId,
+                failure: failure ?? null,
+              }),
+            );
+            if (run)
+              await postRunCommentOnce(
+                githubClientForRun(env, run),
+                run,
+                `checkpoint-rejected-${attempt.id}`,
+                `## Roundhouse needs attention\n\nRoundhouse could not validate the work checkpoint, so this run is paused instead of repeating the work. After the validation problem is fixed, a maintainer can restart it with \`${env.GITHUB_START_COMMAND}\`.`,
+                env.PUBLIC_ORIGIN,
+              );
+          }
           scheduleAttemptSandboxDestruction(
             env.ATTEMPT_SANDBOXES,
             sandboxName(attempt),

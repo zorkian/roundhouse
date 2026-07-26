@@ -870,7 +870,9 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
     return new NestedContainerRuntime(this.componentHost()).ensure(attemptId);
   }
 
-  async validateCheckpoint(attempt: AttemptAssignment): Promise<number> {
+  async validateCheckpoint(
+    attempt: AttemptAssignment,
+  ): Promise<{ readonly status: number; readonly responseBody: string }> {
     const startedAt = Date.now();
     await this.traceSetup(attempt.id, "checkpoint_validation_started");
     try {
@@ -1016,7 +1018,7 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
           responseBody: responseBody.slice(0, 4_000),
         },
       );
-      return response.status;
+      return { status: response.status, responseBody };
     } catch (error) {
       await this.traceSetup(
         attempt.id,
