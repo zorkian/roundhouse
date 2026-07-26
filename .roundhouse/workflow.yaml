@@ -85,7 +85,8 @@ nodes:
           all:
             - path: attempt.changed
               equals: false
-            - exists: output.implementation.screenshots
+            - path: attempt.hasScreenshots
+              equals: true
         terminal: succeeded
       - when:
           exists: attempt.acceptedHead
@@ -123,7 +124,7 @@ nodes:
       - when:
           path: output.integration.status
           equals: ready
-        to: publish
+        to: checks
       - when:
           path: output.integration.status
           equals: changes_requested
@@ -134,30 +135,24 @@ nodes:
         to: integrate
       - terminal: failed
 
-  publish:
-    executor: github.publish
-    capabilities:
-      - github.publish
-    outputs:
-      - publication.status
-    transitions:
-      - when:
-          path: output.publication.status
-          equals: published
-        to: checks
-      - terminal: failed
-
   checks:
     executor: github.checks
     capabilities:
       - github.checks.read
     outputs:
       - ci.status
+      - ci.reason
     transitions:
       - when:
           path: output.ci.status
           equals: success
         to: merge
+      - when:
+          path: output.ci.reason
+          in:
+            - diagnostics_unavailable
+            - evidence_consumed
+        wait: external_check
       - when:
           path: output.ci.status
           equals: failure

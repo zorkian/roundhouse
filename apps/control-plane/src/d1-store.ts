@@ -38,6 +38,8 @@ type AttemptRow = {
   run_id: string;
   run_revision: number;
   kind: Attempt["kind"];
+  node_id: string | null;
+  executor: Attempt["executor"] | null;
   stage: Attempt["stage"];
   role: string;
   state: Attempt["state"];
@@ -133,6 +135,8 @@ function attemptFromRow(row: AttemptRow): Attempt {
     runId: row.run_id,
     runRevision: row.run_revision,
     kind: row.kind,
+    ...(row.node_id ? { nodeId: row.node_id } : {}),
+    ...(row.executor ? { executor: row.executor } : {}),
     stage: row.stage,
     role: row.role,
     state: row.state,
@@ -187,13 +191,15 @@ export class D1RunRepository implements RunRepository {
       .run();
     await this.db
       .prepare(
-        "INSERT INTO runs (id, work_item_id, status, stage, revision, document_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+        "INSERT INTO runs (id, work_item_id, status, stage, current_node_id, workflow_hash, revision, document_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
       )
       .bind(
         run.id,
         workItemId,
         run.status,
         run.stage,
+        run.currentNodeId ?? null,
+        run.workflowHash ?? null,
         run.revision,
         JSON.stringify(run),
         time,
@@ -253,7 +259,7 @@ export class D1RunRepository implements RunRepository {
     const run = JSON.parse(row.document_json) as RunSnapshot;
     const result = await this.db
       .prepare(
-        "SELECT id,run_id,run_revision,kind,stage,role,state,deadline_at,base_commit,expected_head,accepted_head,result_json,routing_json,created_at,updated_at FROM attempts WHERE run_id=?1 ORDER BY created_at ASC,id ASC",
+        "SELECT id,run_id,run_revision,kind,node_id,executor,stage,role,state,deadline_at,base_commit,expected_head,accepted_head,result_json,routing_json,created_at,updated_at FROM attempts WHERE run_id=?1 ORDER BY created_at ASC,id ASC",
       )
       .bind(run.id)
       .all<AttemptRow & { created_at: number; updated_at: number }>();
@@ -351,11 +357,13 @@ export class D1RunRepository implements RunRepository {
     const next = transitionRun(current, expectedRevision, transition);
     const result = await this.db
       .prepare(
-        "UPDATE runs SET status=?1, stage=?2, revision=?3, document_json=?4, lease_attempt_id=NULL, lease_revision=NULL, lease_expires_at=NULL, updated_at=?5 WHERE id=?6 AND revision=?7",
+        "UPDATE runs SET status=?1, stage=?2, current_node_id=?3, workflow_hash=?4, revision=?5, document_json=?6, lease_attempt_id=NULL, lease_revision=NULL, lease_expires_at=NULL, updated_at=?7 WHERE id=?8 AND revision=?9",
       )
       .bind(
         next.status,
         next.stage,
+        next.currentNodeId ?? null,
+        next.workflowHash ?? null,
         next.revision,
         JSON.stringify(next),
         this.now(),
@@ -384,11 +392,13 @@ export class D1RunRepository implements RunRepository {
     );
     const result = await this.db
       .prepare(
-        "UPDATE runs SET status=?1, stage=?2, revision=?3, document_json=?4, lease_attempt_id=NULL, lease_revision=NULL, lease_expires_at=NULL, updated_at=?5 WHERE id=?6 AND revision=?7",
+        "UPDATE runs SET status=?1, stage=?2, current_node_id=?3, workflow_hash=?4, revision=?5, document_json=?6, lease_attempt_id=NULL, lease_revision=NULL, lease_expires_at=NULL, updated_at=?7 WHERE id=?8 AND revision=?9",
       )
       .bind(
         next.status,
         next.stage,
+        next.currentNodeId ?? null,
+        next.workflowHash ?? null,
         next.revision,
         JSON.stringify(next),
         this.now(),
@@ -431,13 +441,15 @@ export class D1RunRepository implements RunRepository {
   async createAttempt(attempt: Attempt): Promise<"created" | "exists"> {
     const result = await this.db
       .prepare(
-        "INSERT OR IGNORE INTO attempts (id,run_id,run_revision,kind,stage,role,state,deadline_at,base_commit,expected_head,routing_json,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?12)",
+        "INSERT OR IGNORE INTO attempts (id,run_id,run_revision,kind,node_id,executor,stage,role,state,deadline_at,base_commit,expected_head,routing_json,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?14)",
       )
       .bind(
         attempt.id,
         attempt.runId,
         attempt.runRevision,
         attempt.kind,
+        attempt.nodeId ?? null,
+        attempt.executor ?? null,
         attempt.stage,
         attempt.role,
         attempt.state,
@@ -525,7 +537,7 @@ export class D1RunRepository implements RunRepository {
   async getAttempt(attemptId: string): Promise<Attempt | undefined> {
     const row = await this.db
       .prepare(
-        "SELECT id,run_id,run_revision,kind,stage,role,state,deadline_at,base_commit,expected_head,accepted_head,result_json,routing_json FROM attempts WHERE id=?1",
+        "SELECT id,run_id,run_revision,kind,node_id,executor,stage,role,state,deadline_at,base_commit,expected_head,accepted_head,result_json,routing_json FROM attempts WHERE id=?1",
       )
       .bind(attemptId)
       .first<AttemptRow>();
@@ -539,7 +551,7 @@ export class D1RunRepository implements RunRepository {
   ): Promise<Attempt | undefined> {
     const row = await this.db
       .prepare(
-        "SELECT id,run_id,run_revision,kind,stage,role,state,deadline_at,base_commit,expected_head,accepted_head,result_json,routing_json FROM attempts WHERE run_id=?1 AND stage=?2 AND state='completed' AND run_revision<?3 ORDER BY run_revision DESC LIMIT 1",
+        "SELECT id,run_id,run_revision,kind,node_id,executor,stage,role,state,deadline_at,base_commit,expected_head,accepted_head,result_json,routing_json FROM attempts WHERE run_id=?1 AND stage=?2 AND state='completed' AND run_revision<?3 ORDER BY run_revision DESC LIMIT 1",
       )
       .bind(runId, stage, beforeRevision)
       .first<AttemptRow>();
@@ -563,7 +575,7 @@ export class D1RunRepository implements RunRepository {
   async attemptsForRevision(runId: string, revision: number) {
     const result = await this.db
       .prepare(
-        "SELECT id,run_id,run_revision,kind,stage,role,state,deadline_at,base_commit,expected_head,accepted_head,result_json,routing_json FROM attempts WHERE run_id=?1 AND run_revision=?2 ORDER BY id",
+        "SELECT id,run_id,run_revision,kind,node_id,executor,stage,role,state,deadline_at,base_commit,expected_head,accepted_head,result_json,routing_json FROM attempts WHERE run_id=?1 AND run_revision=?2 ORDER BY id",
       )
       .bind(runId, revision)
       .all<AttemptRow>();

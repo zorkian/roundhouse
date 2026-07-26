@@ -103,6 +103,13 @@ export interface CompiledWorkflow {
   readonly nodes: Readonly<Record<string, WorkflowNode>>;
 }
 
+export interface WorkflowAdvance {
+  readonly status: "active" | "waiting" | WorkflowTerminalStatus;
+  readonly currentNodeId: string;
+  readonly waitingReason?: WaitingReason;
+  readonly selected: WorkflowTransition;
+}
+
 const executorCapabilities: Readonly<
   Record<WorkflowExecutorKind, readonly string[]>
 > = {
@@ -392,6 +399,36 @@ export function selectWorkflowTransition(
   );
   if (!selected) throw new Error("workflow_transition_not_selected");
   return selected;
+}
+
+export function advanceWorkflow(
+  workflow: CompiledWorkflow,
+  currentNodeId: string,
+  context: Readonly<Record<string, unknown>>,
+): WorkflowAdvance {
+  const current = workflow.nodes[currentNodeId];
+  if (!current) throw new Error("workflow_current_node_missing");
+  const selected = selectWorkflowTransition(current, context);
+  if (selected.to)
+    return {
+      status: "active",
+      currentNodeId: selected.to,
+      selected,
+    };
+  if (selected.wait)
+    return {
+      status: "waiting",
+      currentNodeId,
+      waitingReason: selected.wait,
+      selected,
+    };
+  if (selected.terminal)
+    return {
+      status: selected.terminal,
+      currentNodeId,
+      selected,
+    };
+  throw new Error("workflow_transition_destination_missing");
 }
 
 export async function compileWorkflow(

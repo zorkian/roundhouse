@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import {
+  advanceWorkflow,
   immutableAttemptId,
   reviewerAttemptId,
   reviewers,
@@ -9,6 +10,9 @@ import {
   type Attempt,
   type RunRepository,
   type RunSnapshot,
+  type RunStage,
+  type RunTransition,
+  type WorkflowNode,
   type Wakeup,
 } from "@roundhouse/core";
 import { aggregatedReview } from "./aggregated-review.js";
@@ -298,6 +302,105 @@ function completedTransition(attempt: Attempt, profile?: AppliedProfile) {
   return undefined;
 }
 
+function stageForWorkflowNode(nodeId: string, node: WorkflowNode): RunStage {
+  if (node.executor === "review") return "review";
+  if (node.executor === "github.publish") return "publish";
+  if (node.executor === "github.checks") return "ci";
+  if (node.executor === "github.merge") return "merge";
+  if (node.role === "qualify") return "qualify";
+  if (node.role === "investigate") return "reproduce";
+  if (node.role === "plan") return "plan";
+  if (node.role === "implement") return "implement";
+  if (node.role === "integrate") return "integrate";
+  throw new Error(`workflow_node_has_no_execution_stage:${nodeId}`);
+}
+
+function integrationWorkflowOutput(attempt: Attempt): string | undefined {
+  const transition = integrateTransition(attempt);
+  if (transition.status === "failed") return undefined;
+  if (transition.stage === "ci") return "ready";
+  return "needs_resolution";
+}
+
+function evidenceForAttempt(
+  attempt: Attempt,
+  profile?: AppliedProfile,
+): Pick<RunTransition, "acceptedHead" | "heads"> {
+  if (attempt.stage === "implement") return implementationTransition(attempt);
+  if (attempt.stage === "review") return reviewTransition(attempt);
+  if (attempt.stage === "integrate") return integrateTransition(attempt);
+  if (attempt.stage === "ci") return ciTransition(attempt, profile);
+  if (attempt.stage === "merge") return mergeTransition(attempt);
+  return {};
+}
+
+export function graphCompletedTransition(run: RunSnapshot, attempt: Attempt) {
+  const workflow = run.profile?.workflow;
+  const nodeId = run.currentNodeId;
+  if (!workflow || !nodeId || run.workflowHash !== workflow.hash)
+    throw new Error("run_workflow_snapshot_missing");
+  const node = workflow.nodes[nodeId];
+  if (!node) throw new Error("run_workflow_node_missing");
+  const integrationStatus =
+    node.executor === "validate" && node.role === "integrate"
+      ? integrationWorkflowOutput(attempt)
+      : undefined;
+  const output = integrationStatus
+    ? {
+        ...attempt.result,
+        integration: {
+          ...(attempt.result?.integration as
+            Record<string, unknown> | undefined),
+          status: integrationStatus,
+        },
+      }
+    : attempt.result;
+  const implementation = attempt.result?.implementation as
+    Record<string, unknown> | undefined;
+  const advance = advanceWorkflow(workflow, nodeId, {
+    output: output ?? {},
+    attempt: {
+      expectedHead: attempt.expectedHead,
+      acceptedHead: attempt.acceptedHead,
+      changed:
+        Boolean(attempt.acceptedHead) &&
+        attempt.acceptedHead !== attempt.expectedHead,
+      hasScreenshots:
+        Array.isArray(implementation?.screenshots) &&
+        implementation.screenshots.length > 0,
+    },
+    run: {
+      revision: run.revision,
+      mergeMode: run.profile?.merge?.mode ?? "automatic",
+    },
+  });
+  const destination = workflow.nodes[advance.currentNodeId]!;
+  const stage = stageForWorkflowNode(advance.currentNodeId, destination);
+  const evidence = evidenceForAttempt(attempt, run.profile);
+  console.log(
+    JSON.stringify({
+      message: "workflow_transition_selected",
+      runId: run.id,
+      revision: run.revision,
+      attemptId: attempt.id,
+      workflowHash: workflow.hash,
+      fromNodeId: nodeId,
+      toNodeId: advance.currentNodeId,
+      status: advance.status,
+      waitingReason: advance.waitingReason ?? null,
+      condition: advance.selected.when ?? null,
+      executor: node.executor,
+    }),
+  );
+  return {
+    status: advance.status,
+    stage,
+    currentNodeId: advance.currentNodeId,
+    ...(advance.waitingReason ? { waitingReason: advance.waitingReason } : {}),
+    ...evidence,
+  };
+}
+
 function selectedSpecialists(attempt: Attempt): readonly string[] | undefined {
   const review = attempt.result?.review as Record<string, unknown> | undefined;
   const selections = review?.selections;
@@ -395,7 +498,24 @@ export async function coordinate(
     });
     return "stale";
   }
-  if (run.stage === "review") {
+  const currentWorkflowNode =
+    run.profile.workflow && run.currentNodeId
+      ? run.profile.workflow.nodes[run.currentNodeId]
+      : undefined;
+  if (
+    run.profile.workflow &&
+    (!currentWorkflowNode || run.workflowHash !== run.profile.workflow.hash)
+  )
+    throw new Error("run_workflow_snapshot_invalid");
+  if (
+    currentWorkflowNode &&
+    stageForWorkflowNode(run.currentNodeId!, currentWorkflowNode) !== run.stage
+  )
+    throw new Error("run_workflow_stage_mismatch");
+  if (
+    currentWorkflowNode?.executor === "review" ||
+    (!currentWorkflowNode && run.stage === "review")
+  ) {
     const current = await repository.attemptsForRevision(run.id, run.revision);
     const holisticRole = "review-holistic" as const;
     const holistic = current.find((attempt) => attempt.role === holisticRole);
@@ -460,7 +580,9 @@ export async function coordinate(
     const next = await repository.transition(
       run.id,
       run.revision,
-      reviewTransition(aggregate),
+      currentWorkflowNode
+        ? graphCompletedTransition(run, aggregate)
+        : reviewTransition(aggregate),
     );
     if (!next) return "stale";
     if (reporter) await reporter.report(next, aggregate);
@@ -469,7 +591,10 @@ export async function coordinate(
   const attemptId = immutableAttemptId(run.id, run.revision);
   const previous = await repository.getAttempt(attemptId);
   if (previous?.state === "completed") {
-    const transition = completedTransition(previous, run.profile);
+    const transition =
+      run.profile.workflow && run.currentNodeId
+        ? graphCompletedTransition(run, previous)
+        : completedTransition(previous, run.profile);
     if (!transition) return "stale";
     const next = await repository.transition(run.id, run.revision, transition);
     if (!next) return "stale";
@@ -491,7 +616,8 @@ export async function coordinate(
   // scoped conflict-resolution attempt for the same reviewed candidate; any
   // other integrate wakeup retries the no-model mechanical merge.
   const integrateRole = async (): Promise<string> => {
-    if (run.stage !== "integrate") return run.stage;
+    if (run.stage !== "integrate")
+      return currentWorkflowNode?.role ?? run.stage;
     const previous = await repository.latestCompletedAttempt(
       run.id,
       "integrate",
@@ -535,6 +661,9 @@ export async function coordinate(
     runId: run.id,
     runRevision: run.revision,
     kind: "agent",
+    ...(currentWorkflowNode
+      ? { nodeId: run.currentNodeId, executor: currentWorkflowNode.executor }
+      : {}),
     stage: run.stage,
     role,
     state: "created",
@@ -594,6 +723,9 @@ async function dispatchReview(
     runId: run.id,
     runRevision: run.revision,
     kind: "agent",
+    ...(run.currentNodeId && run.profile?.workflow
+      ? { nodeId: run.currentNodeId, executor: "review" as const }
+      : {}),
     stage: "review",
     role,
     state: "created",

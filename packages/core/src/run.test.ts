@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import { createRun, resumeRun, transitionRun, waitingReasons } from "./run.js";
+import { compileWorkflow } from "./workflow.js";
 
 const input = {
   id: "run_01",
@@ -20,6 +21,34 @@ const input = {
 } as const;
 
 describe("V2 run contract", () => {
+  it("binds a workflow-backed run to its exact hash and trigger node", async () => {
+    const workflow = await compileWorkflow(
+      `version: 1
+triggers:
+  github.issue.started: intake
+nodes:
+  intake:
+    executor: terminal
+    transitions:
+      - terminal: succeeded
+`,
+      input.baseCommit,
+    );
+    expect(
+      createRun({
+        ...input,
+        profile: {
+          ...input.profile,
+          version: 2,
+          workflow,
+        },
+      }),
+    ).toMatchObject({
+      workflowHash: workflow.hash,
+      currentNodeId: "intake",
+    });
+  });
+
   it("creates the one initial qualification state", () => {
     expect(createRun(input)).toEqual({
       schemaVersion: 2,

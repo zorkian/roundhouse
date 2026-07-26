@@ -8,6 +8,7 @@ import type {
   RunTransition,
 } from "./run.js";
 import type { AppliedProfile } from "./profile.js";
+import type { WorkflowExecutorKind } from "./workflow.js";
 
 export const attemptKinds = ["agent", "external"] as const;
 export const attemptStates = [
@@ -37,6 +38,8 @@ export interface Attempt {
   readonly runId: string;
   readonly runRevision: number;
   readonly kind: AttemptKind;
+  readonly nodeId?: string;
+  readonly executor?: WorkflowExecutorKind;
   readonly stage: RunStage;
   readonly role: string;
   readonly state: AttemptState;

@@ -17,7 +17,6 @@ describe("Roundhouse repository workflow", () => {
       "implement",
       "review",
       "integrate",
-      "publish",
       "checks",
       "merge",
     ]);

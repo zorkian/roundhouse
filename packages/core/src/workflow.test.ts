@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  advanceWorkflow,
   compileWorkflow,
   evaluateWorkflowCondition,
   selectWorkflowTransition,
@@ -79,6 +80,39 @@ describe("workflow compiler", () => {
         output: { qualification: { classification: "duplicate" } },
       }),
     ).toEqual({ terminal: "succeeded" });
+  });
+
+  it("advances branches, waits in place, and preserves loops durably", async () => {
+    const workflow = await compileWorkflow(
+      source.replace("to: done", "to: implement").replace(
+        `  done:
+    executor: terminal
+    transitions:
+      - terminal: succeeded
+`,
+        "",
+      ),
+      commit,
+    );
+    expect(
+      advanceWorkflow(workflow, "qualify", {
+        output: { qualification: { classification: "bug" } },
+      }),
+    ).toMatchObject({ status: "active", currentNodeId: "implement" });
+    expect(
+      advanceWorkflow(workflow, "qualify", {
+        output: { qualification: { classification: "unclear" } },
+      }),
+    ).toMatchObject({
+      status: "waiting",
+      currentNodeId: "qualify",
+      waitingReason: "clarification",
+    });
+    expect(
+      advanceWorkflow(workflow, "implement", {
+        output: { implementation: { status: "complete" } },
+      }),
+    ).toMatchObject({ status: "active", currentNodeId: "implement" });
   });
 
   it("evaluates nested conditions without executable expressions", () => {

@@ -556,6 +556,12 @@ export class GitHubCiAutomation {
       runId: run.id,
       runRevision: run.revision,
       kind: "external",
+      ...(run.currentNodeId && run.profile?.workflow
+        ? {
+            nodeId: run.currentNodeId,
+            executor: run.profile.workflow.nodes[run.currentNodeId]!.executor,
+          }
+        : {}),
       stage: "ci",
       role: "github-checks",
       state: "created",
@@ -663,6 +669,12 @@ export class GitHubCiAutomation {
       runId: run.id,
       runRevision: run.revision,
       kind: "external",
+      ...(run.currentNodeId && run.profile?.workflow
+        ? {
+            nodeId: run.currentNodeId,
+            executor: run.profile.workflow.nodes[run.currentNodeId]!.executor,
+          }
+        : {}),
       stage: "merge",
       role: "github-merge",
       state: "created",
