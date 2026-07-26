@@ -16,7 +16,7 @@ import {
   type RunRepository,
 } from "@roundhouse/core";
 import { observeResponse } from "@roundhouse/response-observer";
-import { verifyCallback } from "./callback.js";
+import { verifyCallback, type AttemptCompletion } from "./callback.js";
 import type { SandboxComponentHost } from "./attempt-sandbox-components.js";
 import { NestedContainerRuntime } from "./nested-container-runtime.js";
 import { PreviewTransport } from "./preview-transport.js";
@@ -55,8 +55,40 @@ type AttemptContainerEnv = Cloudflare.Env & {
 interface PreparedAttempt {
   readonly attempt: AttemptAssignment;
   readonly attemptSecret: string;
-  readonly callbackUrl: string;
+  readonly controlPlaneUrl: string;
   readonly backup?: DirectoryBackup;
+}
+
+interface RunnerHttpResult {
+  readonly status: number;
+  readonly responseBody: string;
+}
+
+function attemptCompletion(
+  value: unknown,
+  prepared: PreparedAttempt,
+): AttemptCompletion {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    !("attemptId" in value) ||
+    value.attemptId !== prepared.attempt.id ||
+    !("expectedRevision" in value) ||
+    value.expectedRevision !== prepared.attempt.runRevision ||
+    !("artifactTokenId" in value) ||
+    typeof value.artifactTokenId !== "string" ||
+    !("checkpoint" in value) ||
+    !value.checkpoint ||
+    typeof value.checkpoint !== "object" ||
+    Array.isArray(value.checkpoint) ||
+    !("result" in value) ||
+    !value.result ||
+    typeof value.result !== "object" ||
+    Array.isArray(value.result)
+  )
+    throw new Error("invalid_runner_completion");
+  return value as AttemptCompletion;
 }
 
 const modelHost = "model.roundhouse.internal";
@@ -129,7 +161,7 @@ export function attemptAllowedHosts(
     AttemptAssignment,
     "artifact" | "executor" | "publish" | "source" | "stage" | "upstream"
   >,
-  callbackUrl?: string | null,
+  controlPlaneUrl?: string | null,
 ): string[] {
   // Implementation runs use the repository's own development environment.
   // Its image build and lifecycle commands may install dependencies from
@@ -144,7 +176,7 @@ export function attemptAllowedHosts(
     attempt.publish?.hostname ?? "",
     attempt.source?.hostname ?? "",
     attempt.upstream?.hostname ?? "",
-    callbackUrl ? new URL(callbackUrl).hostname : "",
+    controlPlaneUrl ? new URL(controlPlaneUrl).hostname : "",
   ].filter(Boolean);
 }
 
@@ -579,7 +611,7 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
   async prepareAttempt(
     attempt: AttemptAssignment,
     attemptSecret: string,
-    callbackUrl: string,
+    controlPlaneUrl: string,
     backup?: DirectoryBackup,
   ): Promise<void> {
     const startedAt = Date.now();
@@ -595,7 +627,7 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
     await this.durableState.storage.put(`prepared:${attempt.id}`, {
       attempt,
       attemptSecret,
-      callbackUrl,
+      controlPlaneUrl,
       backup,
     } satisfies PreparedAttempt);
     await this.traceSetup(
@@ -609,7 +641,7 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
     );
   }
 
-  async executePreparedAttempt(attemptId: string): Promise<number> {
+  async restorePreparedAttempt(attemptId: string): Promise<void> {
     const prepared = await this.durableState.storage.get<PreparedAttempt>(
       `prepared:${attemptId}`,
     );
@@ -617,7 +649,7 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
     const startedAt = Date.now();
     await this.traceSetup(
       attemptId,
-      "attempt_workflow_execution_started",
+      "attempt_workflow_restore_started",
       undefined,
       {
         stage: prepared.attempt.stage,
@@ -627,21 +659,63 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
     try {
       if (prepared.backup)
         await this.restoreWorkspace(attemptId, prepared.backup);
-      const status = await this.runAttempt(
+      await this.traceSetup(
+        attemptId,
+        "attempt_workflow_restore_completed",
+        startedAt,
+        {
+          stage: prepared.attempt.stage,
+          backupId: prepared.backup?.id ?? null,
+        },
+      );
+    } catch (error) {
+      await this.traceSetup(
+        attemptId,
+        "attempt_workflow_restore_failed",
+        startedAt,
+        {
+          errorType:
+            error instanceof Error ? error.constructor.name : typeof error,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
+      throw error;
+    }
+  }
+
+  async executePreparedAttempt(attemptId: string): Promise<AttemptCompletion> {
+    const prepared = await this.durableState.storage.get<PreparedAttempt>(
+      `prepared:${attemptId}`,
+    );
+    if (!prepared) throw new Error("prepared_attempt_missing");
+    const startedAt = Date.now();
+    await this.traceSetup(
+      attemptId,
+      "attempt_workflow_execution_started",
+      undefined,
+      { stage: prepared.attempt.stage },
+    );
+    try {
+      const response = await this.runAttempt(
         "/assign",
         prepared.attempt,
         prepared.attemptSecret,
-        prepared.callbackUrl,
+        prepared.controlPlaneUrl,
       );
-      if (status !== 202) throw new Error(`sandbox_dispatch_http_${status}`);
+      if (response.status !== 200)
+        throw new Error(`sandbox_execution_http_${response.status}`);
+      const completion = attemptCompletion(
+        JSON.parse(response.responseBody) as unknown,
+        prepared,
+      );
       await this.durableState.storage.delete(`prepared:${attemptId}`);
       await this.traceSetup(
         attemptId,
         "attempt_workflow_execution_completed",
         startedAt,
-        { status },
+        { status: response.status },
       );
-      return status;
+      return completion;
     } catch (error) {
       await this.traceSetup(
         attemptId,
@@ -688,12 +762,13 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
     path: "/bootstrap" | "/assign",
     attempt: AttemptAssignment,
     attemptSecret: string,
-    callbackUrl?: string,
-  ): Promise<number> {
-    if (attempt.deadlineAt <= Date.now()) return 409;
+    controlPlaneUrl?: string,
+  ): Promise<RunnerHttpResult> {
+    if (attempt.deadlineAt <= Date.now())
+      return { status: 409, responseBody: "" };
 
-    // Agent work continues asynchronously after /assign returns. Completion,
-    // cancellation, and expired-lease recovery explicitly destroy the sandbox.
+    // The caller remains attached through /assign until the runner returns a
+    // completion. Settlement, cancellation, and recovery destroy the sandbox.
     const setupStartedAt = Date.now();
     await this.traceSetup(attempt.id, "run_attempt_started", undefined, {
       path,
@@ -705,7 +780,7 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
       await this.setKeepAlive(true);
       await this.traceSetup(attempt.id, "keepalive_completed", stepStartedAt);
 
-      const allowedHosts = attemptAllowedHosts(attempt, callbackUrl);
+      const allowedHosts = attemptAllowedHosts(attempt, controlPlaneUrl);
       stepStartedAt = Date.now();
       await this.traceSetup(attempt.id, "network_policy_started", undefined, {
         allowedHostCount: allowedHosts.length,
@@ -829,8 +904,8 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
             headers: {
               "content-type": "application/json",
               "x-roundhouse-attempt-secret": attemptSecret,
-              ...(callbackUrl
-                ? { "x-roundhouse-callback-url": callbackUrl }
+              ...(controlPlaneUrl
+                ? { "x-roundhouse-control-plane-url": controlPlaneUrl }
                 : {}),
             },
             body: JSON.stringify(attempt),
@@ -855,7 +930,10 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
         setupStartedAt,
         { status: response.status },
       );
-      return response.status;
+      return {
+        status: response.status,
+        responseBody: await response.text(),
+      };
     } catch (error) {
       await this.traceSetup(attempt.id, "run_attempt_failed", setupStartedAt, {
         errorType:

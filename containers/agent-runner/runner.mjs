@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createServer } from "node:http";
-import { createHash, createHmac } from "node:crypto";
+import { createHash } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -29,7 +29,6 @@ const jsonHeaders = Object.freeze({
   "cache-control": "no-store",
   "content-type": "application/json; charset=utf-8",
 });
-const acceptedAttempts = new Set();
 const runnerContext = new AsyncLocalStorage();
 const devcontainerCli =
   "/opt/roundhouse/containers/agent-runner/node_modules/.bin/devcontainer";
@@ -50,7 +49,7 @@ function stable(value) {
   return value;
 }
 
-function unsignedCallback(assignment, checkpoint, result) {
+export function completionResult(assignment, checkpoint, result) {
   return {
     attemptId: assignment.id,
     expectedRevision: assignment.runRevision,
@@ -60,32 +59,13 @@ function unsignedCallback(assignment, checkpoint, result) {
   };
 }
 
-export function completionRequest(
-  assignment,
-  checkpoint,
-  callbackUrl,
-  attemptSecret,
-  result,
-) {
-  const unsigned = unsignedCallback(assignment, checkpoint, result);
-  const payload = JSON.stringify(stable(unsigned));
-  const signature = createHmac("sha256", attemptSecret)
-    .update(payload)
-    .digest("hex");
-  return new Request(callbackUrl, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ ...unsigned, signature }),
-  });
-}
-
 export function activityRequest(
   assignment,
-  callbackUrl,
+  controlPlaneUrl,
   attemptSecret,
   progress,
 ) {
-  return new Request(new URL("/attempts/activity", callbackUrl), {
+  return new Request(new URL("/attempts/activity", controlPlaneUrl), {
     method: "POST",
     headers: {
       ...(progress ? { "content-type": "application/json" } : {}),
@@ -99,10 +79,10 @@ export function activityRequest(
 
 export function artifactWriteTokenRequest(
   assignment,
-  callbackUrl,
+  controlPlaneUrl,
   attemptSecret,
 ) {
-  return new Request(new URL("/attempts/artifact-token", callbackUrl), {
+  return new Request(new URL("/attempts/artifact-token", controlPlaneUrl), {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -114,8 +94,8 @@ export function artifactWriteTokenRequest(
   });
 }
 
-function screenshotRequest(assignment, callbackUrl, attemptSecret, input) {
-  return new Request(new URL("/attempts/screenshots", callbackUrl), {
+function screenshotRequest(assignment, controlPlaneUrl, attemptSecret, input) {
+  return new Request(new URL("/attempts/screenshots", controlPlaneUrl), {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -129,11 +109,11 @@ function screenshotRequest(assignment, callbackUrl, attemptSecret, input) {
 
 async function refreshArtifactWriteToken(
   assignment,
-  callbackUrl,
+  controlPlaneUrl,
   attemptSecret,
 ) {
   const response = await fetch(
-    artifactWriteTokenRequest(assignment, callbackUrl, attemptSecret),
+    artifactWriteTokenRequest(assignment, controlPlaneUrl, attemptSecret),
   );
   runnerLog("info", "artifact_write_token_response", {
     status: response.status,
@@ -153,14 +133,14 @@ async function refreshArtifactWriteToken(
 
 async function reportActivity(
   assignment,
-  callbackUrl,
+  controlPlaneUrl,
   attemptSecret,
   progress,
 ) {
   try {
     const response = await observeResponse(
       await fetch(
-        activityRequest(assignment, callbackUrl, attemptSecret, progress),
+        activityRequest(assignment, controlPlaneUrl, attemptSecret, progress),
       ),
       { api: "control_plane", operation: "report_activity" },
       { write: writeApiResponseLog },
@@ -1302,7 +1282,7 @@ async function structuredAgent(
       const response = await fetch(
         screenshotRequest(
           assignment,
-          assignment.activityCallbackUrl,
+          assignment.controlPlaneUrl,
           attemptSecret,
           { ...params, sourceHead, sourceTree },
         ),
@@ -1366,25 +1346,20 @@ async function structuredAgent(
   let activity = Promise.resolve();
   const queueActivity = (force = false) => {
     if (
-      typeof assignment.activityCallbackUrl !== "string" ||
+      typeof assignment.controlPlaneUrl !== "string" ||
       (!force && Date.now() - lastActivityAt < 15_000)
     )
       return;
     lastActivityAt = Date.now();
     activity = activity
       .then(() =>
-        reportActivity(
-          assignment,
-          assignment.activityCallbackUrl,
-          attemptSecret,
-          {
-            phase: "command_output",
-            operation,
-            durationMs: Date.now() - startedAt,
-            stdoutBytes: 0,
-            stderrBytes: 0,
-          },
-        ),
+        reportActivity(assignment, assignment.controlPlaneUrl, attemptSecret, {
+          phase: "command_output",
+          operation,
+          durationMs: Date.now() - startedAt,
+          stdoutBytes: 0,
+          stderrBytes: 0,
+        }),
       )
       .catch((error) =>
         runnerLog("error", "runner_progress_failed", {
@@ -1420,7 +1395,7 @@ async function structuredAgent(
         .then(() =>
           reportActivity(
             assignment,
-            assignment.activityCallbackUrl,
+            assignment.controlPlaneUrl,
             attemptSecret,
             observable,
           ),
@@ -2382,20 +2357,23 @@ export async function validateCheckpoint(assignment) {
 }
 
 async function completeAssignment(assignment, headers) {
-  const callbackUrl = headers["x-roundhouse-callback-url"];
+  const controlPlaneUrl = headers["x-roundhouse-control-plane-url"];
   const attemptSecret = headers["x-roundhouse-attempt-secret"];
-  if (typeof callbackUrl !== "string" || typeof attemptSecret !== "string")
-    return;
-  const agentAssignment = { ...assignment, activityCallbackUrl: callbackUrl };
+  if (typeof controlPlaneUrl !== "string" || typeof attemptSecret !== "string")
+    throw new Error("assignment_capability_missing");
+  const agentAssignment = {
+    ...assignment,
+    controlPlaneUrl,
+  };
   const progress = async (phase, details = {}) => {
-    await reportActivity(agentAssignment, callbackUrl, attemptSecret, {
+    await reportActivity(agentAssignment, controlPlaneUrl, attemptSecret, {
       phase,
       ...details,
     });
   };
   await progress("workspace_started");
   const directory = await prepareWorkspace(agentAssignment, (details) =>
-    reportActivity(agentAssignment, callbackUrl, attemptSecret, details),
+    reportActivity(agentAssignment, controlPlaneUrl, attemptSecret, details),
   );
   await progress("workspace_ready");
   await progress("agent_started");
@@ -2501,11 +2479,11 @@ async function completeAssignment(assignment, headers) {
     (checkpointProgress) =>
       reportActivity(
         agentAssignment,
-        callbackUrl,
+        controlPlaneUrl,
         attemptSecret,
         checkpointProgress,
       ),
-    () => refreshArtifactWriteToken(assignment, callbackUrl, attemptSecret),
+    () => refreshArtifactWriteToken(assignment, controlPlaneUrl, attemptSecret),
   );
   await progress("checkpoint_completed", {
     changedPathCount: checkpoint.changedPaths.length,
@@ -2534,22 +2512,10 @@ async function completeAssignment(assignment, headers) {
         routing: assignment.routing,
       }
     : undefined;
-  await progress("callback_started");
-  const response = await observeResponse(
-    await fetch(
-      completionRequest(
-        assignment,
-        checkpoint,
-        callbackUrl,
-        attemptSecret,
-        result,
-      ),
-    ),
-    { api: "control_plane", operation: "complete_attempt" },
-    { write: writeApiResponseLog },
-  );
-  if (!response.ok) throw new Error(`callback_http_${response.status}`);
-  await progress("callback_completed", { status: response.status });
+  await progress("completion_started");
+  const completion = completionResult(assignment, checkpoint, result);
+  await progress("completion_completed");
+  return completion;
 }
 
 function response(status, value, headers = {}) {
@@ -2622,9 +2588,7 @@ export function runnerResponse(method, rawUrl, body) {
       return response(405, { error: "method_not_allowed" }, { allow: "POST" });
     if (!validAssignment(body))
       return response(400, { error: "invalid_assignment" });
-    const duplicate = acceptedAttempts.has(body.id);
-    acceptedAttempts.add(body.id);
-    return response(202, { accepted: true, attemptId: body.id, duplicate });
+    return response(202, { accepted: true, attemptId: body.id });
   }
   if (path === "/bootstrap") {
     if (method !== "POST")
@@ -2643,7 +2607,42 @@ export function runnerResponse(method, rawUrl, body) {
   return response(404, { error: "not_found" });
 }
 
-export function createRunnerServer() {
+export function createAssignmentExecutor(
+  executeAssignment = completeAssignment,
+) {
+  const assignments = new Map();
+  return (body, headers) => {
+    let execution = assignments.get(body.id);
+    const duplicate = Boolean(execution);
+    if (!execution) {
+      execution = runnerContext.run(
+        { attemptId: body.id, stage: body.stage },
+        async () => {
+          runnerLog("info", "runner_attempt_started");
+          try {
+            const completion = await executeAssignment(body, headers);
+            runnerLog("info", "runner_attempt_completed");
+            return completion;
+          } catch (error) {
+            runnerLog("error", "runner_attempt_failed", {
+              error: error?.message ?? String(error),
+            });
+            throw error;
+          }
+        },
+      );
+      assignments.set(body.id, execution);
+    }
+    runnerLog("info", "runner_attempt_request_attached", {
+      attemptId: body.id,
+      duplicate,
+    });
+    return execution;
+  };
+}
+
+export function createRunnerServer(executeAssignment = completeAssignment) {
+  const executeAttachedAssignment = createAssignmentExecutor(executeAssignment);
   return createServer((request, reply) => {
     const chunks = [];
     request.on("data", (chunk) => chunks.push(chunk));
@@ -2657,6 +2656,43 @@ export function createRunnerServer() {
         const invalid = response(400, { error: "invalid_json" });
         reply.writeHead(invalid.status, invalid.headers);
         reply.end(invalid.body);
+        return;
+      }
+      if (request.url === "/assign" && request.method === "POST") {
+        const accepted = runnerResponse(request.method, request.url, body);
+        const controlPlaneUrl =
+          request.headers["x-roundhouse-control-plane-url"];
+        const attemptSecret = request.headers["x-roundhouse-attempt-secret"];
+        if (
+          accepted.status !== 202 ||
+          !body ||
+          typeof controlPlaneUrl !== "string" ||
+          typeof attemptSecret !== "string"
+        ) {
+          const invalid =
+            accepted.status === 202
+              ? response(400, { error: "assignment_capability_missing" })
+              : accepted;
+          reply.writeHead(invalid.status, invalid.headers);
+          reply.end(invalid.body);
+          return;
+        }
+        const execution = executeAttachedAssignment(body, {
+          "x-roundhouse-control-plane-url": controlPlaneUrl,
+          "x-roundhouse-attempt-secret": attemptSecret,
+        });
+        execution.then(
+          (completion) => {
+            const completed = response(200, completion);
+            reply.writeHead(completed.status, completed.headers);
+            reply.end(completed.body);
+          },
+          () => {
+            const failed = response(500, { error: "attempt_failed" });
+            reply.writeHead(failed.status, failed.headers);
+            reply.end(failed.body);
+          },
+        );
         return;
       }
       if (request.url === "/validate" && request.method === "POST" && body) {
@@ -2719,32 +2755,6 @@ export function createRunnerServer() {
       );
       reply.writeHead(result.status, result.headers);
       reply.end(result.body);
-      if (result.status === 202 && body) {
-        {
-          const headers = {
-            "x-roundhouse-callback-url":
-              request.headers["x-roundhouse-callback-url"],
-            "x-roundhouse-attempt-secret":
-              request.headers["x-roundhouse-attempt-secret"],
-          };
-          setImmediate(() => {
-            runnerContext.run(
-              { attemptId: body.id, stage: body.stage },
-              async () => {
-                runnerLog("info", "runner_attempt_started");
-                try {
-                  await completeAssignment(body, headers);
-                  runnerLog("info", "runner_attempt_completed");
-                } catch (error) {
-                  runnerLog("error", "runner_attempt_failed", {
-                    error: error?.message ?? String(error),
-                  });
-                }
-              },
-            );
-          });
-        }
-      }
     });
   });
 }

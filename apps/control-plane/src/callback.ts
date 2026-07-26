@@ -13,6 +13,8 @@ export interface AttemptCallback {
   readonly signature: string;
 }
 
+export type AttemptCompletion = Omit<AttemptCallback, "signature">;
+
 export interface CheckpointValidator {
   validate(input: AttemptCallback): Promise<void>;
 }
