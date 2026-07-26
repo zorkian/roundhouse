@@ -2576,8 +2576,12 @@ function validBootstrap(body) {
   }
 }
 
+export function runnerPathname(rawUrl) {
+  return new URL(rawUrl, "http://runner.invalid").pathname;
+}
+
 export function runnerResponse(method, rawUrl, body) {
-  const path = new URL(rawUrl, "http://runner.invalid").pathname;
+  const path = runnerPathname(rawUrl);
   if (path === "/health") {
     if (method !== "GET")
       return response(405, { error: "method_not_allowed" }, { allow: "GET" });
@@ -2658,7 +2662,14 @@ export function createRunnerServer(executeAssignment = completeAssignment) {
         reply.end(invalid.body);
         return;
       }
-      if (request.url === "/assign" && request.method === "POST") {
+      const rawUrl = request.url ?? "/";
+      const path = runnerPathname(rawUrl);
+      runnerLog("info", "runner_http_request", {
+        method: request.method ?? "",
+        rawUrl,
+        path,
+      });
+      if (path === "/assign" && request.method === "POST") {
         const accepted = runnerResponse(request.method, request.url, body);
         const controlPlaneUrl =
           request.headers["x-roundhouse-control-plane-url"];
@@ -2695,7 +2706,7 @@ export function createRunnerServer(executeAssignment = completeAssignment) {
         );
         return;
       }
-      if (request.url === "/validate" && request.method === "POST" && body) {
+      if (path === "/validate" && request.method === "POST" && body) {
         validateCheckpoint(body).then(
           () => {
             reply.writeHead(204, jsonHeaders);
@@ -2722,7 +2733,7 @@ export function createRunnerServer(executeAssignment = completeAssignment) {
         );
         return;
       }
-      if (request.url === "/bootstrap" && request.method === "POST" && body) {
+      if (path === "/bootstrap" && request.method === "POST" && body) {
         if (!validBootstrap(body)) {
           const invalid = response(400, { error: "invalid_bootstrap" });
           reply.writeHead(invalid.status, invalid.headers);
@@ -2748,11 +2759,7 @@ export function createRunnerServer(executeAssignment = completeAssignment) {
         );
         return;
       }
-      const result = runnerResponse(
-        request.method ?? "",
-        request.url ?? "/",
-        body,
-      );
+      const result = runnerResponse(request.method ?? "", rawUrl, body);
       reply.writeHead(result.status, result.headers);
       reply.end(result.body);
     });
