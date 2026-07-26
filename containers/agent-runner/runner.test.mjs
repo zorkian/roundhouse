@@ -741,7 +741,11 @@ describe("V2 agent runner", () => {
       artifactTokenId: assignment.artifact.tokenId,
       result: { outcome: "ok" },
     };
-    const execute = vi.fn(async () => completion);
+    const execute = vi.fn(async (current) => {
+      if (current.id === "attempt_failure")
+        throw new TypeError("integration_checkpoint_missing");
+      return completion;
+    });
     const server = createRunnerServer(execute);
     await new Promise((resolveListen, rejectListen) => {
       server.once("error", rejectListen);
@@ -751,35 +755,47 @@ describe("V2 agent runner", () => {
       const address = server.address();
       if (!address || typeof address === "string")
         throw new Error("runner_test_address_missing");
-      const result = await new Promise((resolveResponse, rejectResponse) => {
-        const request = httpRequest(
-          {
-            hostname: "127.0.0.1",
-            port: address.port,
-            method: "POST",
-            path: "http://runner/assign",
-            headers: {
-              "content-type": "application/json",
-              "x-roundhouse-control-plane-url": "https://control.invalid",
-              "x-roundhouse-attempt-secret": "attempt-secret",
+      const requestAssignment = (current) =>
+        new Promise((resolveResponse, rejectResponse) => {
+          const request = httpRequest(
+            {
+              hostname: "127.0.0.1",
+              port: address.port,
+              method: "POST",
+              path: "http://runner/assign",
+              headers: {
+                "content-type": "application/json",
+                "x-roundhouse-control-plane-url": "https://control.invalid",
+                "x-roundhouse-attempt-secret": "attempt-secret",
+              },
             },
-          },
-          (response) => {
-            const chunks = [];
-            response.on("data", (chunk) => chunks.push(chunk));
-            response.on("end", () =>
-              resolveResponse({
-                status: response.statusCode,
-                body: JSON.parse(Buffer.concat(chunks).toString()),
-              }),
-            );
-          },
-        );
-        request.once("error", rejectResponse);
-        request.end(JSON.stringify(assignment));
-      });
+            (response) => {
+              const chunks = [];
+              response.on("data", (chunk) => chunks.push(chunk));
+              response.on("end", () =>
+                resolveResponse({
+                  status: response.statusCode,
+                  body: JSON.parse(Buffer.concat(chunks).toString()),
+                }),
+              );
+            },
+          );
+          request.once("error", rejectResponse);
+          request.end(JSON.stringify(current));
+        });
+      const result = await requestAssignment(assignment);
       expect(result).toEqual({ status: 200, body: completion });
-      expect(execute).toHaveBeenCalledOnce();
+      await expect(
+        requestAssignment({ ...assignment, id: "attempt_failure" }),
+      ).resolves.toEqual({
+        status: 500,
+        body: {
+          error: "attempt_failed",
+          errorType: "TypeError",
+          detail: "integration_checkpoint_missing",
+        },
+      });
+      expect(execute).toHaveBeenCalledTimes(2);
     } finally {
       await new Promise((resolveClose, rejectClose) =>
         server.close((error) =>
