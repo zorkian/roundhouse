@@ -82,12 +82,13 @@ Current intentional limitations:
   product behavior;
 - Roundhouse currently begins with an issue start and finishes at merge; and
 - deployment observation, production monitoring, organizational knowledge,
-  SIEM export, and arbitrary repository-specific workflows are not implemented.
+  SIEM export, repository-defined triggers, and repository-supplied executors
+  are not implemented.
 
 ## 3. Target workflow architecture
 
-The fixed lifecycle will become a repository-defined declarative workflow
-graph. It is a state machine rather than a strict DAG: branches, joins, human
+The lifecycle is a repository-defined declarative workflow graph. It is a state
+machine rather than a strict DAG: branches, joins, human
 waits, clarification, validation, review, and repair may return to earlier
 nodes without an arbitrary traversal count.
 
