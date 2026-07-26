@@ -317,10 +317,11 @@ answer a clarification while the run waits. GitHub permissions remain the
 authority for a human merge. Under maintainer merge mode, Roundhouse leaves a
 clean CI-passing pull request and completes when GitHub reports its merge.
 
-The dashboard will eventually visualize the compiled workflow, selected path,
-current node, node evidence, capability set, and configuration revision. A
-future editor will propose repository-file changes through a GitHub pull
-request. D1 will not become a second configuration authority.
+The dashboard visualizes the compiled workflow graph and configuration revision
+from the latest immutable run snapshot. Its editor validates changes with the
+production compiler, then hands the repository-file proposal to GitHub's
+authenticated branch and pull-request flow. D1 is not a second configuration
+authority.
 
 ## 7. Default issue-to-merge workflow
 
@@ -463,6 +464,13 @@ neither interface can expand authority.
 
 Add a dashboard graph view and editor using the same schema and compiler. Show
 node authority and routes and propose changes through a GitHub pull request.
+
+Implemented: each enrolled repository has a graph page sourced from its latest
+immutable run snapshot. It shows executors, capabilities, routes, workflow hash,
+and source commit; serializes the compiled graph back into repository YAML; and
+validates edits through the production compiler. Proposal creation is handed
+to GitHub's authenticated editor and pull-request flow, so the public dashboard
+does not gain repository mutation authority and D1 remains evidence only.
 
 Exit gate: a maintainer can round-trip the active workflow without D1 becoming
 configuration authority or a protected change silently altering an active run.

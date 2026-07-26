@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import {
+  compileWorkflow,
   immutableAttemptId,
   isModelRoute,
   profileModelForAttempt,
@@ -35,6 +36,7 @@ import {
 import { D1RunRepository, type D1Like } from "./d1-store.js";
 import { renderDashboard } from "./dashboard.js";
 import { renderRunDetails } from "./run-details.js";
+import { renderWorkflowView } from "./workflow-view.js";
 import {
   acceptGitHubCheckSuite,
   acceptGitHubPullRequest,
@@ -1257,6 +1259,99 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
         return json({ error: "method_not_allowed" }, 405, { allow: "GET" });
       const runs = await new D1RunRepository(env.DB).listRuns();
       return html(renderDashboard(runs));
+    }
+    const workflowMatch = url.pathname.match(
+      /^\/repositories\/([^/]+)\/([^/]+)\/workflow$/,
+    );
+    if (workflowMatch && isPublicUiRequest()) {
+      let repositoryName: string;
+      try {
+        repositoryName = `${decodeURIComponent(workflowMatch[1]!)}\/${decodeURIComponent(workflowMatch[2]!)}`;
+      } catch {
+        return json({ error: "not_found" }, 404);
+      }
+      const repository = new D1RunRepository(env.DB);
+      const summary = (await repository.listRuns()).find(
+        (candidate) => candidate.run.repository === repositoryName,
+      );
+      const run = summary ? await repository.get(summary.run.id) : undefined;
+      if (!run?.profile?.workflow) return json({ error: "not_found" }, 404);
+      if (request.method === "GET") {
+        console.log(
+          JSON.stringify({
+            message: "workflow_graph_rendered",
+            repository: repositoryName,
+            runId: run.id,
+            runRevision: run.revision,
+            sourceCommit: run.profile.workflow.sourceCommit,
+            workflowHash: run.profile.workflow.hash,
+            nodes: Object.keys(run.profile.workflow.nodes).length,
+          }),
+        );
+        return html(renderWorkflowView(run));
+      }
+      if (request.method !== "POST")
+        return json({ error: "method_not_allowed" }, 405, {
+          allow: "GET, POST",
+        });
+      let input: { source?: unknown; sourceCommit?: unknown };
+      try {
+        input = (await request.json()) as typeof input;
+      } catch {
+        return json({ error: "invalid_request" }, 400);
+      }
+      if (
+        typeof input.source !== "string" ||
+        input.sourceCommit !== run.profile.workflow.sourceCommit
+      )
+        return json({ error: "invalid_request" }, 400);
+      const promptContents = new Map<string, string>();
+      for (const node of Object.values(run.profile.workflow.nodes)) {
+        for (const prompt of [
+          node.agent?.prompt,
+          node.human?.prompt,
+          ...(node.review?.reviewers.map((reviewer) => reviewer.prompt) ?? []),
+        ])
+          if (prompt) promptContents.set(prompt.sourcePath, prompt.content);
+      }
+      try {
+        const compiled = await compileWorkflow(
+          input.source,
+          run.profile.workflow.sourceCommit,
+          async (path) => {
+            const content = promptContents.get(path);
+            if (content === undefined)
+              throw new Error("workflow_editor_prompt_unknown");
+            return content;
+          },
+        );
+        console.log(
+          JSON.stringify({
+            message: "workflow_editor_validation_completed",
+            repository: repositoryName,
+            sourceCommit: compiled.sourceCommit,
+            workflowHash: compiled.hash,
+            nodes: Object.keys(compiled.nodes).length,
+          }),
+        );
+        return json({
+          valid: true,
+          hash: compiled.hash,
+          nodes: Object.keys(compiled.nodes).length,
+        });
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "workflow_invalid";
+        console.warn(
+          JSON.stringify({
+            message: "workflow_editor_validation_failed",
+            repository: repositoryName,
+            sourceCommit: run.profile.workflow.sourceCommit,
+            error: message,
+          }),
+        );
+        return json({ error: message }, 400);
+      }
     }
     const detailsMatch = url.pathname.match(
       /^\/repositories\/([^/]+)\/([^/]+)\/issues\/(\d+)$/,

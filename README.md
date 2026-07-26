@@ -77,6 +77,12 @@ exact-head audit envelope.
 Repositories do not supply executable control-plane code or expand
 Roundhouse's credential and capability boundaries.
 
+The development dashboard links each enrolled repository to a workflow page
+that visualizes nodes, routes, and authority from an immutable run snapshot.
+It serializes that snapshot back to repository YAML, validates edits with the
+same compiler, and uses GitHub's authenticated editor to create the proposed
+branch and pull request. D1 never becomes workflow configuration authority.
+
 ## Project status
 
 Roundhouse is an active V2 prototype. The end-to-end development workflow can

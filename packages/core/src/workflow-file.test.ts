@@ -3,7 +3,11 @@
 
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { compileWorkflow, defaultIssueWorkflowSource } from "./workflow.js";
+import {
+  compileWorkflow,
+  defaultIssueWorkflowSource,
+  serializeWorkflow,
+} from "./workflow.js";
 
 describe("Roundhouse repository workflow", () => {
   it("compiles the checked-in issue-to-merge graph", async () => {
@@ -41,5 +45,11 @@ describe("Roundhouse repository workflow", () => {
       "checks",
       "merge",
     ]);
+    const roundTripped = await compileWorkflow(
+      serializeWorkflow(workflow),
+      "a".repeat(40),
+      (path) => readFile(path, "utf8"),
+    );
+    expect(roundTripped).toEqual(workflow);
   });
 });

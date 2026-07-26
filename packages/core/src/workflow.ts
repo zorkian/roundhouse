@@ -1,7 +1,7 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import { parseDocument } from "yaml";
+import { parseDocument, stringify } from "yaml";
 import type { WaitingReason } from "./run.js";
 
 export const workflowSourcePath = ".roundhouse/workflow.yaml" as const;
@@ -402,6 +402,99 @@ export interface WorkflowAdvance {
   readonly currentNodeId: string;
   readonly waitingReason?: WaitingReason;
   readonly selected: WorkflowTransition;
+}
+
+export function serializeWorkflow(workflow: CompiledWorkflow): string {
+  const nodes = Object.fromEntries(
+    Object.entries(workflow.nodes).map(([id, definition]) => [
+      id,
+      {
+        executor: definition.executor,
+        ...(definition.role ? { role: definition.role } : {}),
+        ...(definition.agent
+          ? {
+              agent: {
+                task: definition.agent.task,
+                inputs: definition.agent.inputs,
+                result: definition.agent.result,
+                model: definition.agent.model,
+                ...(definition.agent.prompt
+                  ? {
+                      prompt: definition.agent.prompt.sourcePath.replace(
+                        /^\.roundhouse\//,
+                        "",
+                      ),
+                    }
+                  : {}),
+              },
+            }
+          : {}),
+        ...(definition.review
+          ? {
+              review: {
+                reviewers: definition.review.reviewers.map((reviewer) => ({
+                  id: reviewer.id,
+                  label: reviewer.label,
+                  activation: reviewer.activation,
+                  ...(reviewer.selectedBy
+                    ? { selected_by: reviewer.selectedBy }
+                    : {}),
+                  ...(reviewer.selects.length
+                    ? { selects: reviewer.selects }
+                    : {}),
+                  mode: reviewer.mode,
+                  blocking_severities: reviewer.blockingSeverities,
+                  model: reviewer.model,
+                  ...(reviewer.prompt
+                    ? {
+                        prompt: reviewer.prompt.sourcePath.replace(
+                          /^\.roundhouse\//,
+                          "",
+                        ),
+                      }
+                    : {}),
+                })),
+              },
+            }
+          : {}),
+        ...(definition.human
+          ? {
+              human: {
+                reason: definition.human.reason,
+                audience: definition.human.audience,
+                ...(definition.human.prompt
+                  ? {
+                      prompt: definition.human.prompt.sourcePath.replace(
+                        /^\.roundhouse\//,
+                        "",
+                      ),
+                    }
+                  : {}),
+              },
+            }
+          : {}),
+        ...(definition.external
+          ? {
+              external: {
+                adapter: definition.external.adapter,
+                event: definition.external.event,
+                result: definition.external.resultKey,
+              },
+            }
+          : {}),
+        ...(definition.capabilities.length
+          ? { capabilities: definition.capabilities }
+          : {}),
+        ...(definition.outputs.length ? { outputs: definition.outputs } : {}),
+        transitions: definition.transitions,
+      },
+    ]),
+  );
+  return stringify({
+    version: workflow.version,
+    triggers: workflow.triggers,
+    nodes,
+  });
 }
 
 const executorCapabilities: Readonly<
