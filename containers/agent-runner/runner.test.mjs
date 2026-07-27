@@ -11,7 +11,6 @@ import {
   activityRequest,
   agentToolNames,
   agentSystemPrompt,
-  agentRuntime,
   artifactWriteTokenRequest,
   bootstrapWorkspace,
   commandProgress,
@@ -36,7 +35,6 @@ import {
   reproductionSchema,
   requestClassification,
   repositoryChangedPaths,
-  runnerIdentity,
   runnerResponse,
   sourceSnapshot,
   visualEvidenceRequested,
@@ -45,20 +43,37 @@ import {
 } from "./runner.mjs";
 
 const testRoot = resolve(process.cwd(), ".runner-test-workspaces");
+
+function git(cwd, args, options = {}) {
+  return execFileSync("git", args, { cwd, ...options });
+}
+
+function commit(cwd, message, options = {}) {
+  return git(
+    cwd,
+    [
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@invalid",
+      "commit",
+      "-m",
+      message,
+    ],
+    options,
+  );
+}
+
+function head(cwd, ref = "HEAD") {
+  return git(cwd, ["rev-parse", ref], { encoding: "utf8" }).trim();
+}
+
 afterEach(async () => {
   vi.restoreAllMocks();
   await rm(testRoot, { recursive: true, force: true });
 });
 
 describe("V2 agent runner", () => {
-  it("uses Pi inside the Cloudflare Sandbox boundary", () => {
-    expect(agentRuntime).toBe("pi");
-  });
-
-  it("marks agent commands as unattended", () => {
-    expect(process.env.CI).toBe("true");
-  });
-
   it("derives tools from immutable attempt capabilities", () => {
     expect(
       agentToolNames({
@@ -87,27 +102,12 @@ describe("V2 agent runner", () => {
     const source = resolve(testRoot, "source");
     const remote = resolve(testRoot, "artifact.git");
     await mkdir(source, { recursive: true });
-    execFileSync("git", ["init", "--initial-branch=main"], { cwd: source });
+    git(source, ["init", "--initial-branch=main"]);
     await writeFile(resolve(source, "README.md"), "baseline\n");
-    execFileSync("git", ["add", "README.md"], { cwd: source });
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@invalid",
-        "commit",
-        "-m",
-        "baseline",
-      ],
-      { cwd: source },
-    );
-    const baseCommit = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: source,
-      encoding: "utf8",
-    }).trim();
-    execFileSync("git", ["clone", "--bare", source, remote]);
+    git(source, ["add", "README.md"]);
+    commit(source, "baseline");
+    const baseCommit = head(source);
+    git(source, ["clone", "--bare", source, remote]);
     const assignment = {
       id: "run_refetch_rev_1",
       runId: "run_refetch",
@@ -131,48 +131,21 @@ describe("V2 agent runner", () => {
     const directory = await prepareWorkspace(assignment);
 
     await writeFile(resolve(source, "advanced.txt"), "advanced\n");
-    execFileSync("git", ["add", "advanced.txt"], { cwd: source });
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@invalid",
-        "commit",
-        "-m",
-        "advance",
-      ],
-      { cwd: source },
-    );
-    const advancedHead = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: source,
-      encoding: "utf8",
-    }).trim();
-    const advancedTree = execFileSync(
-      "git",
-      ["rev-parse", `${advancedHead}^{tree}`],
-      { cwd: source, encoding: "utf8" },
-    ).trim();
-    execFileSync("git", ["push", remote, "HEAD:refs/heads/main"], {
-      cwd: source,
-    });
+    git(source, ["add", "advanced.txt"]);
+    commit(source, "advance");
+    const advancedHead = head(source);
+    const advancedTree = head(source, `${advancedHead}^{tree}`);
+    git(source, ["push", remote, "HEAD:refs/heads/main"]);
 
-    const commitObject = execFileSync(
-      "git",
-      ["cat-file", "commit", advancedHead],
-      { cwd: source },
-    );
+    const commitObject = git(source, ["cat-file", "commit", advancedHead]);
     expect(
-      execFileSync("git", ["hash-object", "-t", "commit", "-w", "--stdin"], {
-        cwd: directory,
+      git(directory, ["hash-object", "-t", "commit", "-w", "--stdin"], {
         input: commitObject,
         encoding: "utf8",
       }).trim(),
     ).toBe(advancedHead);
     expect(() =>
-      execFileSync("git", ["cat-file", "-e", advancedTree], {
-        cwd: directory,
+      git(directory, ["cat-file", "-e", advancedTree], {
         stdio: "ignore",
       }),
     ).toThrow();
@@ -702,17 +675,6 @@ describe("V2 agent runner", () => {
     });
   });
 
-  it("reports only its versioned runner identity", () => {
-    expect(runnerResponse("GET", "/health")).toEqual({
-      status: 200,
-      headers: {
-        "cache-control": "no-store",
-        "content-type": "application/json; charset=utf-8",
-      },
-      body: JSON.stringify({ ...runnerIdentity, ok: true }),
-    });
-  });
-
   it("rejects undeclared routes and mutating health requests", () => {
     expect(runnerResponse("POST", "/health")).toMatchObject({
       status: 405,
@@ -984,45 +946,16 @@ describe("V2 agent runner", () => {
     const source = resolve(testRoot, "bootstrap-source");
     const artifact = resolve(testRoot, "bootstrap-artifact.git");
     await mkdir(source, { recursive: true });
-    execFileSync("git", ["init", "--initial-branch=main"], { cwd: source });
+    git(source, ["init", "--initial-branch=main"]);
     await writeFile(resolve(source, "README.md"), "baseline\n");
-    execFileSync("git", ["add", "README.md"], { cwd: source });
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@invalid",
-        "commit",
-        "-m",
-        "baseline",
-      ],
-      { cwd: source },
-    );
-    const pinnedHead = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: source,
-      encoding: "utf8",
-    }).trim();
+    git(source, ["add", "README.md"]);
+    commit(source, "baseline");
+    const pinnedHead = head(source);
     await writeFile(resolve(source, "README.md"), "baseline\ncurrent\n");
-    execFileSync("git", ["add", "README.md"], { cwd: source });
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@invalid",
-        "commit",
-        "-m",
-        "current",
-      ],
-      { cwd: source },
-    );
-    execFileSync("git", ["init", "--bare", "--initial-branch=main", artifact]);
-    execFileSync("git", ["config", "receive.shallowUpdate", "true"], {
-      cwd: artifact,
-    });
+    git(source, ["add", "README.md"]);
+    commit(source, "current");
+    git(process.cwd(), ["init", "--bare", "--initial-branch=main", artifact]);
+    git(artifact, ["config", "receive.shallowUpdate", "true"]);
     await bootstrapWorkspace({
       id: "attempt_bootstrap_git",
       artifact: { remote: artifact, token: "artifact-token" },
@@ -1032,15 +965,9 @@ describe("V2 agent runner", () => {
         head: pinnedHead,
       },
     });
+    expect(head(artifact, "refs/heads/main")).toBe(pinnedHead);
     expect(
-      execFileSync("git", ["rev-parse", "refs/heads/main"], {
-        cwd: artifact,
-        encoding: "utf8",
-      }).trim(),
-    ).toBe(pinnedHead);
-    expect(
-      execFileSync("git", ["rev-list", "--count", "refs/heads/main"], {
-        cwd: artifact,
+      git(artifact, ["rev-list", "--count", "refs/heads/main"], {
         encoding: "utf8",
       }).trim(),
     ).toBe("1");
@@ -1150,36 +1077,20 @@ describe("V2 agent runner", () => {
       remote = resolve(testRoot, "artifact.git"),
       githubRemote = resolve(testRoot, "github.git");
     await mkdir(source, { recursive: true });
-    execFileSync("git", ["init", "--initial-branch=main"], { cwd: source });
+    git(source, ["init", "--initial-branch=main"]);
     await writeFile(resolve(source, "README.md"), "fake GitHub baseline\n");
     await writeFile(resolve(source, ".gitignore"), "node_modules/\n");
-    execFileSync("git", ["add", "README.md", ".gitignore"], { cwd: source });
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@invalid",
-        "commit",
-        "-m",
-        "baseline",
-      ],
-      {
-        cwd: source,
-        env: {
-          ...process.env,
-          GIT_AUTHOR_DATE: "2000-01-01T00:00:00Z",
-          GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z",
-        },
+    git(source, ["add", "README.md", ".gitignore"]);
+    commit(source, "baseline", {
+      env: {
+        ...process.env,
+        GIT_AUTHOR_DATE: "2000-01-01T00:00:00Z",
+        GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z",
       },
-    );
-    const baseCommit = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: source,
-      encoding: "utf8",
-    }).trim();
-    execFileSync("git", ["clone", "--bare", source, remote]);
-    execFileSync("git", ["clone", "--bare", source, githubRemote]);
+    });
+    const baseCommit = head(source);
+    git(source, ["clone", "--bare", source, remote]);
+    git(source, ["clone", "--bare", source, githubRemote]);
     const assignment = {
       id: "run_git_rev_1",
       runId: "run_git",
@@ -1213,14 +1124,12 @@ describe("V2 agent runner", () => {
     );
     expect(snapshot.sourceHead).toBe(baseCommit);
     expect(
-      execFileSync("git", ["show", `${snapshot.sourceTree}:README.md`], {
-        cwd: firstDirectory,
+      git(firstDirectory, ["show", `${snapshot.sourceTree}:README.md`], {
         encoding: "utf8",
       }),
     ).toBe("fake GitHub baseline\nimplemented change\n");
     expect(
-      execFileSync("git", ["diff", "--cached", "--name-only"], {
-        cwd: firstDirectory,
+      git(firstDirectory, ["diff", "--cached", "--name-only"], {
         encoding: "utf8",
       }),
     ).toBe("");
@@ -1251,12 +1160,7 @@ describe("V2 agent runner", () => {
     const recovered = await checkpointWorkspace(assignment, recoveredDirectory);
     expect(recovered.outputHead).not.toBe(first.outputHead);
     expect(recovered.changedPaths).toEqual(["README.md"]);
-    expect(
-      execFileSync("git", ["rev-parse", assignment.artifact.ref], {
-        cwd: remote,
-        encoding: "utf8",
-      }).trim(),
-    ).toBe(recovered.outputHead);
+    expect(head(remote, assignment.artifact.ref)).toBe(recovered.outputHead);
     expect(first.inputHead).toBe(baseCommit);
     expect(first.outputHead).toMatch(/^[a-f0-9]{40}$/);
     expect(first.changedPaths).toEqual(["README.md"]);
@@ -1392,170 +1296,76 @@ describe("V2 agent runner", () => {
       remoteHead: first.outputHead,
     });
     expect(
-      execFileSync(
-        "git",
-        ["--git-dir", githubRemote, "rev-parse", "roundhouse/issue-42"],
-        { encoding: "utf8" },
-      ).trim(),
+      git(process.cwd(), [
+        "--git-dir",
+        githubRemote,
+        "rev-parse",
+        "roundhouse/issue-42",
+      ])
+        .toString()
+        .trim(),
     ).toBe(first.outputHead);
   });
 
   it("derives literal changed paths without Git quoting", async () => {
     const source = resolve(testRoot, "quoted-paths");
     await mkdir(resolve(source, ".github", "workflows"), { recursive: true });
-    execFileSync("git", ["init", "--initial-branch=main"], { cwd: source });
+    git(source, ["init", "--initial-branch=main"]);
     await writeFile(resolve(source, "README.md"), "base\n");
-    execFileSync("git", ["add", "README.md"], { cwd: source });
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@invalid",
-        "commit",
-        "-m",
-        "base",
-      ],
-      { cwd: source },
-    );
-    const base = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: source,
-      encoding: "utf8",
-    }).trim();
+    git(source, ["add", "README.md"]);
+    commit(source, "base");
+    const base = head(source);
     await writeFile(resolve(source, ".github", "workflows", "é.yml"), "x\n");
-    execFileSync("git", ["add", "--all"], { cwd: source });
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@invalid",
-        "commit",
-        "-m",
-        "unicode path",
-      ],
-      { cwd: source },
-    );
-    const head = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: source,
-      encoding: "utf8",
-    }).trim();
+    git(source, ["add", "--all"]);
+    commit(source, "unicode path");
+    const changedHead = head(source);
 
-    await expect(repositoryChangedPaths(source, base, head)).resolves.toEqual([
-      ".github/workflows/é.yml",
-    ]);
+    await expect(
+      repositoryChangedPaths(source, base, changedHead),
+    ).resolves.toEqual([".github/workflows/é.yml"]);
   });
 
   it("includes both sides when a protected path is renamed", async () => {
     const source = resolve(testRoot, "renamed-paths");
     await mkdir(resolve(source, ".github", "workflows"), { recursive: true });
-    execFileSync("git", ["init", "--initial-branch=main"], { cwd: source });
+    git(source, ["init", "--initial-branch=main"]);
     await writeFile(
       resolve(source, ".github", "workflows", "build.yml"),
       "x\n",
     );
-    execFileSync("git", ["add", "--all"], { cwd: source });
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@invalid",
-        "commit",
-        "-m",
-        "base",
-      ],
-      { cwd: source },
-    );
-    const base = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: source,
-      encoding: "utf8",
-    }).trim();
-    execFileSync("git", ["mv", ".github/workflows/build.yml", "build.yml"], {
-      cwd: source,
-    });
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@invalid",
-        "commit",
-        "-m",
-        "rename",
-      ],
-      { cwd: source },
-    );
-    const head = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: source,
-      encoding: "utf8",
-    }).trim();
+    git(source, ["add", "--all"]);
+    commit(source, "base");
+    const base = head(source);
+    git(source, ["mv", ".github/workflows/build.yml", "build.yml"]);
+    commit(source, "rename");
+    const changedHead = head(source);
 
-    await expect(repositoryChangedPaths(source, base, head)).resolves.toEqual([
-      ".github/workflows/build.yml",
-      "build.yml",
-    ]);
+    await expect(
+      repositoryChangedPaths(source, base, changedHead),
+    ).resolves.toEqual([".github/workflows/build.yml", "build.yml"]);
   });
 
   it("rejects repository paths containing malformed UTF-8", async () => {
     const source = resolve(testRoot, "invalid-utf8-path");
     await mkdir(source, { recursive: true });
-    execFileSync("git", ["init", "--initial-branch=main"], { cwd: source });
+    git(source, ["init", "--initial-branch=main"]);
     await writeFile(resolve(source, "README.md"), "base\n");
-    execFileSync("git", ["add", "README.md"], { cwd: source });
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@invalid",
-        "commit",
-        "-m",
-        "base",
-      ],
-      { cwd: source },
-    );
-    const base = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: source,
-      encoding: "utf8",
-    })
-      .toString()
-      .trim();
+    git(source, ["add", "README.md"]);
+    commit(source, "base");
+    const base = head(source);
     const invalidPath = Buffer.concat([
       Buffer.from(`${source}/`),
       Buffer.from([0xff]),
       Buffer.from(".txt"),
     ]);
     await writeFile(invalidPath, "invalid filename\n");
-    execFileSync("git", ["add", "--all"], { cwd: source });
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@invalid",
-        "commit",
-        "-m",
-        "invalid path",
-      ],
-      { cwd: source },
-    );
-    const head = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: source,
-      encoding: "utf8",
-    })
-      .toString()
-      .trim();
+    git(source, ["add", "--all"]);
+    commit(source, "invalid path");
+    const changedHead = head(source);
 
-    await expect(repositoryChangedPaths(source, base, head)).rejects.toThrow(
-      "invalid_git_path_encoding",
-    );
+    await expect(
+      repositoryChangedPaths(source, base, changedHead),
+    ).rejects.toThrow("invalid_git_path_encoding");
   });
 
   it("prepares a conflicted base update for the conflict-resolution agent", async () => {
@@ -1565,99 +1375,40 @@ describe("V2 agent runner", () => {
     const source = resolve(testRoot, "source");
     const artifact = resolve(testRoot, "artifact.git");
     await mkdir(source, { recursive: true });
-    execFileSync("git", ["init", "--initial-branch=main"], { cwd: source });
+    git(source, ["init", "--initial-branch=main"]);
     await writeFile(
       resolve(source, "route.ts"),
       "export const route = 'base';\n",
     );
-    execFileSync("git", ["add", "route.ts"], { cwd: source });
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@invalid",
-        "commit",
-        "-m",
-        "base",
-      ],
-      { cwd: source },
-    );
-    const baseCommit = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: source,
-      encoding: "utf8",
-    }).trim();
-    execFileSync("git", ["clone", "--bare", source, artifact]);
+    git(source, ["add", "route.ts"]);
+    commit(source, "base");
+    const baseCommit = head(source);
+    git(source, ["clone", "--bare", source, artifact]);
 
     await writeFile(
       resolve(source, "route.ts"),
       "export const route = 'main';\n",
     );
-    execFileSync("git", ["add", "route.ts"], { cwd: source });
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@invalid",
-        "commit",
-        "-m",
-        "main change",
-      ],
-      { cwd: source },
-    );
-    const mainHead = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: source,
-      encoding: "utf8",
-    }).trim();
+    git(source, ["add", "route.ts"]);
+    commit(source, "main change");
+    const mainHead = head(source);
 
-    execFileSync("git", ["checkout", "--detach", baseCommit], { cwd: source });
+    git(source, ["checkout", "--detach", baseCommit]);
     await writeFile(
       resolve(source, "route.ts"),
       "export const route = 'feature';\n",
     );
-    execFileSync("git", ["add", "route.ts"], { cwd: source });
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@invalid",
-        "commit",
-        "-m",
-        "feature change",
-      ],
-      { cwd: source },
-    );
-    const featureHead = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: source,
-      encoding: "utf8",
-    }).trim();
-    execFileSync("git", ["push", artifact, `HEAD:refs/heads/feature`], {
-      cwd: source,
-    });
+    git(source, ["add", "route.ts"]);
+    commit(source, "feature change");
+    const featureHead = head(source);
+    git(source, ["push", artifact, `HEAD:refs/heads/feature`]);
 
     // The target branch moves again after the conflict was detected; the
     // attempt must still integrate with the recorded base commit.
-    execFileSync("git", ["checkout", "main"], { cwd: source });
+    git(source, ["checkout", "main"]);
     await writeFile(resolve(source, "other.ts"), "export const other = 1;\n");
-    execFileSync("git", ["add", "other.ts"], { cwd: source });
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@invalid",
-        "commit",
-        "-m",
-        "later main change",
-      ],
-      { cwd: source },
-    );
+    git(source, ["add", "other.ts"]);
+    commit(source, "later main change");
 
     const assignment = {
       id: "run_conflict_rev_1",
@@ -1686,8 +1437,7 @@ describe("V2 agent runner", () => {
     };
     const directory = await prepareWorkspace(assignment);
     expect(
-      execFileSync("git", ["diff", "--name-only", "--diff-filter=U"], {
-        cwd: directory,
+      git(directory, ["diff", "--name-only", "--diff-filter=U"], {
         encoding: "utf8",
       }).trim(),
     ).toBe("route.ts");
@@ -1696,10 +1446,10 @@ describe("V2 agent runner", () => {
       "export const route = 'main-and-feature';\n",
     );
     const checkpoint = await checkpointWorkspace(assignment, directory);
-    const parents = execFileSync(
-      "git",
+    const parents = git(
+      directory,
       ["show", "--format=%P", "--no-patch", checkpoint.outputHead],
-      { cwd: directory, encoding: "utf8" },
+      { encoding: "utf8" },
     )
       .trim()
       .split(" ");
@@ -1716,45 +1466,25 @@ describe("V2 agent runner", () => {
     const source = resolve(testRoot, "source");
     const artifact = resolve(testRoot, "artifact.git");
     await mkdir(source, { recursive: true });
-    execFileSync("git", ["init", "--initial-branch=main"], { cwd: source });
-    const commit = (message) =>
-      execFileSync(
-        "git",
-        [
-          "-c",
-          "user.name=Fixture",
-          "-c",
-          "user.email=fixture@invalid",
-          "commit",
-          "-m",
-          message,
-        ],
-        { cwd: source },
-      );
+    git(source, ["init", "--initial-branch=main"]);
     await writeFile(
       resolve(source, "route.ts"),
       "export const route = 'base';\n",
     );
-    execFileSync("git", ["add", "route.ts"], { cwd: source });
-    commit("base");
-    const baseCommit = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: source,
-      encoding: "utf8",
-    }).trim();
-    execFileSync("git", ["clone", "--bare", source, artifact]);
+    git(source, ["add", "route.ts"]);
+    commit(source, "base");
+    const baseCommit = head(source);
+    git(source, ["clone", "--bare", source, artifact]);
     await writeFile(
       resolve(source, "route.ts"),
       "export const route = 'main';\n",
     );
     if (!conflicting)
       await writeFile(resolve(source, "main.ts"), "export const main = 1;\n");
-    execFileSync("git", ["add", "--all"], { cwd: source });
-    commit("main change");
-    const mainHead = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: source,
-      encoding: "utf8",
-    }).trim();
-    execFileSync("git", ["checkout", "--detach", baseCommit], { cwd: source });
+    git(source, ["add", "--all"]);
+    commit(source, "main change");
+    const mainHead = head(source);
+    git(source, ["checkout", "--detach", baseCommit]);
     if (conflicting)
       await writeFile(
         resolve(source, "route.ts"),
@@ -1765,16 +1495,11 @@ describe("V2 agent runner", () => {
         resolve(source, "feature.ts"),
         "export const feature = 1;\n",
       );
-    execFileSync("git", ["add", "--all"], { cwd: source });
-    commit("feature change");
-    const featureHead = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: source,
-      encoding: "utf8",
-    }).trim();
-    execFileSync("git", ["push", artifact, "HEAD:refs/heads/feature"], {
-      cwd: source,
-    });
-    execFileSync("git", ["checkout", "main"], { cwd: source });
+    git(source, ["add", "--all"]);
+    commit(source, "feature change");
+    const featureHead = head(source);
+    git(source, ["push", artifact, "HEAD:refs/heads/feature"]);
+    git(source, ["checkout", "main"]);
     const assignment = {
       id: "run_integrate_rev_1",
       runId: "run_integrate",
@@ -1811,11 +1536,10 @@ describe("V2 agent runner", () => {
       candidateHead: featureHead,
       baseHead: mainHead,
     });
-    const parents = execFileSync(
-      "git",
+    const parents = git(
+      resolve(process.env.ROUNDHOUSE_WORKSPACE_ROOT, assignment.id),
       ["show", "--format=%P", "--no-patch", first.head],
       {
-        cwd: resolve(process.env.ROUNDHOUSE_WORKSPACE_ROOT, assignment.id),
         encoding: "utf8",
       },
     )
@@ -1860,20 +1584,16 @@ describe("V2 agent runner", () => {
       resolve(integratedDirectory, "main.ts"),
       "export const main = 'tampered';\n",
     );
-    execFileSync("git", ["add", "--all"], { cwd: integratedDirectory });
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@invalid",
-        "commit",
-        "--amend",
-        "--no-edit",
-      ],
-      { cwd: integratedDirectory },
-    );
+    git(integratedDirectory, ["add", "--all"]);
+    git(integratedDirectory, [
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@invalid",
+      "commit",
+      "--amend",
+      "--no-edit",
+    ]);
     const tamperedCheckpoint = await checkpointWorkspace(
       assignment,
       integratedDirectory,
@@ -1911,12 +1631,7 @@ describe("V2 agent runner", () => {
     expect(outcome.conflicts).toHaveLength(1);
     expect(outcome.conflicts[0].path).toBe("route.ts");
     expect(outcome.conflicts[0].hunks).toContain("<<<<<<<");
-    expect(
-      execFileSync("git", ["rev-parse", "HEAD"], {
-        cwd: directory,
-        encoding: "utf8",
-      }).trim(),
-    ).toBe(featureHead);
+    expect(head(directory)).toBe(featureHead);
     const checkpoint = await checkpointWorkspace(assignment, directory);
     expect(checkpoint.outputHead).toBe(featureHead);
     expect(checkpoint.changedPaths).toEqual([]);
@@ -2010,35 +1725,16 @@ describe("V2 agent runner", () => {
     const source = resolve(testRoot, "both-source");
     const artifact = resolve(testRoot, "both-artifact.git");
     await mkdir(source, { recursive: true });
-    execFileSync("git", ["init", "--initial-branch=main"], { cwd: source });
-    const commit = (message) =>
-      execFileSync(
-        "git",
-        [
-          "-c",
-          "user.name=Fixture",
-          "-c",
-          "user.email=fixture@invalid",
-          "commit",
-          "-m",
-          message,
-        ],
-        { cwd: source },
-      );
-    const head = () =>
-      execFileSync("git", ["rev-parse", "HEAD"], {
-        cwd: source,
-        encoding: "utf8",
-      }).trim();
+    git(source, ["init", "--initial-branch=main"]);
     await writeFile(
       resolve(source, "app.ts"),
       "export const a = 1;\nexport const b = 2;\nexport const c = 3;\n",
     );
     await writeFile(resolve(source, "route.ts"), "route = 'base';\n");
-    execFileSync("git", ["add", "--all"], { cwd: source });
-    commit("base");
-    const baseCommit = head();
-    execFileSync("git", ["clone", "--bare", source, artifact]);
+    git(source, ["add", "--all"]);
+    commit(source, "base");
+    const baseCommit = head(source);
+    git(source, ["clone", "--bare", source, artifact]);
     // Main changes the first line of app.ts (merges cleanly with the
     // candidate's last-line change) and conflicts on route.ts.
     await writeFile(
@@ -2046,21 +1742,19 @@ describe("V2 agent runner", () => {
       "export const a = 'main';\nexport const b = 2;\nexport const c = 3;\n",
     );
     await writeFile(resolve(source, "route.ts"), "route = 'main';\n");
-    execFileSync("git", ["add", "--all"], { cwd: source });
-    commit("main change");
-    const mainHead = head();
-    execFileSync("git", ["checkout", "--detach", baseCommit], { cwd: source });
+    git(source, ["add", "--all"]);
+    commit(source, "main change");
+    const mainHead = head(source);
+    git(source, ["checkout", "--detach", baseCommit]);
     await writeFile(
       resolve(source, "app.ts"),
       "export const a = 1;\nexport const b = 2;\nexport const c = 'feature';\n",
     );
     await writeFile(resolve(source, "route.ts"), "route = 'feature';\n");
-    execFileSync("git", ["add", "--all"], { cwd: source });
-    commit("feature change");
-    const featureHead = head();
-    execFileSync("git", ["push", artifact, "HEAD:refs/heads/feature"], {
-      cwd: source,
-    });
+    git(source, ["add", "--all"]);
+    commit(source, "feature change");
+    const featureHead = head(source);
+    git(source, ["push", artifact, "HEAD:refs/heads/feature"]);
     const assignment = {
       id: "run_both_rev_1",
       runId: "run_both",

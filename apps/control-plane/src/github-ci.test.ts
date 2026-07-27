@@ -867,65 +867,13 @@ describe("GitHub exact-head CI and merge", () => {
     });
   });
 
-  it("waits with a truthful explanation when failed-job logs are inaccessible", async () => {
-    const { repository, run } = await setupCi();
-    const api = githubFailure({ logError: true });
-    const automation = new GitHubCiAutomation(repository, api.api);
-
-    await expect(automation.reconcileCi(run, 100)).resolves.toBe("recorded");
-    const ci = (await repository.getAttempt(`${run.id}_rev_6`))?.result
-      ?.ci as Record<string, any>;
-    expect(ci.status).toBe("failure");
-    expect(ci.reason).toBe("diagnostics_unavailable");
-    expect(ci.diagnosticsError).toBe("github_get_404");
-    expect(ci.diagnostics).toBeUndefined();
-
-    const submitted: Attempt[] = [];
-    await coordinate(
-      repository,
-      {
-        submit: async (attempt: Attempt) => {
-          submitted.push(attempt);
-        },
-      },
-      { runId: run.id, expectedRevision: 6 },
-      101,
-    );
-    expect(submitted).toEqual([]);
-    await expect(repository.get(run.id)).resolves.toMatchObject({
-      status: "waiting",
-      stage: "ci",
-      waitingReason: "external_check",
-      revision: 7,
-    });
-  });
-
-  it("waits when a failed check has no GitHub Actions workflow run", async () => {
-    const { repository, run } = await setupCi();
-    const api = githubFailure({ workflowRunFound: false });
-    const automation = new GitHubCiAutomation(repository, api.api);
-
-    await expect(automation.reconcileCi(run, 100)).resolves.toBe("recorded");
-    const ci = (await repository.getAttempt(`${run.id}_rev_6`))?.result
-      ?.ci as Record<string, any>;
-    expect(ci.reason).toBe("diagnostics_unavailable");
-    expect(ci.diagnosticsError).toContain(
-      'failed check "test" has no GitHub Actions workflow run',
-    );
-    await coordinate(
-      repository,
-      { submit: async () => undefined },
-      { runId: run.id, expectedRevision: 6 },
-      101,
-    );
-    await expect(repository.get(run.id)).resolves.toMatchObject({
-      status: "waiting",
-      stage: "ci",
-      waitingReason: "external_check",
-    });
-  });
-
   it.each([
+    ["inaccessible failed-job logs", { logError: true }, "github_get_404"],
+    [
+      "a failed check without a matching workflow run",
+      { workflowRunFound: false },
+      'failed check "test" has no GitHub Actions workflow run',
+    ],
     [
       "a workflow run that moved off the candidate head",
       { workflowHead: "e".repeat(40) },

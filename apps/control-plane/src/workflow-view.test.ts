@@ -9,35 +9,39 @@ import {
 import { describe, expect, it } from "vitest";
 import { renderWorkflowView } from "./workflow-view.js";
 
+async function runFixture(): Promise<RunSnapshot> {
+  const workflow = await compileWorkflow(
+    defaultIssueWorkflowSource,
+    "a".repeat(40),
+  );
+  return {
+    schemaVersion: 2,
+    id: "run_workflow",
+    repository: "zorkian/roundhouse",
+    githubDefaultBranch: "main",
+    issueNumber: 1,
+    baseCommit: "a".repeat(40),
+    currentHead: "b".repeat(40),
+    profileVersion: "c".repeat(64),
+    profile: {
+      sourcePath: ".roundhouse/profile.yaml",
+      sourceCommit: "a".repeat(40),
+      version: 2,
+      hash: "c".repeat(64),
+      workflow,
+      paths: { allowed: ["**"], protected: [] },
+    },
+    workflowHash: workflow.hash,
+    currentNodeId: "implement",
+    status: "active",
+    stage: "implement",
+    revision: 4,
+  };
+}
+
 describe("workflow graph view", () => {
   it("renders the immutable graph, authority, editor, and GitHub proposal path", async () => {
-    const workflow = await compileWorkflow(
-      defaultIssueWorkflowSource,
-      "a".repeat(40),
-    );
-    const run = {
-      schemaVersion: 2,
-      id: "run_workflow",
-      repository: "zorkian/roundhouse",
-      githubDefaultBranch: "main",
-      issueNumber: 1,
-      baseCommit: "a".repeat(40),
-      currentHead: "b".repeat(40),
-      profileVersion: "c".repeat(64),
-      profile: {
-        sourcePath: ".roundhouse/profile.yaml",
-        sourceCommit: "a".repeat(40),
-        version: 2,
-        hash: "c".repeat(64),
-        workflow,
-        paths: { allowed: ["**"], protected: [] },
-      },
-      workflowHash: workflow.hash,
-      currentNodeId: "implement",
-      status: "active",
-      stage: "implement",
-      revision: 4,
-    } satisfies RunSnapshot;
+    const run = await runFixture();
     const html = renderWorkflowView(run);
     expect(html).toContain('aria-label="Workflow graph"');
     expect(html).toContain("agent.write");
@@ -47,38 +51,13 @@ describe("workflow graph view", () => {
     expect(html).toContain(
       "https://github.com/zorkian/roundhouse/edit/main/.roundhouse/workflow.yaml",
     );
-    expect(html).toContain(workflow.hash);
+    expect(html).toContain(run.profile!.workflow!.hash);
     expect(html).toContain("Existing runs keep their original snapshot.");
   });
 
   it("routes edges around nodes with arrowed paths instead of center-to-center lines", async () => {
-    const workflow = await compileWorkflow(
-      defaultIssueWorkflowSource,
-      "a".repeat(40),
-    );
-    const run = {
-      schemaVersion: 2,
-      id: "run_workflow",
-      repository: "zorkian/roundhouse",
-      githubDefaultBranch: "main",
-      issueNumber: 1,
-      baseCommit: "a".repeat(40),
-      currentHead: "b".repeat(40),
-      profileVersion: "c".repeat(64),
-      profile: {
-        sourcePath: ".roundhouse/profile.yaml",
-        sourceCommit: "a".repeat(40),
-        version: 2,
-        hash: "c".repeat(64),
-        workflow,
-        paths: { allowed: ["**"], protected: [] },
-      },
-      workflowHash: workflow.hash,
-      currentNodeId: "implement",
-      status: "active",
-      stage: "implement",
-      revision: 4,
-    } satisfies RunSnapshot;
+    const run = await runFixture();
+    const workflow = run.profile!.workflow!;
     const html = renderWorkflowView(run);
     const svg = html.slice(html.indexOf("<svg"), html.indexOf("</svg>"));
     // No straight center-to-center lines remain; every edge is a routed path

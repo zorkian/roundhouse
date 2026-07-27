@@ -7,6 +7,7 @@ import {
   defaultIssueWorkflowSource,
   MemoryRunRepository,
   type Attempt,
+  type RunSnapshot,
 } from "@roundhouse/core";
 import { describe, expect, it, vi } from "vitest";
 
@@ -24,7 +25,6 @@ import {
   artifactNeedsSync,
   attemptArtifactAccess,
   attemptContext,
-  controlPlaneService,
   handleRequest,
   recoverExpiredAttempts,
   resolveWorkflowAgentInputs,
@@ -42,6 +42,65 @@ const workflow = await compileWorkflow(
   defaultIssueWorkflowSource,
   workflowCommit,
 );
+const workflowProfile = {
+  sourcePath: ".roundhouse/profile.yaml" as const,
+  sourceCommit: workflowCommit,
+  version: 1 as const,
+  hash: "profile",
+  workflow,
+  paths: { allowed: ["**"], protected: [] },
+};
+
+function workflowRun(
+  id: string,
+  issueNumber: number,
+  title: string,
+  body: string,
+): RunSnapshot {
+  return createRun({
+    id,
+    repository: "zorkian/roundhouse",
+    issueNumber,
+    baseCommit: workflowCommit,
+    profileVersion: workflowProfile.hash,
+    profile: workflowProfile,
+    issue: {
+      title,
+      body,
+      url: `https://github.test/issues/${issueNumber}`,
+      actor: "maintainer",
+    },
+  });
+}
+
+function seedPreImplementationResults(
+  repository: MemoryRunRepository,
+  run: RunSnapshot,
+  classification: "bug" | "feature",
+) {
+  for (const [revision, nodeId, stage, key, value] of [
+    [1, "qualify", "qualify", "qualification", { classification }],
+    [2, "investigate", "reproduce", "reproduction", { status: "confirmed" }],
+    [3, "plan", "plan", "plan", { status: "ready" }],
+  ] as const) {
+    repository.attempts.set(`attempt_${nodeId}`, {
+      id: `attempt_${nodeId}`,
+      runId: run.id,
+      runRevision: revision,
+      kind: "agent",
+      nodeId,
+      executor: "agent.read",
+      stage,
+      role: nodeId,
+      state: "completed",
+      deadlineAt: 1,
+      baseCommit: run.baseCommit,
+      expectedHead: run.currentHead,
+      acceptedHead: run.currentHead,
+      result: { [key]: value },
+    });
+  }
+}
 
 function detailsDb(found = true): D1Like {
   // Multi-repository enrollment stores the numeric GitHub repository ID in
@@ -335,19 +394,7 @@ describe("V2 control plane", () => {
     expect(protectedOriginScreenshot.status).toBe(404);
   });
 
-  it("reports a small versioned health contract", async () => {
-    const response = handleRequest(new Request("https://v2.invalid/health"));
-
-    expect(response.status).toBe(200);
-    expect(response.headers.get("cache-control")).toBe("no-store");
-    await expect(response.json()).resolves.toEqual({
-      schemaVersion: 2,
-      ok: true,
-      service: controlPlaneService,
-    });
-  });
-
-  it("reconciles immediate successor wakeups through review", () => {
+  it("reconciles one immediate successor revision", () => {
     const processed = { runId: "run_1", expectedRevision: 1 };
     const run = {
       schemaVersion: 2,
@@ -362,26 +409,6 @@ describe("V2 control plane", () => {
       revision: 2,
     } as const;
     expect(successorWakeup(run, processed)).toEqual({
-      runId: "run_1",
-      expectedRevision: 2,
-    });
-    expect(successorWakeup({ ...run, stage: "plan" }, processed)).toEqual({
-      runId: "run_1",
-      expectedRevision: 2,
-    });
-    expect(successorWakeup({ ...run, stage: "implement" }, processed)).toEqual({
-      runId: "run_1",
-      expectedRevision: 2,
-    });
-    expect(successorWakeup({ ...run, stage: "review" }, processed)).toEqual({
-      runId: "run_1",
-      expectedRevision: 2,
-    });
-    expect(successorWakeup({ ...run, stage: "ci" }, processed)).toEqual({
-      runId: "run_1",
-      expectedRevision: 2,
-    });
-    expect(successorWakeup({ ...run, stage: "merge" }, processed)).toEqual({
       runId: "run_1",
       expectedRevision: 2,
     });
@@ -485,60 +512,13 @@ describe("V2 control plane", () => {
 
   it("resolves typed workflow inputs from exact durable node results", async () => {
     const repository = new MemoryRunRepository();
-    const profile = {
-      sourcePath: ".roundhouse/profile.yaml" as const,
-      sourceCommit: workflowCommit,
-      version: 1 as const,
-      hash: "profile",
-      workflow,
-      paths: { allowed: ["**"], protected: [] },
-    };
-    const initial = createRun({
-      id: "run_inputs",
-      repository: "zorkian/roundhouse",
-      issueNumber: 1,
-      baseCommit: workflowCommit,
-      profileVersion: profile.hash,
-      profile,
-      issue: {
-        title: "Typed inputs",
-        body: "Use durable evidence",
-        url: "https://github.test/issues/1",
-        actor: "maintainer",
-      },
-    });
-    const results = [
-      ["qualify", "qualification", { classification: "bug" }],
-      ["investigate", "reproduction", { status: "confirmed" }],
-      ["plan", "plan", { status: "ready" }],
-    ] as const;
-    for (const [index, [nodeId, key, result]] of results.entries()) {
-      const attempt: Attempt = {
-        id: `attempt_${nodeId}`,
-        runId: initial.id,
-        runRevision: index + 1,
-        kind: "agent",
-        nodeId,
-        executor: "agent.read",
-        stage:
-          nodeId === "qualify"
-            ? "qualify"
-            : nodeId === "investigate"
-              ? "reproduce"
-              : "plan",
-        role: nodeId,
-        state: "created",
-        deadlineAt: 1,
-        baseCommit: initial.baseCommit,
-        expectedHead: initial.currentHead,
-      };
-      repository.attempts.set(attempt.id, {
-        ...attempt,
-        state: "completed",
-        acceptedHead: attempt.expectedHead,
-        result: { [key]: result },
-      });
-    }
+    const initial = workflowRun(
+      "run_inputs",
+      1,
+      "Typed inputs",
+      "Use durable evidence",
+    );
+    seedPreImplementationResults(repository, initial, "bug");
     const run = {
       ...initial,
       revision: 4,
@@ -585,55 +565,13 @@ describe("V2 control plane", () => {
 
   it("resolves a review node to the joined findings from every selected reviewer", async () => {
     const repository = new MemoryRunRepository();
-    const profile = {
-      sourcePath: ".roundhouse/profile.yaml" as const,
-      sourceCommit: workflowCommit,
-      version: 1 as const,
-      hash: "profile",
-      workflow,
-      paths: { allowed: ["**"], protected: [] },
-    };
-    const initial = createRun({
-      id: "run_joined_review_inputs",
-      repository: "zorkian/roundhouse",
-      issueNumber: 414,
-      baseCommit: workflowCommit,
-      profileVersion: profile.hash,
-      profile,
-      issue: {
-        title: "Joined reviews",
-        body: "Preserve every selected finding.",
-        url: "https://github.test/issues/414",
-        actor: "maintainer",
-      },
-    });
-    for (const [revision, nodeId, key, value] of [
-      [1, "qualify", "qualification", { classification: "feature" }],
-      [2, "investigate", "reproduction", { status: "confirmed" }],
-      [3, "plan", "plan", { status: "ready" }],
-    ] as const) {
-      repository.attempts.set(`attempt_${nodeId}`, {
-        id: `attempt_${nodeId}`,
-        runId: initial.id,
-        runRevision: revision,
-        kind: "agent",
-        nodeId,
-        executor: "agent.read",
-        stage:
-          nodeId === "qualify"
-            ? "qualify"
-            : nodeId === "investigate"
-              ? "reproduce"
-              : "plan",
-        role: nodeId,
-        state: "completed",
-        deadlineAt: 1,
-        baseCommit: initial.baseCommit,
-        expectedHead: initial.currentHead,
-        acceptedHead: initial.currentHead,
-        result: { [key]: value },
-      });
-    }
+    const initial = workflowRun(
+      "run_joined_review_inputs",
+      414,
+      "Joined reviews",
+      "Preserve every selected finding.",
+    );
+    seedPreImplementationResults(repository, initial, "feature");
     const review = (
       role: "review-holistic" | "review-security",
       finding: string,
@@ -728,55 +666,13 @@ describe("V2 control plane", () => {
 
   it("preserves implementation screenshots across repeated fix passes", async () => {
     const repository = new MemoryRunRepository();
-    const profile = {
-      sourcePath: ".roundhouse/profile.yaml" as const,
-      sourceCommit: workflowCommit,
-      version: 1 as const,
-      hash: "profile",
-      workflow,
-      paths: { allowed: ["**"], protected: [] },
-    };
-    const initial = createRun({
-      id: "run_cumulative_implementation_evidence",
-      repository: "zorkian/roundhouse",
-      issueNumber: 414,
-      baseCommit: workflowCommit,
-      profileVersion: profile.hash,
-      profile,
-      issue: {
-        title: "Preserve visual evidence",
-        body: "Keep valid screenshots through review fix passes.",
-        url: "https://github.test/issues/414",
-        actor: "maintainer",
-      },
-    });
-    for (const [revision, nodeId, key, value] of [
-      [1, "qualify", "qualification", { classification: "feature" }],
-      [2, "investigate", "reproduction", { status: "confirmed" }],
-      [3, "plan", "plan", { status: "ready" }],
-    ] as const) {
-      repository.attempts.set(`attempt_${nodeId}`, {
-        id: `attempt_${nodeId}`,
-        runId: initial.id,
-        runRevision: revision,
-        kind: "agent",
-        nodeId,
-        executor: "agent.read",
-        stage:
-          nodeId === "qualify"
-            ? "qualify"
-            : nodeId === "investigate"
-              ? "reproduce"
-              : "plan",
-        role: nodeId,
-        state: "completed",
-        deadlineAt: 1,
-        baseCommit: initial.baseCommit,
-        expectedHead: initial.currentHead,
-        acceptedHead: initial.currentHead,
-        result: { [key]: value },
-      });
-    }
+    const initial = workflowRun(
+      "run_cumulative_implementation_evidence",
+      414,
+      "Preserve visual evidence",
+      "Keep valid screenshots through review fix passes.",
+    );
+    seedPreImplementationResults(repository, initial, "feature");
     const implementation = (
       id: string,
       revision: number,

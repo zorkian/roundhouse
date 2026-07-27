@@ -6,7 +6,6 @@ import {
   immutableAttemptId,
   MemoryRunRepository,
   parseProfile,
-  transitionRun,
   type Attempt,
 } from "@roundhouse/core";
 import { readFile } from "node:fs/promises";
@@ -70,63 +69,6 @@ describe("workflow-backed coordinator transitions", () => {
       expect.stringContaining('"message":"workflow_transition_selected"'),
     );
     log.mockRestore();
-  });
-
-  it("persists a wait on the current node and resumes its branch", async () => {
-    const run = await workflowRun();
-    const waiting = transitionRun(
-      run,
-      run.revision,
-      graphCompletedTransition(
-        run,
-        completed(run, {
-          qualification: {
-            classification: "unclear",
-            summary: "Need context",
-          },
-        }),
-      ),
-    );
-    expect(waiting).toMatchObject({
-      status: "waiting",
-      stage: "qualify",
-      currentNodeId: "qualify",
-      waitingReason: "clarification",
-    });
-  });
-
-  it("routes a moved target base back through integration and clears stale heads", async () => {
-    const initial = await workflowRun();
-    const head = "b".repeat(40);
-    const run = {
-      ...initial,
-      stage: "ci" as const,
-      currentNodeId: "checks",
-      currentHead: head,
-      reviewedHead: head,
-      targetBaseHead: "c".repeat(40),
-      integrationHead: head,
-    };
-    expect(
-      graphCompletedTransition(run, {
-        ...completed(run, {
-          ci: {
-            status: "reintegrate",
-            head,
-            reason: "target_base_changed",
-          },
-        }),
-        kind: "external",
-        nodeId: "checks",
-        executor: "github.checks",
-        stage: "ci",
-      }),
-    ).toMatchObject({
-      status: "active",
-      stage: "integrate",
-      currentNodeId: "integrate",
-      heads: { targetBaseHead: null, integrationHead: null },
-    });
   });
 
   it("drives the existing agent journey from compiled nodes instead of stage routing", async () => {

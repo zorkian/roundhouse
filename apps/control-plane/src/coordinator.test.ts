@@ -56,6 +56,26 @@ const input = {
 };
 const validator = { validate: async () => undefined };
 
+function runFixture(overrides: Partial<RunSnapshot> = {}): RunSnapshot {
+  return { ...createRun(input), ...overrides };
+}
+
+function attemptFixture(overrides: Partial<Attempt> = {}): Attempt {
+  return {
+    id: "run_slice_rev_1",
+    runId: input.id,
+    runRevision: 1,
+    kind: "agent",
+    stage: "qualify",
+    role: "qualify",
+    state: "completed",
+    deadlineAt: 1_000,
+    baseCommit: input.baseCommit,
+    expectedHead: input.baseCommit,
+    ...overrides,
+  };
+}
+
 async function callbackFor(
   attempt: Attempt,
   head: string,
@@ -188,8 +208,7 @@ describe("single coordinator", () => {
 
   it("reconciles a superseded branch through implementation and invalidates stale gates", () => {
     const observedHead = "e".repeat(40);
-    const run = {
-      ...createRun(input),
+    const run = runFixture({
       stage: "integrate",
       currentNodeId: "integrate",
       currentHead: "d".repeat(40),
@@ -197,20 +216,15 @@ describe("single coordinator", () => {
       reviewedHead: "b".repeat(40),
       targetBaseHead: "c".repeat(40),
       integrationHead: "d".repeat(40),
-    } satisfies RunSnapshot;
-    const attempt = {
+    });
+    const attempt = attemptFixture({
       id: "run_slice_rev_6",
-      runId: run.id,
       runRevision: run.revision,
-      kind: "agent",
       nodeId: "integrate",
       executor: "validate",
       stage: "integrate",
       role: "integrate",
       capabilities: workflow.nodes.integrate!.capabilities,
-      state: "completed",
-      deadlineAt: 1_000,
-      baseCommit: run.baseCommit,
       expectedHead: run.currentHead,
       acceptedHead: observedHead,
       outcome: {
@@ -220,7 +234,7 @@ describe("single coordinator", () => {
         detail: `publish_branch_changed:${observedHead}`,
         observedHead,
       },
-    } satisfies Attempt;
+    });
 
     expect(attemptOutcomeTransition(run, attempt)).toEqual({
       status: "active",
@@ -238,13 +252,12 @@ describe("single coordinator", () => {
 
   it("fails a holistic review that omits a specialist decision", async () => {
     const store = new MemoryRunRepository();
-    const run = {
-      ...createRun(input),
+    const run = runFixture({
       revision: 5,
-      stage: "review" as const,
+      stage: "review",
       currentNodeId: "review",
       currentHead: "b".repeat(40),
-    };
+    });
     await store.create(run);
     store.attempts.set("holistic", {
       id: "holistic",
@@ -290,13 +303,12 @@ describe("single coordinator", () => {
 
   it("does not dispatch a conditional reviewer that was not selected", async () => {
     const store = new MemoryRunRepository();
-    const run = {
-      ...createRun(input),
+    const run = runFixture({
       revision: 5,
-      stage: "review" as const,
+      stage: "review",
       currentNodeId: "review",
       currentHead: "b".repeat(40),
-    };
+    });
     await store.create(run);
     store.attempts.set("holistic", {
       id: "holistic",
@@ -348,13 +360,12 @@ describe("single coordinator", () => {
 
   it("blocks only findings at a reviewer's configured severities", async () => {
     const store = new MemoryRunRepository();
-    const run = {
-      ...createRun(input),
+    const run = runFixture({
       revision: 5,
-      stage: "review" as const,
+      stage: "review",
       currentNodeId: "review",
       currentHead: "b".repeat(40),
-    };
+    });
     await store.create(run);
     const reviewAttempt = (
       id: string,
@@ -717,12 +728,11 @@ describe("single coordinator", () => {
 
   it("reports an implementation start only after a durable dispatch", async () => {
     const store = new MemoryRunRepository();
-    const run = {
-      ...createRun(input),
+    const run = runFixture({
       revision: 4,
-      stage: "implement" as const,
+      stage: "implement",
       currentNodeId: "implement",
-    };
+    });
     await store.create(run);
     const order: string[] = [];
     const markDispatched = store.markDispatched.bind(store);
@@ -784,12 +794,11 @@ describe("single coordinator", () => {
 
   it("does not report a start when implementation submission fails", async () => {
     const store = new MemoryRunRepository();
-    const run = {
-      ...createRun(input),
+    const run = runFixture({
       revision: 4,
-      stage: "implement" as const,
+      stage: "implement",
       currentNodeId: "implement",
-    };
+    });
     await store.create(run);
     let started = 0;
     await expect(
@@ -816,12 +825,11 @@ describe("single coordinator", () => {
 
   it("does not report a start when durable dispatch marking fails", async () => {
     const store = new MemoryRunRepository();
-    const run = {
-      ...createRun(input),
+    const run = runFixture({
       revision: 4,
-      stage: "implement" as const,
+      stage: "implement",
       currentNodeId: "implement",
-    };
+    });
     await store.create(run);
     store.markDispatched = async () => {
       throw new Error("store_unavailable");
@@ -845,100 +853,13 @@ describe("single coordinator", () => {
     expect(started).toBe(0);
   });
 
-  it("revisits the start report on a duplicate wakeup without redispatching", async () => {
-    const store = new MemoryRunRepository();
-    const run = {
-      ...createRun(input),
-      revision: 4,
-      stage: "implement" as const,
-      currentNodeId: "implement",
-    };
-    await store.create(run);
-    let started = 0;
-    let submitted = 0;
-    const dispatcher = {
-      submit: async () => {
-        submitted += 1;
-      },
-    };
-    const reporter = {
-      report: async () => undefined,
-      reportStarted: async () => {
-        started += 1;
-      },
-    };
-    await expect(
-      coordinate(
-        store,
-        dispatcher,
-        { runId: input.id, expectedRevision: 4 },
-        100,
-        50,
-        reporter,
-      ),
-    ).resolves.toBe("dispatched");
-    await expect(
-      coordinate(
-        store,
-        dispatcher,
-        { runId: input.id, expectedRevision: 4 },
-        101,
-        50,
-        reporter,
-      ),
-    ).resolves.toBe("duplicate");
-    // The reporter is invoked again so a previously lost comment can go out;
-    // its immutable marker keeps the retry from duplicating the comment.
-    expect(started).toBe(2);
-    expect(submitted).toBe(1);
-  });
-
-  it("keeps a durable dispatch successful when the start report fails", async () => {
-    const store = new MemoryRunRepository();
-    const run = {
-      ...createRun(input),
-      revision: 4,
-      stage: "implement" as const,
-      currentNodeId: "implement",
-    };
-    await store.create(run);
-    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    try {
-      await expect(
-        coordinate(
-          store,
-          { submit: async () => undefined },
-          { runId: input.id, expectedRevision: 4 },
-          100,
-          50,
-          {
-            report: async () => undefined,
-            reportStarted: async () => {
-              throw new Error("github_unavailable");
-            },
-          },
-        ),
-      ).resolves.toBe("dispatched");
-      expect(log).toHaveBeenCalledWith(
-        "report_started_failed",
-        expect.any(Error),
-      );
-    } finally {
-      log.mockRestore();
-    }
-    await expect(store.getAttempt("run_slice_rev_4")).resolves.toMatchObject({
-      state: "dispatched",
-    });
-  });
-
   it("retries a lost start report on the next wakeup without redispatching", async () => {
     const store = new MemoryRunRepository();
-    const run = {
-      ...createRun(input),
+    const run = runFixture({
       revision: 4,
-      stage: "implement" as const,
+      stage: "implement",
       currentNodeId: "implement",
-    };
+    });
     await store.create(run);
     let submitted = 0;
     const dispatcher = {
@@ -993,12 +914,11 @@ describe("single coordinator", () => {
 
   it("does not revisit a start report while the dispatch is still in flight", async () => {
     const store = new MemoryRunRepository();
-    const run = {
-      ...createRun(input),
+    const run = runFixture({
       revision: 4,
-      stage: "implement" as const,
+      stage: "implement",
       currentNodeId: "implement",
-    };
+    });
     await store.create(run);
     await store.createAttempt({
       id: "run_slice_rev_4",
@@ -1039,13 +959,12 @@ describe("single coordinator", () => {
 
   it("reports a holistic review start after dispatch but stays silent for specialists", async () => {
     const store = new MemoryRunRepository();
-    const run = {
-      ...createRun(input),
+    const run = runFixture({
       revision: 5,
-      stage: "review" as const,
+      stage: "review",
       currentNodeId: "review",
       currentHead: "b".repeat(40),
-    };
+    });
     await store.create(run);
     const order: string[] = [];
     const markDispatched = store.markDispatched.bind(store);
@@ -1119,146 +1038,6 @@ describe("single coordinator", () => {
     await expect(
       store.getAttempt("run_slice_rev_5_review-security"),
     ).resolves.toMatchObject({ state: "dispatched" });
-  });
-
-  it("keeps a durable holistic review dispatch successful when the start report fails", async () => {
-    const store = new MemoryRunRepository();
-    const run = {
-      ...createRun(input),
-      revision: 5,
-      stage: "review" as const,
-      currentNodeId: "review",
-      currentHead: "b".repeat(40),
-    };
-    await store.create(run);
-    let submitted = 0;
-    const dispatcher = {
-      submit: async () => {
-        submitted += 1;
-      },
-    };
-    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    try {
-      await expect(
-        coordinate(
-          store,
-          dispatcher,
-          { runId: input.id, expectedRevision: 5 },
-          100,
-          50,
-          {
-            report: async () => undefined,
-            reportStarted: async () => {
-              throw new Error("review_pull_request_missing");
-            },
-          },
-        ),
-      ).resolves.toBe("dispatched");
-      expect(log).toHaveBeenCalledWith(
-        "report_started_failed",
-        expect.any(Error),
-      );
-    } finally {
-      log.mockRestore();
-    }
-    await expect(
-      store.getAttempt("run_slice_rev_5_review-holistic"),
-    ).resolves.toMatchObject({ state: "dispatched" });
-    // A duplicate wakeup while the review is running revisits the lost start
-    // report without redispatching the review attempt.
-    const started: Attempt[] = [];
-    await expect(
-      coordinate(
-        store,
-        dispatcher,
-        { runId: input.id, expectedRevision: 5 },
-        101,
-        50,
-        {
-          report: async () => undefined,
-          reportStarted: async (_run: RunSnapshot, attempt: Attempt) => {
-            started.push(attempt);
-          },
-        },
-      ),
-    ).resolves.toBe("duplicate");
-    expect(started.map((attempt) => attempt.role)).toEqual(["review-holistic"]);
-    expect(submitted).toBe(1);
-  });
-
-  it("does not revisit a start report for a dispatched specialist review", async () => {
-    const store = new MemoryRunRepository();
-    const run = {
-      ...createRun(input),
-      revision: 5,
-      stage: "review" as const,
-      currentNodeId: "review",
-      currentHead: "b".repeat(40),
-    };
-    await store.create(run);
-    store.attempts.set("run_slice_rev_5_review-holistic", {
-      id: "run_slice_rev_5_review-holistic",
-      runId: input.id,
-      runRevision: 5,
-      kind: "agent",
-      stage: "review",
-      role: "review-holistic",
-      state: "completed",
-      deadlineAt: 1_000,
-      baseCommit: input.baseCommit,
-      expectedHead: run.currentHead,
-      acceptedHead: run.currentHead,
-      result: {
-        review: {
-          status: "clean",
-          findings: [],
-          selections: [
-            {
-              role: "review-security",
-              applicable: true,
-              rationale: "Authorization changed",
-            },
-            {
-              role: "review-data",
-              applicable: false,
-              rationale: "No data changes",
-            },
-          ],
-        },
-      },
-    });
-    let started = 0;
-    const reporter = {
-      report: async () => undefined,
-      reportStarted: async () => {
-        started += 1;
-      },
-    };
-    const dispatcher = { submit: async () => undefined };
-    await expect(
-      coordinate(
-        store,
-        dispatcher,
-        { runId: input.id, expectedRevision: 5 },
-        100,
-        50,
-        reporter,
-      ),
-    ).resolves.toBe("dispatched");
-    await expect(
-      store.getAttempt("run_slice_rev_5_review-security"),
-    ).resolves.toMatchObject({ state: "dispatched" });
-    await expect(
-      coordinate(
-        store,
-        dispatcher,
-        { runId: input.id, expectedRevision: 5 },
-        101,
-        50,
-        reporter,
-      ),
-    ).resolves.toBe("duplicate");
-    expect(started).toBe(0);
   });
 
   it("advances a recorded qualification only through the coordinator", async () => {
@@ -1406,18 +1185,12 @@ describe("single coordinator", () => {
   });
 
   it("maps reproduction evidence to explicit lifecycle outcomes", () => {
-    const attempt = {
+    const attempt = attemptFixture({
       id: "run_slice_rev_2",
-      runId: input.id,
       runRevision: 2,
-      kind: "agent",
       stage: "reproduce",
       role: "reproduce",
-      state: "completed",
-      deadlineAt: 1_000,
-      baseCommit: input.baseCommit,
-      expectedHead: input.baseCommit,
-    } satisfies Attempt;
+    });
     expect(
       reproductionTransition({
         ...attempt,
@@ -1447,18 +1220,12 @@ describe("single coordinator", () => {
   });
 
   it("maps planning to implementation or another prose clarification", () => {
-    const attempt = {
+    const attempt = attemptFixture({
       id: "run_slice_rev_3",
-      runId: input.id,
       runRevision: 3,
-      kind: "agent",
       stage: "plan",
       role: "plan",
-      state: "completed",
-      deadlineAt: 1_000,
-      baseCommit: input.baseCommit,
-      expectedHead: input.baseCommit,
-    } satisfies Attempt;
+    });
     expect(
       planTransition({
         ...attempt,
@@ -1479,20 +1246,14 @@ describe("single coordinator", () => {
 
   it("reviews the validated implementation checkpoint next", () => {
     const head = "b".repeat(40);
-    const attempt = {
+    const attempt = attemptFixture({
       id: "run_slice_rev_4",
-      runId: input.id,
       runRevision: 4,
-      kind: "agent",
       stage: "implement",
       role: "implement",
-      state: "completed",
-      deadlineAt: 1_000,
-      baseCommit: input.baseCommit,
-      expectedHead: input.baseCommit,
       acceptedHead: head,
       result: { implementation: { summary: "Done" } },
-    } satisfies Attempt;
+    });
     expect(implementationTransition(attempt)).toEqual({
       status: "active",
       stage: "review",
@@ -1503,16 +1264,11 @@ describe("single coordinator", () => {
 
   it("completes screenshot-only implementation without empty review and CI work", () => {
     const head = "b".repeat(40);
-    const attempt = {
+    const attempt = attemptFixture({
       id: "run_slice_rev_4",
-      runId: input.id,
       runRevision: 4,
-      kind: "agent",
       stage: "implement",
       role: "implement",
-      state: "completed",
-      deadlineAt: 1_000,
-      baseCommit: input.baseCommit,
       expectedHead: head,
       acceptedHead: head,
       result: {
@@ -1521,7 +1277,7 @@ describe("single coordinator", () => {
           screenshots: [{ url: "https://example.test/screenshot" }],
         },
       },
-    } satisfies Attempt;
+    });
     expect(implementationTransition(attempt)).toEqual({
       status: "succeeded",
       stage: "implement",
@@ -1531,25 +1287,19 @@ describe("single coordinator", () => {
 
   it("returns screenshot evidence to review when a candidate already exists", () => {
     const head = "b".repeat(40);
-    const run = {
-      ...createRun(input),
-      status: "active" as const,
-      stage: "implement" as const,
+    const run = runFixture({
+      status: "active",
+      stage: "implement",
       currentNodeId: "implement",
       currentHead: head,
       candidateHead: head,
       revision: 12,
-    };
-    const attempt = {
+    });
+    const attempt = attemptFixture({
       id: "run_slice_rev_12",
-      runId: input.id,
       runRevision: 12,
-      kind: "agent",
       stage: "implement",
       role: "implement",
-      state: "completed",
-      deadlineAt: 1_000,
-      baseCommit: input.baseCommit,
       expectedHead: head,
       acceptedHead: head,
       result: {
@@ -1558,7 +1308,7 @@ describe("single coordinator", () => {
           screenshots: [{ url: "https://example.test/screenshot" }],
         },
       },
-    } satisfies Attempt;
+    });
 
     expect(graphCompletedTransition(run, attempt)).toEqual({
       status: "active",
@@ -1569,18 +1319,13 @@ describe("single coordinator", () => {
   });
 
   it("advances a clean review to integration and returns findings to implementation", () => {
-    const attempt = {
+    const attempt = attemptFixture({
       id: "run_slice_rev_5",
-      runId: input.id,
       runRevision: 5,
-      kind: "agent",
       stage: "review",
       role: "review",
-      state: "completed",
-      deadlineAt: 1_000,
-      baseCommit: input.baseCommit,
       expectedHead: "b".repeat(40),
-    } satisfies Attempt;
+    });
     expect(
       reviewTransition({
         ...attempt,
@@ -1608,16 +1353,11 @@ describe("single coordinator", () => {
     const candidate = "b".repeat(40);
     const base = "d".repeat(40);
     const integration = "e".repeat(40);
-    const attempt = {
+    const attempt = attemptFixture({
       id: "run_slice_rev_6",
-      runId: input.id,
       runRevision: 6,
-      kind: "agent",
       stage: "integrate",
       role: "integrate",
-      state: "completed",
-      deadlineAt: 1_000,
-      baseCommit: input.baseCommit,
       expectedHead: candidate,
       acceptedHead: integration,
       result: {
@@ -1628,7 +1368,7 @@ describe("single coordinator", () => {
           head: integration,
         },
       },
-    } satisfies Attempt;
+    });
     expect(integrateTransition(attempt)).toEqual({
       status: "active",
       stage: "ci",
@@ -1668,15 +1408,16 @@ describe("single coordinator", () => {
     const candidate = "b".repeat(40);
     const base = "d".repeat(40);
     const resolved = "e".repeat(40);
-    await store.create({
-      ...createRun(input),
-      revision: 6,
-      stage: "integrate" as const,
-      currentNodeId: "integrate",
-      currentHead: candidate,
-      candidateHead: candidate,
-      reviewedHead: candidate,
-    });
+    await store.create(
+      runFixture({
+        revision: 6,
+        stage: "integrate",
+        currentNodeId: "integrate",
+        currentHead: candidate,
+        candidateHead: candidate,
+        reviewedHead: candidate,
+      }),
+    );
     const submitted: Attempt[] = [];
     const dispatcher = {
       submit: async (attempt: Attempt) => {
@@ -1815,15 +1556,11 @@ describe("single coordinator", () => {
     const candidate = "b".repeat(40);
     const base = "d".repeat(40);
     const resolved = "e".repeat(40);
-    const attempt = {
+    const attempt = attemptFixture({
       id: "run_slice_rev_7",
-      runId: input.id,
       runRevision: 7,
-      kind: "agent",
       stage: "integrate",
       role: "conflict-resolution",
-      state: "completed",
-      deadlineAt: 1_000,
       baseCommit: base,
       expectedHead: candidate,
       acceptedHead: resolved,
@@ -1835,7 +1572,7 @@ describe("single coordinator", () => {
           head: resolved,
         },
       },
-    } satisfies Attempt;
+    });
     expect(integrateTransition(attempt)).toEqual({
       status: "active",
       stage: "integrate",
@@ -1911,16 +1648,17 @@ describe("single coordinator", () => {
   it("retries mechanical integration against a moved base without repeating earlier stages", async () => {
     const store = new MemoryRunRepository();
     const candidate = "b".repeat(40);
-    await store.create({
-      ...createRun(input),
-      revision: 8,
-      stage: "integrate" as const,
-      currentNodeId: "integrate",
-      currentHead: candidate,
-      candidateHead: candidate,
-      reviewedHead: candidate,
-      targetBaseHead: "d".repeat(40),
-    });
+    await store.create(
+      runFixture({
+        revision: 8,
+        stage: "integrate",
+        currentNodeId: "integrate",
+        currentHead: candidate,
+        candidateHead: candidate,
+        reviewedHead: candidate,
+        targetBaseHead: "d".repeat(40),
+      }),
+    );
     // The previous integration generation completed cleanly against an older
     // base; a moved base retries the no-model mechanical merge, not conflict
     // resolution or general implementation.
@@ -1966,20 +1704,16 @@ describe("single coordinator", () => {
 
   it("requires exact successful CI before merge", () => {
     const head = "b".repeat(40);
-    const attempt = {
+    const attempt = attemptFixture({
       id: "run_slice_rev_6",
-      runId: input.id,
       runRevision: 6,
       kind: "external",
       stage: "ci",
       role: "github-checks",
-      state: "completed",
-      deadlineAt: 1_000,
-      baseCommit: input.baseCommit,
       expectedHead: head,
       acceptedHead: head,
       result: { ci: { status: "success", head } },
-    } satisfies Attempt;
+    });
     expect(ciTransition(attempt)).toEqual({
       status: "active",
       stage: "merge",
@@ -2034,22 +1768,18 @@ describe("single coordinator", () => {
 
   it("records the merge commit as the terminal run head", () => {
     const mergeCommit = "c".repeat(40);
-    const attempt = {
+    const attempt = attemptFixture({
       id: "run_slice_rev_7",
-      runId: input.id,
       runRevision: 7,
       kind: "external",
       stage: "merge",
       role: "github-merge",
-      state: "completed",
-      deadlineAt: 1_000,
-      baseCommit: input.baseCommit,
       expectedHead: "b".repeat(40),
       acceptedHead: mergeCommit,
       result: {
         merge: { status: "merged", head: "b".repeat(40), mergeCommit },
       },
-    } satisfies Attempt;
+    });
     expect(mergeTransition(attempt)).toEqual({
       status: "succeeded",
       stage: "merge",

@@ -134,6 +134,14 @@ pnpm check
 `pnpm check` verifies formatting and Apache-2.0 headers, typechecks the
 workspace, and runs the test suite.
 
+Tests should protect a user-visible outcome, an external or persisted
+contract, an authority boundary, a concurrency guarantee, or a failure we
+have actually observed. Keep exhaustive cases at the narrowest layer and use
+representative equivalence classes at adapter and end-to-end boundaries. Do
+not test TypeScript guarantees, constants, library behavior, or incidental
+wording and markup. Roundhouse intentionally has no coverage or test-count
+target; each test must justify the maintenance it adds.
+
 Useful individual commands are:
 
 ```sh
