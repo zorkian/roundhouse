@@ -18,3 +18,10 @@ Run the configured repository validation. For visual work, run the real
 application in its development environment, capture matching before-and-after
 screenshots at the acceptance viewport, and include them in the implementation
 evidence for the pull request.
+
+When working on Roundhouse itself, do not start Wrangler's local Worker or D1
+runtime inside the agent sandbox; that runtime does not complete there. Use
+deterministic test fixtures for local validation. If a review asks only for
+visual evidence and the rendered application has not changed since valid
+screenshots were captured, inspect the issue and pull-request history and reuse
+that evidence instead of recreating it.
