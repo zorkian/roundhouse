@@ -531,6 +531,59 @@ describe("GitHub intake", () => {
     ]);
   });
 
+  it("accepts the short-form development command", async () => {
+    const repository = new IntakeRepository();
+    const wakeups: Wakeup[] = [];
+    await expect(
+      acceptGitHubComment(
+        await delivery("delivery-1", "/rhd start"),
+        env,
+        repository,
+        async (wakeup) => {
+          wakeups.push(wakeup);
+        },
+        github(),
+      ),
+    ).resolves.toBe("accepted");
+    await expect(repository.get("run_123_issue_42")).resolves.toMatchObject({
+      id: "run_123_issue_42",
+      status: "active",
+      stage: "qualify",
+    });
+    expect(wakeups).toEqual([
+      { runId: "run_123_issue_42", expectedRevision: 1 },
+    ]);
+  });
+
+  it("accepts both production command forms when configured for production", async () => {
+    const productionEnv = {
+      ...env,
+      GITHUB_START_COMMAND: "/roundhouse start",
+    } satisfies GitHubEnv;
+    for (const command of ["/roundhouse start", "/rh start"]) {
+      const repository = new IntakeRepository();
+      const wakeups: Wakeup[] = [];
+      await expect(
+        acceptGitHubComment(
+          await delivery("delivery-1", command),
+          productionEnv,
+          repository,
+          async (wakeup) => {
+            wakeups.push(wakeup);
+          },
+          github(),
+        ),
+      ).resolves.toBe("accepted");
+      await expect(repository.get("run_123_issue_42")).resolves.toMatchObject({
+        id: "run_123_issue_42",
+        status: "active",
+      });
+      expect(wakeups).toEqual([
+        { runId: "run_123_issue_42", expectedRevision: 1 },
+      ]);
+    }
+  });
+
   it("binds a run and all enrollment reads to the repository in the webhook", async () => {
     const repository = new IntakeRepository();
     const api = github();
@@ -1064,6 +1117,24 @@ describe("GitHub intake", () => {
   it("rejects near-match commands and actors without write permission", async () => {
     const repository = new IntakeRepository();
     const enqueue = vi.fn();
+    for (const nearMatch of [
+      "/roundhouse-dev start now",
+      "/rhd start now",
+      "/rh start now",
+      "/rh start",
+      "/roundhouse start",
+    ]) {
+      const nearRepository = new IntakeRepository();
+      await expect(
+        acceptGitHubComment(
+          await delivery("delivery-1", nearMatch),
+          env,
+          nearRepository,
+          enqueue,
+          github(),
+        ),
+      ).resolves.toBe("ignored");
+    }
     await expect(
       acceptGitHubComment(
         await delivery("delivery-1", "/roundhouse-dev start now"),
