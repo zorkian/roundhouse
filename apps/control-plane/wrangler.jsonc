@@ -101,7 +101,7 @@
     "GITHUB_APP_ID": "4281837",
     // User sign-in client ID of the development GitHub App; the matching
     // ROUNDHOUSE_GITHUB_CLIENT_SECRET is stored as a Worker secret.
-    "GITHUB_CLIENT_ID": "Iv1.0000000000000000",
+    "GITHUB_CLIENT_ID": "Iv23liaPflwJhKpGfxvB",
     "GITHUB_START_COMMAND": "/roundhouse-dev start",
     "SANDBOX_TRANSPORT": "rpc",
     "BACKUP_BUCKET_NAME": "roundhouse-v2-development-workspaces",
