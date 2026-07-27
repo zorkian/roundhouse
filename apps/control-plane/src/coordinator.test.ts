@@ -23,6 +23,7 @@ import {
   attemptInactivityMilliseconds,
   ciTransition,
   coordinate,
+  graphCompletedTransition,
   implementationTransition,
   integrateTransition,
   mergeTransition,
@@ -1442,6 +1443,45 @@ describe("single coordinator", () => {
     expect(implementationTransition(attempt)).toEqual({
       status: "succeeded",
       stage: "implement",
+      acceptedHead: head,
+    });
+  });
+
+  it("returns screenshot evidence to review when a candidate already exists", () => {
+    const head = "b".repeat(40);
+    const run = {
+      ...createRun(input),
+      status: "active" as const,
+      stage: "implement" as const,
+      currentNodeId: "implement",
+      currentHead: head,
+      candidateHead: head,
+      revision: 12,
+    };
+    const attempt = {
+      id: "run_slice_rev_12",
+      runId: input.id,
+      runRevision: 12,
+      kind: "agent",
+      stage: "implement",
+      role: "implement",
+      state: "completed",
+      deadlineAt: 1_000,
+      baseCommit: input.baseCommit,
+      expectedHead: head,
+      acceptedHead: head,
+      result: {
+        implementation: {
+          summary: "Added the requested visual evidence",
+          screenshots: [{ url: "https://example.test/screenshot" }],
+        },
+      },
+    } satisfies Attempt;
+
+    expect(graphCompletedTransition(run, attempt)).toEqual({
+      status: "active",
+      stage: "review",
+      currentNodeId: "review",
       acceptedHead: head,
     });
   });
