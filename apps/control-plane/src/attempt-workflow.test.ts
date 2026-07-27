@@ -7,6 +7,8 @@ const {
   acceptRecordedAttemptCompletion,
   backupRecordedAttemptWorkspace,
   loadRecordedAttemptCompletion,
+  markDispatched,
+  prepareAttemptExecution,
   publishRecordedAttemptCompletion,
   recordAttemptCompletion,
   recordAttemptEvent,
@@ -20,6 +22,8 @@ const {
   acceptRecordedAttemptCompletion: vi.fn(),
   backupRecordedAttemptWorkspace: vi.fn(),
   loadRecordedAttemptCompletion: vi.fn(),
+  markDispatched: vi.fn(),
+  prepareAttemptExecution: vi.fn(),
   publishRecordedAttemptCompletion: vi.fn(),
   recordAttemptCompletion: vi.fn(),
   recordAttemptEvent: vi.fn(),
@@ -40,8 +44,12 @@ vi.mock("./attempt-settlement.js", () => ({
   recordAttemptCompletion,
   validateRecordedAttemptCompletion,
 }));
+vi.mock("./attempt-dispatch.js", () => ({
+  prepareAttemptExecution,
+}));
 vi.mock("./d1-store.js", () => ({
   D1RunRepository: class {
+    markDispatched = markDispatched;
     recordAttemptEvent = recordAttemptEvent;
   },
 }));
@@ -123,6 +131,8 @@ function steps() {
 describe("attempt execution Workflow", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    markDispatched.mockResolvedValue(undefined);
+    prepareAttemptExecution.mockResolvedValue(undefined);
     recordAttemptCompletion.mockResolvedValue("recorded");
     validateRecordedAttemptCompletion.mockResolvedValue({
       outcome: "validated",
@@ -157,6 +167,8 @@ describe("attempt execution Workflow", () => {
     });
 
     expect(calls.map(({ name }) => name)).toEqual([
+      "confirm durable dispatch",
+      "prepare attempt",
       "restore prepared workspace",
       "execute prepared attempt",
       "record completed execution",
@@ -166,10 +178,15 @@ describe("attempt execution Workflow", () => {
       "accept completed attempt",
       "destroy settled attempt sandbox",
     ]);
-    expect(calls[1]?.config).toMatchObject({
+    expect(calls[3]?.config).toMatchObject({
       timeout: "365 days",
       retries: { limit: 0 },
     });
+    expect(markDispatched).toHaveBeenCalledWith(completion.attemptId);
+    expect(prepareAttemptExecution).toHaveBeenCalledWith(
+      expect.objectContaining({ ATTEMPT_SANDBOXES: expect.anything() }),
+      completion.attemptId,
+    );
     expect(recordAttemptCompletion).toHaveBeenCalledWith(
       expect.objectContaining({ ATTEMPT_SANDBOXES: expect.anything() }),
       completion,
@@ -202,6 +219,8 @@ describe("attempt execution Workflow", () => {
     );
 
     expect(calls.map(({ name }) => name)).toEqual([
+      "confirm durable dispatch",
+      "prepare attempt",
       "restore prepared workspace",
       "execute prepared attempt",
     ]);
