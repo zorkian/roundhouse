@@ -46,6 +46,35 @@ export class WorkspaceLifecycle {
         "workspace_process_cleanup_completed",
         stepStartedAt,
       );
+      stepStartedAt = Date.now();
+      await this.host.trace(
+        attemptId,
+        "workspace_nested_mount_release_started",
+      );
+      const nestedUnmounted = await this.host.exec(
+        `awk '$5 ~ "^/workspace/roundhouse/" { print $5 }' /proc/self/mountinfo | sort -r | while IFS= read -r mountpoint; do /usr/bin/fusermount3 -uz "$mountpoint" || exit 1; printf '%s\\n' "$mountpoint"; done`,
+        {
+          cwd: "/",
+          origin: "internal",
+          timeout: 30_000,
+        },
+      );
+      await this.host.trace(
+        attemptId,
+        "workspace_nested_mount_release_completed",
+        stepStartedAt,
+        {
+          success: nestedUnmounted.success,
+          exitCode: nestedUnmounted.exitCode,
+          mounts: nestedUnmounted.stdout
+            .split(/\s+/)
+            .filter(Boolean)
+            .slice(-100),
+          detail: nestedUnmounted.stderr.slice(-1_000),
+        },
+      );
+      if (!nestedUnmounted.success)
+        throw new Error("workspace_nested_mount_release_failed");
       await traceRuntimeFiles("workspace_restore_files_after_cleanup");
       stepStartedAt = Date.now();
       await this.host.trace(

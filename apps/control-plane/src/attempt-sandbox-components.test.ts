@@ -129,6 +129,41 @@ describe("attempt Sandbox components", () => {
     expect(phases.at(-1)).toBe("workspace_backup_completed");
   });
 
+  it("releases stale nested mounts before restoring a workspace", async () => {
+    const phases: string[] = [];
+    const commands: string[] = [];
+    const lifecycle = new WorkspaceLifecycle(
+      componentHost({
+        trace: async (_attemptId, phase) => {
+          phases.push(phase);
+        },
+        exec: async (command) => {
+          commands.push(command);
+          return successful(command);
+        },
+      }),
+      async () => undefined,
+    );
+
+    await expect(
+      lifecycle.restore("attempt_1", {
+        id: "backup_1",
+        dir: "/workspace/roundhouse",
+      }),
+    ).resolves.toBeUndefined();
+
+    const nestedRelease = commands.findIndex((command) =>
+      command.includes("/proc/self/mountinfo"),
+    );
+    const backupMaterialization = commands.findIndex((command) =>
+      command.startsWith("cp -a /workspace/roundhouse/."),
+    );
+    expect(nestedRelease).toBeGreaterThanOrEqual(0);
+    expect(backupMaterialization).toBeGreaterThan(nestedRelease);
+    expect(phases).toContain("workspace_nested_mount_release_completed");
+    expect(phases.at(-1)).toBe("workspace_restore_completed");
+  });
+
   it("owns Docker and BuildKit readiness in the nested runtime component", async () => {
     const phases: string[] = [];
     const process = runningProcess();
