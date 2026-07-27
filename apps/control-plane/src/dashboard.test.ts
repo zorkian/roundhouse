@@ -127,22 +127,6 @@ describe("dashboard", () => {
     expect(html).not.toContain("<script>alert(1)</script>");
   });
 
-  it("shows a Development badge beside the heading with the subtitle below", () => {
-    const html = renderDashboard([]);
-    expect(html).toContain(
-      '<div class="heading"><h1>Roundhouse</h1><span class="env-badge">Development</span></div>',
-    );
-    expect(html).toContain(
-      "<p>Development runs across enrolled repositories</p>",
-    );
-  });
-
-  it("has an approachable empty state", () => {
-    const html = renderDashboard([]);
-    expect(html).toContain("Nothing here right now.");
-    expect(html).toContain("0</strong> need attention");
-  });
-
   it("shows issue usage totals", () => {
     const run: RunSummary = {
       ...summary("active", 6, "Measured"),

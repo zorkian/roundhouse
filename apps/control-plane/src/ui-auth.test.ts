@@ -123,6 +123,45 @@ async function sha256Hex(value: string): Promise<string> {
     .join("");
 }
 
+function stubGitHubOAuth(
+  repositories: readonly { id: number }[],
+  publicRepository?: { id: number; private: false },
+) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("login/oauth/access_token"))
+        return Response.json({ access_token: "user-token" });
+      if (url.includes("api.github.com/user/repos"))
+        return Response.json(repositories);
+      if (
+        publicRepository &&
+        url.includes(`api.github.com/repositories/${publicRepository.id}`)
+      )
+        return Response.json(publicRepository);
+      if (url.includes("api.github.com/repositories/"))
+        return new Response("not found", { status: 404 });
+      if (url.includes("api.github.com/user"))
+        return Response.json({ id: 7, login: "octocat" });
+      throw new Error(`unexpected fetch ${url}`);
+    }),
+  );
+}
+
+async function completeGitHubSignIn(db: D1Like): Promise<Response> {
+  const start = await beginGitHubSignIn(env(db));
+  const state = new URL(start.headers.get("location")!).searchParams.get(
+    "state",
+  )!;
+  return handleGitHubCallback(
+    new URL(`https://v2.invalid/auth/github/callback?code=abc&state=${state}`),
+    callbackRequest("https://v2.invalid/auth/github/callback", start),
+    env(db),
+    html,
+  );
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -147,32 +186,8 @@ describe("GitHub UI sign-in", () => {
 
   it("completes the callback, filters enrolled repositories, and issues a session cookie", async () => {
     const { db, states, sessions } = authDb();
-    const start = await beginGitHubSignIn(env(db));
-    const state = new URL(start.headers.get("location")!).searchParams.get(
-      "state",
-    )!;
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("login/oauth/access_token"))
-        return Response.json({ access_token: "user-token" });
-      if (url.includes("api.github.com/user/repos"))
-        return Response.json([
-          { id: 1297678423 },
-          { id: 42 }, // readable but not enrolled
-        ]);
-      if (url.includes("api.github.com/user"))
-        return Response.json({ id: 7, login: "octocat" });
-      throw new Error(`unexpected fetch ${url}`);
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const response = await handleGitHubCallback(
-      new URL(
-        `https://v2.invalid/auth/github/callback?code=abc&state=${state}`,
-      ),
-      callbackRequest("https://v2.invalid/auth/github/callback", start),
-      env(db),
-      html,
-    );
+    stubGitHubOAuth([{ id: 1297678423 }, { id: 42 }]);
+    const response = await completeGitHubSignIn(db);
     expect(response.status).toBe(302);
     expect(response.headers.get("location")).toBe("/");
     const cookie = response.headers.get("set-cookie")!;
@@ -193,72 +208,23 @@ describe("GitHub UI sign-in", () => {
   });
 
   it("includes enrolled public repositories not listed for the user", async () => {
-    const { db, states, sessions } = authDb({
+    const { db, sessions } = authDb({
       enrolled: ["1297678423", "555"],
     });
-    const start = await beginGitHubSignIn(env(db));
-    const state = new URL(start.headers.get("location")!).searchParams.get(
-      "state",
-    )!;
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("login/oauth/access_token"))
-        return Response.json({ access_token: "user-token" });
-      if (url.includes("api.github.com/user/repos"))
-        return Response.json([{ id: 1297678423 }]);
-      if (url.includes("api.github.com/repositories/555"))
-        return Response.json({ id: 555, private: false });
-      if (url.includes("api.github.com/user"))
-        return Response.json({ id: 7, login: "octocat" });
-      throw new Error(`unexpected fetch ${url}`);
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const response = await handleGitHubCallback(
-      new URL(
-        `https://v2.invalid/auth/github/callback?code=abc&state=${state}`,
-      ),
-      callbackRequest("https://v2.invalid/auth/github/callback", start),
-      env(db),
-      html,
-    );
+    stubGitHubOAuth([{ id: 1297678423 }], { id: 555, private: false });
+    const response = await completeGitHubSignIn(db);
     expect(response.status).toBe(302);
     const session = [...sessions.values()][0]!;
     expect(JSON.parse(session.repository_ids_json).sort()).toEqual([
       "1297678423",
       "555",
     ]);
-    void states;
   });
 
   it("excludes enrolled private repositories the user cannot read", async () => {
     const { db, sessions } = authDb({ enrolled: ["1297678423", "555"] });
-    const start = await beginGitHubSignIn(env(db));
-    const state = new URL(start.headers.get("location")!).searchParams.get(
-      "state",
-    )!;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input);
-        if (url.includes("login/oauth/access_token"))
-          return Response.json({ access_token: "user-token" });
-        if (url.includes("api.github.com/user/repos"))
-          return Response.json([{ id: 1297678423 }]);
-        if (url.includes("api.github.com/repositories/555"))
-          return new Response("not found", { status: 404 });
-        if (url.includes("api.github.com/user"))
-          return Response.json({ id: 7, login: "octocat" });
-        throw new Error(`unexpected fetch ${url}`);
-      }),
-    );
-    const response = await handleGitHubCallback(
-      new URL(
-        `https://v2.invalid/auth/github/callback?code=abc&state=${state}`,
-      ),
-      callbackRequest("https://v2.invalid/auth/github/callback", start),
-      env(db),
-      html,
-    );
+    stubGitHubOAuth([{ id: 1297678423 }]);
+    const response = await completeGitHubSignIn(db);
     expect(response.status).toBe(302);
     const session = [...sessions.values()][0]!;
     expect(JSON.parse(session.repository_ids_json)).toEqual(["1297678423"]);

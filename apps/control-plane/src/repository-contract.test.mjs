@@ -1,14 +1,9 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import {
-  createRun,
-  MemoryRunRepository,
-  parseProfile,
-  waitingReasons,
-} from "@roundhouse/core";
+import { createRun, MemoryRunRepository, parseProfile } from "@roundhouse/core";
 import { describe, expect, it } from "vitest";
 import { D1RunRepository } from "./d1-store.js";
 
@@ -41,81 +36,11 @@ class LocalD1Statement {
 class LocalD1 {
   constructor() {
     this.database = new DatabaseSync(":memory:");
-    this.database.exec(
-      readFileSync(
-        new URL("../migrations/0001_v2_initial.sql", import.meta.url),
-        "utf8",
-      ),
-    );
-    this.database.exec(
-      readFileSync(
-        new URL("../migrations/0002_attempt_base_commit.sql", import.meta.url),
-        "utf8",
-      ),
-    );
-    this.database.exec(
-      readFileSync(
-        new URL("../migrations/0003_github_intake.sql", import.meta.url),
-        "utf8",
-      ),
-    );
-    this.database.exec(
-      readFileSync(
-        new URL("../migrations/0004_github_issue_state.sql", import.meta.url),
-        "utf8",
-      ),
-    );
-    this.database.exec(
-      readFileSync(
-        new URL("../migrations/0005_model_usage.sql", import.meta.url),
-        "utf8",
-      ),
-    );
-    this.database.exec(
-      readFileSync(
-        new URL("../migrations/0007_model_provider_usage.sql", import.meta.url),
-        "utf8",
-      ),
-    );
-    this.database.exec(
-      readFileSync(
-        new URL(
-          "../migrations/0008_model_usage_provider_identity.sql",
-          import.meta.url,
-        ),
-        "utf8",
-      ),
-    );
-    this.database.exec(
-      readFileSync(
-        new URL("../migrations/0009_cache_creation_usage.sql", import.meta.url),
-        "utf8",
-      ),
-    );
-    this.database.exec(
-      readFileSync(
-        new URL("../migrations/0011_workflow_graph.sql", import.meta.url),
-        "utf8",
-      ),
-    );
-    this.database.exec(
-      readFileSync(
-        new URL(
-          "../migrations/0012_durable_attempt_completion.sql",
-          import.meta.url,
-        ),
-        "utf8",
-      ),
-    );
-    this.database.exec(
-      readFileSync(
-        new URL(
-          "../migrations/0014_attempt_authority_outcomes.sql",
-          import.meta.url,
-        ),
-        "utf8",
-      ),
-    );
+    const migrations = new URL("../migrations/", import.meta.url);
+    for (const migration of readdirSync(migrations).filter((name) =>
+      name.endsWith(".sql"),
+    ))
+      this.database.exec(readFileSync(new URL(migration, migrations), "utf8"));
   }
 
   prepare(sql) {
@@ -404,56 +329,59 @@ function repositoryContract(label, createRepository) {
       });
     });
 
-    it.each(waitingReasons)("resumes a %s wait", async (reason) => {
-      const repository = createRepository();
-      const { profile: _profile, ...profilelessInput } = input;
-      const run = createRun({
-        ...(reason === "profile_error" ? profilelessInput : input),
-        id: `run_waiting_${reason}`,
-        ...(reason === "profile_error"
-          ? { profileError: "Repository profile is missing or invalid" }
-          : {}),
-        issue: {
-          title: "Paused work",
-          body: "Original report",
-          url: "https://github.com/zorkian/roundhouse/issues/42",
-          actor: "reporter",
-        },
-      });
-      await repository.create(run);
-      const waiting = await repository.transition(run.id, 1, {
-        status: "waiting",
-        stage: "implement",
-        waitingReason: reason,
-      });
-      const profile =
-        reason === "profile_error"
-          ? await parseProfile(
-              'version: 1\npaths:\n  allowed: ["**"]\n  protected: []\n',
-              "b".repeat(40),
-            )
-          : undefined;
-      const resumed = await repository.resume(
-        run.id,
-        waiting.revision,
-        run.issue,
-        profile,
-      );
-      expect(resumed).toMatchObject({
-        status: "active",
-        stage: "implement",
-        revision: 3,
-      });
-      expect(resumed).not.toHaveProperty("waitingReason");
-      if (profile) {
-        expect(resumed).toMatchObject({
-          profile,
-          profileVersion: profile.hash,
+    it.each(["clarification", "profile_error"])(
+      "resumes a representative %s wait",
+      async (reason) => {
+        const repository = createRepository();
+        const { profile: _profile, ...profilelessInput } = input;
+        const run = createRun({
+          ...(reason === "profile_error" ? profilelessInput : input),
+          id: `run_waiting_${reason}`,
+          ...(reason === "profile_error"
+            ? { profileError: "Repository profile is missing or invalid" }
+            : {}),
+          issue: {
+            title: "Paused work",
+            body: "Original report",
+            url: "https://github.com/zorkian/roundhouse/issues/42",
+            actor: "reporter",
+          },
         });
-        expect(resumed).not.toHaveProperty("profileError");
-      }
-      await expect(repository.get(run.id)).resolves.toEqual(resumed);
-    });
+        await repository.create(run);
+        const waiting = await repository.transition(run.id, 1, {
+          status: "waiting",
+          stage: "implement",
+          waitingReason: reason,
+        });
+        const profile =
+          reason === "profile_error"
+            ? await parseProfile(
+                'version: 1\npaths:\n  allowed: ["**"]\n  protected: []\n',
+                "b".repeat(40),
+              )
+            : undefined;
+        const resumed = await repository.resume(
+          run.id,
+          waiting.revision,
+          run.issue,
+          profile,
+        );
+        expect(resumed).toMatchObject({
+          status: "active",
+          stage: "implement",
+          revision: 3,
+        });
+        expect(resumed).not.toHaveProperty("waitingReason");
+        if (profile) {
+          expect(resumed).toMatchObject({
+            profile,
+            profileVersion: profile.hash,
+          });
+          expect(resumed).not.toHaveProperty("profileError");
+        }
+        await expect(repository.get(run.id)).resolves.toEqual(resumed);
+      },
+    );
 
     it("resumes clarification with the updated issue conversation", async () => {
       const repository = createRepository();

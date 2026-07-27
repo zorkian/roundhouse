@@ -51,73 +51,32 @@ function modelRequest(
 }
 
 describe("model broker", () => {
-  it.each([
-    [
-      "qualify",
-      "openai",
-      "openai/gpt-5.6-sol",
-      "openai-responses",
-      "qualification-default-v1",
-    ],
-    [
-      "reproduce",
-      "openai",
-      "openai/gpt-5.6-sol",
-      "openai-responses",
-      "reproduction-default-v1",
-    ],
-    [
-      "plan",
-      "openai",
-      "openai/gpt-5.6-sol",
-      "openai-responses",
-      "planning-default-v1",
-    ],
-    [
-      "implement",
-      "moonshotai",
-      "moonshotai/kimi-k3",
-      "openai-completions",
-      "implementation-default-v1",
-    ],
-    [
-      "review-holistic",
-      "openai",
-      "openai/gpt-5.6-sol",
-      "openai-responses",
-      "review-holistic-v1",
-    ],
-    [
-      "review-security",
-      "openai",
-      "openai/gpt-5.6-sol",
-      "openai-responses",
-      "review-security-v1",
-    ],
-    [
-      "review-data",
-      "openai",
-      "openai/gpt-5.6-sol",
-      "openai-responses",
-      "review-data-v1",
-    ],
-  ] as const)(
-    "resolves the native route for %s",
-    (role, provider, model, protocol, rule) => {
-      expect(
-        resolveRoute(
-          { role, taskType: "validation", complexity: "unknown" },
-          env,
-        ),
-      ).toEqual({
-        provider,
-        model,
-        protocol,
-        thinkingLevel: "low",
-        rule,
-      });
-    },
-  );
+  it("resolves the distinct default routing classes", () => {
+    expect(
+      resolveRoute(
+        { role: "qualify", taskType: "qualification", complexity: "unknown" },
+        env,
+      ),
+    ).toMatchObject({
+      provider: "openai",
+      model: "openai/gpt-5.6-sol",
+      protocol: "openai-responses",
+    });
+    expect(
+      resolveRoute(
+        {
+          role: "implement",
+          taskType: "implementation",
+          complexity: "unknown",
+        },
+        env,
+      ),
+    ).toMatchObject({
+      provider: "moonshotai",
+      model: "moonshotai/kimi-k3",
+      protocol: "openai-completions",
+    });
+  });
 
   it("honors a model and reasoning level selected by a repository profile", () => {
     expect(

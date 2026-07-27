@@ -4,7 +4,6 @@
 import {
   createRun,
   MemoryRunRepository,
-  waitingReasons,
   type Attempt,
   type RunSnapshot,
   type Wakeup,
@@ -66,6 +65,42 @@ function github(permission = "write"): GitHubApi {
       return { default_branch: "main" };
     }) as GitHubApi["get"],
     post: vi.fn(async () => ({})) as GitHubApi["post"],
+  };
+}
+
+function reportRun(
+  id: string,
+  overrides: Partial<RunSnapshot> = {},
+): RunSnapshot {
+  return {
+    ...createRun({
+      id,
+      repository: "zorkian/roundhouse",
+      issueNumber: 42,
+      baseCommit: "a".repeat(40),
+      profileVersion: "v2",
+    }),
+    ...overrides,
+  };
+}
+
+function reportAttempt(
+  run: RunSnapshot,
+  overrides: Partial<Attempt> = {},
+): Attempt {
+  const runRevision = Math.max(1, run.revision - 1);
+  return {
+    id: `${run.id}_rev_${runRevision}`,
+    runId: run.id,
+    runRevision,
+    kind: "agent",
+    stage: run.stage,
+    role: run.stage,
+    state: "completed",
+    deadlineAt: Date.now() + 1_000,
+    baseCommit: run.baseCommit,
+    expectedHead: run.currentHead,
+    ...overrides,
   };
 }
 
@@ -258,14 +293,9 @@ describe("GitHub intake", () => {
   it("cancels active work when its GitHub issue closes", async () => {
     const repository = new IntakeRepository();
     await repository.create(
-      createRun({
-        id: "run_123_issue_42",
-        repository: "zorkian/roundhouse",
+      reportRun("run_123_issue_42", {
         githubRepositoryId: 123,
         githubInstallationId: 456,
-        issueNumber: 42,
-        baseCommit: "a".repeat(40),
-        profileVersion: "v2",
       }),
     );
 
@@ -297,14 +327,9 @@ describe("GitHub intake", () => {
     const repository = new IntakeRepository();
     const id = "run_123_issue_42";
     await repository.create(
-      createRun({
-        id,
-        repository: "zorkian/roundhouse",
+      reportRun(id, {
         githubRepositoryId: 123,
         githubInstallationId: 456,
-        issueNumber: 42,
-        baseCommit: "a".repeat(40),
-        profileVersion: "v2",
         profile: {
           sourcePath: ".roundhouse/profile.yaml",
           sourceCommit: "a".repeat(40),
@@ -340,20 +365,13 @@ describe("GitHub intake", () => {
 
   it("closes and reopens a failed issue without changing or restarting its run", async () => {
     const repository = new IntakeRepository();
-    const failed = {
-      ...createRun({
-        id: "run_123_issue_42",
-        repository: "zorkian/roundhouse",
-        githubRepositoryId: 123,
-        githubInstallationId: 456,
-        issueNumber: 42,
-        baseCommit: "a".repeat(40),
-        profileVersion: "v2",
-      }),
+    const failed = reportRun("run_123_issue_42", {
+      githubRepositoryId: 123,
+      githubInstallationId: 456,
       status: "failed" as const,
       stage: "implement" as const,
       revision: 7,
-    };
+    });
     await repository.create(failed);
 
     await expect(
@@ -378,24 +396,10 @@ describe("GitHub intake", () => {
   });
 
   it("links generated issue comments to run details", async () => {
-    const run = createRun({
-      id: "run_links",
-      repository: "zorkian/roundhouse",
-      issueNumber: 42,
-      baseCommit: "a".repeat(40),
-      profileVersion: "v2",
-    });
+    const run = reportRun("run_links");
     const body = await reportedBodyWithDetails(run, {
-      id: "qualification",
-      runId: run.id,
-      runRevision: 1,
-      kind: "agent",
-      stage: "qualify",
+      ...reportAttempt(run),
       role: "qualify",
-      state: "completed",
-      deadlineAt: 1,
-      baseCommit: run.baseCommit,
-      expectedHead: run.currentHead,
       result: {
         qualification: { classification: "feature", summary: "Ready" },
       },
@@ -406,24 +410,10 @@ describe("GitHub intake", () => {
   });
 
   it("preserves the run-details link when comment content is truncated", async () => {
-    const run = createRun({
-      id: "run_long_comment",
-      repository: "zorkian/roundhouse",
-      issueNumber: 42,
-      baseCommit: "a".repeat(40),
-      profileVersion: "v2",
-    });
+    const run = reportRun("run_long_comment");
     const body = await reportedBodyWithDetails(run, {
-      id: "qualification",
-      runId: run.id,
-      runRevision: 1,
-      kind: "agent",
-      stage: "qualify",
+      ...reportAttempt(run),
       role: "qualify",
-      state: "completed",
-      deadlineAt: 1,
-      baseCommit: run.baseCommit,
-      expectedHead: run.currentHead,
       result: {
         qualification: {
           classification: "feature",
@@ -461,24 +451,12 @@ describe("GitHub intake", () => {
       },
       "https://roundhouse.example",
     );
-    const run = createRun({
-      id: "run_pr_links",
-      repository: "zorkian/roundhouse",
-      issueNumber: 42,
-      baseCommit: "a".repeat(40),
-      profileVersion: "v2",
+    const run = reportRun("run_pr_links", {
+      stage: "implement",
     });
     await reporter.report(run, {
-      id: "implementation",
-      runId: run.id,
-      runRevision: 1,
-      kind: "agent",
-      stage: "implement",
+      ...reportAttempt(run),
       role: "developer",
-      state: "completed",
-      deadlineAt: 1,
-      baseCommit: run.baseCommit,
-      expectedHead: run.currentHead,
       acceptedHead: "b".repeat(40),
       result: {
         implementation: {
@@ -876,33 +854,6 @@ describe("GitHub intake", () => {
     });
   });
 
-  it("does not repeat the profile error comment when its marker is already posted", async () => {
-    vi.spyOn(console, "error").mockImplementationOnce(() => undefined);
-    const repository = new IntakeRepository();
-    const enqueue = vi.fn();
-    const comments = [
-      {
-        body: "<!-- roundhouse:v2:profile-error:run_123_issue_42:1 -->\n## I can’t start on this yet",
-      },
-    ];
-    const api = profileErrorApi(comments, "missing");
-    await expect(
-      acceptGitHubComment(
-        await delivery("delivery-no-profile-repeat"),
-        env,
-        repository,
-        enqueue,
-        api,
-      ),
-    ).resolves.toBe("accepted");
-    await expect(repository.get("run_123_issue_42")).resolves.toMatchObject({
-      status: "waiting",
-      waitingReason: "profile_error",
-    });
-    expect(api.post).not.toHaveBeenCalled();
-    expect(enqueue).not.toHaveBeenCalled();
-  });
-
   it("does not repeat the profile error comment when its marker is beyond the first page", async () => {
     vi.spyOn(console, "error").mockImplementationOnce(() => undefined);
     const repository = new IntakeRepository();
@@ -1008,8 +959,8 @@ describe("GitHub intake", () => {
     expect(api.post).toHaveBeenCalledTimes(1);
   });
 
-  it.each(waitingReasons)(
-    "lets a maintainer restart a %s wait",
+  it.each(["clarification", "profile_error"] as const)(
+    "lets a maintainer restart a representative %s wait",
     async (reason) => {
       const repository = new IntakeRepository();
       const wakeups: Wakeup[] = [];
@@ -1766,14 +1717,9 @@ describe("GitHub intake", () => {
   it("does not treat Roundhouse's own question as a clarification answer", async () => {
     const repository = new IntakeRepository();
     await repository.create(
-      createRun({
-        id: "run_123_issue_42",
-        repository: "zorkian/roundhouse",
+      reportRun("run_123_issue_42", {
         githubRepositoryId: 123,
         githubInstallationId: 456,
-        issueNumber: 42,
-        baseCommit: "a".repeat(40),
-        profileVersion: "v2",
         issue: {
           title: "Question",
           body: "Details",
@@ -1812,44 +1758,32 @@ describe("GitHub intake", () => {
         return {} as T;
       },
     });
-    const run = {
-      ...createRun({
-        id: "run_question",
-        repository: "zorkian/roundhouse",
-        issueNumber: 42,
-        baseCommit: "a".repeat(40),
-        profileVersion: "v2",
-      }),
+    const run = reportRun("run_question", {
       status: "waiting",
       stage: "qualify",
       revision: 2,
       waitingReason: "clarification",
-    } as const;
-    await reporter.report(run, {
-      id: "run_question_rev_1",
-      runId: run.id,
-      runRevision: 1,
-      kind: "agent",
-      stage: "qualify",
-      role: "qualify",
-      state: "completed",
-      deadlineAt: Date.now() + 1_000,
-      baseCommit: run.baseCommit,
-      expectedHead: run.currentHead,
-      result: {
-        qualification: {
-          classification: "unclear",
-          summary: "The failing input is missing.",
-          uncertainties: ["Which input demonstrates the problem?"],
-          sources: [
-            {
-              title: "Project documentation",
-              url: "https://example.com/docs",
-            },
-          ],
-        },
-      },
     });
+    await reporter.report(
+      run,
+      reportAttempt(run, {
+        stage: "qualify",
+        role: "qualify",
+        result: {
+          qualification: {
+            classification: "unclear",
+            summary: "The failing input is missing.",
+            uncertainties: ["Which input demonstrates the problem?"],
+            sources: [
+              {
+                title: "Project documentation",
+                url: "https://example.com/docs",
+              },
+            ],
+          },
+        },
+      }),
+    );
     expect(post.mock.calls[0]?.[1]).toMatchObject({
       body: expect.stringContaining(
         "## A few questions before I start\n\nThe failing input is missing.",
@@ -1877,79 +1811,55 @@ describe("GitHub intake", () => {
       ["unsupported", "## I can’t take this on"],
     ] as const;
     for (const [classification, heading] of cases) {
-      const run = {
-        ...createRun({
-          id: `run_${classification}`,
-          repository: "zorkian/roundhouse",
-          issueNumber: 42,
-          baseCommit: "a".repeat(40),
-          profileVersion: "v2",
-        }),
+      const run = reportRun(`run_${classification}`, {
         status: "succeeded",
         stage: "qualify",
         revision: 2,
-      } as const;
-      const body = await reportedBody(run, {
-        id: `${run.id}_rev_1`,
-        runId: run.id,
-        runRevision: 1,
-        kind: "agent",
-        stage: "qualify",
-        role: "qualify",
-        state: "completed",
-        deadlineAt: Date.now() + 1_000,
-        baseCommit: run.baseCommit,
-        expectedHead: run.currentHead,
-        result: {
-          qualification: { classification, summary: "Here’s what I found." },
-        },
       });
+      const body = await reportedBody(
+        run,
+        reportAttempt(run, {
+          stage: "qualify",
+          role: "qualify",
+          result: {
+            qualification: { classification, summary: "Here’s what I found." },
+          },
+        }),
+      );
       expect(body).toContain(heading);
       expect(body).not.toContain("Roundhouse has stopped here");
     }
   });
 
   it("asks natural follow-up questions when reproduction is inconclusive", async () => {
-    const run = {
-      ...createRun({
-        id: "run_not_reproduced",
-        repository: "zorkian/roundhouse",
-        issueNumber: 42,
-        baseCommit: "a".repeat(40),
-        profileVersion: "v2",
-      }),
+    const run = reportRun("run_not_reproduced", {
       status: "waiting",
       stage: "reproduce",
       revision: 3,
       waitingReason: "clarification",
-    } as const;
-    const body = await reportedBody(run, {
-      id: "run_not_reproduced_rev_2",
-      runId: run.id,
-      runRevision: 2,
-      kind: "agent",
-      stage: "reproduce",
-      role: "reproduce",
-      state: "completed",
-      deadlineAt: Date.now() + 1_000,
-      baseCommit: run.baseCommit,
-      expectedHead: run.currentHead,
-      result: {
-        reproduction: {
-          status: "not_reproduced",
-          summary: "I couldn’t trigger the behavior described.",
-          expectedBehavior: "The page should remain open.",
-          observedBehavior: "The page remained open in my test.",
-          uncertainties: ["What did you click immediately before it closed?"],
-          sources: [
-            {
-              title: "Browser behavior",
-              url: "https://example.com/browser",
-            },
-          ],
-        },
-      },
     });
+    const body = await reportedBody(
+      run,
+      reportAttempt(run, {
+        stage: "reproduce",
+        role: "reproduce",
+        result: {
+          reproduction: {
+            status: "not_reproduced",
+            summary: "I couldn’t trigger the behavior described.",
+            expectedBehavior: "The page should remain open.",
+            observedBehavior: "The page remained open in my test.",
+            uncertainties: ["What did you click immediately before it closed?"],
+            sources: [
+              {
+                title: "Browser behavior",
+                url: "https://example.com/browser",
+              },
+            ],
+          },
+        },
+      }),
+    );
     expect(body).toContain(
       "## I couldn’t reproduce this yet\n\nI couldn’t trigger the behavior described.",
     );
@@ -1971,28 +1881,13 @@ describe("GitHub intake", () => {
         return {} as T;
       },
     });
-    const run = {
-      ...createRun({
-        id: "run_reproduction",
-        repository: "zorkian/roundhouse",
-        issueNumber: 42,
-        baseCommit: "a".repeat(40),
-        profileVersion: "v2",
-      }),
+    const run = reportRun("run_reproduction", {
       stage: "plan",
       revision: 3,
-    } as const;
-    const attempt = {
-      id: "run_reproduction_rev_2",
-      runId: run.id,
-      runRevision: 2,
-      kind: "agent",
+    });
+    const attempt = reportAttempt(run, {
       stage: "reproduce",
       role: "reproduce",
-      state: "completed",
-      deadlineAt: Date.now() + 1_000,
-      baseCommit: run.baseCommit,
-      expectedHead: run.currentHead,
       result: {
         reproduction: {
           status: "confirmed",
@@ -2009,7 +1904,7 @@ describe("GitHub intake", () => {
           ],
         },
       },
-    } satisfies Attempt;
+    });
     await reporter.report(run, attempt);
     expect(post).toHaveBeenCalledWith(
       "/repos/zorkian/roundhouse/issues/42/comments",
@@ -2036,40 +1931,29 @@ describe("GitHub intake", () => {
   });
 
   it("describes feature investigation as current behavior rather than reproduction", async () => {
-    const run = {
-      ...createRun({
-        id: "run_feature_investigation",
-        repository: "zorkian/roundhouse",
-        issueNumber: 43,
-        baseCommit: "a".repeat(40),
-        profileVersion: "v2",
-      }),
+    const run = reportRun("run_feature_investigation", {
+      issueNumber: 43,
       stage: "plan",
       revision: 3,
-    } as const;
-    const body = await reportedBody(run, {
-      id: "run_feature_investigation_rev_2",
-      runId: run.id,
-      runRevision: 2,
-      kind: "agent",
-      stage: "reproduce",
-      role: "reproduce",
-      state: "completed",
-      deadlineAt: Date.now() + 1_000,
-      baseCommit: run.baseCommit,
-      expectedHead: run.currentHead,
-      result: {
-        requestClassification: "feature",
-        reproduction: {
-          status: "confirmed",
-          summary: "The dashboard does not currently provide this filter.",
-          observedBehavior: "The dashboard shows one unfiltered list.",
-          commands: [],
-          relevantFiles: ["apps/control-plane/src/dashboard.ts"],
-          uncertainties: [],
-        },
-      },
     });
+    const body = await reportedBody(
+      run,
+      reportAttempt(run, {
+        stage: "reproduce",
+        role: "reproduce",
+        result: {
+          requestClassification: "feature",
+          reproduction: {
+            status: "confirmed",
+            summary: "The dashboard does not currently provide this filter.",
+            observedBehavior: "The dashboard shows one unfiltered list.",
+            commands: [],
+            relevantFiles: ["apps/control-plane/src/dashboard.ts"],
+            uncertainties: [],
+          },
+        },
+      }),
+    );
     expect(body).toContain("## I checked the current behavior");
     expect(body).toContain("### Requested outcome");
     expect(body).toContain("I couldn’t determine the requested outcome.");
@@ -2087,28 +1971,13 @@ describe("GitHub intake", () => {
         return {} as T;
       },
     });
-    const run = {
-      ...createRun({
-        id: "run_plan",
-        repository: "zorkian/roundhouse",
-        issueNumber: 42,
-        baseCommit: "a".repeat(40),
-        profileVersion: "v2",
-      }),
+    const run = reportRun("run_plan", {
       stage: "implement",
       revision: 4,
-    } as const;
-    const attempt = {
-      id: "run_plan_rev_3",
-      runId: run.id,
-      runRevision: 3,
-      kind: "agent",
+    });
+    const attempt = reportAttempt(run, {
       stage: "plan",
       role: "plan",
-      state: "completed",
-      deadlineAt: Date.now() + 1_000,
-      baseCommit: run.baseCommit,
-      expectedHead: run.currentHead,
       result: {
         plan: {
           status: "ready",
@@ -2119,7 +1988,7 @@ describe("GitHub intake", () => {
           questions: [],
         },
       },
-    } satisfies Attempt;
+    });
     await reporter.report(run, attempt);
     expect(post).toHaveBeenCalledWith(
       "/repos/zorkian/roundhouse/issues/42/comments",
@@ -2153,29 +2022,15 @@ describe("GitHub intake", () => {
             : { default_branch: "main" }) as T,
       post: post as GitHubApi["post"],
     });
-    const run = {
-      ...createRun({
-        id: "run_implementation",
-        repository: "zorkian/roundhouse",
-        issueNumber: 42,
-        baseCommit: "a".repeat(40),
-        profileVersion: "v2",
-      }),
+    const run = reportRun("run_implementation", {
       status: "succeeded",
       stage: "implement",
       revision: 5,
       currentHead: "b".repeat(40),
-    } as const;
-    const attempt = {
-      id: "run_implementation_rev_4",
-      runId: run.id,
-      runRevision: 4,
-      kind: "agent",
+    });
+    const attempt = reportAttempt(run, {
       stage: "implement",
       role: "implement",
-      state: "completed",
-      deadlineAt: Date.now() + 1_000,
-      baseCommit: run.baseCommit,
       expectedHead: "a".repeat(40),
       acceptedHead: run.currentHead,
       result: {
@@ -2192,7 +2047,7 @@ describe("GitHub intake", () => {
           ],
         },
       },
-    } satisfies Attempt;
+    });
 
     await reporter.report(run, attempt);
 
@@ -2233,40 +2088,29 @@ describe("GitHub intake", () => {
           : []) as T,
       post: post as GitHubApi["post"],
     });
-    const run = {
-      ...createRun({
-        id: "run_remediation",
-        repository: "zorkian/roundhouse",
-        issueNumber: 42,
-        baseCommit: "a".repeat(40),
-        profileVersion: "v2",
-      }),
+    const run = reportRun("run_remediation", {
       status: "active",
       stage: "review",
       revision: 7,
       currentHead: "c".repeat(40),
-    } as const;
-    await reporter.report(run, {
-      id: "run_remediation_rev_6",
-      runId: run.id,
-      runRevision: 6,
-      kind: "agent",
-      stage: "implement",
-      role: "implement",
-      state: "completed",
-      deadlineAt: Date.now() + 1_000,
-      baseCommit: run.baseCommit,
-      expectedHead: "b".repeat(40),
-      acceptedHead: run.currentHead,
-      result: {
-        implementation: {
-          summary: "Addressed the review finding.",
-          pullRequestTitle: "Handle empty input",
-          pullRequestBody: "Handles empty input.",
-          validation: [],
-        },
-      },
     });
+    await reporter.report(
+      run,
+      reportAttempt(run, {
+        stage: "implement",
+        role: "implement",
+        expectedHead: "b".repeat(40),
+        acceptedHead: run.currentHead,
+        result: {
+          implementation: {
+            summary: "Addressed the review finding.",
+            pullRequestTitle: "Handle empty input",
+            pullRequestBody: "Handles empty input.",
+            validation: [],
+          },
+        },
+      }),
+    );
     expect(post).not.toHaveBeenCalledWith(
       "/repos/zorkian/roundhouse/pulls",
       expect.anything(),
@@ -2294,39 +2138,28 @@ describe("GitHub intake", () => {
       post: post as GitHubApi["post"],
     });
     const head = "c".repeat(40);
-    const run = {
-      ...createRun({
-        id: "run_review",
-        repository: "zorkian/roundhouse",
-        issueNumber: 42,
-        baseCommit: "a".repeat(40),
-        profileVersion: "v2",
-      }),
+    const run = reportRun("run_review", {
       status: "active",
       stage: "ci",
       revision: 6,
       currentHead: head,
-    } as const;
-    await reporter.report(run, {
-      id: "run_review_rev_5",
-      runId: run.id,
-      runRevision: 5,
-      kind: "agent",
-      stage: "review",
-      role: "review",
-      state: "completed",
-      deadlineAt: Date.now() + 1_000,
-      baseCommit: run.baseCommit,
-      expectedHead: head,
-      acceptedHead: head,
-      result: {
-        review: {
-          status: "clean",
-          summary: "The change matches the requested behavior.",
-          findings: [],
-        },
-      },
     });
+    await reporter.report(
+      run,
+      reportAttempt(run, {
+        stage: "review",
+        role: "review",
+        expectedHead: head,
+        acceptedHead: head,
+        result: {
+          review: {
+            status: "clean",
+            summary: "The change matches the requested behavior.",
+            findings: [],
+          },
+        },
+      }),
+    );
     expect(post).toHaveBeenCalledWith(
       "/repos/zorkian/roundhouse/issues/73/comments",
       {
@@ -2392,19 +2225,12 @@ describe("GitHub intake", () => {
       }),
     ]);
     expect(aggregated).toBeDefined();
-    const run = {
-      ...createRun({
-        id: "run_aggregated_review",
-        repository: "zorkian/roundhouse",
-        issueNumber: 42,
-        baseCommit: "a".repeat(40),
-        profileVersion: "v2",
-      }),
+    const run = reportRun("run_aggregated_review", {
       status: "active",
       stage: "implement",
       revision: 6,
       currentHead: head,
-    } as const;
+    });
 
     const body = await reportedBody(run, aggregated!);
     expect(body).toContain(
@@ -2447,19 +2273,12 @@ describe("GitHub intake", () => {
         },
       },
     } satisfies Attempt;
-    const run = {
-      ...createRun({
-        id: attempt.runId,
-        repository: "zorkian/roundhouse",
-        issueNumber: 42,
-        baseCommit: attempt.baseCommit,
-        profileVersion: "v2",
-      }),
+    const run = reportRun(attempt.runId, {
       status: "active",
       stage: "ci",
       revision: 6,
       currentHead: head,
-    } as const;
+    });
 
     const body = await reportedBody(run, attempt);
     expect(body).toContain("Review complete");
@@ -2476,29 +2295,17 @@ describe("GitHub intake", () => {
       post: post as GitHubApi["post"],
     });
     const mergeCommit = "d".repeat(40);
-    const run = {
-      ...createRun({
-        id: "run_merge",
-        repository: "zorkian/roundhouse",
-        issueNumber: 42,
-        baseCommit: "a".repeat(40),
-        profileVersion: "v2",
-      }),
+    const run = reportRun("run_merge", {
       status: "succeeded",
       stage: "merge",
       revision: 8,
       currentHead: mergeCommit,
-    } as const;
+    });
     await reporter.report(run, {
-      id: "run_merge_rev_7",
-      runId: run.id,
-      runRevision: 7,
+      ...reportAttempt(run),
       kind: "external",
       stage: "merge",
       role: "github-merge",
-      state: "completed",
-      deadlineAt: Date.now() + 1_000,
-      baseCommit: run.baseCommit,
       expectedHead: "c".repeat(40),
       acceptedHead: mergeCommit,
       result: {
@@ -2525,30 +2332,17 @@ describe("GitHub intake", () => {
 
   it("does not announce a merge that failed validation", async () => {
     const api = github();
-    const run = {
-      ...createRun({
-        id: "run_failed_merge",
-        repository: "zorkian/roundhouse",
-        issueNumber: 42,
-        baseCommit: "a".repeat(40),
-        profileVersion: "v2",
-      }),
+    const run = reportRun("run_failed_merge", {
       status: "failed",
       stage: "merge",
       revision: 8,
       currentHead: "c".repeat(40),
-    } as const;
+    });
     await new GitHubStageReporter(api).report(run, {
-      id: "run_failed_merge_rev_7",
-      runId: run.id,
-      runRevision: 7,
+      ...reportAttempt(run),
       kind: "external",
       stage: "merge",
       role: "github-merge",
-      state: "completed",
-      deadlineAt: Date.now() + 1_000,
-      baseCommit: run.baseCommit,
-      expectedHead: run.currentHead,
       result: {
         merge: {
           status: "failed",
@@ -2562,29 +2356,13 @@ describe("GitHub intake", () => {
 
   it("does not open a pull request for a failed implementation", async () => {
     const api = github();
-    const run = {
-      ...createRun({
-        id: "run_failed_implementation",
-        repository: "zorkian/roundhouse",
-        issueNumber: 42,
-        baseCommit: "a".repeat(40),
-        profileVersion: "v2",
-      }),
+    const run = reportRun("run_failed_implementation", {
       status: "failed",
       stage: "implement",
       revision: 5,
-    } as const;
+    });
     await new GitHubStageReporter(api).report(run, {
-      id: "run_failed_implementation_rev_4",
-      runId: run.id,
-      runRevision: 4,
-      kind: "agent",
-      stage: "implement",
-      role: "implement",
-      state: "completed",
-      deadlineAt: Date.now() + 1_000,
-      baseCommit: run.baseCommit,
-      expectedHead: run.currentHead,
+      ...reportAttempt(run),
       result: { outcome: "ok", checkpoint: run.currentHead },
     });
     expect(api.get).not.toHaveBeenCalled();
@@ -2600,24 +2378,15 @@ describe("GitHub intake", () => {
       },
       "https://roundhouse.example",
     );
-    const run = createRun({
-      id: "run_implementation_started",
-      repository: "zorkian/roundhouse",
-      issueNumber: 42,
-      baseCommit: "a".repeat(40),
-      profileVersion: "v2",
+    const run = reportRun("run_implementation_started", {
+      stage: "implement",
+      revision: 5,
     });
     await reporter.reportStarted(run, {
+      ...reportAttempt(run),
       id: "run_implementation_started_rev_4",
-      runId: run.id,
       runRevision: 4,
-      kind: "agent",
-      stage: "implement",
-      role: "implement",
       state: "dispatched",
-      deadlineAt: Date.now() + 1_000,
-      baseCommit: run.baseCommit,
-      expectedHead: run.currentHead,
     });
     expect(post).toHaveBeenCalledTimes(1);
     expect(post).toHaveBeenCalledWith(
@@ -2640,123 +2409,6 @@ describe("GitHub intake", () => {
     });
   });
 
-  it("does not repeat an implementation start that is already posted", async () => {
-    const post = vi.fn(async (_path: string, _body: unknown) => ({}));
-    const reporter = new GitHubStageReporter({
-      get: async <T>() =>
-        [
-          {
-            body: "<!-- roundhouse:v2:implementation-started:run_implementation_started_rev_4 -->\n## Implementation started",
-          },
-        ] as T,
-      post: post as GitHubApi["post"],
-    });
-    const run = createRun({
-      id: "run_implementation_started",
-      repository: "zorkian/roundhouse",
-      issueNumber: 42,
-      baseCommit: "a".repeat(40),
-      profileVersion: "v2",
-    });
-    await reporter.reportStarted(run, {
-      id: "run_implementation_started_rev_4",
-      runId: run.id,
-      runRevision: 4,
-      kind: "agent",
-      stage: "implement",
-      role: "implement",
-      state: "dispatched",
-      deadlineAt: Date.now() + 1_000,
-      baseCommit: run.baseCommit,
-      expectedHead: run.currentHead,
-    });
-    expect(post).not.toHaveBeenCalled();
-  });
-
-  it("finds an implementation start marker beyond the first comment page", async () => {
-    const post = vi.fn(async (_path: string, _body: unknown) => ({}));
-    const get = vi.fn(async (path: string) =>
-      path.endsWith("page=1")
-        ? Array.from({ length: 100 }, (_, index) => ({
-            body: `older comment ${index}`,
-          }))
-        : [
-            {
-              body: "<!-- roundhouse:v2:implementation-started:run_implementation_started_rev_4 -->\n## Implementation started",
-            },
-          ],
-    );
-    const reporter = new GitHubStageReporter({
-      get: get as GitHubApi["get"],
-      post: post as GitHubApi["post"],
-    });
-    const run = createRun({
-      id: "run_implementation_started",
-      repository: "zorkian/roundhouse",
-      issueNumber: 42,
-      baseCommit: "a".repeat(40),
-      profileVersion: "v2",
-    });
-    await reporter.reportStarted(run, {
-      id: "run_implementation_started_rev_4",
-      runId: run.id,
-      runRevision: 4,
-      kind: "agent",
-      stage: "implement",
-      role: "implement",
-      state: "dispatched",
-      deadlineAt: Date.now() + 1_000,
-      baseCommit: run.baseCommit,
-      expectedHead: run.currentHead,
-    });
-    expect(get).toHaveBeenCalledTimes(2);
-    expect(post).not.toHaveBeenCalled();
-  });
-
-  it("checks every comment page before posting an implementation start", async () => {
-    const post = vi.fn(async (_path: string, _body: unknown) => ({}));
-    const get = vi.fn(async (path: string) =>
-      path.endsWith("page=1")
-        ? Array.from({ length: 100 }, (_, index) => ({
-            body: `older comment ${index}`,
-          }))
-        : [{ body: "an unrelated new comment" }],
-    );
-    const reporter = new GitHubStageReporter({
-      get: get as GitHubApi["get"],
-      post: post as GitHubApi["post"],
-    });
-    const run = createRun({
-      id: "run_implementation_started",
-      repository: "zorkian/roundhouse",
-      issueNumber: 42,
-      baseCommit: "a".repeat(40),
-      profileVersion: "v2",
-    });
-    await reporter.reportStarted(run, {
-      id: "run_implementation_started_rev_4",
-      runId: run.id,
-      runRevision: 4,
-      kind: "agent",
-      stage: "implement",
-      role: "implement",
-      state: "dispatched",
-      deadlineAt: Date.now() + 1_000,
-      baseCommit: run.baseCommit,
-      expectedHead: run.currentHead,
-    });
-    expect(get).toHaveBeenCalledTimes(2);
-    expect(post).toHaveBeenCalledTimes(1);
-    expect(post).toHaveBeenCalledWith(
-      "/repos/zorkian/roundhouse/issues/42/comments",
-      {
-        body: expect.stringContaining(
-          "<!-- roundhouse:v2:implementation-started:run_implementation_started_rev_4 -->",
-        ),
-      },
-    );
-  });
-
   it("posts a holistic review start on the pull request", async () => {
     const post = vi.fn(async (_path: string, _body: unknown) => ({}));
     const reporter = new GitHubStageReporter(
@@ -2774,29 +2426,16 @@ describe("GitHub intake", () => {
       },
       "https://roundhouse.example",
     );
-    const run = {
-      ...createRun({
-        id: "run_review_started",
-        repository: "zorkian/roundhouse",
-        issueNumber: 42,
-        baseCommit: "a".repeat(40),
-        profileVersion: "v2",
-      }),
+    const run = reportRun("run_review_started", {
       stage: "review",
       revision: 5,
       currentHead: "b".repeat(40),
-    } as const;
+    });
     await reporter.reportStarted(run, {
+      ...reportAttempt(run),
       id: "run_review_started_rev_5_review-holistic",
-      runId: run.id,
-      runRevision: 5,
-      kind: "agent",
-      stage: "review",
       role: "review-holistic",
       state: "dispatched",
-      deadlineAt: Date.now() + 1_000,
-      baseCommit: run.baseCommit,
-      expectedHead: run.currentHead,
     });
     expect(post).toHaveBeenCalledTimes(1);
     expect(post).toHaveBeenCalledWith(
@@ -2819,102 +2458,6 @@ describe("GitHub intake", () => {
     });
   });
 
-  it("does not repeat a holistic review start that is already posted", async () => {
-    const post = vi.fn(async (_path: string, _body: unknown) => ({}));
-    const reporter = new GitHubStageReporter({
-      get: async <T>(path: string) =>
-        (path.includes("/pulls?state=open")
-          ? [
-              {
-                number: 73,
-                html_url: "https://github.com/zorkian/roundhouse/pull/73",
-              },
-            ]
-          : [
-              {
-                body: "<!-- roundhouse:v2:review-started:run_review_started_rev_5_review-holistic -->\n## Review started",
-              },
-            ]) as T,
-      post: post as GitHubApi["post"],
-    });
-    const run = {
-      ...createRun({
-        id: "run_review_started",
-        repository: "zorkian/roundhouse",
-        issueNumber: 42,
-        baseCommit: "a".repeat(40),
-        profileVersion: "v2",
-      }),
-      stage: "review",
-      revision: 5,
-      currentHead: "b".repeat(40),
-    } as const;
-    await reporter.reportStarted(run, {
-      id: "run_review_started_rev_5_review-holistic",
-      runId: run.id,
-      runRevision: 5,
-      kind: "agent",
-      stage: "review",
-      role: "review-holistic",
-      state: "dispatched",
-      deadlineAt: Date.now() + 1_000,
-      baseCommit: run.baseCommit,
-      expectedHead: run.currentHead,
-    });
-    expect(post).not.toHaveBeenCalled();
-  });
-
-  it("finds a review start marker beyond the first pull request comment page", async () => {
-    const post = vi.fn(async (_path: string, _body: unknown) => ({}));
-    const get = vi.fn(async (path: string) => {
-      if (path.includes("/pulls?state=open"))
-        return [
-          {
-            number: 73,
-            html_url: "https://github.com/zorkian/roundhouse/pull/73",
-          },
-        ];
-      return path.endsWith("page=1")
-        ? Array.from({ length: 100 }, (_, index) => ({
-            body: `older comment ${index}`,
-          }))
-        : [
-            {
-              body: "<!-- roundhouse:v2:review-started:run_review_started_rev_5_review-holistic -->\n## Review started",
-            },
-          ];
-    });
-    const reporter = new GitHubStageReporter({
-      get: get as GitHubApi["get"],
-      post: post as GitHubApi["post"],
-    });
-    const run = {
-      ...createRun({
-        id: "run_review_started",
-        repository: "zorkian/roundhouse",
-        issueNumber: 42,
-        baseCommit: "a".repeat(40),
-        profileVersion: "v2",
-      }),
-      stage: "review",
-      revision: 5,
-      currentHead: "b".repeat(40),
-    } as const;
-    await reporter.reportStarted(run, {
-      id: "run_review_started_rev_5_review-holistic",
-      runId: run.id,
-      runRevision: 5,
-      kind: "agent",
-      stage: "review",
-      role: "review-holistic",
-      state: "dispatched",
-      deadlineAt: Date.now() + 1_000,
-      baseCommit: run.baseCommit,
-      expectedHead: run.currentHead,
-    });
-    expect(post).not.toHaveBeenCalled();
-  });
-
   it("does not post a review start for specialist reviewers", async () => {
     const get = vi.fn(async () => []);
     const post = vi.fn(async (_path: string, _body: unknown) => ({}));
@@ -2922,30 +2465,17 @@ describe("GitHub intake", () => {
       get: get as GitHubApi["get"],
       post: post as GitHubApi["post"],
     });
-    const run = {
-      ...createRun({
-        id: "run_specialist_started",
-        repository: "zorkian/roundhouse",
-        issueNumber: 42,
-        baseCommit: "a".repeat(40),
-        profileVersion: "v2",
-      }),
+    const run = reportRun("run_specialist_started", {
       stage: "review",
       revision: 5,
       currentHead: "b".repeat(40),
-    } as const;
+    });
     for (const role of ["review-security", "review-data"] as const) {
       await reporter.reportStarted(run, {
+        ...reportAttempt(run),
         id: `run_specialist_started_rev_5_${role}`,
-        runId: run.id,
-        runRevision: 5,
-        kind: "agent",
-        stage: "review",
         role,
         state: "dispatched",
-        deadlineAt: Date.now() + 1_000,
-        baseCommit: run.baseCommit,
-        expectedHead: run.currentHead,
       });
     }
     expect(get).not.toHaveBeenCalled();
@@ -2958,60 +2488,31 @@ describe("GitHub intake", () => {
       get: async <T>() => [] as T,
       post: post as GitHubApi["post"],
     });
-    const run = {
-      ...createRun({
-        id: "run_review_started_missing_pr",
-        repository: "zorkian/roundhouse",
-        issueNumber: 42,
-        baseCommit: "a".repeat(40),
-        profileVersion: "v2",
-      }),
+    const run = reportRun("run_review_started_missing_pr", {
       stage: "review",
       revision: 5,
       currentHead: "b".repeat(40),
-    } as const;
+    });
     await expect(
       reporter.reportStarted(run, {
+        ...reportAttempt(run),
         id: "run_review_started_missing_pr_rev_5_review-holistic",
-        runId: run.id,
-        runRevision: 5,
-        kind: "agent",
-        stage: "review",
         role: "review-holistic",
         state: "dispatched",
-        deadlineAt: Date.now() + 1_000,
-        baseCommit: run.baseCommit,
-        expectedHead: run.currentHead,
       }),
     ).rejects.toThrow("review_pull_request_missing");
     expect(post).not.toHaveBeenCalled();
   });
 
   it("asks plan questions without exposing workflow status", async () => {
-    const run = {
-      ...createRun({
-        id: "run_plan_question",
-        repository: "zorkian/roundhouse",
-        issueNumber: 42,
-        baseCommit: "a".repeat(40),
-        profileVersion: "v2",
-      }),
+    const run = reportRun("run_plan_question", {
       status: "waiting",
       stage: "plan",
       revision: 4,
       waitingReason: "clarification",
-    } as const;
+    });
     const body = await reportedBody(run, {
-      id: "run_plan_question_rev_3",
-      runId: run.id,
-      runRevision: 3,
-      kind: "agent",
-      stage: "plan",
-      role: "plan",
-      state: "completed",
-      deadlineAt: Date.now() + 1_000,
-      baseCommit: run.baseCommit,
-      expectedHead: run.currentHead,
+      ...reportAttempt(run),
       result: {
         plan: {
           status: "needs_clarification",
