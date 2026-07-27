@@ -1242,6 +1242,14 @@ export function agentToolNames(assignment) {
   ];
 }
 
+export function configureAgentToolExecution(session) {
+  // Every tool in a batch operates on the same checkout and process runtime.
+  // Pi's parallel mode can race shared helper bootstrap and, more importantly,
+  // lets reads, commands, and mutations observe different workspace states.
+  session.agent.toolExecution = "sequential";
+  return session.agent.toolExecution;
+}
+
 async function structuredAgent(
   assignment,
   directory,
@@ -1399,6 +1407,13 @@ async function structuredAgent(
     settingsManager: SettingsManager.inMemory({
       quietStartup: true,
     }),
+  });
+  const toolExecution = configureAgentToolExecution(session);
+  runnerLog("info", "pi_agent_configured", {
+    attemptId: assignment.id,
+    stage: name,
+    toolExecution,
+    tools,
   });
   const unsubscribe = session.subscribe((event) => {
     runnerLog("info", "pi_agent_event", { stage: name, event: event.type });
