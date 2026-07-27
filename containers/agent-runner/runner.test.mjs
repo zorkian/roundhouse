@@ -54,6 +54,10 @@ describe("V2 agent runner", () => {
     expect(agentRuntime).toBe("pi");
   });
 
+  it("marks agent commands as unattended", () => {
+    expect(process.env.CI).toBe("true");
+  });
+
   it("refreshes complete Git metadata in a restored workspace", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     process.env.ROUNDHOUSE_WORKSPACE_ROOT = resolve(testRoot, "runner");

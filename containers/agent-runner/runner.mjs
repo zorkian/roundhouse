@@ -26,6 +26,10 @@ import {
 import { Value } from "typebox/value";
 import { observeResponse } from "../../packages/response-observer/index.mjs";
 
+// Every agent command runs unattended. Tools such as Wrangler use CI to skip
+// confirmation prompts that would otherwise leave the sandbox waiting forever.
+process.env.CI = "true";
+
 export const runnerIdentity = Object.freeze({
   schemaVersion: 2,
   service: "roundhouse-v2-agent-runner",
