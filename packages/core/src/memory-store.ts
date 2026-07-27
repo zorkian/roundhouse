@@ -196,6 +196,26 @@ export class MemoryRunRepository implements RunRepository {
       .sort((left, right) => right.runRevision - left.runRevision)[0];
   }
 
+  async completedNodeAttempts(
+    runId: string,
+    nodeId: string,
+    beforeRevision: number,
+  ): Promise<readonly Attempt[]> {
+    return [...this.attempts.values()]
+      .filter(
+        (attempt) =>
+          attempt.runId === runId &&
+          attempt.nodeId === nodeId &&
+          attempt.state === "completed" &&
+          attempt.runRevision < beforeRevision,
+      )
+      .sort(
+        (left, right) =>
+          left.runRevision - right.runRevision ||
+          left.id.localeCompare(right.id),
+      );
+  }
+
   async consumedCiEvidence(
     runId: string,
     evidenceKey: string,

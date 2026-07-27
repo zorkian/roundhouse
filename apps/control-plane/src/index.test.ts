@@ -660,6 +660,152 @@ describe("V2 control plane", () => {
     });
   });
 
+  it("preserves implementation screenshots across repeated fix passes", async () => {
+    const repository = new MemoryRunRepository();
+    const profile = {
+      sourcePath: ".roundhouse/profile.yaml" as const,
+      sourceCommit: workflowCommit,
+      version: 1 as const,
+      hash: "profile",
+      workflow,
+      paths: { allowed: ["**"], protected: [] },
+    };
+    const initial = createRun({
+      id: "run_cumulative_implementation_evidence",
+      repository: "zorkian/roundhouse",
+      issueNumber: 414,
+      baseCommit: workflowCommit,
+      profileVersion: profile.hash,
+      profile,
+      issue: {
+        title: "Preserve visual evidence",
+        body: "Keep valid screenshots through review fix passes.",
+        url: "https://github.test/issues/414",
+        actor: "maintainer",
+      },
+    });
+    for (const [revision, nodeId, key, value] of [
+      [1, "qualify", "qualification", { classification: "feature" }],
+      [2, "investigate", "reproduction", { status: "confirmed" }],
+      [3, "plan", "plan", { status: "ready" }],
+    ] as const) {
+      repository.attempts.set(`attempt_${nodeId}`, {
+        id: `attempt_${nodeId}`,
+        runId: initial.id,
+        runRevision: revision,
+        kind: "agent",
+        nodeId,
+        executor: "agent.read",
+        stage:
+          nodeId === "qualify"
+            ? "qualify"
+            : nodeId === "investigate"
+              ? "reproduce"
+              : "plan",
+        role: nodeId,
+        state: "completed",
+        deadlineAt: 1,
+        baseCommit: initial.baseCommit,
+        expectedHead: initial.currentHead,
+        acceptedHead: initial.currentHead,
+        result: { [key]: value },
+      });
+    }
+    const implementation = (
+      id: string,
+      revision: number,
+      summary: string,
+      screenshots: readonly Readonly<Record<string, unknown>>[],
+    ): Attempt => ({
+      id,
+      runId: initial.id,
+      runRevision: revision,
+      kind: "agent",
+      nodeId: "implement",
+      executor: "agent.write",
+      stage: "implement",
+      role: "implement",
+      state: "completed",
+      deadlineAt: 1,
+      baseCommit: initial.baseCommit,
+      expectedHead: initial.currentHead,
+      acceptedHead: `${revision}`.repeat(40),
+      result: {
+        implementation: {
+          summary,
+          validation: [],
+          screenshots,
+        },
+      },
+    });
+    const first = implementation("attempt_implement_first", 4, "Initial", [
+      { url: "https://example.test/signed-in", description: "Signed in" },
+      { url: "https://example.test/unauthorized", description: "Denied" },
+    ]);
+    const latest = implementation("attempt_implement_latest", 6, "Fixed", [
+      {
+        url: "https://example.test/signed-in",
+        description: "Signed in, still valid",
+      },
+      { url: "https://example.test/signed-out", description: "Signed out" },
+    ]);
+    repository.attempts.set(first.id, first);
+    repository.attempts.set(latest.id, latest);
+    const run = {
+      ...initial,
+      revision: 7,
+      stage: "implement" as const,
+      currentNodeId: "implement",
+    };
+    const attempt: Attempt = {
+      id: "attempt_implement_next",
+      runId: run.id,
+      runRevision: run.revision,
+      kind: "agent",
+      nodeId: "implement",
+      executor: "agent.write",
+      stage: "implement",
+      role: "implement",
+      state: "created",
+      deadlineAt: 1,
+      baseCommit: run.baseCommit,
+      expectedHead: latest.acceptedHead!,
+    };
+
+    const resolved = await resolveWorkflowAgentInputs(
+      repository,
+      run,
+      attempt,
+      workflow.nodes.implement!.agent!,
+    );
+
+    expect(resolved.values.implementation).toEqual({
+      summary: "Fixed",
+      validation: [],
+      screenshots: [
+        {
+          url: "https://example.test/signed-in",
+          description: "Signed in, still valid",
+        },
+        {
+          url: "https://example.test/unauthorized",
+          description: "Denied",
+        },
+        {
+          url: "https://example.test/signed-out",
+          description: "Signed out",
+        },
+      ],
+    });
+    expect(resolved.evidence.implementation).toMatchObject({
+      selector: "nodes.implement.implementation",
+      present: true,
+      sourceAttemptId: latest.id,
+      sourceAttemptIds: [first.id, latest.id],
+      sourceHead: latest.acceptedHead,
+    });
+  });
+
   it("allows only required attempt services and the package registry", () => {
     expect(
       attemptAllowedHosts(

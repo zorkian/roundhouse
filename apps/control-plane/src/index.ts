@@ -471,10 +471,43 @@ function nestedValue(value: unknown, path: readonly string[]): unknown {
   );
 }
 
+function aggregateImplementationAttempts(
+  attempts: readonly Attempt[],
+): Attempt | undefined {
+  const latest = attempts.at(-1);
+  if (!latest) return undefined;
+  const screenshots = new Map<string, unknown>();
+  for (const attempt of attempts) {
+    const implementation = attempt.result?.implementation as
+      Record<string, unknown> | undefined;
+    if (!Array.isArray(implementation?.screenshots)) continue;
+    for (const screenshot of implementation.screenshots) {
+      if (!screenshot || typeof screenshot !== "object") continue;
+      const url = (screenshot as Record<string, unknown>).url;
+      if (typeof url === "string" && url) screenshots.set(url, screenshot);
+    }
+  }
+  if (!screenshots.size) return latest;
+  const latestImplementation = latest.result?.implementation as
+    Record<string, unknown> | undefined;
+  return {
+    ...latest,
+    result: {
+      ...latest.result,
+      implementation: {
+        ...latestImplementation,
+        screenshots: [...screenshots.values()],
+      },
+    },
+  };
+}
+
 export async function resolveWorkflowAgentInputs(
   repository: Pick<
     RunRepository,
-    "latestCompletedNodeAttempt" | "attemptsForRevision"
+    | "latestCompletedNodeAttempt"
+    | "completedNodeAttempts"
+    | "attemptsForRevision"
   >,
   run: RunSnapshot,
   attempt: Attempt,
@@ -506,17 +539,42 @@ export async function resolveWorkflowAgentInputs(
       run.revision,
     );
     const sourceNode = run.profile?.workflow?.nodes[match[1]!];
-    const sourceAttempts =
-      source && sourceNode?.executor === "review"
-        ? (
-            await repository.attemptsForRevision(run.id, source.runRevision)
-          ).filter(
-            (candidate) =>
-              candidate.nodeId === match[1] && candidate.state === "completed",
-          )
-        : source
-          ? [source]
-          : [];
+    let sourceAttempts: readonly Attempt[] = source ? [source] : [];
+    if (source && sourceNode?.executor === "review")
+      sourceAttempts = (
+        await repository.attemptsForRevision(run.id, source.runRevision)
+      ).filter(
+        (candidate) =>
+          candidate.nodeId === match[1] && candidate.state === "completed",
+      );
+    else if (source && sourceNode?.agent?.task === "implementation") {
+      const aggregationStartedAt = Date.now();
+      console.log(
+        JSON.stringify({
+          message: "workflow_implementation_evidence_load_started",
+          runId: run.id,
+          revision: run.revision,
+          attemptId: attempt.id,
+          sourceNodeId: match[1],
+        }),
+      );
+      sourceAttempts = await repository.completedNodeAttempts(
+        run.id,
+        match[1]!,
+        run.revision,
+      );
+      console.log(
+        JSON.stringify({
+          message: "workflow_implementation_evidence_load_completed",
+          runId: run.id,
+          revision: run.revision,
+          attemptId: attempt.id,
+          sourceNodeId: match[1],
+          sourceAttemptIds: sourceAttempts.map(({ id }) => id),
+          durationMs: Date.now() - aggregationStartedAt,
+        }),
+      );
+    }
     const resolvedSource =
       source && sourceNode?.executor === "review"
         ? aggregateReviewAttempts(
@@ -524,7 +582,9 @@ export async function resolveWorkflowAgentInputs(
             run.profile,
             sourceNode.review,
           )
-        : source;
+        : sourceNode?.agent?.task === "implementation"
+          ? aggregateImplementationAttempts(sourceAttempts)
+          : source;
     const resolved = resolvedSource
       ? nestedValue(resolvedSource.result, match[2]!.split("."))
       : undefined;

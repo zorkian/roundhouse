@@ -634,6 +634,20 @@ export class D1RunRepository implements RunRepository {
     return row ? attemptFromRow(row) : undefined;
   }
 
+  async completedNodeAttempts(
+    runId: string,
+    nodeId: string,
+    beforeRevision: number,
+  ): Promise<readonly Attempt[]> {
+    const result = await this.db
+      .prepare(
+        "SELECT id,run_id,run_revision,kind,node_id,executor,stage,role,state,deadline_at,base_commit,expected_head,accepted_head,result_json,routing_json FROM attempts WHERE run_id=?1 AND node_id=?2 AND state='completed' AND run_revision<?3 ORDER BY run_revision,id",
+      )
+      .bind(runId, nodeId, beforeRevision)
+      .all<AttemptRow>();
+    return (result.results ?? []).map(attemptFromRow);
+  }
+
   async consumedCiEvidence(
     runId: string,
     evidenceKey: string,
