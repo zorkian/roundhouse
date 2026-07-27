@@ -54,7 +54,7 @@ describe("V2 agent runner", () => {
     expect(agentRuntime).toBe("pi");
   });
 
-  it("refetches complete Git objects into a restored workspace", async () => {
+  it("refreshes complete Git metadata in a restored workspace", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     process.env.ROUNDHOUSE_WORKSPACE_ROOT = resolve(testRoot, "runner");
     const source = resolve(testRoot, "source");

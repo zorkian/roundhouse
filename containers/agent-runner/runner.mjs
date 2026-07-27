@@ -4,7 +4,14 @@
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -1869,33 +1876,58 @@ export async function prepareWorkspace(assignment, onProgress) {
     } catch {}
   }
   if (restored) {
-    await command(
-      "git",
-      [
-        "fetch",
-        "--refetch",
-        "--no-tags",
-        assignment.artifact.remote,
-        assignment.artifact.ref,
-      ],
-      {
-        cwd: directory,
-        env: gitEnvironment(assignment.artifact.token),
-        onProgress,
-      },
-    );
+    const operation = "workspace Git refresh";
+    const startedAt = Date.now();
+    await onProgress?.({ phase: "command_started", operation });
+    const refreshed = resolve(workspaceRoot(), `${assignment.id}-git-refresh`);
+    try {
+      await clone(assignment.artifact, refreshed, onProgress);
+      await rm(resolve(directory, ".git"), { recursive: true, force: true });
+      await rename(resolve(refreshed, ".git"), resolve(directory, ".git"));
+      await rm(refreshed, { recursive: true, force: true });
+      await onProgress?.({
+        phase: "command_completed",
+        operation,
+        durationMs: Date.now() - startedAt,
+        exitCode: 0,
+      });
+    } catch (error) {
+      await onProgress?.({
+        phase: "command_failed",
+        operation,
+        durationMs: Date.now() - startedAt,
+        errorType:
+          error instanceof Error ? error.constructor.name : typeof error,
+        detail: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
   } else {
     await clone(assignment.artifact, directory, onProgress);
   }
-  await command("git", ["checkout", "--detach", assignment.expectedHead], {
-    cwd: directory,
-    onProgress,
-  });
-  if (restored)
+  await command(
+    "git",
+    [
+      "checkout",
+      ...(restored ? ["--force"] : []),
+      "--detach",
+      assignment.expectedHead,
+    ],
+    {
+      cwd: directory,
+      onProgress,
+    },
+  );
+  if (restored) {
     await command("git", ["reset", "--hard", assignment.expectedHead], {
       cwd: directory,
       onProgress,
     });
+    await command("git", ["clean", "-fd"], {
+      cwd: directory,
+      onProgress,
+    });
+  }
   await command(
     "git",
     [
