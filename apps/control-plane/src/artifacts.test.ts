@@ -57,6 +57,24 @@ describe("trusted checkpoint path validation", () => {
       }),
     ).toThrow("protected_path_changed");
   });
+
+  it("leaves trusted integration path validation to exact Git validation", async () => {
+    const profile = await parseProfile(
+      'version: 1\npaths:\n  allowed: ["src/**"]\n  protected: [".roundhouse/**"]\n',
+      "a".repeat(40),
+    );
+
+    expect(() =>
+      validateCheckpointIdentity(
+        checkpoint([".roundhouse/workflow.yaml", "README.md"]),
+        {
+          ...identity,
+          profile,
+          enforcePathPolicy: false,
+        },
+      ),
+    ).not.toThrow();
+  });
 });
 
 it("accepts only unchanged checkpoints from read-only attempts", () => {

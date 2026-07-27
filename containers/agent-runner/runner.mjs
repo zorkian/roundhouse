@@ -2237,6 +2237,28 @@ export async function validateCheckpoint(assignment) {
   );
   if (JSON.stringify(changedPaths) !== JSON.stringify(checkpoint.changedPaths))
     throw new Error("changed_paths_mismatch");
+  const integration = assignment.integration;
+  const validatesIntegration =
+    typeof integration?.baseHead === "string" &&
+    /^[a-f0-9]{40}$/.test(integration.baseHead) &&
+    (integration.mechanical === true || Array.isArray(integration.conflicts));
+  if (
+    (integration?.mechanical === true ||
+      Array.isArray(integration?.conflicts)) &&
+    !validatesIntegration
+  )
+    throw new Error("integration_validation_context_invalid");
+  runnerLog("info", "runner_checkpoint_validation_mode_selected", {
+    attemptId: assignment.id,
+    mode:
+      integration?.mechanical === true && validatesIntegration
+        ? "mechanical_integration"
+        : Array.isArray(integration?.conflicts) && validatesIntegration
+          ? "conflict_resolution"
+          : "authored_paths",
+    baseHead: validatesIntegration ? integration.baseHead : null,
+    changedPathCount: changedPaths.length,
+  });
   const matches = (pattern, path) => {
     let expression = "";
     for (let index = 0; index < pattern.length; index++) {
@@ -2255,7 +2277,7 @@ export async function validateCheckpoint(assignment) {
     }
     return new RegExp(`^${expression}$`).test(path);
   };
-  for (const path of changedPaths) {
+  for (const path of validatesIntegration ? [] : changedPaths) {
     if (
       !path ||
       path.startsWith("/") ||
@@ -2278,7 +2300,47 @@ export async function validateCheckpoint(assignment) {
     )
       throw new Error("path_outside_allowlist");
   }
-  const integration = assignment.integration;
+  if (integration?.mechanical === true && validatesIntegration) {
+    const integrationParents = (
+      await command(
+        "git",
+        ["show", "-s", "--format=%P", checkpoint.outputHead],
+        {
+          cwd: directory,
+        },
+      )
+    )
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+    if (
+      integrationParents.length !== 2 ||
+      integrationParents[0] !== checkpoint.inputHead ||
+      integrationParents[1] !== integration.baseHead
+    )
+      throw new Error("integration_base_not_parent");
+    const mechanicalTree = (
+      await command(
+        "git",
+        [
+          "merge-tree",
+          "--write-tree",
+          checkpoint.inputHead,
+          integration.baseHead,
+        ],
+        { cwd: directory },
+      )
+    )
+      .split("\n", 1)[0]
+      .trim();
+    const outputTree = await command(
+      "git",
+      ["rev-parse", `${checkpoint.outputHead}^{tree}`],
+      { cwd: directory },
+    );
+    if (!/^[a-f0-9]{40}$/.test(mechanicalTree) || outputTree !== mechanicalTree)
+      throw new Error("integration_tree_mismatch");
+  }
   if (
     Array.isArray(integration?.conflicts) &&
     typeof integration?.baseHead === "string" &&

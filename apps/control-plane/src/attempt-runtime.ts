@@ -235,6 +235,71 @@ export class SandboxCheckpointValidator implements CheckpointValidator {
     if (!attempt || !run) throw new Error("attempt_not_found");
     const artifact = await this.artifacts.get(input.checkpoint.repository);
     if (!artifact) throw new Error("artifact_repository_not_found");
+    const reportedIntegration = input.result?.integration as
+      Record<string, unknown> | undefined;
+    let integrationValidation:
+      | {
+          readonly baseHead: string;
+          readonly mechanical?: true;
+          readonly conflicts?: readonly unknown[];
+        }
+      | undefined;
+    if (attempt.stage === "integrate" && attempt.role === "integrate") {
+      if (
+        reportedIntegration?.candidateHead !== attempt.expectedHead ||
+        typeof reportedIntegration.baseHead !== "string" ||
+        !/^[a-f0-9]{40}$/.test(reportedIntegration.baseHead)
+      )
+        throw new Error("integration_result_identity_mismatch");
+      if (reportedIntegration.status === "clean") {
+        if (reportedIntegration.head !== input.checkpoint.outputHead)
+          throw new Error("integration_result_identity_mismatch");
+        integrationValidation = {
+          baseHead: reportedIntegration.baseHead,
+          mechanical: true,
+        };
+      } else if (reportedIntegration.status === "conflict") {
+        if (!Array.isArray(reportedIntegration.conflicts))
+          throw new Error("integration_result_identity_mismatch");
+        validateReadOnlyCheckpoint(input.checkpoint);
+      } else {
+        throw new Error("integration_result_identity_mismatch");
+      }
+    }
+    const conflicted =
+      attempt.role === "conflict-resolution"
+        ? await conflictedIntegrationOutcome(this.repository, run)
+        : undefined;
+    if (attempt.role === "conflict-resolution" && !conflicted)
+      throw new Error("integration_conflict_context_missing");
+    if (conflicted) {
+      if (
+        typeof conflicted.baseHead !== "string" ||
+        !/^[a-f0-9]{40}$/.test(conflicted.baseHead) ||
+        !Array.isArray(conflicted.conflicts)
+      )
+        throw new Error("integration_conflict_context_invalid");
+      integrationValidation = {
+        baseHead: conflicted.baseHead,
+        conflicts: conflicted.conflicts,
+      };
+    }
+    console.log(
+      JSON.stringify({
+        message: "checkpoint_validation_mode_selected",
+        runId: run.id,
+        attemptId: attempt.id,
+        stage: attempt.stage,
+        role: attempt.role,
+        mode: integrationValidation?.mechanical
+          ? "mechanical_integration"
+          : integrationValidation?.conflicts
+            ? "conflict_resolution"
+            : "authored_paths",
+        baseHead: integrationValidation?.baseHead ?? null,
+        changedPathCount: input.checkpoint.changedPaths.length,
+      }),
+    );
     validateCheckpointIdentity(input.checkpoint, {
       repositoryId: artifact.id,
       repository: workspaceName(run.id),
@@ -246,6 +311,7 @@ export class SandboxCheckpointValidator implements CheckpointValidator {
         (() => {
           throw new Error("run_profile_missing");
         })(),
+      enforcePathPolicy: !integrationValidation,
     });
     if (
       !["implement", "integrate"].includes(attempt.stage) ||
@@ -261,10 +327,6 @@ export class SandboxCheckpointValidator implements CheckpointValidator {
       }
       return;
     }
-    const conflicted =
-      attempt.role === "conflict-resolution"
-        ? await conflictedIntegrationOutcome(this.repository, run)
-        : undefined;
     const token = await artifact.createToken("read", 5 * 60);
     try {
       const validation = await attemptSandbox(
@@ -275,17 +337,8 @@ export class SandboxCheckpointValidator implements CheckpointValidator {
         baseCommit: run.baseCommit,
         profile: run.profile,
         checkpoint: input.checkpoint,
-        ...(conflicted
-          ? {
-              integration: {
-                ...(typeof conflicted.baseHead === "string"
-                  ? { baseHead: conflicted.baseHead }
-                  : {}),
-                ...(Array.isArray(conflicted.conflicts)
-                  ? { conflicts: conflicted.conflicts }
-                  : {}),
-              },
-            }
+        ...(integrationValidation
+          ? { integration: integrationValidation }
           : {}),
         artifact: {
           repositoryId: artifact.id,

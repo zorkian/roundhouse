@@ -1810,6 +1810,70 @@ describe("V2 agent runner", () => {
     );
     expect(checkpoint.outputHead).toBe(first.head);
     expect(checkpoint.changedPaths.sort()).toEqual(["main.ts", "route.ts"]);
+    await expect(
+      validateCheckpoint({
+        ...assignment,
+        id: "run_integrate_rev_1-validation",
+        profile: {
+          version: 1,
+          paths: {
+            allowed: ["route.ts"],
+            protected: ["main.ts"],
+          },
+        },
+        checkpoint,
+        artifact: { ...assignment.artifact, access: "read" },
+        integration: {
+          baseHead: mainHead,
+          mechanical: true,
+        },
+      }),
+    ).resolves.toBeUndefined();
+    const integratedDirectory = resolve(
+      process.env.ROUNDHOUSE_WORKSPACE_ROOT,
+      assignment.id,
+    );
+    await writeFile(
+      resolve(integratedDirectory, "main.ts"),
+      "export const main = 'tampered';\n",
+    );
+    execFileSync("git", ["add", "--all"], { cwd: integratedDirectory });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@invalid",
+        "commit",
+        "--amend",
+        "--no-edit",
+      ],
+      { cwd: integratedDirectory },
+    );
+    const tamperedCheckpoint = await checkpointWorkspace(
+      assignment,
+      integratedDirectory,
+    );
+    await expect(
+      validateCheckpoint({
+        ...assignment,
+        id: "run_integrate_rev_1-tampered-validation",
+        profile: {
+          version: 1,
+          paths: {
+            allowed: ["**"],
+            protected: [],
+          },
+        },
+        checkpoint: tamperedCheckpoint,
+        artifact: { ...assignment.artifact, access: "read" },
+        integration: {
+          baseHead: mainHead,
+          mechanical: true,
+        },
+      }),
+    ).rejects.toThrow("integration_tree_mismatch");
   });
 
   it("reports textual conflicts without producing an integration head", async () => {
