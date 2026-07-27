@@ -3,16 +3,28 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { recordAttemptEvent, sandbox, settleAttemptCompletion } = vi.hoisted(
-  () => ({
-    sandbox: {
-      restorePreparedAttempt: vi.fn(),
-      executePreparedAttempt: vi.fn(),
-    },
-    settleAttemptCompletion: vi.fn(),
-    recordAttemptEvent: vi.fn(),
-  }),
-);
+const {
+  acceptRecordedAttemptCompletion,
+  backupRecordedAttemptWorkspace,
+  loadRecordedAttemptCompletion,
+  publishRecordedAttemptCompletion,
+  recordAttemptCompletion,
+  recordAttemptEvent,
+  sandbox,
+  validateRecordedAttemptCompletion,
+} = vi.hoisted(() => ({
+  sandbox: {
+    restorePreparedAttempt: vi.fn(),
+    executePreparedAttempt: vi.fn(),
+  },
+  acceptRecordedAttemptCompletion: vi.fn(),
+  backupRecordedAttemptWorkspace: vi.fn(),
+  loadRecordedAttemptCompletion: vi.fn(),
+  publishRecordedAttemptCompletion: vi.fn(),
+  recordAttemptCompletion: vi.fn(),
+  recordAttemptEvent: vi.fn(),
+  validateRecordedAttemptCompletion: vi.fn(),
+}));
 
 vi.mock("cloudflare:workers", () => ({
   WorkflowEntrypoint: class {},
@@ -21,7 +33,12 @@ vi.mock("@cloudflare/sandbox", () => ({
   getSandbox: vi.fn(() => sandbox),
 }));
 vi.mock("./attempt-settlement.js", () => ({
-  settleAttemptCompletion,
+  acceptRecordedAttemptCompletion,
+  backupRecordedAttemptWorkspace,
+  loadRecordedAttemptCompletion,
+  publishRecordedAttemptCompletion,
+  recordAttemptCompletion,
+  validateRecordedAttemptCompletion,
 }));
 vi.mock("./d1-store.js", () => ({
   D1RunRepository: class {
@@ -106,16 +123,32 @@ function steps() {
 describe("attempt execution Workflow", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    recordAttemptCompletion.mockResolvedValue("recorded");
+    validateRecordedAttemptCompletion.mockResolvedValue({
+      outcome: "validated",
+      attemptId: completion.attemptId,
+      sandboxName: "sandbox_1",
+    });
+    backupRecordedAttemptWorkspace.mockResolvedValue({
+      outcome: "completed",
+      attemptId: completion.attemptId,
+      backupId: "backup_1",
+    });
+    publishRecordedAttemptCompletion.mockResolvedValue({
+      outcome: "published",
+      attemptId: completion.attemptId,
+      sandboxName: "sandbox_1",
+    });
+    acceptRecordedAttemptCompletion.mockResolvedValue({
+      outcome: "completed",
+      attemptId: completion.attemptId,
+      sandboxName: "sandbox_1",
+    });
   });
 
   it("attaches restore, execution, settlement, and cleanup in durable steps", async () => {
     sandbox.restorePreparedAttempt.mockResolvedValue(undefined);
     sandbox.executePreparedAttempt.mockResolvedValue(completion);
-    settleAttemptCompletion.mockResolvedValue({
-      outcome: "completed",
-      attemptId: completion.attemptId,
-      sandboxName: "sandbox_1",
-    });
     const { destroy, instance } = workflow();
     const { calls, step } = steps();
 
@@ -126,15 +159,31 @@ describe("attempt execution Workflow", () => {
     expect(calls.map(({ name }) => name)).toEqual([
       "restore prepared workspace",
       "execute prepared attempt",
-      "settle completed attempt",
+      "record completed execution",
+      "validate completed attempt",
+      "backup completed workspace",
+      "publish completed attempt",
+      "accept completed attempt",
       "destroy settled attempt sandbox",
     ]);
     expect(calls[1]?.config).toMatchObject({
       timeout: "365 days",
       retries: { limit: 0 },
     });
-    expect(settleAttemptCompletion).toHaveBeenCalledWith(
+    expect(recordAttemptCompletion).toHaveBeenCalledWith(
       expect.objectContaining({ ATTEMPT_SANDBOXES: expect.anything() }),
+      completion,
+    );
+    expect(validateRecordedAttemptCompletion).toHaveBeenCalledWith(
+      expect.anything(),
+      completion,
+    );
+    expect(publishRecordedAttemptCompletion).toHaveBeenCalledWith(
+      expect.anything(),
+      completion,
+    );
+    expect(acceptRecordedAttemptCompletion).toHaveBeenCalledWith(
+      expect.anything(),
       completion,
     );
     expect(destroy).toHaveBeenCalledOnce();
@@ -156,7 +205,60 @@ describe("attempt execution Workflow", () => {
       "restore prepared workspace",
       "execute prepared attempt",
     ]);
-    expect(settleAttemptCompletion).not.toHaveBeenCalled();
+    expect(recordAttemptCompletion).not.toHaveBeenCalled();
+    expect(validateRecordedAttemptCompletion).not.toHaveBeenCalled();
     expect(destroy).not.toHaveBeenCalled();
+  });
+
+  it("resumes settlement from D1 without restoring or executing the agent", async () => {
+    loadRecordedAttemptCompletion.mockResolvedValue(completion);
+    const { destroy, instance } = workflow();
+    const { calls, step } = steps();
+    const recoveryEvent = {
+      instanceId: "workflow_2",
+      payload: {
+        attemptId: "attempt_1",
+        sandboxName: "sandbox_1",
+        mode: "settle",
+      },
+      timestamp: new Date(10_000),
+      workflowName: "attempt-execution",
+    } as never;
+
+    await expect(
+      instance.run(recoveryEvent, step as never),
+    ).resolves.toMatchObject({ outcome: "completed" });
+
+    expect(calls.map(({ name }) => name)).toEqual([
+      "load recorded execution",
+      "validate completed attempt",
+      "backup completed workspace",
+      "publish completed attempt",
+      "accept completed attempt",
+      "destroy settled attempt sandbox",
+    ]);
+    expect(sandbox.restorePreparedAttempt).not.toHaveBeenCalled();
+    expect(sandbox.executePreparedAttempt).not.toHaveBeenCalled();
+    expect(recordAttemptCompletion).not.toHaveBeenCalled();
+    expect(destroy).toHaveBeenCalledOnce();
+  });
+
+  it("accepts a valid checkpoint when workspace backup is unavailable", async () => {
+    sandbox.restorePreparedAttempt.mockResolvedValue(undefined);
+    sandbox.executePreparedAttempt.mockResolvedValue(completion);
+    backupRecordedAttemptWorkspace.mockResolvedValue({
+      outcome: "unavailable",
+      attemptId: completion.attemptId,
+      error: "backup connection closed",
+    });
+    const { instance } = workflow();
+    const { step } = steps();
+
+    await expect(instance.run(event(), step as never)).resolves.toMatchObject({
+      outcome: "completed",
+    });
+
+    expect(publishRecordedAttemptCompletion).toHaveBeenCalledOnce();
+    expect(acceptRecordedAttemptCompletion).toHaveBeenCalledOnce();
   });
 });

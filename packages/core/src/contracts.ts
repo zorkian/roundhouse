@@ -15,6 +15,7 @@ export const attemptKinds = ["agent", "external"] as const;
 export const attemptStates = [
   "created",
   "dispatched",
+  "executed",
   "completed",
   "failed",
 ] as const;

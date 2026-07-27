@@ -29,6 +29,16 @@ export class CheckpointRejectedError extends Error {
   }
 }
 
+export class BranchChangedError extends Error {
+  constructor(
+    readonly status: number,
+    readonly detail: string,
+  ) {
+    super("branch_changed");
+    this.name = "BranchChangedError";
+  }
+}
+
 const encoder = new TextEncoder();
 function bytesToHex(bytes: ArrayBuffer): string {
   return [...new Uint8Array(bytes)]

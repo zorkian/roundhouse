@@ -960,24 +960,26 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
     return new NestedContainerRuntime(this.componentHost()).ensure(attemptId);
   }
 
-  async validateCheckpoint(
+  private async checkpointRequest(
     attempt: AttemptAssignment,
+    operation: "validation" | "publication",
   ): Promise<{ readonly status: number; readonly responseBody: string }> {
     const startedAt = Date.now();
-    await this.traceSetup(attempt.id, "checkpoint_validation_started");
+    const path = operation === "validation" ? "/validate" : "/publish";
+    await this.traceSetup(attempt.id, `checkpoint_${operation}_started`);
     try {
       let stepStartedAt = Date.now();
       const allowedHosts = attemptAllowedHosts(attempt);
       await this.traceSetup(
         attempt.id,
-        "checkpoint_validation_network_policy_started",
+        `checkpoint_${operation}_network_policy_started`,
         undefined,
         { allowedHostCount: allowedHosts.length },
       );
       await this.setAllowedHosts(allowedHosts);
       await this.traceSetup(
         attempt.id,
-        "checkpoint_validation_network_policy_completed",
+        `checkpoint_${operation}_network_policy_completed`,
         stepStartedAt,
         { allowedHostCount: allowedHosts.length },
       );
@@ -1024,7 +1026,7 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
       stepStartedAt = Date.now();
       await this.traceSetup(
         attempt.id,
-        "checkpoint_validator_health_wait_started",
+        `checkpoint_${operation}_runner_health_wait_started`,
       );
       try {
         await runner.waitForPort(this.agentRunnerPort, {
@@ -1043,7 +1045,7 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
         ).catch(() => undefined);
         await this.traceSetup(
           attempt.id,
-          "checkpoint_validator_health_wait_failed",
+          `checkpoint_${operation}_runner_health_wait_failed`,
           stepStartedAt,
           {
             processId: runner.id,
@@ -1065,17 +1067,17 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
       }
       await this.traceSetup(
         attempt.id,
-        "checkpoint_validator_health_wait_completed",
+        `checkpoint_${operation}_runner_health_wait_completed`,
         stepStartedAt,
       );
       stepStartedAt = Date.now();
       await this.traceSetup(
         attempt.id,
-        "checkpoint_validation_request_started",
+        `checkpoint_${operation}_request_started`,
       );
       const response = await observeResponse(
         await this.containerFetch(
-          "http://runner/validate",
+          `http://runner${path}`,
           {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -1085,14 +1087,14 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
         ),
         {
           api: "agent_runner",
-          operation: "/validate",
+          operation: path,
           attemptId: attempt.id,
         },
       );
       const responseBody = await response.clone().text();
       await this.traceSetup(
         attempt.id,
-        "checkpoint_validation_request_completed",
+        `checkpoint_${operation}_request_completed`,
         stepStartedAt,
         {
           status: response.status,
@@ -1101,7 +1103,7 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
       );
       await this.traceSetup(
         attempt.id,
-        "checkpoint_validation_completed",
+        `checkpoint_${operation}_completed`,
         startedAt,
         {
           status: response.status,
@@ -1112,7 +1114,7 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
     } catch (error) {
       await this.traceSetup(
         attempt.id,
-        "checkpoint_validation_failed",
+        `checkpoint_${operation}_failed`,
         startedAt,
         {
           errorType:
@@ -1122,6 +1124,18 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
       );
       throw error;
     }
+  }
+
+  async validateCheckpoint(
+    attempt: AttemptAssignment,
+  ): Promise<{ readonly status: number; readonly responseBody: string }> {
+    return this.checkpointRequest(attempt, "validation");
+  }
+
+  async publishCheckpoint(
+    attempt: AttemptAssignment,
+  ): Promise<{ readonly status: number; readonly responseBody: string }> {
+    return this.checkpointRequest(attempt, "publication");
   }
 }
 

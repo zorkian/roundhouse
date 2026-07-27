@@ -14,7 +14,12 @@ import {
   type SandboxNamespace,
 } from "./attempt-runtime.js";
 import {
-  settleAttemptCompletion,
+  acceptRecordedAttemptCompletion,
+  backupRecordedAttemptWorkspace,
+  loadRecordedAttemptCompletion,
+  publishRecordedAttemptCompletion,
+  recordAttemptCompletion,
+  validateRecordedAttemptCompletion,
   type AttemptSettlementEnv,
   type AttemptSettlementResult,
 } from "./attempt-settlement.js";
@@ -23,6 +28,7 @@ import { D1RunRepository } from "./d1-store.js";
 export interface AttemptWorkflowParams {
   readonly attemptId: string;
   readonly sandboxName: string;
+  readonly mode?: "execute" | "settle";
 }
 
 type AttemptWorkflowEnv = AttemptSettlementEnv & {
@@ -88,40 +94,165 @@ export class AttemptExecutionWorkflow extends WorkflowEntrypoint<
     step: WorkflowStep,
   ): Promise<AttemptSettlementResult> {
     const { attemptId, sandboxName } = event.payload;
+    const mode = event.payload.mode ?? "execute";
     const repository = new D1RunRepository(this.env.DB);
     const sandbox = getSandbox(this.env.ATTEMPT_SANDBOXES, sandboxName, {
       enableDefaultSession: false,
     });
 
-    await step.do(
-      "restore prepared workspace",
+    let completion: AttemptCompletion;
+    if (mode === "execute") {
+      await step.do(
+        "restore prepared workspace",
+        { timeout: attachedStepTimeout },
+        async (): Promise<void> => {
+          const startedAt = Date.now();
+          await trace(
+            repository,
+            attemptId,
+            event.instanceId,
+            sandboxName,
+            "attempt_workflow_restore_started",
+          );
+          try {
+            await sandbox.restorePreparedAttempt(attemptId);
+            await trace(
+              repository,
+              attemptId,
+              event.instanceId,
+              sandboxName,
+              "attempt_workflow_restore_completed",
+              startedAt,
+            );
+          } catch (error) {
+            await trace(
+              repository,
+              attemptId,
+              event.instanceId,
+              sandboxName,
+              "attempt_workflow_restore_failed",
+              startedAt,
+              {
+                errorType:
+                  error instanceof Error
+                    ? error.constructor.name
+                    : typeof error,
+                error: error instanceof Error ? error.message : String(error),
+              },
+            );
+            throw error;
+          }
+        },
+      );
+
+      const serializedCompletion = await step.do(
+        "execute prepared attempt",
+        { ...noExecutionRetry, timeout: attachedStepTimeout },
+        async (): Promise<string> => {
+          const startedAt = Date.now();
+          await trace(
+            repository,
+            attemptId,
+            event.instanceId,
+            sandboxName,
+            "attempt_workflow_execution_started",
+          );
+          try {
+            const result = await sandbox.executePreparedAttempt(attemptId);
+            await trace(
+              repository,
+              attemptId,
+              event.instanceId,
+              sandboxName,
+              "attempt_workflow_execution_completed",
+              startedAt,
+            );
+            return JSON.stringify(result);
+          } catch (error) {
+            await trace(
+              repository,
+              attemptId,
+              event.instanceId,
+              sandboxName,
+              "attempt_workflow_execution_failed",
+              startedAt,
+              {
+                errorType:
+                  error instanceof Error
+                    ? error.constructor.name
+                    : typeof error,
+                error: error instanceof Error ? error.message : String(error),
+              },
+            );
+            throw error;
+          }
+        },
+      );
+      completion = JSON.parse(serializedCompletion) as AttemptCompletion;
+      const recorded = await step.do(
+        "record completed execution",
+        async (): Promise<"recorded" | "duplicate" | "stale"> =>
+          recordAttemptCompletion(this.env, completion),
+      );
+      if (recorded === "stale")
+        throw new Error("attempt_execution_record_stale");
+    } else {
+      const serializedCompletion = await step.do(
+        "load recorded execution",
+        async (): Promise<string> =>
+          JSON.stringify(
+            await loadRecordedAttemptCompletion(this.env, attemptId),
+          ),
+      );
+      completion = JSON.parse(serializedCompletion) as AttemptCompletion;
+      await trace(
+        repository,
+        attemptId,
+        event.instanceId,
+        sandboxName,
+        "attempt_workflow_settlement_resumed",
+        undefined,
+        {
+          expectedRevision: completion.expectedRevision,
+          outputHead: completion.checkpoint.outputHead,
+        },
+      );
+    }
+
+    const validation = await step.do(
+      "validate completed attempt",
       { timeout: attachedStepTimeout },
-      async (): Promise<void> => {
+      async () => {
         const startedAt = Date.now();
         await trace(
           repository,
           attemptId,
           event.instanceId,
           sandboxName,
-          "attempt_workflow_restore_started",
+          "attempt_workflow_validation_started",
         );
         try {
-          await sandbox.restorePreparedAttempt(attemptId);
+          const result = await validateRecordedAttemptCompletion(
+            this.env,
+            completion,
+          );
           await trace(
             repository,
             attemptId,
             event.instanceId,
             sandboxName,
-            "attempt_workflow_restore_completed",
+            "attempt_workflow_validation_completed",
             startedAt,
+            { outcome: result.outcome },
           );
+          return result;
         } catch (error) {
           await trace(
             repository,
             attemptId,
             event.instanceId,
             sandboxName,
-            "attempt_workflow_restore_failed",
+            "attempt_workflow_validation_failed",
             startedAt,
             {
               errorType:
@@ -132,38 +263,57 @@ export class AttemptExecutionWorkflow extends WorkflowEntrypoint<
           throw error;
         }
       },
+    );
+    if (validation.outcome !== "validated") {
+      if (validation.sandboxName)
+        await step.do("destroy rejected attempt sandbox", async () => {
+          await destroyAttemptSandboxWithTrace(
+            this.env.ATTEMPT_SANDBOXES,
+            validation.sandboxName!,
+            attemptId,
+          );
+        });
+      return validation as AttemptSettlementResult;
+    }
+
+    await step.do("backup completed workspace", noExecutionRetry, async () =>
+      backupRecordedAttemptWorkspace(this.env, completion),
     );
 
-    const serializedCompletion = await step.do(
-      "execute prepared attempt",
-      { ...noExecutionRetry, timeout: attachedStepTimeout },
-      async (): Promise<string> => {
+    const publication = await step.do(
+      "publish completed attempt",
+      { timeout: attachedStepTimeout },
+      async () => {
         const startedAt = Date.now();
         await trace(
           repository,
           attemptId,
           event.instanceId,
           sandboxName,
-          "attempt_workflow_execution_started",
+          "attempt_workflow_publication_started",
         );
         try {
-          const result = await sandbox.executePreparedAttempt(attemptId);
+          const result = await publishRecordedAttemptCompletion(
+            this.env,
+            completion,
+          );
           await trace(
             repository,
             attemptId,
             event.instanceId,
             sandboxName,
-            "attempt_workflow_execution_completed",
+            "attempt_workflow_publication_completed",
             startedAt,
+            { outcome: result.outcome },
           );
-          return JSON.stringify(result);
+          return result;
         } catch (error) {
           await trace(
             repository,
             attemptId,
             event.instanceId,
             sandboxName,
-            "attempt_workflow_execution_failed",
+            "attempt_workflow_publication_failed",
             startedAt,
             {
               errorType:
@@ -175,11 +325,20 @@ export class AttemptExecutionWorkflow extends WorkflowEntrypoint<
         }
       },
     );
-    const completion = JSON.parse(serializedCompletion) as AttemptCompletion;
+    if (publication.outcome !== "published") {
+      if (publication.sandboxName)
+        await step.do("destroy unpublished attempt sandbox", async () => {
+          await destroyAttemptSandboxWithTrace(
+            this.env.ATTEMPT_SANDBOXES,
+            publication.sandboxName!,
+            attemptId,
+          );
+        });
+      return publication as AttemptSettlementResult;
+    }
 
     const settlement = await step.do(
-      "settle completed attempt",
-      { timeout: attachedStepTimeout },
+      "accept completed attempt",
       async (): Promise<AttemptSettlementResult> => {
         const startedAt = Date.now();
         await trace(
@@ -190,7 +349,10 @@ export class AttemptExecutionWorkflow extends WorkflowEntrypoint<
           "attempt_workflow_settlement_started",
         );
         try {
-          const result = await settleAttemptCompletion(this.env, completion);
+          const result = await acceptRecordedAttemptCompletion(
+            this.env,
+            completion,
+          );
           await trace(
             repository,
             attemptId,

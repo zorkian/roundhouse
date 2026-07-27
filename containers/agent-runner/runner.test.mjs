@@ -30,6 +30,7 @@ import {
   planSchema,
   piModelConfiguration,
   prepareWorkspace,
+  publishCheckpoint,
   reviewSchema,
   reproductionSchema,
   requestClassification,
@@ -1240,6 +1241,24 @@ describe("V2 agent runner", () => {
         },
       }),
     ).resolves.toBeUndefined();
+    await expect(
+      publishCheckpoint({
+        ...validationAssignment,
+        id: "run_git_rev_1_profile_v2_publication",
+      }),
+    ).resolves.toEqual({
+      status: "published",
+      remoteHead: first.outputHead,
+    });
+    await expect(
+      publishCheckpoint({
+        ...validationAssignment,
+        id: "run_git_rev_1_profile_v2_publication_retry",
+      }),
+    ).resolves.toEqual({
+      status: "already_published",
+      remoteHead: first.outputHead,
+    });
     expect(
       execFileSync(
         "git",

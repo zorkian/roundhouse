@@ -517,6 +517,149 @@ describe("V2 control plane", () => {
     });
   });
 
+  it("resolves a review node to the joined findings from every selected reviewer", async () => {
+    const repository = new MemoryRunRepository();
+    const profile = {
+      sourcePath: ".roundhouse/profile.yaml" as const,
+      sourceCommit: workflowCommit,
+      version: 1 as const,
+      hash: "profile",
+      workflow,
+      paths: { allowed: ["**"], protected: [] },
+    };
+    const initial = createRun({
+      id: "run_joined_review_inputs",
+      repository: "zorkian/roundhouse",
+      issueNumber: 414,
+      baseCommit: workflowCommit,
+      profileVersion: profile.hash,
+      profile,
+      issue: {
+        title: "Joined reviews",
+        body: "Preserve every selected finding.",
+        url: "https://github.test/issues/414",
+        actor: "maintainer",
+      },
+    });
+    for (const [revision, nodeId, key, value] of [
+      [1, "qualify", "qualification", { classification: "feature" }],
+      [2, "investigate", "reproduction", { status: "confirmed" }],
+      [3, "plan", "plan", { status: "ready" }],
+    ] as const) {
+      repository.attempts.set(`attempt_${nodeId}`, {
+        id: `attempt_${nodeId}`,
+        runId: initial.id,
+        runRevision: revision,
+        kind: "agent",
+        nodeId,
+        executor: "agent.read",
+        stage:
+          nodeId === "qualify"
+            ? "qualify"
+            : nodeId === "investigate"
+              ? "reproduce"
+              : "plan",
+        role: nodeId,
+        state: "completed",
+        deadlineAt: 1,
+        baseCommit: initial.baseCommit,
+        expectedHead: initial.currentHead,
+        acceptedHead: initial.currentHead,
+        result: { [key]: value },
+      });
+    }
+    const review = (
+      role: "review-holistic" | "review-security",
+      finding: string,
+    ): Attempt => ({
+      id: `attempt_${role}`,
+      runId: initial.id,
+      runRevision: 4,
+      kind: "agent",
+      nodeId: "review",
+      executor: "review",
+      stage: "review",
+      role,
+      state: "completed",
+      deadlineAt: 1,
+      baseCommit: initial.baseCommit,
+      expectedHead: initial.currentHead,
+      acceptedHead: initial.currentHead,
+      result: {
+        review: {
+          status: "changes_requested",
+          summary: finding,
+          findings: [
+            {
+              title: finding,
+              details: `${finding} details`,
+              severity: "medium",
+              file: "src/index.ts",
+            },
+          ],
+          ...(role === "review-holistic"
+            ? {
+                selections: [
+                  {
+                    role: "review-security",
+                    applicable: true,
+                    rationale: "Authentication changed.",
+                  },
+                  {
+                    role: "review-data",
+                    applicable: false,
+                    rationale: "No persistence changes.",
+                  },
+                ],
+              }
+            : {}),
+        },
+      },
+    });
+    const holistic = review("review-holistic", "Public repositories omitted");
+    const security = review("review-security", "OAuth state is not bound");
+    repository.attempts.set(holistic.id, holistic);
+    repository.attempts.set(security.id, security);
+    const run = {
+      ...initial,
+      revision: 5,
+      stage: "implement" as const,
+      currentNodeId: "implement",
+    };
+    const attempt: Attempt = {
+      id: "attempt_implement_fix",
+      runId: run.id,
+      runRevision: run.revision,
+      kind: "agent",
+      nodeId: "implement",
+      executor: "agent.write",
+      stage: "implement",
+      role: "implement",
+      state: "created",
+      deadlineAt: 1,
+      baseCommit: run.baseCommit,
+      expectedHead: run.currentHead,
+    };
+
+    const resolved = await resolveWorkflowAgentInputs(
+      repository,
+      run,
+      attempt,
+      workflow.nodes.implement!.agent!,
+    );
+
+    expect(
+      (
+        resolved.values.review as { findings: readonly { title: string }[] }
+      ).findings.map(({ title }) => title),
+    ).toEqual(["Public repositories omitted", "OAuth state is not bound"]);
+    expect(resolved.evidence.review).toMatchObject({
+      selector: "nodes.review.review",
+      present: true,
+      sourceAttemptIds: [holistic.id, security.id],
+    });
+  });
+
   it("allows only required attempt services and the package registry", () => {
     expect(
       attemptAllowedHosts(
@@ -727,20 +870,31 @@ describe("V2 control plane", () => {
         }),
       },
       [wakeup],
-      async (next) => {
-        events.push(`enqueue:${next.runId}:${next.expectedRevision}`);
-      },
-      async (attemptId, next) => {
-        events.push(`diagnose:${attemptId}:${next.expectedRevision}`);
-      },
-      undefined,
-      async (_attemptId, phase) => {
-        events.push(`trace:${phase}`);
+      {
+        async decide() {
+          return "redispatch";
+        },
+        async redispatch(next) {
+          events.push(`enqueue:${next.runId}:${next.expectedRevision}`);
+        },
+        async resumeSettlement() {
+          throw new Error("unexpected_settlement");
+        },
+        async pause() {
+          throw new Error("unexpected_wait");
+        },
+        async diagnose(attemptId, next) {
+          events.push(`diagnose:${attemptId}:${next.expectedRevision}`);
+        },
+        async trace(_attemptId, phase) {
+          events.push(`trace:${phase}`);
+        },
       },
     );
     expect(events).toEqual([
       "trace:recovery_started",
       "diagnose:run_1_rev_3:3",
+      "trace:recovery_action_selected",
       "trace:sandbox_name_resolution_started",
       "trace:sandbox_name_resolution_completed",
       "trace:sandbox_destroy_started",
@@ -751,6 +905,79 @@ describe("V2 control plane", () => {
       "trace:wakeup_enqueue_completed",
       "trace:recovery_completed",
     ]);
+  });
+
+  it("resumes settlement without destroying or redispatching an executed attempt", async () => {
+    const events: string[] = [];
+    const wakeup = {
+      runId: "run_1",
+      expectedRevision: 8,
+      attemptId: "run_1_rev_8_review-security",
+    };
+    await recoverExpiredAttempts(
+      {
+        idFromName: (name: string) => name,
+        get: () => ({
+          destroy: async () => {
+            events.push("destroy");
+          },
+        }),
+      },
+      [wakeup],
+      {
+        async decide(attemptId) {
+          events.push(`decide:${attemptId}`);
+          return "settle";
+        },
+        async redispatch() {
+          events.push("redispatch");
+        },
+        async resumeSettlement(attemptId, next, name) {
+          events.push(`settle:${attemptId}:${next.expectedRevision}:${name}`);
+        },
+        async pause() {
+          events.push("pause");
+        },
+        async resolveName() {
+          return "review-sandbox";
+        },
+      },
+    );
+    expect(events).toEqual([
+      "decide:run_1_rev_8_review-security",
+      "settle:run_1_rev_8_review-security:8:review-sandbox",
+    ]);
+  });
+
+  it("moves interrupted paid work to waiting instead of redispatching it", async () => {
+    const events: string[] = [];
+    const wakeup = { runId: "run_1", expectedRevision: 9 };
+    await recoverExpiredAttempts(
+      {
+        idFromName: (name: string) => name,
+        get: () => ({
+          destroy: async () => {
+            events.push("destroy");
+          },
+        }),
+      },
+      [wakeup],
+      {
+        async decide() {
+          return "wait";
+        },
+        async redispatch() {
+          events.push("redispatch");
+        },
+        async resumeSettlement() {
+          events.push("settle");
+        },
+        async pause(attemptId) {
+          events.push(`pause:${attemptId}`);
+        },
+      },
+    );
+    expect(events).toEqual(["destroy", "pause:run_1_rev_9"]);
   });
 
   it("accepts only bounded runner progress metadata", () => {

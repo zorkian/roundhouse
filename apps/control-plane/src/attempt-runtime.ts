@@ -9,6 +9,7 @@ import {
   validateReadOnlyCheckpoint,
 } from "./artifacts.js";
 import {
+  BranchChangedError,
   CheckpointRejectedError,
   type AttemptCallback,
   type CheckpointValidator,
@@ -107,6 +108,33 @@ export async function destroyAttemptSandboxWithTrace(
   }
 }
 
+async function cleanupCheckpointResources(
+  attemptId: string,
+  phase: "validation" | "publication",
+  resources: Readonly<Record<string, () => Promise<unknown>>>,
+): Promise<void> {
+  const entries = Object.entries(resources);
+  const results = await Promise.allSettled(
+    entries.map(([, cleanup]) => cleanup()),
+  );
+  for (const [index, result] of results.entries()) {
+    if (result?.status !== "rejected") continue;
+    const resource = entries[index]?.[0] ?? "unknown";
+    console.error(
+      JSON.stringify({
+        message: "checkpoint_cleanup_unavailable",
+        attemptId,
+        phase,
+        resource,
+        error:
+          result.reason instanceof Error
+            ? result.reason.message
+            : String(result.reason),
+      }),
+    );
+  }
+}
+
 export async function workspaceBackup(
   db: D1Like,
   runId: string,
@@ -199,7 +227,6 @@ export class SandboxCheckpointValidator implements CheckpointValidator {
     private readonly containers: SandboxNamespace,
     private readonly artifacts: CloudflareArtifactsNamespace,
     private readonly repository: D1RunRepository,
-    private readonly githubEnv: GitHubEnv,
   ) {}
 
   async validate(input: AttemptCallback): Promise<void> {
@@ -227,7 +254,10 @@ export class SandboxCheckpointValidator implements CheckpointValidator {
       try {
         validateReadOnlyCheckpoint(input.checkpoint);
       } finally {
-        await artifact.revokeToken(input.artifactTokenId);
+        await cleanupCheckpointResources(attempt.id, "validation", {
+          artifactWriterToken: () =>
+            artifact.revokeToken(input.artifactTokenId),
+        });
       }
       return;
     }
@@ -267,19 +297,6 @@ export class SandboxCheckpointValidator implements CheckpointValidator {
           access: token.access,
           ref: input.checkpoint.ref,
         },
-        ...(input.checkpoint.outputHead !== input.checkpoint.inputHead
-          ? {
-              publish: {
-                remote: `https://github.com/${run.repository}.git`,
-                hostname: "github.com",
-                token: await githubClientForRun(
-                  this.githubEnv,
-                  run,
-                ).installationToken(),
-                ref: `refs/heads/${githubBranch(run.issueNumber)}`,
-              },
-            }
-          : {}),
       });
       if (validation.status >= 400 && validation.status < 500)
         throw new CheckpointRejectedError(
@@ -289,23 +306,80 @@ export class SandboxCheckpointValidator implements CheckpointValidator {
       if (validation.status < 200 || validation.status >= 300)
         throw new Error("checkpoint_git_validation_failed");
     } finally {
-      await Promise.all([
-        artifact.revokeToken(token.id),
-        artifact.revokeToken(input.artifactTokenId),
-        destroyAttemptSandbox(this.containers, `${attempt.id}-validation`),
-      ]);
+      await cleanupCheckpointResources(attempt.id, "validation", {
+        artifactReaderToken: () => artifact.revokeToken(token.id),
+        artifactWriterToken: () => artifact.revokeToken(input.artifactTokenId),
+        validationSandbox: () =>
+          destroyAttemptSandbox(this.containers, `${attempt.id}-validation`),
+      });
     }
-    if (attempt.stage === "implement") {
-      const backup = await attemptSandbox(
+  }
+}
+
+export class SandboxCheckpointPublisher {
+  constructor(
+    private readonly containers: SandboxNamespace,
+    private readonly artifacts: CloudflareArtifactsNamespace,
+    private readonly repository: D1RunRepository,
+    private readonly githubEnv: GitHubEnv,
+  ) {}
+
+  async publish(input: AttemptCallback): Promise<void> {
+    const attempt = await this.repository.getAttempt(input.attemptId);
+    const run = attempt && (await this.repository.get(attempt.runId));
+    if (!attempt || !run) throw new Error("attempt_not_found");
+    if (
+      input.checkpoint.outputHead === input.checkpoint.inputHead ||
+      !["implement", "integrate"].includes(attempt.stage) ||
+      attempt.role === "review-integration"
+    )
+      return;
+    const artifact = await this.artifacts.get(input.checkpoint.repository);
+    if (!artifact) throw new Error("artifact_repository_not_found");
+    const token = await artifact.createToken("read", 5 * 60);
+    const publicationSandbox = `${attempt.id}-publication`;
+    try {
+      const publication = await attemptSandbox(
         this.containers,
-        sandboxName(attempt),
-      ).backupWorkspace(attempt.id, attempt.runId);
-      await saveWorkspaceBackup(
-        this.repository.database,
-        attempt.runId,
-        attempt.id,
-        backup,
-      );
+        publicationSandbox,
+      ).publishCheckpoint({
+        ...attempt,
+        baseCommit: run.baseCommit,
+        profile: run.profile,
+        checkpoint: input.checkpoint,
+        artifact: {
+          repositoryId: artifact.id,
+          repository: artifact.name,
+          remote: artifact.remote,
+          hostname: artifact.hostname,
+          tokenId: token.id,
+          token: token.plaintext,
+          access: token.access,
+          ref: input.checkpoint.ref,
+        },
+        publish: {
+          remote: `https://github.com/${run.repository}.git`,
+          hostname: "github.com",
+          token: await githubClientForRun(
+            this.githubEnv,
+            run,
+          ).installationToken(),
+          ref: `refs/heads/${githubBranch(run.issueNumber)}`,
+        },
+      });
+      if (publication.status === 409)
+        throw new BranchChangedError(
+          publication.status,
+          publication.responseBody,
+        );
+      if (publication.status < 200 || publication.status >= 300)
+        throw new Error("checkpoint_git_publication_failed");
+    } finally {
+      await cleanupCheckpointResources(attempt.id, "publication", {
+        artifactReaderToken: () => artifact.revokeToken(token.id),
+        publicationSandbox: () =>
+          destroyAttemptSandbox(this.containers, publicationSandbox),
+      });
     }
   }
 }

@@ -2331,29 +2331,59 @@ export async function validateCheckpoint(assignment) {
         throw new Error("unrelated_conflict_resolution_edit");
     }
   }
-  if (assignment.publish) {
-    const authorization = Buffer.from(
-      `x-access-token:${assignment.publish.token}`,
-    ).toString("base64");
-    await command(
-      "git",
-      [
-        "push",
-        assignment.publish.remote,
-        `${checkpoint.outputHead}:${assignment.publish.ref}`,
-      ],
-      {
-        cwd: directory,
-        env: {
-          ...process.env,
-          GIT_CONFIG_COUNT: "1",
-          GIT_CONFIG_KEY_0: "http.extraHeader",
-          GIT_CONFIG_VALUE_0: `Authorization: Basic ${authorization}`,
-          GIT_TERMINAL_PROMPT: "0",
-        },
-      },
-    );
-  }
+}
+
+function publishEnvironment(token) {
+  const authorization = Buffer.from(`x-access-token:${token}`).toString(
+    "base64",
+  );
+  return {
+    ...process.env,
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "http.extraHeader",
+    GIT_CONFIG_VALUE_0: `Authorization: Basic ${authorization}`,
+    GIT_TERMINAL_PROMPT: "0",
+  };
+}
+
+export async function publishCheckpoint(assignment) {
+  if (!assignment.publish) throw new Error("publish_configuration_missing");
+  const directory = resolve(workspaceRoot(), `${assignment.id}-publish`);
+  await clone(assignment.artifact, directory);
+  const checkpoint = assignment.checkpoint;
+  await command(
+    "git",
+    ["cat-file", "-e", `${checkpoint.outputHead}^{commit}`],
+    { cwd: directory },
+  );
+  const environment = publishEnvironment(assignment.publish.token);
+  const advertised = await command(
+    "git",
+    ["ls-remote", "--refs", assignment.publish.remote, assignment.publish.ref],
+    {
+      cwd: directory,
+      env: environment,
+      preserveOutput: true,
+    },
+  );
+  const remoteHead = advertised.trim().split(/\s+/, 1)[0] || undefined;
+  if (remoteHead === checkpoint.outputHead)
+    return { status: "already_published", remoteHead };
+  if (remoteHead && remoteHead !== checkpoint.inputHead)
+    throw new Error(`publish_branch_changed:${remoteHead}`);
+  await command(
+    "git",
+    [
+      "push",
+      assignment.publish.remote,
+      `${checkpoint.outputHead}:${assignment.publish.ref}`,
+    ],
+    {
+      cwd: directory,
+      env: environment,
+    },
+  );
+  return { status: "published", remoteHead: checkpoint.outputHead };
 }
 
 async function completeAssignment(assignment, headers) {
@@ -2608,6 +2638,13 @@ export function runnerResponse(method, rawUrl, body) {
       return response(400, { error: "invalid_validation" });
     return response(202, { accepted: true, attemptId: body.id });
   }
+  if (path === "/publish") {
+    if (method !== "POST")
+      return response(405, { error: "method_not_allowed" }, { allow: "POST" });
+    if (!validAssignment(body) || !body.checkpoint || !body.publish)
+      return response(400, { error: "invalid_publication" });
+    return response(202, { accepted: true, attemptId: body.id });
+  }
   return response(404, { error: "not_found" });
 }
 
@@ -2733,6 +2770,40 @@ export function createRunnerServer(executeAssignment = completeAssignment) {
             reply.end(
               JSON.stringify({
                 error: "invalid_checkpoint",
+                errorType,
+                detail,
+              }),
+            );
+          },
+        );
+        return;
+      }
+      if (path === "/publish" && request.method === "POST" && body) {
+        publishCheckpoint(body).then(
+          (published) => {
+            const completed = response(200, published);
+            reply.writeHead(completed.status, completed.headers);
+            reply.end(completed.body);
+          },
+          (error) => {
+            const errorType =
+              error instanceof Error ? error.constructor.name : typeof error;
+            const detail =
+              error instanceof Error ? error.message : String(error);
+            runnerLog("error", "checkpoint_publication_failed", {
+              errorType,
+              error: detail,
+            });
+            const status = detail.startsWith("publish_branch_changed:")
+              ? 409
+              : 500;
+            reply.writeHead(status, jsonHeaders);
+            reply.end(
+              JSON.stringify({
+                error:
+                  status === 409
+                    ? "publish_branch_changed"
+                    : "checkpoint_publication_failed",
                 errorType,
                 detail,
               }),

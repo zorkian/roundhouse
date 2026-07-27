@@ -185,12 +185,16 @@ revision and serve only as wakeups.
 
 One Cloudflare Workflow instance owns the transport lifetime of each Sandbox
 attempt. Its durable steps restore the prepared workspace, keep the runner
-request attached until the executor returns a completion, settle that completion
-through the trusted checkpoint boundary, and release the Sandbox. Agent
-execution is not automatically retried: the existing D1 attempt deadline and
-recovery path decide what happens after an interrupted paid operation. The
-Cloudflare Workflow does not choose nodes, transitions, retries, or product
-outcomes and stores no attempt capability.
+request attached until the executor returns a completion, record that
+completion in D1, validate it, attempt an optional workspace backup, publish it
+idempotently, accept it, and release the Sandbox. Once D1 records an attempt as
+`executed`, recovery can resume only the settlement steps; it cannot invoke the
+model again. If a paid execution is interrupted before a completion is
+recorded, the run waits for an explicit maintainer restart. Workspace backup
+improves continuation speed but is not a correctness boundary: the Artifacts
+checkpoint and Git commit remain authoritative when backup is unavailable. The
+Cloudflare Workflow does not choose nodes, transitions, or product outcomes and
+stores no attempt capability.
 
 For each node execution the coordinator:
 
@@ -451,7 +455,9 @@ workflow snapshot. The runtime resolves configured fan-out, validates selector
 results, joins only completed attempts bound to one exact candidate head, and
 records durable fan-out/join events. Findings carry stable fingerprints and
 candidate-head evidence; blocking, advisory, and shadow modes share one
-contract.
+contract. Downstream `nodes.<review>.review` inputs resolve to that deterministic
+join and record every contributing attempt ID, rather than selecting one
+reviewer attempt.
 
 Exit gate: a repository adds a reviewer through configuration; every outcome is
 exact-head-bound; remediation invalidates and reruns required gates.

@@ -101,7 +101,7 @@ export class MemoryRunRepository implements RunRepository {
   async createAttempt(attempt: Attempt): Promise<"created" | "exists"> {
     const existing = this.attempts.get(attempt.id);
     if (existing) {
-      if (existing.state !== "completed")
+      if (!["executed", "completed"].includes(existing.state))
         this.attempts.set(attempt.id, {
           ...existing,
           state: "created",
