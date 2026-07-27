@@ -3,6 +3,7 @@
 
 import {
   compileWorkflow,
+  attemptHasCapability,
   immutableAttemptId,
   isModelRoute,
   profileModelForAttempt,
@@ -47,7 +48,6 @@ import {
   acceptGitHubIssueClosed,
   githubClientForRun,
   GitHubStageReporter,
-  postRunCommentOnce,
 } from "./github.js";
 import { observeResponse } from "@roundhouse/response-observer";
 import { aggregatedReview } from "./aggregated-review.js";
@@ -195,20 +195,19 @@ export function scheduleAttemptSandboxDestruction(
 }
 
 type RecoveryWakeup = Wakeup & { readonly attemptId?: string };
-type ExpiredAttemptRecoveryAction = "redispatch" | "settle" | "wait";
+type ExpiredAttemptRecoveryAction = "settle" | "reconcile";
 
 interface ExpiredAttemptRecoveryHandlers {
   readonly decide: (
     attemptId: string,
     wakeup: RecoveryWakeup,
   ) => Promise<ExpiredAttemptRecoveryAction>;
-  readonly redispatch: (wakeup: Wakeup) => Promise<void>;
   readonly resumeSettlement: (
     attemptId: string,
     wakeup: Wakeup,
     sandboxName: string,
   ) => Promise<void>;
-  readonly pause: (attemptId: string, wakeup: Wakeup) => Promise<void>;
+  readonly reconcile: (attemptId: string, wakeup: Wakeup) => Promise<void>;
   readonly diagnose?: (
     attemptId: string,
     wakeup: RecoveryWakeup,
@@ -252,7 +251,7 @@ export async function recoverExpiredAttempts(
         ? await handlers.resolveName(attemptId)
         : attemptId;
       await emit("sandbox_name_resolution_completed", { sandboxName: name });
-      if (action !== "settle") {
+      if (action === "reconcile") {
         await emit("sandbox_destroy_started", { sandboxName: name });
         try {
           await destroyAttemptSandbox(containers, name);
@@ -262,21 +261,17 @@ export async function recoverExpiredAttempts(
             sandboxName: name,
             error: error instanceof Error ? error.message : String(error),
           });
-          if (action === "redispatch") throw error;
+          throw error;
         }
       }
-      if (action === "redispatch") {
-        await emit("wakeup_enqueue_started");
-        await handlers.redispatch(wakeup);
-        await emit("wakeup_enqueue_completed");
-      } else if (action === "settle") {
+      if (action === "settle") {
         await emit("settlement_resume_started", { sandboxName: name });
         await handlers.resumeSettlement(attemptId, wakeup, name);
         await emit("settlement_resume_completed", { sandboxName: name });
       } else {
-        await emit("execution_wait_started");
-        await handlers.pause(attemptId, wakeup);
-        await emit("execution_wait_completed");
+        await emit("execution_reconciliation_started");
+        await handlers.reconcile(attemptId, wakeup);
+        await emit("execution_reconciliation_completed");
       }
       await emit("recovery_completed");
     } catch (error) {
@@ -433,28 +428,21 @@ export { destroyAttemptSandbox, githubBranch };
 
 export function artifactNeedsSync(
   artifact: { readonly empty: boolean; readonly head?: string },
-  attempt: Pick<Attempt, "executor">,
+  attempt: Pick<Attempt, "capabilities">,
   run: Pick<RunSnapshot, "baseCommit" | "currentHead" | "candidateHead">,
 ): boolean {
   return (
     artifact.empty ||
-    (attempt.executor === "agent.write" &&
-      run.currentHead === run.baseCommit &&
-      !run.candidateHead &&
+    (attemptHasCapability(attempt, "artifact.write") &&
       artifact.head !== run.currentHead)
   );
 }
 
 export function attemptArtifactAccess(
-  attempt: Pick<Attempt, "executor" | "role">,
+  attempt: Pick<Attempt, "capabilities"> &
+    Partial<Pick<Attempt, "executor" | "role">>,
 ): "read" | "write" {
-  if (attempt.executor === "agent.write") return "write";
-  if (
-    attempt.executor === "validate" &&
-    ["integrate", "conflict-resolution"].includes(attempt.role)
-  )
-    return "write";
-  return "read";
+  return attemptHasCapability(attempt, "artifact.write") ? "write" : "read";
 }
 
 interface ResolvedWorkflowInputs {
@@ -733,6 +721,13 @@ class SandboxDispatcher implements AttemptDispatcher {
           workflowNode.agent,
         )
       : undefined;
+    const previousOutcomeAttempt =
+      run.revision > 1
+        ? (await this.runs.attemptsForRevision(run.id, run.revision - 1)).find(
+            (candidate) => candidate.outcome,
+          )
+        : undefined;
+    const previousExecutorOutcome = previousOutcomeAttempt?.outcome;
     if (workflowNode?.agent && resolvedInputs) {
       const resolution = {
         phase: "workflow_agent_resolved",
@@ -746,6 +741,9 @@ class SandboxDispatcher implements AttemptDispatcher {
         requestedModel: workflowNode.agent.model.id,
         requestedReasoning: workflowNode.agent.model.reasoning,
         capabilities: workflowNode.capabilities,
+        effectiveCapabilities: attempt.capabilities ?? [],
+        previousOutcomeAttemptId: previousOutcomeAttempt?.id ?? null,
+        previousExecutorOutcome: previousExecutorOutcome ?? null,
         inputs: resolvedInputs.evidence,
       };
       console.log(
@@ -1006,17 +1004,21 @@ class SandboxDispatcher implements AttemptDispatcher {
       issueNumber: run.issueNumber,
       ...(workflowNode ? { workflowNode } : {}),
       ...(resolvedInputs ? { inputs: resolvedInputs.values } : {}),
-      context:
-        resolvedInputs?.values ??
-        attemptContext({
-          qualification,
-          reproduction,
-          plan,
-          implementation,
-          holisticSelection,
-          review,
-          ci,
-        }),
+      context: {
+        ...(resolvedInputs?.values ??
+          attemptContext({
+            qualification,
+            reproduction,
+            plan,
+            implementation,
+            holisticSelection,
+            review,
+            ci,
+          })),
+        ...(previousExecutorOutcome
+          ? { executorOutcome: previousExecutorOutcome }
+          : {}),
+      },
       ...(route ? { routing: route } : {}),
       ...(reviewer ? { reviewer } : {}),
       artifact: {
@@ -1398,8 +1400,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       const attempt = await repository.getAttempt(attemptId);
       if (
         !attempt ||
-        !["implement", "integrate"].includes(attempt.stage) ||
-        attempt.role === "review-integration" ||
+        !attemptHasCapability(attempt, "artifact.write") ||
         !["created", "dispatched"].includes(attempt.state) ||
         attempt.deadlineAt <= Date.now()
       )
@@ -1451,7 +1452,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       const attempt = await repository.getAttempt(attemptId);
       if (
         !attempt ||
-        !["reproduce", "implement"].includes(attempt.stage) ||
+        !attemptHasCapability(attempt, "preview.capture") ||
         !["created", "dispatched"].includes(attempt.state) ||
         attempt.deadlineAt <= Date.now()
       )
@@ -1896,17 +1897,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
           const attempt = await repository.getAttempt(attemptId);
           const completion = await repository.getAttemptCompletion(attemptId);
           if (attempt?.state === "executed" && completion) return "settle";
-          const snapshot =
-            await repository.attemptDiagnosticSnapshot(attemptId);
-          if (
-            (snapshot?.modelCalls ?? 0) > 0 ||
-            (snapshot?.completedModelCalls ?? 0) > 0
-          )
-            return "wait";
-          return "redispatch";
-        },
-        async redispatch(wakeup) {
-          await env.RUN_WAKEUPS.send(wakeup);
+          return "reconcile";
         },
         async resumeSettlement(attemptId, wakeup, attemptSandboxName) {
           const renewed = await repository.renewExecutedAttemptLease(
@@ -1946,7 +1937,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
             payload,
           );
         },
-        async pause(attemptId, wakeup) {
+        async reconcile(attemptId, wakeup) {
           const attempt = await repository.getAttempt(attemptId);
           const run = attempt && (await repository.get(attempt.runId));
           if (
@@ -1956,32 +1947,28 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
             attempt.runRevision !== wakeup.expectedRevision
           )
             return;
-          const waiting = await repository.transition(run.id, run.revision, {
-            status: "waiting",
-            stage: run.stage,
-            currentNodeId: run.currentNodeId,
-            waitingReason: "execution_interrupted",
-          });
-          if (!waiting) return;
-          const failed = await repository.failAttempt(
+          const outcome = {
+            kind: "execution_interrupted",
+            source: "attempt_recovery",
+          } as const;
+          const settled = await repository.settleAttemptOutcome(
             attempt.id,
             attempt.runRevision,
-            {
-              failure: {
-                reason: "execution_interrupted",
-                source: "attempt_recovery",
-              },
-            },
+            "failed",
+            outcome,
           );
+          if (settled === "failed" || settled === "duplicate")
+            await env.RUN_WAKEUPS.send(wakeup);
           const payload = {
-            phase: "execution_interrupted_waiting",
-            runRevision: waiting.revision,
+            phase: "execution_interrupted_recorded",
+            runRevision: run.revision,
             attemptRevision: attempt.runRevision,
-            attemptSettlement: failed,
+            outcome,
+            attemptSettlement: settled,
           };
-          console.error(
+          console.log(
             JSON.stringify({
-              message: "attempt_execution_interrupted",
+              message: "attempt_execution_interruption_recorded",
               attemptId,
               runId: run.id,
               ...payload,
@@ -1991,13 +1978,6 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
             attemptId,
             "attempt_recovery_trace",
             payload,
-          );
-          await postRunCommentOnce(
-            githubClientForRun(env, waiting),
-            waiting,
-            `execution-interrupted-${attempt.id}`,
-            `## Roundhouse needs attention\n\nThe execution stopped after model work had begun, and Roundhouse will not repeat paid work automatically. A maintainer can explicitly start another attempt with \`${env.GITHUB_START_COMMAND}\`.`,
-            env.PUBLIC_ORIGIN,
           );
         },
         async diagnose(attemptId, wakeup) {

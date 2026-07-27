@@ -36,9 +36,6 @@ export const waitingReasons = [
   "maintainer_merge",
   "retry_exhausted",
   "profile_error",
-  "checkpoint_rejected",
-  "branch_changed",
-  "execution_interrupted",
 ] as const;
 
 export type RunStatus = (typeof runStatuses)[number];

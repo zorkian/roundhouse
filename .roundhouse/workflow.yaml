@@ -57,6 +57,10 @@ nodes:
       - repository.read
       - context.read
       - research.public
+      - commands.execute
+      - environment.project
+      - network.project
+      - preview.capture
     outputs:
       - reproduction.status
     transitions:
@@ -129,6 +133,7 @@ nodes:
       - repository.read
       - artifact.write
       - commands.execute
+      - environment.project
       - network.project
       - preview.capture
     outputs:
@@ -215,6 +220,7 @@ nodes:
     role: integrate
     capabilities:
       - repository.read
+      - artifact.write
       - commands.execute
     outputs:
       - integration.status

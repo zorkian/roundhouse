@@ -106,6 +106,9 @@ export class MemoryRunRepository implements RunRepository {
           ...existing,
           state: "created",
           deadlineAt: attempt.deadlineAt,
+          capabilities: attempt.capabilities,
+          result: undefined,
+          outcome: undefined,
         });
       return "exists";
     }
@@ -158,6 +161,40 @@ export class MemoryRunRepository implements RunRepository {
     if (attempt.state === "completed") return "stale";
     this.attempts.set(attemptId, { ...attempt, state: "failed", result });
     return "failed";
+  }
+
+  async settleAttemptOutcome(
+    attemptId: string,
+    expectedRevision: number,
+    state: "completed" | "failed",
+    outcome: NonNullable<Attempt["outcome"]>,
+    acceptedHead?: string,
+    result?: Readonly<Record<string, unknown>>,
+  ): Promise<"completed" | "failed" | "duplicate" | "stale"> {
+    const attempt = this.attempts.get(attemptId);
+    const run = attempt && this.runs.get(attempt.runId);
+    if (
+      !attempt ||
+      !run ||
+      run.revision !== expectedRevision ||
+      attempt.runRevision !== expectedRevision
+    )
+      return "stale";
+    if (
+      attempt.state === state &&
+      JSON.stringify(attempt.outcome) === JSON.stringify(outcome)
+    )
+      return "duplicate";
+    if (["completed", "failed"].includes(attempt.state)) return "stale";
+    this.attempts.set(attemptId, {
+      ...attempt,
+      state,
+      ...(acceptedHead ? { acceptedHead } : {}),
+      ...(result ? { result } : {}),
+      outcome,
+    });
+    this.leases.delete(attempt.runId);
+    return state;
   }
 
   async getAttempt(attemptId: string): Promise<Attempt | undefined> {

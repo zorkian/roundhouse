@@ -109,46 +109,35 @@ export async function acceptCallback(
     await validator.validate(input);
   } catch (error) {
     if (!(error instanceof CheckpointRejectedError)) throw error;
-    const run = await repository.get(attempt.runId);
-    const waiting =
-      run?.revision === input.expectedRevision
-        ? await repository.transition(run.id, run.revision, {
-            status: "waiting",
-            stage: run.stage,
-            currentNodeId: run.currentNodeId,
-            waitingReason: "checkpoint_rejected",
-          })
-        : undefined;
-    if (!waiting) return "stale";
-    const failed = await repository.failAttempt(
+    const outcome = {
+      kind: "checkpoint_rejected",
+      source: "checkpoint_validator",
+      status: error.status,
+      detail: error.detail,
+    } as const;
+    const settled = await repository.settleAttemptOutcome(
       input.attemptId,
       input.expectedRevision,
-      {
-        failure: {
-          reason: "checkpoint_rejected",
-          source: "checkpoint_validator",
-          status: error.status,
-          detail: error.detail,
-        },
-      },
+      "completed",
+      outcome,
+      attempt.expectedHead,
+      input.result,
     );
-    console.error(
+    console.log(
       JSON.stringify({
-        message: "checkpoint_rejection_settled",
+        message: "attempt_outcome_recorded",
         runId: attempt.runId,
         attemptId: attempt.id,
         expectedRevision: input.expectedRevision,
-        waitingRevision: waiting.revision,
         stage: attempt.stage,
         nodeId: attempt.nodeId,
-        status: error.status,
-        detail: error.detail,
-        attemptSettlement: failed,
+        outcome,
+        attemptSettlement: settled,
         durationMs: Date.now() - startedAt,
       }),
     );
-    if (failed === "stale")
-      throw new Error("checkpoint_rejection_attempt_settlement_failed");
+    if (settled === "stale")
+      throw new Error("attempt_outcome_settlement_failed");
     return "rejected";
   }
   return repository.completeAttempt(

@@ -444,6 +444,62 @@ describe("run details", () => {
     expect(html).not.toContain("<details open");
   });
 
+  it("shows effective authority and typed reconciliation outcomes", () => {
+    const head = "b".repeat(40);
+    const html = renderRunDetails({
+      run: {
+        schemaVersion: 2,
+        id: "run_reconciliation",
+        repository: "zorkian/roundhouse",
+        issueNumber: 414,
+        baseCommit: "a".repeat(40),
+        currentHead: head,
+        profileVersion: "test",
+        status: "active",
+        stage: "implement",
+        revision: 2,
+      },
+      createdAt: 1,
+      updatedAt: 2,
+      attempts: [
+        {
+          id: "run_reconciliation_rev_1",
+          runId: "run_reconciliation",
+          runRevision: 1,
+          kind: "agent",
+          nodeId: "integrate",
+          executor: "validate",
+          stage: "integrate",
+          role: "integrate",
+          capabilities: [
+            "repository.read",
+            "artifact.write",
+            "commands.execute",
+          ],
+          state: "completed",
+          deadlineAt: 2,
+          baseCommit: "a".repeat(40),
+          expectedHead: "a".repeat(40),
+          acceptedHead: head,
+          outcome: {
+            kind: "branch_superseded",
+            source: "checkpoint_publisher",
+            status: 409,
+            detail: `publish_branch_changed:${head}`,
+            observedHead: head,
+          },
+          createdAt: 1,
+          updatedAt: 2,
+        },
+      ],
+    });
+
+    expect(html).toContain("Effective capabilities");
+    expect(html).toContain("artifact.write");
+    expect(html).toContain("Executor outcome");
+    expect(html).toContain("branch_superseded");
+  });
+
   it("labels feature evidence as current behavior", () => {
     const common = {
       runId: "run_feature",

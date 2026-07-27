@@ -11,6 +11,7 @@ import {
   type RunSnapshot,
   type RunStage,
   type RunTransition,
+  type WorkflowCapability,
   type WorkflowNode,
   type WorkflowReview,
   type Wakeup,
@@ -27,6 +28,113 @@ export interface AttemptReporter {
 }
 
 export const attemptInactivityMilliseconds = 10 * 60_000;
+
+export function effectiveAttemptCapabilities(
+  node: WorkflowNode,
+  role: string,
+): readonly WorkflowCapability[] {
+  const capabilities = new Set(node.capabilities);
+  // Integration is currently a built-in composite executor. Its
+  // integration-delta review is a strictly read-only sub-operation of the
+  // repository-configured node, so it receives an attenuated capability set.
+  if (node.executor === "validate" && role === "review-integration") {
+    capabilities.delete("artifact.write");
+    capabilities.delete("commands.execute");
+  }
+  return [...capabilities].sort();
+}
+
+function implementationNode(run: RunSnapshot): [string, WorkflowNode] {
+  const entry = Object.entries(run.profile?.workflow?.nodes ?? {}).find(
+    ([, node]) => node.agent?.task === "implementation",
+  );
+  if (!entry) throw new Error("workflow_implementation_node_missing");
+  return entry;
+}
+
+export function attemptOutcomeTransition(
+  run: RunSnapshot,
+  attempt: Attempt,
+): RunTransition {
+  if (!attempt.outcome) throw new Error("attempt_outcome_missing");
+  if (attempt.outcome.kind === "branch_superseded") {
+    const [nodeId, node] = implementationNode(run);
+    return {
+      status: "active",
+      stage: stageForWorkflowNode(nodeId, node),
+      currentNodeId: nodeId,
+      acceptedHead: attempt.outcome.observedHead,
+      heads: {
+        candidateHead: attempt.outcome.observedHead,
+        reviewedHead: null,
+        targetBaseHead: null,
+        integrationHead: null,
+      },
+    };
+  }
+  return {
+    status: "active",
+    stage: run.stage,
+    currentNodeId: run.currentNodeId,
+  };
+}
+
+async function recordAttemptOutcomeTransition(
+  repository: RunRepository,
+  run: RunSnapshot,
+  attempt: Attempt,
+  next: RunSnapshot,
+): Promise<void> {
+  const payload = {
+    outcome: attempt.outcome,
+    fromNodeId: run.currentNodeId,
+    toNodeId: next.currentNodeId,
+    fromRevision: run.revision,
+    toRevision: next.revision,
+    inputHead: run.currentHead,
+    outputHead: next.currentHead,
+  };
+  console.log(
+    JSON.stringify({
+      message: "attempt_outcome_reconciled",
+      runId: run.id,
+      attemptId: attempt.id,
+      ...payload,
+    }),
+  );
+  await repository.recordEvent?.(
+    run.id,
+    attempt.id,
+    "attempt_outcome_reconciled",
+    payload,
+  );
+}
+
+async function recordIssuedCapabilities(
+  repository: RunRepository,
+  attempt: Attempt,
+): Promise<void> {
+  const payload = {
+    nodeId: attempt.nodeId ?? null,
+    executor: attempt.executor ?? null,
+    role: attempt.role,
+    capabilities: attempt.capabilities ?? [],
+  };
+  console.log(
+    JSON.stringify({
+      message: "attempt_capabilities_issued",
+      runId: attempt.runId,
+      attemptId: attempt.id,
+      ...payload,
+    }),
+  );
+  await repository.recordEvent?.(
+    attempt.runId,
+    attempt.id,
+    "attempt_capabilities_issued",
+    payload,
+  );
+}
 
 function startNotificationApplies(run: RunSnapshot, attempt: Attempt): boolean {
   const review =
@@ -778,6 +886,10 @@ export async function coordinate(
       executor: currentWorkflowNode.executor,
       stage: run.stage,
       role: currentWorkflowNode.role ?? currentWorkflowNode.executor,
+      capabilities: effectiveAttemptCapabilities(
+        currentWorkflowNode,
+        currentWorkflowNode.role ?? currentWorkflowNode.executor,
+      ),
       state: "completed",
       deadlineAt: now,
       baseCommit: run.baseCommit,
@@ -820,6 +932,22 @@ export async function coordinate(
   if (currentWorkflowNode.executor === "review") {
     const review = currentWorkflowNode.review!;
     const current = await repository.attemptsForRevision(run.id, run.revision);
+    const operationalOutcome = current.find((attempt) => attempt.outcome);
+    if (operationalOutcome) {
+      const next = await repository.transition(
+        run.id,
+        run.revision,
+        attemptOutcomeTransition(run, operationalOutcome),
+      );
+      if (!next) return "stale";
+      await recordAttemptOutcomeTransition(
+        repository,
+        run,
+        operationalOutcome,
+        next,
+      );
+      return "dispatched";
+    }
     const required = new Set(
       review.reviewers
         .filter((reviewer) => reviewer.activation === "always")
@@ -910,6 +1038,16 @@ export async function coordinate(
   }
   const attemptId = immutableAttemptId(run.id, run.revision);
   const previous = await repository.getAttempt(attemptId);
+  if (previous?.outcome) {
+    const next = await repository.transition(
+      run.id,
+      run.revision,
+      attemptOutcomeTransition(run, previous),
+    );
+    if (!next) return "stale";
+    await recordAttemptOutcomeTransition(repository, run, previous, next);
+    return "dispatched";
+  }
   if (previous?.state === "completed") {
     const transition = graphCompletedTransition(run, previous);
     const next = await repository.transition(run.id, run.revision, transition);
@@ -978,6 +1116,7 @@ export async function coordinate(
     executor: currentWorkflowNode.executor,
     stage: run.stage,
     role,
+    capabilities: effectiveAttemptCapabilities(currentWorkflowNode, role),
     state: "created",
     deadlineAt: now + leaseMilliseconds,
     baseCommit:
@@ -992,6 +1131,8 @@ export async function coordinate(
         : run.currentHead,
   };
   const created = await repository.createAttempt(attempt);
+  if (created === "created")
+    await recordIssuedCapabilities(repository, attempt);
   const durable = await repository.getAttempt(attemptId);
   if (created === "exists" && durable?.state === "completed")
     return "duplicate";
@@ -1040,12 +1181,18 @@ async function dispatchReview(
       : {}),
     stage: "review",
     role,
+    capabilities: effectiveAttemptCapabilities(
+      run.profile!.workflow!.nodes[run.currentNodeId!]!,
+      role,
+    ),
     state: "created",
     deadlineAt: now + leaseMilliseconds,
     baseCommit: run.baseCommit,
     expectedHead: run.currentHead,
   };
-  await repository.createAttempt(attempt);
+  const created = await repository.createAttempt(attempt);
+  if (created === "created")
+    await recordIssuedCapabilities(repository, attempt);
   try {
     await dispatcher.submit(attempt, run);
   } catch (error) {

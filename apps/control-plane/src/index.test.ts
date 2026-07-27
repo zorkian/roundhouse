@@ -16,6 +16,7 @@ vi.mock("cloudflare:workers", async (importOriginal) => ({
 }));
 import {
   attemptAllowedHosts,
+  attemptUsesProjectEnvironment,
   pauseForModelBudget,
   RoundhouseAttemptSandbox,
 } from "./attempt-container.js";
@@ -879,6 +880,7 @@ describe("V2 control plane", () => {
             remote: "https://artifacts.test/repository.git",
             hostname: "artifacts.test",
           },
+          capabilities: [],
           executor: "agent.read",
           stage: "plan",
           publish: { hostname: "github.com" },
@@ -903,13 +905,25 @@ describe("V2 control plane", () => {
           remote: "https://artifacts.test/repository.git",
           hostname: "artifacts.test",
         },
+        capabilities: ["network.project"],
         executor: "agent.write",
         stage: "implement",
       }),
     ).toEqual(["*"]);
   });
 
-  it("resynchronizes an implementation artifact only when its refreshed base is missing", () => {
+  it("selects the project environment independently from network authority", () => {
+    expect(
+      attemptUsesProjectEnvironment({
+        capabilities: ["environment.project"],
+      }),
+    ).toBe(true);
+    expect(
+      attemptUsesProjectEnvironment({ capabilities: ["network.project"] }),
+    ).toBe(false);
+  });
+
+  it("resynchronizes a writable artifact whenever it differs from the bound head", () => {
     const merged = "b".repeat(40);
     const run = {
       baseCommit: merged,
@@ -918,54 +932,68 @@ describe("V2 control plane", () => {
     expect(
       artifactNeedsSync(
         { empty: false, head: "a".repeat(40) },
-        { executor: "agent.write" },
+        { capabilities: ["artifact.write"] },
         run,
       ),
     ).toBe(true);
     expect(
       artifactNeedsSync(
         { empty: false, head: merged },
-        { executor: "agent.write" },
+        { capabilities: ["artifact.write"] },
         run,
       ),
     ).toBe(false);
     expect(
       artifactNeedsSync(
         { empty: false, head: "a".repeat(40) },
-        { executor: "review" },
+        { capabilities: [] },
         run,
       ),
     ).toBe(false);
     expect(
       artifactNeedsSync(
         { empty: false, head: "a".repeat(40) },
-        { executor: "agent.write" },
+        { capabilities: ["artifact.write"] },
         { ...run, candidateHead: "c".repeat(40) },
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
-  it("gives artifact write access only to executors that produce checkpoints", () => {
+  it("gives artifact write access only to attempts carrying that capability", () => {
     expect(
-      attemptArtifactAccess({ executor: "agent.write", role: "implement" }),
-    ).toBe("write");
-    expect(
-      attemptArtifactAccess({ executor: "validate", role: "integrate" }),
+      attemptArtifactAccess({
+        capabilities: ["artifact.write"],
+        executor: "agent.write",
+        role: "implement",
+      }),
     ).toBe("write");
     expect(
       attemptArtifactAccess({
+        capabilities: ["artifact.write"],
+        executor: "validate",
+        role: "integrate",
+      }),
+    ).toBe("write");
+    expect(
+      attemptArtifactAccess({
+        capabilities: ["artifact.write"],
         executor: "validate",
         role: "conflict-resolution",
       }),
     ).toBe("write");
     expect(
       attemptArtifactAccess({
+        capabilities: [],
         executor: "review",
         role: "review-integration",
       }),
     ).toBe("read");
     expect(
-      attemptArtifactAccess({ executor: "validate", role: "validate" }),
+      attemptArtifactAccess({
+        capabilities: [],
+        executor: "validate",
+        role: "validate",
+      }),
     ).toBe("read");
   });
 
@@ -1067,7 +1095,7 @@ describe("V2 control plane", () => {
     await expect(pauseForModelBudget(repository, attempt)).resolves.toBe(false);
   });
 
-  it("destroys an inactive sandbox before redispatching its stage", async () => {
+  it("destroys an interrupted sandbox before reconciling its outcome", async () => {
     const events: string[] = [];
     const wakeup = { runId: "run_1", expectedRevision: 3 };
     await recoverExpiredAttempts(
@@ -1083,16 +1111,15 @@ describe("V2 control plane", () => {
       [wakeup],
       {
         async decide() {
-          return "redispatch";
-        },
-        async redispatch(next) {
-          events.push(`enqueue:${next.runId}:${next.expectedRevision}`);
+          return "reconcile";
         },
         async resumeSettlement() {
           throw new Error("unexpected_settlement");
         },
-        async pause() {
-          throw new Error("unexpected_wait");
+        async reconcile(attemptId, next) {
+          events.push(
+            `reconcile:${attemptId}:${next.runId}:${next.expectedRevision}`,
+          );
         },
         async diagnose(attemptId, next) {
           events.push(`diagnose:${attemptId}:${next.expectedRevision}`);
@@ -1111,9 +1138,9 @@ describe("V2 control plane", () => {
       "trace:sandbox_destroy_started",
       "destroy:run_1_rev_3",
       "trace:sandbox_destroy_completed",
-      "trace:wakeup_enqueue_started",
-      "enqueue:run_1:3",
-      "trace:wakeup_enqueue_completed",
+      "trace:execution_reconciliation_started",
+      "reconcile:run_1_rev_3:run_1:3",
+      "trace:execution_reconciliation_completed",
       "trace:recovery_completed",
     ]);
   });
@@ -1140,13 +1167,10 @@ describe("V2 control plane", () => {
           events.push(`decide:${attemptId}`);
           return "settle";
         },
-        async redispatch() {
-          events.push("redispatch");
-        },
         async resumeSettlement(attemptId, next, name) {
           events.push(`settle:${attemptId}:${next.expectedRevision}:${name}`);
         },
-        async pause() {
+        async reconcile() {
           events.push("pause");
         },
         async resolveName() {
@@ -1160,7 +1184,7 @@ describe("V2 control plane", () => {
     ]);
   });
 
-  it("moves interrupted paid work to waiting instead of redispatching it", async () => {
+  it("records interrupted execution for coordinator reconciliation", async () => {
     const events: string[] = [];
     const wakeup = { runId: "run_1", expectedRevision: 9 };
     await recoverExpiredAttempts(
@@ -1175,20 +1199,17 @@ describe("V2 control plane", () => {
       [wakeup],
       {
         async decide() {
-          return "wait";
-        },
-        async redispatch() {
-          events.push("redispatch");
+          return "reconcile";
         },
         async resumeSettlement() {
           events.push("settle");
         },
-        async pause(attemptId) {
-          events.push(`pause:${attemptId}`);
+        async reconcile(attemptId) {
+          events.push(`reconcile:${attemptId}`);
         },
       },
     );
-    expect(events).toEqual(["destroy", "pause:run_1_rev_9"]);
+    expect(events).toEqual(["destroy", "reconcile:run_1_rev_9"]);
   });
 
   it("accepts only bounded runner progress metadata", () => {

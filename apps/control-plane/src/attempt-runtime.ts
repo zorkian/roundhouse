@@ -2,7 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { getSandbox, type DirectoryBackup } from "@cloudflare/sandbox";
-import type { Attempt, RunSnapshot } from "@roundhouse/core";
+import {
+  attemptHasCapability,
+  type Attempt,
+  type RunSnapshot,
+} from "@roundhouse/core";
 import {
   CloudflareArtifactsNamespace,
   validateCheckpointIdentity,
@@ -313,10 +317,7 @@ export class SandboxCheckpointValidator implements CheckpointValidator {
         })(),
       enforcePathPolicy: !integrationValidation,
     });
-    if (
-      !["implement", "integrate"].includes(attempt.stage) ||
-      attempt.role === "review-integration"
-    ) {
+    if (!attemptHasCapability(attempt, "artifact.write")) {
       try {
         validateReadOnlyCheckpoint(input.checkpoint);
       } finally {
@@ -383,8 +384,7 @@ export class SandboxCheckpointPublisher {
     if (!attempt || !run) throw new Error("attempt_not_found");
     if (
       input.checkpoint.outputHead === input.checkpoint.inputHead ||
-      !["implement", "integrate"].includes(attempt.stage) ||
-      attempt.role === "review-integration"
+      !attemptHasCapability(attempt, "artifact.write")
     )
       return;
     const artifact = await this.artifacts.get(input.checkpoint.repository);

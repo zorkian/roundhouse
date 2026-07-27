@@ -326,6 +326,7 @@ export class GitHubCiAutomation {
       executor,
       stage: run.stage,
       role: executor === "github.checks" ? "github-checks" : "github-merge",
+      capabilities: workflow.nodes[run.currentNodeId]!.capabilities,
       state: "created",
       deadlineAt: Date.now(),
       baseCommit: run.baseCommit,
@@ -604,6 +605,8 @@ export class GitHubCiAutomation {
         ? {
             nodeId: run.currentNodeId,
             executor: run.profile.workflow.nodes[run.currentNodeId]!.executor,
+            capabilities:
+              run.profile.workflow.nodes[run.currentNodeId]!.capabilities,
           }
         : {}),
       stage: "ci",
@@ -718,6 +721,8 @@ export class GitHubCiAutomation {
         ? {
             nodeId: run.currentNodeId,
             executor: run.profile.workflow.nodes[run.currentNodeId]!.executor,
+            capabilities:
+              run.profile.workflow.nodes[run.currentNodeId]!.capabilities,
           }
         : {}),
       stage: "merge",

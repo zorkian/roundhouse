@@ -8,9 +8,28 @@ import {
   verifyCallback,
   type AttemptCompletion,
 } from "./callback.js";
-import { callbackForCompletion } from "./attempt-settlement.js";
+import {
+  callbackForCompletion,
+  observedBranchHead,
+} from "./attempt-settlement.js";
 
 describe("attempt settlement", () => {
+  it("extracts the observed pull-request head from publication conflicts", () => {
+    const head = "b".repeat(40);
+    expect(observedBranchHead(`publish_branch_changed:${head}`)).toBe(head);
+    expect(
+      observedBranchHead(
+        JSON.stringify({
+          error: "publish_branch_changed",
+          detail: `publish_branch_changed:${head}`,
+        }),
+      ),
+    ).toBe(head);
+    expect(observedBranchHead('{"error":"publish_branch_changed"}')).toBe(
+      undefined,
+    );
+  });
+
   it("derives the final callback capability only at the trusted boundary", async () => {
     const completion: AttemptCompletion = {
       attemptId: "attempt_1",

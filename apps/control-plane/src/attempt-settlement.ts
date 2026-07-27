@@ -20,11 +20,7 @@ import {
   saveWorkspaceBackup,
   type SandboxNamespace,
 } from "./attempt-runtime.js";
-import {
-  githubClientForRun,
-  postRunCommentOnce,
-  type GitHubEnv,
-} from "./github.js";
+import type { GitHubEnv } from "./github.js";
 
 export type AttemptSettlementOutcome =
   "completed" | "duplicate" | "rejected" | "stale" | "unauthorized";
@@ -92,6 +88,16 @@ async function settlementResult(
   };
 }
 
+async function enqueueAttemptWakeup(
+  env: AttemptSettlementEnv,
+  attempt: { readonly runId: string; readonly runRevision: number },
+): Promise<void> {
+  await env.RUN_WAKEUPS.send({
+    runId: attempt.runId,
+    expectedRevision: attempt.runRevision,
+  });
+}
+
 export async function recordAttemptCompletion(
   env: AttemptSettlementEnv,
   completion: AttemptCompletion,
@@ -150,73 +156,73 @@ export async function loadRecordedAttemptCompletion(
   return completion;
 }
 
-async function rejectRecordedAttempt(
+export function observedBranchHead(detail: string): string | undefined {
+  try {
+    const parsed = JSON.parse(detail) as { detail?: unknown };
+    const message = typeof parsed.detail === "string" ? parsed.detail : detail;
+    return /^publish_branch_changed:([a-f0-9]{40})$/.exec(message)?.[1];
+  } catch {
+    return /^publish_branch_changed:([a-f0-9]{40})$/.exec(detail)?.[1];
+  }
+}
+
+async function recordRejectedAttemptOutcome(
   env: AttemptSettlementEnv,
   input: AttemptCallback,
-  waitingReason: "checkpoint_rejected" | "branch_changed",
-  source: "checkpoint_validator" | "checkpoint_publisher",
+  kind: "checkpoint_rejected" | "branch_superseded",
   status: number,
   detail: string,
 ): Promise<AttemptSettlementResult> {
   const repository = new D1RunRepository(env.DB);
   const attempt = await repository.getAttempt(input.attemptId);
-  const run = attempt && (await repository.get(attempt.runId));
-  if (
-    !attempt ||
-    !run ||
-    run.revision !== input.expectedRevision ||
-    attempt.runRevision !== input.expectedRevision
-  )
+  if (!attempt || attempt.runRevision !== input.expectedRevision)
     return settlementResult(repository, input.attemptId, "stale");
-  const waiting = await repository.transition(run.id, run.revision, {
-    status: "waiting",
-    stage: run.stage,
-    currentNodeId: run.currentNodeId,
-    waitingReason,
-  });
-  if (!waiting) return settlementResult(repository, input.attemptId, "stale");
-  const failure = {
-    reason: waitingReason,
-    source,
-    status,
-    detail,
-  };
-  const failed = await repository.failAttempt(
+  const observedHead =
+    kind === "branch_superseded" ? observedBranchHead(detail) : undefined;
+  if (kind === "branch_superseded" && !observedHead)
+    throw new Error("branch_superseded_head_missing");
+  const outcome =
+    kind === "branch_superseded"
+      ? {
+          kind,
+          source: "checkpoint_publisher" as const,
+          status,
+          detail,
+          observedHead: observedHead!,
+        }
+      : {
+          kind,
+          source: "checkpoint_validator" as const,
+          status,
+          detail,
+        };
+  const settled = await repository.settleAttemptOutcome(
     input.attemptId,
     input.expectedRevision,
-    { failure },
+    "completed",
+    outcome,
+    observedHead ?? attempt.expectedHead,
+    input.result,
   );
+  if (settled === "completed" || settled === "duplicate")
+    await enqueueAttemptWakeup(env, attempt);
   const payload = {
-    phase: "checkpoint_rejection_settled",
+    phase: "attempt_outcome_recorded",
     runId: attempt.runId,
-    runRevision: waiting.revision,
     attemptRevision: attempt.runRevision,
     stage: attempt.stage,
     nodeId: attempt.nodeId,
-    failure,
-    attemptSettlement: failed,
+    outcome,
+    attemptSettlement: settled,
   };
-  console.error(
+  console.log(
     JSON.stringify({
-      message: "checkpoint_rejection_settlement_completed",
+      message: "attempt_outcome_recorded",
       attemptId: attempt.id,
       ...payload,
     }),
   );
-  await repository.recordAttemptEvent(
-    attempt.id,
-    "checkpoint_rejected",
-    payload,
-  );
-  await postRunCommentOnce(
-    githubClientForRun(env, waiting),
-    waiting,
-    `${waitingReason}-${attempt.id}`,
-    waitingReason === "branch_changed"
-      ? `## Roundhouse needs attention\n\nThe pull request branch changed while Roundhouse was publishing this result, so the run is paused instead of overwriting it. A maintainer can inspect the branch and restart with \`${env.GITHUB_START_COMMAND}\`.`
-      : `## Roundhouse needs attention\n\nRoundhouse could not validate the work checkpoint, so this run is paused instead of repeating the work. After the validation problem is fixed, a maintainer can restart it with \`${env.GITHUB_START_COMMAND}\`.`,
-    env.PUBLIC_ORIGIN,
-  );
+  await repository.recordAttemptEvent(attempt.id, "attempt_outcome", payload);
   return settlementResult(repository, input.attemptId, "rejected");
 }
 
@@ -233,12 +239,14 @@ export async function validateRecordedAttemptCompletion(
       "stale",
     ) as Promise<AttemptValidationResult>;
   const attempt = await repository.getAttempt(input.attemptId);
-  if (attempt?.state === "completed")
+  if (attempt?.state === "completed") {
+    if (attempt.outcome) await enqueueAttemptWakeup(env, attempt);
     return settlementResult(
       repository,
       input.attemptId,
       "duplicate",
     ) as Promise<AttemptValidationResult>;
+  }
   try {
     await new SandboxCheckpointValidator(
       env.ATTEMPT_SANDBOXES,
@@ -247,11 +255,10 @@ export async function validateRecordedAttemptCompletion(
     ).validate(input);
   } catch (error) {
     if (!(error instanceof CheckpointRejectedError)) throw error;
-    return (await rejectRecordedAttempt(
+    return (await recordRejectedAttemptOutcome(
       env,
       input,
       "checkpoint_rejected",
-      "checkpoint_validator",
       error.status,
       error.detail,
     )) as AttemptValidationResult;
@@ -357,12 +364,14 @@ export async function publishRecordedAttemptCompletion(
       "stale",
     ) as Promise<AttemptPublicationResult>;
   const attempt = await repository.getAttempt(input.attemptId);
-  if (attempt?.state === "completed")
+  if (attempt?.state === "completed") {
+    if (attempt.outcome) await enqueueAttemptWakeup(env, attempt);
     return settlementResult(
       repository,
       input.attemptId,
       "duplicate",
     ) as Promise<AttemptPublicationResult>;
+  }
   try {
     await new SandboxCheckpointPublisher(
       env.ATTEMPT_SANDBOXES,
@@ -372,11 +381,10 @@ export async function publishRecordedAttemptCompletion(
     ).publish(input);
   } catch (error) {
     if (!(error instanceof BranchChangedError)) throw error;
-    return (await rejectRecordedAttempt(
+    return (await recordRejectedAttemptOutcome(
       env,
       input,
-      "branch_changed",
-      "checkpoint_publisher",
+      "branch_superseded",
       error.status,
       error.detail,
     )) as AttemptPublicationResult;
@@ -417,10 +425,7 @@ export async function acceptRecordedAttemptCompletion(
   );
   const attempt = await repository.getAttempt(input.attemptId);
   if (attempt && (outcome === "completed" || outcome === "duplicate"))
-    await env.RUN_WAKEUPS.send({
-      runId: attempt.runId,
-      expectedRevision: attempt.runRevision,
-    });
+    await enqueueAttemptWakeup(env, attempt);
   console.log(
     JSON.stringify({
       message: "attempt_settlement_accepted",

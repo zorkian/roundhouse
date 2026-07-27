@@ -9,7 +9,7 @@ import type {
   RunTransition,
 } from "./run.js";
 import type { AppliedProfile } from "./profile.js";
-import type { WorkflowExecutorKind } from "./workflow.js";
+import type { WorkflowCapability, WorkflowExecutorKind } from "./workflow.js";
 
 export const attemptKinds = ["agent", "external"] as const;
 export const attemptStates = [
@@ -44,6 +44,7 @@ export interface Attempt {
   readonly executor?: WorkflowExecutorKind;
   readonly stage: RunStage;
   readonly role: string;
+  readonly capabilities?: readonly WorkflowCapability[];
   readonly state: AttemptState;
   readonly deadlineAt: number;
   readonly baseCommit: string;
@@ -51,6 +52,33 @@ export interface Attempt {
   readonly acceptedHead?: string;
   readonly result?: Readonly<Record<string, unknown>>;
   readonly routing?: ModelRoute;
+  readonly outcome?: AttemptOutcome;
+}
+
+export type AttemptOutcome =
+  | {
+      readonly kind: "execution_interrupted";
+      readonly source: "attempt_recovery";
+    }
+  | {
+      readonly kind: "checkpoint_rejected";
+      readonly source: "checkpoint_validator";
+      readonly status: number;
+      readonly detail: string;
+    }
+  | {
+      readonly kind: "branch_superseded";
+      readonly source: "checkpoint_publisher";
+      readonly status: number;
+      readonly detail: string;
+      readonly observedHead: string;
+    };
+
+export function attemptHasCapability(
+  attempt: Pick<Attempt, "capabilities">,
+  capability: WorkflowCapability,
+): boolean {
+  return attempt.capabilities?.includes(capability) ?? false;
 }
 
 export const modelProtocols = [
@@ -235,6 +263,14 @@ export interface RunRepository {
     expectedRevision: number,
     result: Readonly<Record<string, unknown>>,
   ): Promise<"failed" | "duplicate" | "stale">;
+  settleAttemptOutcome(
+    attemptId: string,
+    expectedRevision: number,
+    state: "completed" | "failed",
+    outcome: AttemptOutcome,
+    acceptedHead?: string,
+    result?: Readonly<Record<string, unknown>>,
+  ): Promise<"completed" | "failed" | "duplicate" | "stale">;
   getAttempt(attemptId: string): Promise<Attempt | undefined>;
   latestCompletedAttempt(
     runId: string,

@@ -44,9 +44,10 @@ only after the candidate checkpoint has been validated from a clean clone.
 The outer Cloudflare Sandbox VM is the security boundary. The nested Dev
 Container provides the repository's development environment but is not a
 second isolation boundary: repository lifecycle commands and the agent share
-the outer Sandbox's filesystem and implementation-stage network access.
-Implementation may reach arbitrary project-selected package and image hosts;
-read-only stages remain allowlisted. The current prototype is therefore
+the outer Sandbox's filesystem and project network access. Investigation and
+implementation may reach project-selected package, image, and public research
+hosts when their snapshotted node capabilities allow it; qualification,
+planning, and review remain allowlisted. The current prototype is therefore
 limited to explicitly enrolled public repositories.
 
 ## Repository configuration
@@ -76,6 +77,13 @@ authority. Boundary events carry a common workflow, node, actor, source, and
 exact-head audit envelope.
 Repositories do not supply executable control-plane code or expand
 Roundhouse's credential and capability boundaries.
+
+Every attempt stores the effective capability set minted from its immutable
+workflow node. The Sandbox network policy, runner tools, hosted research,
+Artifact access, and screenshot route enforce that same set. Execution
+interruptions, invalid checkpoints, and superseded pull-request branches are
+typed executor outcomes that return to the coordinator automatically; they are
+not presented as questions for a maintainer.
 
 The development dashboard links each enrolled repository to a workflow page
 that visualizes nodes, routes, and authority from an immutable run snapshot.

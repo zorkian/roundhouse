@@ -18,6 +18,7 @@ function modelRequest(
   role: string,
   body: Record<string, unknown>,
   routingEnv: BrokerEnv = env,
+  research = false,
 ) {
   const route = resolveRoute(
     {
@@ -38,6 +39,7 @@ function modelRequest(
       "content-type": "application/json",
       "x-roundhouse-attempt-id": "attempt_1",
       "x-roundhouse-role": role,
+      "x-roundhouse-research": research ? "enabled" : "disabled",
       "x-roundhouse-routing-provider": route.provider,
       "x-roundhouse-routing-model": route.model,
       "x-roundhouse-routing-protocol": route.protocol,
@@ -159,11 +161,11 @@ describe("model broker", () => {
     });
   });
 
-  it("passes native OpenAI Responses input and adds hosted research", async () => {
+  it("adds hosted research from attempt authority rather than the role name", async () => {
     const run = vi.fn(async () => new Response("event: done\n\n"));
     const body = { model: "untrusted", input: "Research this", stream: true };
     const response = await brokerRequest(
-      modelRequest("openai-responses", "qualify", body),
+      modelRequest("openai-responses", "review-holistic", body, env, true),
       env,
       { run },
     );
@@ -205,7 +207,7 @@ describe("model broker", () => {
       max_tokens: 100,
     };
     await brokerRequest(
-      modelRequest("anthropic-messages", "plan", body, anthropicEnv),
+      modelRequest("anthropic-messages", "plan", body, anthropicEnv, true),
       anthropicEnv,
       { run },
     );
@@ -221,7 +223,7 @@ describe("model broker", () => {
     );
   });
 
-  it("removes caller-supplied OpenAI hosted search outside research roles", async () => {
+  it("removes caller-supplied OpenAI hosted search without research authority", async () => {
     const run = vi.fn(async () => new Response("event: done\n\n"));
     await brokerRequest(
       modelRequest("openai-responses", "review-holistic", {
@@ -243,7 +245,7 @@ describe("model broker", () => {
     );
   });
 
-  it("removes caller-supplied Anthropic hosted search outside research roles", async () => {
+  it("removes caller-supplied Anthropic hosted search without research authority", async () => {
     const anthropicEnv = {
       ...env,
       ROUTING_ROUTES: JSON.stringify({

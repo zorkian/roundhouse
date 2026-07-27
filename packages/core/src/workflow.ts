@@ -51,7 +51,8 @@ nodes:
         key: reproduction
         schema: roundhouse.investigation.v1
       model: { id: openai/gpt-5.6-sol, reasoning: low }
-    capabilities: [repository.read, context.read, research.public]
+    capabilities:
+      [repository.read, context.read, research.public, commands.execute, environment.project, network.project, preview.capture]
     outputs: [reproduction.status]
     transitions:
       - when:
@@ -108,7 +109,7 @@ nodes:
         schema: roundhouse.implementation.v1
       model: { id: moonshotai/kimi-k3, reasoning: low }
     capabilities:
-      [repository.read, artifact.write, commands.execute, network.project, preview.capture]
+      [repository.read, artifact.write, commands.execute, environment.project, network.project, preview.capture]
     outputs: [implementation.screenshots]
     transitions:
       - when:
@@ -167,7 +168,7 @@ nodes:
   integrate:
     executor: validate
     role: integrate
-    capabilities: [repository.read, commands.execute]
+    capabilities: [repository.read, artifact.write, commands.execute]
     outputs: [integration.status]
     transitions:
       - when:
@@ -383,7 +384,7 @@ export interface WorkflowNode {
   readonly review?: WorkflowReview;
   readonly human?: WorkflowHuman;
   readonly external?: WorkflowExternal;
-  readonly capabilities: readonly string[];
+  readonly capabilities: readonly WorkflowCapability[];
   readonly outputs: readonly string[];
   readonly transitions: readonly WorkflowTransition[];
 }
@@ -499,19 +500,45 @@ export function serializeWorkflow(workflow: CompiledWorkflow): string {
   });
 }
 
+export const workflowCapabilities = [
+  "repository.read",
+  "context.read",
+  "research.public",
+  "artifact.write",
+  "commands.execute",
+  "environment.project",
+  "network.project",
+  "preview.capture",
+  "github.publish",
+  "github.checks.read",
+  "github.merge",
+  "external.check",
+] as const;
+
+export type WorkflowCapability = (typeof workflowCapabilities)[number];
+
 const executorCapabilities: Readonly<
-  Record<WorkflowExecutorKind, readonly string[]>
+  Record<WorkflowExecutorKind, readonly WorkflowCapability[]>
 > = {
-  "agent.read": ["repository.read", "context.read", "research.public"],
+  "agent.read": [
+    "repository.read",
+    "context.read",
+    "research.public",
+    "commands.execute",
+    "environment.project",
+    "network.project",
+    "preview.capture",
+  ],
   "agent.write": [
     "repository.read",
     "artifact.write",
     "commands.execute",
+    "environment.project",
     "network.project",
     "preview.capture",
   ],
   review: ["repository.read", "context.read"],
-  validate: ["repository.read", "commands.execute"],
+  validate: ["repository.read", "artifact.write", "commands.execute"],
   human: [],
   "github.publish": ["github.publish"],
   "github.checks": ["github.checks.read"],
@@ -995,7 +1022,10 @@ async function node(
       : stringList(value.capabilities, "workflow_capabilities_invalid");
   if (
     capabilities.some(
-      (capability) => !executorCapabilities[executor].includes(capability),
+      (capability) =>
+        !(executorCapabilities[executor] as readonly string[]).includes(
+          capability,
+        ),
     )
   )
     throw new Error("workflow_capability_escalation");
@@ -1024,7 +1054,7 @@ async function node(
     ...(value.external === undefined
       ? {}
       : { external: external(value.external) }),
-    capabilities,
+    capabilities: capabilities as WorkflowCapability[],
     outputs,
     transitions: value.transitions.map(transition),
   };
