@@ -11,6 +11,7 @@ interface __BaseEnv_Env {
   CONTROL_PLANE_ORIGIN: "https://roundhouse-v2-control-plane.default-07f.workers.dev";
   PUBLIC_ORIGIN: "https://roundhouse-dev.rm-rf.rip";
   GITHUB_APP_ID: "4281837";
+  GITHUB_CLIENT_ID: "Iv1.0000000000000000";
   GITHUB_START_COMMAND: "/roundhouse-dev start";
   SANDBOX_TRANSPORT: "rpc";
   BACKUP_BUCKET_NAME: "roundhouse-v2-development-workspaces";
@@ -47,6 +48,7 @@ declare namespace NodeJS {
       | "CONTROL_PLANE_ORIGIN"
       | "PUBLIC_ORIGIN"
       | "GITHUB_APP_ID"
+      | "GITHUB_CLIENT_ID"
       | "GITHUB_START_COMMAND"
       | "SANDBOX_TRANSPORT"
       | "BACKUP_BUCKET_NAME"

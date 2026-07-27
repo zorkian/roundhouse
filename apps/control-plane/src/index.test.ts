@@ -58,10 +58,10 @@ function detailsDb(found = true): D1Like {
           return statement;
         },
         first: async () => {
-          const [repository, issueNumber] = values;
-          const matchesRepository = sql.includes("github_id")
-            ? repository === enrolledGithubId
-            : repository === enrolledRepository;
+          const issueNumber = values[1];
+          const matchesRepository = sql.includes("github_id IN (")
+            ? values.includes(enrolledGithubId)
+            : values.includes(enrolledRepository);
           if (
             !found ||
             !matchesRepository ||
@@ -114,7 +114,34 @@ const uiEnv = (DB: D1Like) => ({
   DB,
   PUBLIC_ORIGIN: "https://v2.invalid",
   CONTROL_PLANE_ORIGIN: "https://direct-worker.invalid",
+  GITHUB_CLIENT_ID: "client-id",
+  ROUNDHOUSE_GITHUB_CLIENT_SECRET: "client-secret",
 });
+
+const authedUiCookie = "roundhouse_ui_session=test-session";
+
+// Extends a UI database stub with one valid, unexpired browser session.
+function withUiSession(DB: D1Like, repositoryIds = '["1297678423"]'): D1Like {
+  return {
+    prepare(sql: string) {
+      if (sql.includes("FROM ui_sessions")) {
+        const statement = {
+          bind: (..._values: unknown[]) => statement,
+          first: async () => ({
+            github_user_id: 7,
+            github_login: "octocat",
+            repository_ids_json: repositoryIds,
+            expires_at: Date.now() + 60_000,
+          }),
+          run: async () => ({ meta: {} }),
+          all: async () => ({ meta: {}, results: [] }),
+        };
+        return statement as unknown as ReturnType<D1Like["prepare"]>;
+      }
+      return DB.prepare(sql);
+    },
+  };
+}
 
 describe("V2 control plane", () => {
   it("prepares a private assignment before its workflow restores the workspace", async () => {
@@ -228,9 +255,19 @@ describe("V2 control plane", () => {
       env: unknown,
       context: unknown,
     ) => Promise<Response>;
-    const response = await fetch(
+    const signedOut = await fetch(
       new Request("https://v2.invalid/"),
       uiEnv(dashboardDb()) as never,
+      {} as never,
+    );
+    expect(signedOut.status).toBe(200);
+    await expect(signedOut.text()).resolves.toContain("Sign in with GitHub");
+
+    const response = await fetch(
+      new Request("https://v2.invalid/", {
+        headers: { cookie: authedUiCookie },
+      }),
+      uiEnv(withUiSession(dashboardDb())) as never,
       {} as never,
     );
     expect(response.status).toBe(200);
@@ -240,9 +277,9 @@ describe("V2 control plane", () => {
     expect(response.headers.get("content-security-policy")).toContain(
       "frame-ancestors 'none'",
     );
-    await expect(response.text()).resolves.toContain(
-      "Development runs across enrolled repositories",
-    );
+    const body = await response.text();
+    expect(body).toContain("Development runs across enrolled repositories");
+    expect(body).toContain("Sign out");
 
     for (const path of [
       "/",
@@ -371,8 +408,9 @@ describe("V2 control plane", () => {
     const html = await fetch(
       new Request(
         "https://v2.invalid/repositories/zorkian/roundhouse/issues/281",
+        { headers: { cookie: authedUiCookie } },
       ),
-      uiEnv(detailsDb()) as never,
+      uiEnv(withUiSession(detailsDb())) as never,
       {} as never,
     );
     expect(html.status).toBe(200);
@@ -382,17 +420,20 @@ describe("V2 control plane", () => {
     const missing = await fetch(
       new Request(
         "https://v2.invalid/repositories/zorkian/roundhouse/issues/999",
+        { headers: { cookie: authedUiCookie } },
       ),
-      uiEnv(detailsDb(false)) as never,
+      uiEnv(withUiSession(detailsDb(false))) as never,
       {} as never,
     );
     expect(missing.status).toBe(404);
+    expect(missing.headers.get("content-type")).toContain("text/html");
 
     const malformed = await fetch(
       new Request(
         "https://v2.invalid/repositories/%E0%A4%A/roundhouse/issues/281",
+        { headers: { cookie: authedUiCookie } },
       ),
-      uiEnv(detailsDb()) as never,
+      uiEnv(withUiSession(detailsDb())) as never,
       {} as never,
     );
     expect(malformed.status).toBe(404);
@@ -400,15 +441,39 @@ describe("V2 control plane", () => {
     const mutation = await fetch(
       new Request(
         "https://v2.invalid/repositories/zorkian/roundhouse/issues/281",
-        {
-          method: "POST",
-        },
+        { method: "POST", headers: { cookie: authedUiCookie } },
       ),
-      uiEnv(detailsDb()) as never,
+      uiEnv(withUiSession(detailsDb())) as never,
       {} as never,
     );
     expect(mutation.status).toBe(405);
     expect(mutation.headers.get("allow")).toBe("GET");
+  });
+
+  it("makes unauthorized and missing direct pages indistinguishable", async () => {
+    const fetch = worker.fetch as unknown as (
+      request: Request,
+      env: unknown,
+      context: unknown,
+    ) => Promise<Response>;
+    const request = () =>
+      new Request(
+        "https://v2.invalid/repositories/zorkian/roundhouse/issues/281",
+        { headers: { cookie: authedUiCookie } },
+      );
+    const missing = await fetch(
+      request(),
+      uiEnv(withUiSession(detailsDb(false))) as never,
+      {} as never,
+    );
+    const unauthorized = await fetch(
+      request(),
+      uiEnv(withUiSession(detailsDb(), '["9999999999"]')) as never,
+      {} as never,
+    );
+    expect(missing.status).toBe(404);
+    expect(unauthorized.status).toBe(404);
+    expect(await unauthorized.text()).toBe(await missing.text());
   });
 
   it("registers the private model egress handler with the Containers SDK", () => {
