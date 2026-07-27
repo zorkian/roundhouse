@@ -1873,6 +1873,7 @@ export async function prepareWorkspace(assignment, onProgress) {
       "git",
       [
         "fetch",
+        "--refetch",
         "--no-tags",
         assignment.artifact.remote,
         assignment.artifact.ref,

@@ -54,6 +54,111 @@ describe("V2 agent runner", () => {
     expect(agentRuntime).toBe("pi");
   });
 
+  it("refetches complete Git objects into a restored workspace", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    process.env.ROUNDHOUSE_WORKSPACE_ROOT = resolve(testRoot, "runner");
+    const source = resolve(testRoot, "source");
+    const remote = resolve(testRoot, "artifact.git");
+    await mkdir(source, { recursive: true });
+    execFileSync("git", ["init", "--initial-branch=main"], { cwd: source });
+    await writeFile(resolve(source, "README.md"), "baseline\n");
+    execFileSync("git", ["add", "README.md"], { cwd: source });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@invalid",
+        "commit",
+        "-m",
+        "baseline",
+      ],
+      { cwd: source },
+    );
+    const baseCommit = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: source,
+      encoding: "utf8",
+    }).trim();
+    execFileSync("git", ["clone", "--bare", source, remote]);
+    const assignment = {
+      id: "run_refetch_rev_1",
+      runId: "run_refetch",
+      stage: "implement",
+      runRevision: 1,
+      issueNumber: 42,
+      deadlineAt: Date.now() + 60_000,
+      baseCommit,
+      expectedHead: baseCommit,
+      protectedPaths: [],
+      artifact: {
+        repositoryId: "artifact-repo-id",
+        repository: "v2-run-refetch",
+        remote,
+        tokenId: "write-token-id",
+        token: "ephemeral-write-token",
+        access: "write",
+        ref: "refs/heads/main",
+      },
+    };
+    const directory = await prepareWorkspace(assignment);
+
+    await writeFile(resolve(source, "advanced.txt"), "advanced\n");
+    execFileSync("git", ["add", "advanced.txt"], { cwd: source });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@invalid",
+        "commit",
+        "-m",
+        "advance",
+      ],
+      { cwd: source },
+    );
+    const advancedHead = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: source,
+      encoding: "utf8",
+    }).trim();
+    const advancedTree = execFileSync(
+      "git",
+      ["rev-parse", `${advancedHead}^{tree}`],
+      { cwd: source, encoding: "utf8" },
+    ).trim();
+    execFileSync("git", ["push", remote, "HEAD:refs/heads/main"], {
+      cwd: source,
+    });
+
+    const commitObject = execFileSync(
+      "git",
+      ["cat-file", "commit", advancedHead],
+      { cwd: source },
+    );
+    expect(
+      execFileSync("git", ["hash-object", "-t", "commit", "-w", "--stdin"], {
+        cwd: directory,
+        input: commitObject,
+        encoding: "utf8",
+      }).trim(),
+    ).toBe(advancedHead);
+    expect(() =>
+      execFileSync("git", ["cat-file", "-e", advancedTree], {
+        cwd: directory,
+        stdio: "ignore",
+      }),
+    ).toThrow();
+
+    const restored = await prepareWorkspace({
+      ...assignment,
+      expectedHead: advancedHead,
+    });
+    await expect(
+      readFile(resolve(restored, "advanced.txt"), "utf8"),
+    ).resolves.toBe("advanced\n");
+  });
+
   it("adapts command progress objects to lifecycle progress callbacks", async () => {
     const progress = vi.fn();
     await commandProgress(progress)({
