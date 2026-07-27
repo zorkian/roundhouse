@@ -186,6 +186,95 @@ async function revisitStarted(
     await reportStarted(reporter, run, attempt);
 }
 
+// A queue delivery can be interrupted after the attempt and lease are durable
+// but before its Workflow handoff is confirmed. The deterministic Workflow
+// instance makes resubmitting that created attempt idempotent, so a duplicate
+// wakeup completes the handoff instead of waiting for the execution lease to
+// expire.
+async function resumeCreatedDispatch(
+  repository: RunRepository,
+  dispatcher: AttemptDispatcher,
+  reporter: AttemptReporter | undefined,
+  run: RunSnapshot,
+  attemptId: string,
+): Promise<boolean> {
+  const attempt = await repository.getAttempt(attemptId);
+  if (
+    attempt?.state !== "created" ||
+    attempt.runId !== run.id ||
+    attempt.runRevision !== run.revision
+  )
+    return false;
+  const startedAt = Date.now();
+  const started = {
+    phase: "created_attempt_dispatch_resume_started",
+    revision: run.revision,
+  };
+  console.log(
+    JSON.stringify({
+      message: "created_attempt_dispatch_resume_started",
+      runId: run.id,
+      attemptId,
+      ...started,
+    }),
+  );
+  await repository.recordEvent?.(
+    run.id,
+    attempt.id,
+    "attempt_dispatch_resume",
+    started,
+  );
+  try {
+    await dispatcher.submit(attempt, run);
+    await repository.markDispatched(attempt.id);
+    await reportStarted(reporter, run, attempt);
+    const completed = {
+      phase: "created_attempt_dispatch_resume_completed",
+      revision: run.revision,
+      durationMs: Date.now() - startedAt,
+    };
+    console.log(
+      JSON.stringify({
+        message: "created_attempt_dispatch_resume_completed",
+        runId: run.id,
+        attemptId,
+        ...completed,
+      }),
+    );
+    await repository.recordEvent?.(
+      run.id,
+      attempt.id,
+      "attempt_dispatch_resume",
+      completed,
+    );
+    return true;
+  } catch (error) {
+    await repository.releaseLease(run.id, run.revision, attempt.id);
+    const failed = {
+      phase: "created_attempt_dispatch_resume_failed",
+      revision: run.revision,
+      durationMs: Date.now() - startedAt,
+      errorType: error instanceof Error ? error.constructor.name : typeof error,
+      error: error instanceof Error ? error.message : String(error),
+    };
+    console.error(
+      JSON.stringify({
+        message: "created_attempt_dispatch_resume_failed",
+        runId: run.id,
+        attemptId,
+        ...failed,
+      }),
+    );
+    await repository.recordEvent?.(
+      run.id,
+      attempt.id,
+      "attempt_dispatch_resume",
+      failed,
+    );
+    throw error;
+  }
+}
+
 export function qualificationTransition(attempt: Attempt) {
   const outcome = attempt.result?.qualification;
   if (!outcome || typeof outcome !== "object")
@@ -1104,6 +1193,16 @@ export async function coordinate(
     now,
   );
   if (!claimed) {
+    if (
+      await resumeCreatedDispatch(
+        repository,
+        dispatcher,
+        reporter,
+        run,
+        attemptId,
+      )
+    )
+      return "dispatched";
     await revisitStarted(repository, reporter, run, attemptId);
     return "duplicate";
   }
@@ -1168,6 +1267,16 @@ async function dispatchReview(
     now,
   );
   if (!claimed) {
+    if (
+      await resumeCreatedDispatch(
+        repository,
+        dispatcher,
+        reporter,
+        run,
+        attemptId,
+      )
+    )
+      return "dispatched";
     await revisitStarted(repository, reporter, run, attemptId);
     return "duplicate";
   }
