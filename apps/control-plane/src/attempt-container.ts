@@ -8,6 +8,7 @@ import {
   type Process,
 } from "@cloudflare/sandbox";
 import {
+  attemptHasCapability,
   isModelRoute,
   modelStopReasonHeader,
   type Attempt,
@@ -159,15 +160,22 @@ export async function pauseForModelBudget(
 export function attemptAllowedHosts(
   attempt: Pick<
     AttemptAssignment,
-    "artifact" | "executor" | "publish" | "source" | "stage" | "upstream"
+    | "artifact"
+    | "capabilities"
+    | "executor"
+    | "publish"
+    | "source"
+    | "stage"
+    | "upstream"
   >,
   controlPlaneUrl?: string | null,
 ): string[] {
-  // Implementation runs use the repository's own development environment.
-  // Its image build and lifecycle commands may install dependencies from
-  // arbitrary project-selected package repositories. The sandbox VM remains
-  // the isolation boundary, while credentials stay behind outbound handlers.
-  if (attempt.executor === "agent.write") return ["*"];
+  // A node with project network authority uses the repository's own
+  // development environment. Its image build and lifecycle commands may
+  // install dependencies from arbitrary project-selected package repositories.
+  // The sandbox VM remains the isolation boundary, while credentials stay
+  // behind outbound handlers.
+  if (attemptHasCapability(attempt, "network.project")) return ["*"];
   return [
     modelHost,
     packageRegistryHost,
@@ -178,6 +186,12 @@ export function attemptAllowedHosts(
     attempt.upstream?.hostname ?? "",
     controlPlaneUrl ? new URL(controlPlaneUrl).hostname : "",
   ].filter(Boolean);
+}
+
+export function attemptUsesProjectEnvironment(
+  attempt: Pick<AttemptAssignment, "capabilities">,
+): boolean {
+  return attemptHasCapability(attempt, "environment.project");
 }
 
 async function modelEgress(request: Request, env: Cloudflare.Env) {
@@ -244,6 +258,10 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
   headers.delete("x-api-key");
   headers.delete("x-roundhouse-attempt-capability");
   headers.set("x-roundhouse-role", attempt.role);
+  headers.set(
+    "x-roundhouse-research",
+    attemptHasCapability(attempt, "research.public") ? "enabled" : "disabled",
+  );
   headers.set(
     "x-roundhouse-task-type",
     attempt.stage === "plan"
@@ -786,17 +804,23 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
       stepStartedAt = Date.now();
       await this.traceSetup(attempt.id, "network_policy_started", undefined, {
         allowedHostCount: allowedHosts.length,
+        capabilities: attempt.capabilities ?? [],
+        projectEnvironment: attemptUsesProjectEnvironment(attempt),
       });
       await this.setAllowedHosts(allowedHosts);
       await this.traceSetup(
         attempt.id,
         "network_policy_completed",
         stepStartedAt,
-        { allowedHostCount: allowedHosts.length },
+        {
+          allowedHostCount: allowedHosts.length,
+          capabilities: attempt.capabilities ?? [],
+          projectEnvironment: attemptUsesProjectEnvironment(attempt),
+        },
       );
 
       let runner: Process | null = null;
-      if (attempt.stage === "implement") {
+      if (attemptUsesProjectEnvironment(attempt)) {
         stepStartedAt = Date.now();
         await this.traceSetup(attempt.id, "docker_setup_started");
         runner = await this.ensureDocker(attempt.id);
@@ -988,12 +1012,11 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
         attempt.id,
         "checkpoint_runtime_owner_lookup_started",
         undefined,
-        { needsDocker: attempt.stage === "implement" },
+        { needsDocker: attemptUsesProjectEnvironment(attempt) },
       );
-      let runner =
-        attempt.stage === "implement"
-          ? await this.ensureDocker(attempt.id)
-          : await this.getProcessSessionless("roundhouse-runner");
+      let runner = attemptUsesProjectEnvironment(attempt)
+        ? await this.ensureDocker(attempt.id)
+        : await this.getProcessSessionless("roundhouse-runner");
       if (!runner) {
         await this.traceSetup(attempt.id, "checkpoint_runner_start_started");
         const runnerStartedAt = Date.now();
@@ -1017,7 +1040,7 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
         "checkpoint_runtime_owner_lookup_completed",
         stepStartedAt,
         {
-          needsDocker: attempt.stage === "implement",
+          needsDocker: attemptUsesProjectEnvironment(attempt),
           processId: runner.id,
           pid: runner.pid,
           status: await runner.getStatus(),

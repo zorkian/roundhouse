@@ -5,7 +5,7 @@
 
 - Status: Active
 - Audience: Maintainers and implementers
-- Last updated: 2026-07-25
+- Last updated: 2026-07-27
 
 This is the current product, architecture, and implementation plan for
 Roundhouse V2. Git history and the `v1-poc-final` tag preserve earlier designs
@@ -74,10 +74,12 @@ severity policy, and exact-head-bound fan-out/join evidence.
 Current intentional limitations:
 
 - only explicitly enrolled public repositories are supported;
-- implementation has unrestricted outbound network access inside its isolated
-  Sandbox so repository image builds and lifecycle commands can use
-  project-specific hosts;
-- read-only stages use restricted access plus broker-mediated hosted research;
+- investigation and implementation have project network access inside their
+  isolated Sandboxes so repository image builds, dependency installation,
+  lifecycle commands, and public research can work in the repository's actual
+  development environment;
+- qualification, planning, and review use restricted access plus
+  capability-gated broker-mediated hosted research;
 - risk and approval types exist in old core/schema work but are not active
   product behavior;
 - Roundhouse currently begins with an issue start and finishes at merge; and
@@ -152,19 +154,19 @@ references outside `.roundhouse/**`.
 
 Repositories compose these executor kinds within fixed maximum authority:
 
-| Kind                      | Maximum authority                                                 |
-| ------------------------- | ----------------------------------------------------------------- |
-| `agent.read`              | Read an exact checkpoint and approved context; no source mutation |
-| `agent.write`             | Write an isolated Artifacts checkpoint; no GitHub mutation        |
-| `review`                  | Read an exact candidate and return structured findings            |
-| `validate`                | Run deterministic commands and return exact results               |
-| `human`                   | Wait for clarification or an authenticated decision               |
-| `github.publish`          | Publish a validated exact candidate                               |
-| `github.checks`           | Observe checks for the exact published head                       |
-| `github.merge`            | Merge an exact head after required gates                          |
-| `external.wait` / `check` | Use one separately enabled, named, scoped adapter                 |
-| `fanout` / `join`         | Coordinate typed child attempts; no external authority            |
-| `terminal`                | Record a declared outcome                                         |
+| Kind                      | Maximum authority                                                                                                                  |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `agent.read`              | Read an exact checkpoint; optionally run project commands, use project network, and capture previews; no durable Artifact mutation |
+| `agent.write`             | Write an isolated Artifacts checkpoint; no GitHub mutation                                                                         |
+| `review`                  | Read an exact candidate and return structured findings                                                                             |
+| `validate`                | Run deterministic commands and return exact results                                                                                |
+| `human`                   | Wait for clarification or an authenticated decision                                                                                |
+| `github.publish`          | Publish a validated exact candidate                                                                                                |
+| `github.checks`           | Observe checks for the exact published head                                                                                        |
+| `github.merge`            | Merge an exact head after required gates                                                                                           |
+| `external.wait` / `check` | Use one separately enabled, named, scoped adapter                                                                                  |
+| `fanout` / `join`         | Coordinate typed child attempts; no external authority                                                                             |
+| `terminal`                | Record a declared outcome                                                                                                          |
 
 The first graph supports only the existing authenticated
 `github.issue.started` trigger. The trigger contract also accommodates later
@@ -189,12 +191,16 @@ request attached until the executor returns a completion, record that
 completion in D1, validate it, attempt an optional workspace backup, publish it
 idempotently, accept it, and release the Sandbox. Once D1 records an attempt as
 `executed`, recovery can resume only the settlement steps; it cannot invoke the
-model again. If a paid execution is interrupted before a completion is
-recorded, the run waits for an explicit maintainer restart. Workspace backup
-improves continuation speed but is not a correctness boundary: the Artifacts
-checkpoint and Git commit remain authoritative when backup is unavailable. The
-Cloudflare Workflow does not choose nodes, transitions, or product outcomes and
-stores no attempt capability.
+model again. If execution is interrupted before a completion is recorded, D1
+records a typed interruption outcome and the coordinator issues a new
+revision-bound attempt automatically. A rejected checkpoint similarly returns
+to the same workflow node with the rejection evidence. If publication observes
+that the pull-request branch has moved, the coordinator accepts that observed
+head, invalidates stale review and integration evidence, and returns through
+implementation to reconcile it. Workspace backup improves continuation speed
+but is not a correctness boundary: the Artifacts checkpoint and Git commit
+remain authoritative when backup is unavailable. The Cloudflare Workflow does
+not choose nodes, transitions, or product outcomes.
 
 For each node execution the coordinator:
 
@@ -209,10 +215,12 @@ For each node execution the coordinator:
 
 A work item is the enduring external subject. A run is one execution of a
 compiled workflow against an immutable trigger, profile, and workflow snapshot.
-An attempt is the durable record of one node execution; fan-out attempts may
-own typed child attempts.
+An attempt is the durable record of one node execution. It stores the
+coordinator-minted effective capability set and any typed executor outcome;
+fan-out attempts may own typed child attempts.
 
-A waiting attempt records a typed requested action or external event.
+A waiting run records a typed requested action or external event declared by
+the workflow.
 Resumption follows the workflow edge recorded for that node and never attempts
 to reconstruct a stage from current source configuration or comment wording.
 
@@ -284,16 +292,18 @@ needed. It does not own workflow state.
 
 ### 5.2 Agent environment
 
-The outer Cloudflare Sandbox VM is the isolation boundary. For implementation,
-Roundhouse adapts the repository's image-based Dev Container inside that
-Sandbox. The Dev Container provides compatibility, not another security
-boundary: repository lifecycle commands and the agent share the outer
-Sandbox's authority.
+The outer Cloudflare Sandbox VM is the isolation boundary. For investigation
+and implementation, Roundhouse adapts the repository's image-based Dev
+Container inside that Sandbox. The Dev Container provides compatibility, not
+another security boundary: repository lifecycle commands and the agent share
+the outer Sandbox's authority.
 
 Implementation receives a short-lived Artifacts writer, never a GitHub
-credential. Review and other read-only work receive only read authority. A
-separate clean validation Sandbox verifies Git ancestry and path policy before
-the trusted control plane publishes anything.
+credential. Investigation may execute commands, use project network access,
+and capture previews, but receives only Artifacts read authority. Review and
+other read-only work receive only read authority. A separate clean validation
+Sandbox verifies Git ancestry and path policy before the trusted control plane
+publishes anything.
 
 Implementation workspaces, dependency caches, volumes, and application data can
 be backed up before compute is destroyed and restored for later revisions.
@@ -307,10 +317,11 @@ Unified Billing. The runner uses Pi as a provider-neutral harness with native
 OpenAI Responses, OpenAI Chat Completions, Anthropic Messages, or Google
 Generative AI protocols. The broker does not translate conversation history.
 
-Each attempt records provider, model, reasoning level, prompt version, tool
-policy, actual route, timing, and available usage. The implementation
+Each attempt records provider, model, reasoning level, prompt version, effective
+capabilities, actual route, timing, and available usage. The project
 environment receives no provider credential. Hosted research is attached only
-to approved read roles. In-flight attempts keep their original route snapshot.
+when the attempt has `research.public`, independent of its role name. In-flight
+attempts keep their original route and capability snapshot.
 
 ## 6. Repository policy and human interaction
 
@@ -348,8 +359,9 @@ The initial repository workflow preserves the behavior deployed today:
 1. **Qualification:** classify the request and ask only questions not
    answerable from available repository, issue, or approved public context.
 2. **Investigation:** reproduce a bug, establish a feature baseline, or inspect
-   a maintenance constraint. Record truthful evidence and a regression or
-   acceptance strategy.
+   a maintenance constraint in the repository's development environment.
+   Record truthful command, public research, and screenshot evidence plus a
+   regression or acceptance strategy.
 3. **Planning:** produce acceptance criteria, proposed behavior, likely areas,
    validation strategy, uncertainty, and any real human decision.
 4. **Implementation:** make the smallest complete change in the repository
@@ -509,6 +521,8 @@ The existing product baseline must continue to demonstrate:
 - validation and adversarial-review remediation;
 - target-branch integration without stale review or CI authorization;
 - duplicate delivery and container replacement without duplicate publication;
+- interruption, checkpoint rejection, and branch supersession returning to the
+  coordinator without an unnecessary maintainer restart;
 - malicious untrusted content failing to acquire credentials or authority; and
 - the same journeys on an external repository through configuration.
 

@@ -107,6 +107,15 @@ class LocalD1 {
         "utf8",
       ),
     );
+    this.database.exec(
+      readFileSync(
+        new URL(
+          "../migrations/0014_attempt_authority_outcomes.sql",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    );
   }
 
   prepare(sql) {
@@ -175,6 +184,7 @@ function repositoryContract(label, createRepository) {
         executor: "agent.read",
         stage: "qualify",
         role: "qualification",
+        capabilities: ["repository.read", "context.read"],
         state: "created",
         deadlineAt: 200,
         baseCommit: run.baseCommit,
@@ -187,6 +197,7 @@ function repositoryContract(label, createRepository) {
       await expect(repository.getAttempt(attempt.id)).resolves.toMatchObject({
         nodeId: "qualify",
         executor: "agent.read",
+        capabilities: ["repository.read", "context.read"],
         state: "created",
         deadlineAt: 300,
       });
@@ -562,6 +573,62 @@ function repositoryContract(label, createRepository) {
       await expect(
         repository.completeAttempt(attempt.id, 1, run.baseCommit, {}),
       ).resolves.toBe("stale");
+    });
+
+    it("persists a typed executor outcome exactly once", async () => {
+      const repository = createRepository();
+      const run = createRun({ ...input, id: "run_executor_outcome" });
+      await repository.create(run);
+      const attempt = {
+        id: "run_executor_outcome_rev_1",
+        runId: run.id,
+        runRevision: 1,
+        kind: "agent",
+        nodeId: "implement",
+        executor: "agent.write",
+        stage: "implement",
+        role: "implement",
+        capabilities: ["repository.read", "artifact.write", "commands.execute"],
+        state: "dispatched",
+        deadlineAt: 200,
+        baseCommit: run.baseCommit,
+        expectedHead: run.baseCommit,
+      };
+      const outcome = {
+        kind: "checkpoint_rejected",
+        source: "checkpoint_validator",
+        status: 422,
+        detail: "protected_path_changed",
+      };
+      await repository.createAttempt(attempt);
+      await expect(
+        repository.settleAttemptOutcome(
+          attempt.id,
+          1,
+          "completed",
+          outcome,
+          run.baseCommit,
+          { implementation: { summary: "Rejected checkpoint" } },
+        ),
+      ).resolves.toBe("completed");
+      await expect(repository.getAttempt(attempt.id)).resolves.toMatchObject({
+        state: "completed",
+        capabilities: attempt.capabilities,
+        acceptedHead: run.baseCommit,
+        outcome,
+      });
+      await expect(
+        repository.settleAttemptOutcome(
+          attempt.id,
+          1,
+          "completed",
+          outcome,
+          run.baseCommit,
+        ),
+      ).resolves.toBe("duplicate");
+      await expect(
+        repository.completeAttempt(attempt.id, 1, run.baseCommit, {}),
+      ).resolves.toBe("duplicate");
     });
   });
 }

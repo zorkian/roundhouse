@@ -17,8 +17,6 @@ const routeHeaders = {
   thinkingLevel: "x-roundhouse-routing-thinking-level",
   rule: "x-roundhouse-routing-rule",
 } as const;
-const researchRoles = new Set(["qualify", "reproduce", "plan"]);
-
 export type BrokerEnv = Omit<Cloudflare.Env, "ROUTING_ROUTES"> & {
   readonly ROUTING_ROUTES?: string;
 };
@@ -243,7 +241,7 @@ function tools(body: Record<string, unknown>): Record<string, unknown>[] {
 function applyHostedResearch(
   body: Record<string, unknown>,
   route: ModelRoute,
-  role: string,
+  enabled: boolean,
 ): void {
   const existing = tools(body).filter(
     (tool) =>
@@ -252,7 +250,7 @@ function applyHostedResearch(
   );
   if (existing.length > 0) body.tools = existing;
   else delete body.tools;
-  if (!researchRoles.has(role)) return;
+  if (!enabled) return;
   if (route.protocol === "openai-responses") {
     body.tools = [...existing, { type: "web_search_preview" }];
   } else if (route.protocol === "anthropic-messages") {
@@ -388,7 +386,7 @@ export async function brokerRequest(
   applyHostedResearch(
     body,
     route,
-    request.headers.get("x-roundhouse-role") ?? "",
+    request.headers.get("x-roundhouse-research") === "enabled",
   );
 
   let response: Response;

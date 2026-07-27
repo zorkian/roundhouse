@@ -20,9 +20,11 @@ import {
 } from "./callback.js";
 import {
   aggregateReviewAttempts,
+  attemptOutcomeTransition,
   attemptInactivityMilliseconds,
   ciTransition,
   coordinate,
+  effectiveAttemptCapabilities,
   graphCompletedTransition,
   implementationTransition,
   integrateTransition,
@@ -159,6 +161,81 @@ async function callbackFor(
 }
 
 describe("single coordinator", () => {
+  it("mints node authority and only attenuates the read-only integration review", () => {
+    const investigate = workflow.nodes.investigate!;
+    expect(
+      effectiveAttemptCapabilities(investigate, "renamed-investigation-role"),
+    ).toEqual([
+      "commands.execute",
+      "context.read",
+      "environment.project",
+      "network.project",
+      "preview.capture",
+      "repository.read",
+      "research.public",
+    ]);
+
+    const integration = workflow.nodes.integrate!;
+    expect(effectiveAttemptCapabilities(integration, "integrate")).toEqual([
+      "artifact.write",
+      "commands.execute",
+      "repository.read",
+    ]);
+    expect(
+      effectiveAttemptCapabilities(integration, "review-integration"),
+    ).toEqual(["repository.read"]);
+  });
+
+  it("reconciles a superseded branch through implementation and invalidates stale gates", () => {
+    const observedHead = "e".repeat(40);
+    const run = {
+      ...createRun(input),
+      stage: "integrate",
+      currentNodeId: "integrate",
+      currentHead: "d".repeat(40),
+      candidateHead: "b".repeat(40),
+      reviewedHead: "b".repeat(40),
+      targetBaseHead: "c".repeat(40),
+      integrationHead: "d".repeat(40),
+    } satisfies RunSnapshot;
+    const attempt = {
+      id: "run_slice_rev_6",
+      runId: run.id,
+      runRevision: run.revision,
+      kind: "agent",
+      nodeId: "integrate",
+      executor: "validate",
+      stage: "integrate",
+      role: "integrate",
+      capabilities: workflow.nodes.integrate!.capabilities,
+      state: "completed",
+      deadlineAt: 1_000,
+      baseCommit: run.baseCommit,
+      expectedHead: run.currentHead,
+      acceptedHead: observedHead,
+      outcome: {
+        kind: "branch_superseded",
+        source: "checkpoint_publisher",
+        status: 409,
+        detail: `publish_branch_changed:${observedHead}`,
+        observedHead,
+      },
+    } satisfies Attempt;
+
+    expect(attemptOutcomeTransition(run, attempt)).toEqual({
+      status: "active",
+      stage: "implement",
+      currentNodeId: "implement",
+      acceptedHead: observedHead,
+      heads: {
+        candidateHead: observedHead,
+        reviewedHead: null,
+        targetBaseHead: null,
+        integrationHead: null,
+      },
+    });
+  });
+
   it("fails a holistic review that omits a specialist decision", async () => {
     const store = new MemoryRunRepository();
     const run = {
@@ -460,7 +537,7 @@ describe("single coordinator", () => {
     ).resolves.toBe("unauthorized");
   });
 
-  it("pauses a deterministically rejected checkpoint instead of redispatching it", async () => {
+  it("routes a deterministically rejected checkpoint back through the coordinator", async () => {
     const store = new MemoryRunRepository();
     await store.create(createRun(input));
     await coordinate(
@@ -492,21 +569,18 @@ describe("single coordinator", () => {
       ),
     ).resolves.toBe("rejected");
     await expect(store.get(input.id)).resolves.toMatchObject({
-      status: "waiting",
+      status: "active",
       stage: "qualify",
-      waitingReason: "checkpoint_rejected",
-      revision: 2,
+      revision: 1,
     });
     await expect(store.getAttempt(attempt.id)).resolves.toMatchObject({
-      state: "failed",
-      result: {
-        failure: {
-          reason: "checkpoint_rejected",
-          source: "checkpoint_validator",
-          status: 422,
-          detail:
-            '{"error":"invalid_checkpoint","detail":"protected_path_changed"}',
-        },
+      state: "completed",
+      outcome: {
+        kind: "checkpoint_rejected",
+        source: "checkpoint_validator",
+        status: 422,
+        detail:
+          '{"error":"invalid_checkpoint","detail":"protected_path_changed"}',
       },
     });
     await expect(
@@ -516,10 +590,18 @@ describe("single coordinator", () => {
         { validate: async () => undefined },
         callback,
       ),
-    ).resolves.toBe("rejected");
+    ).resolves.toBe("duplicate");
+    await expect(
+      coordinate(
+        store,
+        { submit: async () => undefined },
+        { runId: input.id, expectedRevision: 1 },
+        200,
+      ),
+    ).resolves.toBe("dispatched");
     await expect(store.get(input.id)).resolves.toMatchObject({
-      status: "waiting",
-      waitingReason: "checkpoint_rejected",
+      status: "active",
+      currentNodeId: "qualify",
       revision: 2,
     });
   });

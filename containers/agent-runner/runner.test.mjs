@@ -9,6 +9,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   activityRequest,
+  agentToolNames,
   agentSystemPrompt,
   agentRuntime,
   artifactWriteTokenRequest,
@@ -56,6 +57,28 @@ describe("V2 agent runner", () => {
 
   it("marks agent commands as unattended", () => {
     expect(process.env.CI).toBe("true");
+  });
+
+  it("derives tools from immutable attempt capabilities", () => {
+    expect(
+      agentToolNames({
+        capabilities: ["repository.read", "commands.execute"],
+      }),
+    ).toEqual(["read", "bash", "grep", "find", "ls", "submit_result"]);
+    expect(
+      agentToolNames({
+        capabilities: ["repository.read", "artifact.write", "preview.capture"],
+      }),
+    ).toEqual([
+      "read",
+      "edit",
+      "write",
+      "grep",
+      "find",
+      "ls",
+      "capture_screenshot",
+      "submit_result",
+    ]);
   });
 
   it("refreshes complete Git metadata in a restored workspace", async () => {
@@ -630,7 +653,7 @@ describe("V2 agent runner", () => {
       context: { qualification: { classification: "bug" } },
     });
     expect(bug).toContain("Attempt to reproduce this bug report");
-    expect(bug).toContain("configured package registry");
+    expect(bug).toContain("repository's project environment");
 
     expect(
       requestClassification({
