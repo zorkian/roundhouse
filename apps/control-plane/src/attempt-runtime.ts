@@ -191,6 +191,26 @@ export function workspaceRef(runId: string): string {
   return `refs/heads/roundhouse/${runId}`;
 }
 
+export function checkpointIdentityExpectation(
+  attempt: Pick<Attempt, "baseCommit" | "expectedHead">,
+  run: Pick<RunSnapshot, "id" | "profile" | "baseCommit">,
+  repositoryId: string,
+  enforcePathPolicy: boolean,
+) {
+  if (!run.profile) throw new Error("run_profile_missing");
+  return {
+    repositoryId,
+    repository: workspaceName(run.id),
+    // Integration attempts may deliberately select a newer target commit
+    // than the run's original base. The attempt records that exact identity.
+    baseCommit: attempt.baseCommit,
+    inputHead: attempt.expectedHead,
+    ref: workspaceRef(run.id),
+    profile: run.profile,
+    enforcePathPolicy,
+  };
+}
+
 export function githubBranch(issueNumber: number): string {
   return `roundhouse/issue-${issueNumber}`;
 }
@@ -301,22 +321,21 @@ export class SandboxCheckpointValidator implements CheckpointValidator {
             ? "conflict_resolution"
             : "authored_paths",
         baseHead: integrationValidation?.baseHead ?? null,
+        checkpointBaseCommit: input.checkpoint.baseCommit,
+        expectedBaseCommit: attempt.baseCommit,
+        runBaseCommit: run.baseCommit,
         changedPathCount: input.checkpoint.changedPaths.length,
       }),
     );
-    validateCheckpointIdentity(input.checkpoint, {
-      repositoryId: artifact.id,
-      repository: workspaceName(run.id),
-      baseCommit: run.baseCommit,
-      inputHead: attempt.expectedHead,
-      ref: workspaceRef(run.id),
-      profile:
-        run.profile ??
-        (() => {
-          throw new Error("run_profile_missing");
-        })(),
-      enforcePathPolicy: !integrationValidation,
-    });
+    validateCheckpointIdentity(
+      input.checkpoint,
+      checkpointIdentityExpectation(
+        attempt,
+        run,
+        artifact.id,
+        !integrationValidation,
+      ),
+    );
     if (!attemptHasCapability(attempt, "artifact.write")) {
       try {
         validateReadOnlyCheckpoint(input.checkpoint);
@@ -335,7 +354,7 @@ export class SandboxCheckpointValidator implements CheckpointValidator {
         `${attempt.id}-validation`,
       ).validateCheckpoint({
         ...attempt,
-        baseCommit: run.baseCommit,
+        baseCommit: attempt.baseCommit,
         profile: run.profile,
         checkpoint: input.checkpoint,
         ...(integrationValidation
@@ -397,7 +416,7 @@ export class SandboxCheckpointPublisher {
         publicationSandbox,
       ).publishCheckpoint({
         ...attempt,
-        baseCommit: run.baseCommit,
+        baseCommit: attempt.baseCommit,
         profile: run.profile,
         checkpoint: input.checkpoint,
         artifact: {
