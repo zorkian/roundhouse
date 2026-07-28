@@ -22,6 +22,7 @@ import {
   deliverCompletion,
   checkpointWorkspace,
   devContainerConfigIdentity,
+  fetchJudgementCandidateChanges,
   implementationPrompt,
   implementationResultSchema,
   implementationSchema,
@@ -1040,6 +1041,126 @@ describe("V2 agent runner", () => {
     expect(() =>
       git(checkout, ["merge-base", "--is-ancestor", baseCommit, updatedHead]),
     ).not.toThrow();
+  });
+
+  it("fetches each changed judgement candidate's checkpoint across the repository boundary", async () => {
+    process.env.ROUNDHOUSE_WORKSPACE_ROOT = resolve(testRoot, "judgement");
+    // The candidate's own artifact repository holds its checkpoint ref.
+    const candidateSource = resolve(testRoot, "judgement-candidate-source");
+    const candidateRepo = resolve(testRoot, "judgement-candidate.git");
+    await mkdir(candidateSource, { recursive: true });
+    git(candidateSource, ["init", "--initial-branch=main"]);
+    await writeFile(resolve(candidateSource, "README.md"), "baseline\n");
+    git(candidateSource, ["add", "README.md"]);
+    commit(candidateSource, "baseline");
+    const baseHead = head(candidateSource);
+    await writeFile(resolve(candidateSource, "README.md"), "baseline\nalpha\n");
+    git(candidateSource, ["add", "README.md"]);
+    commit(candidateSource, "alpha change");
+    const candidateHead = head(candidateSource);
+    git(process.cwd(), [
+      "init",
+      "--bare",
+      "--initial-branch=main",
+      candidateRepo,
+    ]);
+    git(candidateSource, [
+      "push",
+      candidateRepo,
+      `${candidateHead}:refs/heads/roundhouse/candidate-alpha`,
+    ]);
+
+    // The judge's checkout only has the canonical repository (base head).
+    const judgeCheckout = resolve(testRoot, "judgement-checkout");
+    git(process.cwd(), [
+      "clone",
+      "--no-checkout",
+      candidateRepo,
+      judgeCheckout,
+    ]);
+    git(judgeCheckout, [
+      "update-ref",
+      "-d",
+      "refs/heads/roundhouse/candidate-alpha",
+    ]);
+    expect(() =>
+      git(judgeCheckout, ["rev-parse", "refs/judgement/alpha"]),
+    ).toThrow();
+
+    const fetched = await fetchJudgementCandidateChanges(
+      [
+        {
+          candidateId: "alpha",
+          change: {
+            ref: "refs/heads/roundhouse/candidate-alpha",
+            baseHead,
+            head: candidateHead,
+            changedPaths: ["README.md"],
+            access: { remote: candidateRepo, token: "read-token" },
+          },
+        },
+        // An unchanged candidate has no access credential and is skipped.
+        {
+          candidateId: "beta",
+          change: {
+            ref: "refs/heads/roundhouse/candidate-beta",
+            baseHead,
+            head: baseHead,
+            changedPaths: [],
+          },
+        },
+      ],
+      judgeCheckout,
+    );
+
+    expect(fetched).toEqual(["alpha"]);
+    expect(head(judgeCheckout, "refs/judgement/alpha")).toBe(candidateHead);
+    expect(
+      git(
+        judgeCheckout,
+        ["diff", `${baseHead}..refs/judgement/alpha`, "--", "README.md"],
+        {
+          encoding: "utf8",
+        },
+      ),
+    ).toContain("+alpha");
+  });
+
+  it("rejects a fetched judgement candidate whose head moved", async () => {
+    process.env.ROUNDHOUSE_WORKSPACE_ROOT = resolve(
+      testRoot,
+      "judgement-stale",
+    );
+    const source = resolve(testRoot, "judgement-stale-source");
+    await mkdir(source, { recursive: true });
+    git(source, ["init", "--initial-branch=main"]);
+    await writeFile(resolve(source, "README.md"), "baseline\n");
+    git(source, ["add", "README.md"]);
+    commit(source, "baseline");
+    const baseHead = head(source);
+    await writeFile(resolve(source, "README.md"), "baseline\nchanged\n");
+    git(source, ["add", "README.md"]);
+    commit(source, "changed");
+    const actualHead = head(source);
+    await expect(
+      fetchJudgementCandidateChanges(
+        [
+          {
+            candidateId: "alpha",
+            change: {
+              ref: "refs/heads/main",
+              baseHead,
+              // The validated checkpoint head does not match the ref.
+              head: "f".repeat(40),
+              changedPaths: ["README.md"],
+              access: { remote: source, token: "read-token" },
+            },
+          },
+        ],
+        source,
+      ),
+    ).rejects.toThrow("judgement_candidate_head_changed:alpha");
+    expect(actualHead).not.toBe("f".repeat(40));
   });
 
   it("returns an attempt-bound completion without persisting a capability", () => {

@@ -192,6 +192,72 @@ describe("durable attempt dispatch", () => {
     ]);
   });
 
+  it("gives the judge read-only repository access to each changed candidate's checkpoint", async () => {
+    const head = (marker: string) => marker.repeat(40);
+    const candidate = (candidateId: string, acceptedHead: string): Attempt => ({
+      ...attempt,
+      id: `run_1_rev_2_implement-candidate-${candidateId}`,
+      stage: "implement",
+      role: `implement-candidate-${candidateId}`,
+      state: "completed",
+      acceptedHead,
+      competition: { purpose: "candidate", candidateId },
+    });
+    const alpha = candidate("alpha", head("b"));
+    // beta changed nothing: base and result heads match.
+    const beta = candidate("beta", attempt.expectedHead);
+    const completions = new Map([
+      [
+        alpha.id,
+        {
+          checkpoint: {
+            inputHead: head("a"),
+            outputHead: head("b"),
+            changedPaths: ["src/alpha.ts"],
+          },
+        },
+      ],
+    ]);
+    const runs = {
+      getAttemptCompletion: async (attemptId: string) =>
+        completions.get(attemptId) as never,
+    };
+    const createToken = vi.fn().mockResolvedValue({
+      id: "token-1",
+      plaintext: "read-secret",
+      access: "read",
+      expiresAt: 0,
+    });
+    const ensure = vi.fn().mockResolvedValue({
+      id: "artifacts:ns/run_1_rev_2_implement-candidate-alpha",
+      name: alpha.id,
+      remote: `https://artifacts.example/git/ns/${alpha.id}.git`,
+      hostname: "artifacts.example",
+      empty: false,
+      createToken,
+    });
+
+    const evidence = await judgementCandidateEvidence(runs, [alpha, beta], {
+      ensure,
+    } as never);
+
+    // Only the changed candidate's own repository is opened, with a
+    // short-lived read credential scoped to that repository.
+    expect(ensure).toHaveBeenCalledTimes(1);
+    expect(ensure).toHaveBeenCalledWith(alpha.id);
+    expect(createToken).toHaveBeenCalledWith("read", 30 * 60);
+    expect(evidence[0]?.change.access).toEqual({
+      remote: `https://artifacts.example/git/ns/${alpha.id}.git`,
+      hostname: "artifacts.example",
+      tokenId: "token-1",
+      token: "read-secret",
+    });
+    expect(evidence[0]?.change.access?.remote).toContain(alpha.id);
+    expect(evidence[0]?.change.access?.remote).not.toContain(beta.id);
+    // An unchanged candidate needs no credential: there is no diff to read.
+    expect(evidence[1]?.change.access).toBeUndefined();
+  });
+
   it("falls back to attempt heads when a candidate completion is missing", async () => {
     const candidate: Attempt = {
       ...attempt,

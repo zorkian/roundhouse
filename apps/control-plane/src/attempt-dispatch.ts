@@ -20,6 +20,7 @@ import {
   type WorkflowReviewer,
 } from "@roundhouse/core";
 import { aggregatedReview } from "./aggregated-review.js";
+import type { ArtifactsNamespace } from "./artifacts.js";
 import { signCallback, type AttemptCompletion } from "./callback.js";
 import {
   aggregateReviewAttempts,
@@ -519,10 +520,14 @@ export function judgementCandidateAttempts(
 
 // Builds the untrusted evidence one judge receives per candidate. Beyond the
 // candidate's self-reported result, the judge gets the candidate's validated
-// checkpoint evidence — the read-only workspace ref, base/result heads, and
-// recorded changed paths — so it can fetch the ref read-only and diff
-// base..head to evaluate what the candidate actually changed. The judge
-// never receives writable access to candidate workspaces.
+// checkpoint evidence — the workspace ref, base/result heads, and recorded
+// changed paths. Write candidates publish into their own artifact
+// repositories, so the judge's canonical-repository credential cannot reach
+// those refs; when an artifacts namespace is supplied and the candidate
+// actually changed code, the evidence also carries a short-lived read-only
+// credential for that candidate's repository so the judge can fetch the ref
+// and diff base..head itself. The judge never receives writable access to
+// candidate workspaces.
 export async function judgementCandidateEvidence(
   runs: {
     getAttemptCompletion(
@@ -530,6 +535,7 @@ export async function judgementCandidateEvidence(
     ): Promise<AttemptCompletion | undefined>;
   },
   candidates: readonly Attempt[],
+  artifacts?: ArtifactsNamespace,
 ): Promise<
   readonly {
     candidateId: string;
@@ -542,6 +548,12 @@ export async function judgementCandidateEvidence(
       baseHead: string;
       head: string;
       changedPaths: readonly string[];
+      access?: {
+        remote: string;
+        hostname: string;
+        tokenId: string;
+        token: string;
+      };
     };
   }[]
 > {
@@ -550,6 +562,42 @@ export async function judgementCandidateEvidence(
       const completion = await runs
         .getAttemptCompletion(candidate.id)
         .catch(() => undefined);
+      const change = {
+        ref: attemptWorkspaceRef(candidate),
+        baseHead: completion?.checkpoint.inputHead ?? candidate.expectedHead,
+        head:
+          completion?.checkpoint.outputHead ??
+          candidate.acceptedHead ??
+          candidate.expectedHead,
+        changedPaths: completion?.checkpoint.changedPaths ?? [],
+      };
+      let access;
+      if (artifacts && change.head !== change.baseHead) {
+        const startedAt = Date.now();
+        const repository = await artifacts.ensure(
+          artifactRepositoryName(candidate),
+        );
+        const token = await repository.createToken("read", 30 * 60);
+        access = {
+          remote: repository.remote,
+          hostname: repository.hostname,
+          tokenId: token.id,
+          token: token.plaintext,
+        };
+        console.log(
+          JSON.stringify({
+            message: "judgement_candidate_access_issued",
+            attemptId: candidate.id,
+            candidateId:
+              candidate.competition?.purpose === "candidate"
+                ? candidate.competition.candidateId
+                : null,
+            repository: repository.name,
+            tokenId: token.id,
+            durationMs: Date.now() - startedAt,
+          }),
+        );
+      }
       return {
         candidateId:
           candidate.competition?.purpose === "candidate"
@@ -559,15 +607,7 @@ export async function judgementCandidateEvidence(
         model: candidate.routing?.model ?? null,
         expectedHead: candidate.expectedHead,
         acceptedHead: candidate.acceptedHead ?? candidate.expectedHead,
-        change: {
-          ref: attemptWorkspaceRef(candidate),
-          baseHead: completion?.checkpoint.inputHead ?? candidate.expectedHead,
-          head:
-            completion?.checkpoint.outputHead ??
-            candidate.acceptedHead ??
-            candidate.expectedHead,
-          changedPaths: completion?.checkpoint.changedPaths ?? [],
-        },
+        change: { ...change, ...(access ? { access } : {}) },
       };
     }),
   );
@@ -953,6 +993,7 @@ class SandboxAttemptPreparer {
               attempt,
               competitionForAttempt(workflowNode, attempt),
             ),
+            artifactsNamespace(this.env),
           )
         : undefined;
     const assignment = {
