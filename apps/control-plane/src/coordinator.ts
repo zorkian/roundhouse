@@ -119,6 +119,8 @@ async function recordIssuedCapabilities(
     executor: attempt.executor ?? null,
     role: attempt.role,
     capabilities: attempt.capabilities ?? [],
+    baseCommit: attempt.baseCommit,
+    expectedHead: attempt.expectedHead,
   };
   console.log(
     JSON.stringify({
@@ -1204,7 +1206,9 @@ export async function coordinate(
       run.stage === "integrate"
         ? role === "review-integration"
           ? (run.integrationHead ?? run.currentHead)
-          : (run.reviewedHead ?? run.currentHead)
+          : role === "conflict-resolution"
+            ? run.currentHead
+            : (run.reviewedHead ?? run.currentHead)
         : run.currentHead,
   };
   const acquired = await repository.acquireAttempt(
