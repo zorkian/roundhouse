@@ -10,12 +10,18 @@ import {
   reviewerForRole,
   type Attempt,
   type ModelRoute,
+  type Reviewer,
   type RunRepository,
   type RunSnapshot,
   type WorkflowAgent,
+  type WorkflowCompetition,
+  type WorkflowModel,
+  type WorkflowNode,
+  type WorkflowReviewer,
 } from "@roundhouse/core";
 import { aggregatedReview } from "./aggregated-review.js";
-import { signCallback } from "./callback.js";
+import type { ArtifactsNamespace } from "./artifacts.js";
+import { signCallback, type AttemptCompletion } from "./callback.js";
 import {
   aggregateReviewAttempts,
   type AttemptDispatcher,
@@ -24,12 +30,13 @@ import { D1RunRepository, type D1Like } from "./d1-store.js";
 import {
   artifactsNamespace,
   attemptSandbox,
+  attemptWorkspaceBackupKey,
+  attemptWorkspaceRef,
   conflictedIntegrationOutcome,
+  artifactRepositoryName,
   destroyAttemptSandbox,
   sandboxName,
   workspaceBackup,
-  workspaceName,
-  workspaceRef,
   type SandboxNamespace,
 } from "./attempt-runtime.js";
 
@@ -217,6 +224,16 @@ function nestedValue(value: unknown, path: readonly string[]): unknown {
   );
 }
 
+// Competition candidate and judge attempts are retained as evidence only;
+// downstream selectors must resolve to the promoted canonical (`selected`)
+// attempt so losing or judging output can never feed a later stage.
+function canonicalAttempts(attempts: readonly Attempt[]): Attempt[] {
+  return attempts.filter(
+    (attempt) =>
+      !attempt.competition || attempt.competition.purpose === "selected",
+  );
+}
+
 function aggregateImplementationAttempts(
   attempts: readonly Attempt[],
 ): Attempt | undefined {
@@ -279,19 +296,40 @@ export async function resolveWorkflowAgentInputs(
     }
     const match = /^nodes\.([a-z][a-z0-9-]{0,63})\.(.+)$/.exec(selector);
     if (!match) throw new Error("workflow_agent_input_selector_invalid");
-    const source = await repository.latestCompletedNodeAttempt(
+    let source = await repository.latestCompletedNodeAttempt(
       run.id,
       match[1]!,
       run.revision,
     );
     const sourceNode = run.profile?.workflow?.nodes[match[1]!];
+    const competitionNode =
+      sourceNode?.agent?.competition !== undefined ||
+      sourceNode?.review?.reviewers.some(
+        (reviewer) => reviewer.competition !== undefined,
+      ) === true;
     let sourceAttempts: readonly Attempt[] = source ? [source] : [];
+    if (
+      source &&
+      competitionNode &&
+      sourceNode?.executor !== "review" &&
+      sourceNode?.agent?.task !== "implementation"
+    ) {
+      // `latestCompletedNodeAttempt` ties on revision, so for a competition
+      // node resolve explicitly to the promoted canonical attempt.
+      const canonical = canonicalAttempts(
+        await repository.completedNodeAttempts(run.id, match[1]!, run.revision),
+      );
+      source = canonical.at(-1);
+      sourceAttempts = source ? [source] : [];
+    }
     if (source && sourceNode?.executor === "review")
-      sourceAttempts = (
-        await repository.attemptsForRevision(run.id, source.runRevision)
-      ).filter(
-        (candidate) =>
-          candidate.nodeId === match[1] && candidate.state === "completed",
+      sourceAttempts = canonicalAttempts(
+        (
+          await repository.attemptsForRevision(run.id, source.runRevision)
+        ).filter(
+          (candidate) =>
+            candidate.nodeId === match[1] && candidate.state === "completed",
+        ),
       );
     else if (source && sourceNode?.agent?.task === "implementation") {
       const aggregationStartedAt = Date.now();
@@ -304,11 +342,14 @@ export async function resolveWorkflowAgentInputs(
           sourceNodeId: match[1],
         }),
       );
-      sourceAttempts = await repository.completedNodeAttempts(
+      const loadedAttempts = await repository.completedNodeAttempts(
         run.id,
         match[1]!,
         run.revision,
       );
+      sourceAttempts = canonicalAttempts(loadedAttempts);
+      if (sourceAttempts.length !== loadedAttempts.length)
+        source = sourceAttempts.at(-1) ?? source;
       console.log(
         JSON.stringify({
           message: "workflow_implementation_evidence_load_completed",
@@ -371,6 +412,207 @@ export async function resolveWorkflowAgentInputs(
   return { values, evidence };
 }
 
+// Finds the competition definition governing a candidate or judge attempt,
+// whether it is configured on an agent node or on an individual reviewer.
+export function competitionForAttempt(
+  node: WorkflowNode | undefined,
+  attempt: Attempt,
+): WorkflowCompetition | undefined {
+  if (node?.agent?.competition) return node.agent.competition;
+  // Resolve the base reviewer role from the attempt's competition metadata
+  // and look it up exactly; prefix matching would confuse reviewer IDs that
+  // share a prefix (for example `review` and `review-api`).
+  const baseRole = competitionAttemptBaseRole(attempt);
+  return node?.review?.reviewers.find((reviewer) => reviewer.id === baseRole)
+    ?.competition;
+}
+
+function requestedModelForAttempt(
+  node: WorkflowNode | undefined,
+  attempt: Attempt,
+  run: RunSnapshot,
+): WorkflowModel | undefined {
+  const competition = competitionForAttempt(node, attempt);
+  if (attempt.competition?.purpose === "candidate") {
+    const candidateId = attempt.competition.candidateId;
+    return competition?.candidates.find(
+      (candidate) => candidate.id === candidateId,
+    )?.model;
+  }
+  if (attempt.competition?.purpose === "judge") return competition?.judge.model;
+  return (
+    node?.agent?.model ??
+    node?.review?.reviewers.find((reviewer) => reviewer.id === attempt.role)
+      ?.model ??
+    (run.profile
+      ? profileModelForAttempt(run.profile, attempt.stage, attempt.role)
+      : undefined)
+  );
+}
+
+// Resolves the base role a competition candidate or judge attempt derives
+// from, so reviewer metadata, prompts, and selection contracts configured on
+// the base reviewer apply to its competing attempts.
+function competitionAttemptBaseRole(attempt: Attempt): string {
+  if (attempt.competition?.purpose === "candidate") {
+    const suffix = `-candidate-${attempt.competition.candidateId}`;
+    if (attempt.role.endsWith(suffix))
+      return attempt.role.slice(0, -suffix.length);
+  }
+  if (
+    attempt.competition?.purpose === "judge" &&
+    attempt.role.endsWith("-judge")
+  )
+    return attempt.role.slice(0, -"-judge".length);
+  return attempt.role;
+}
+
+// Resolves the reviewer definition governing an attempt. Competition
+// candidates run under roles derived from the base reviewer, so the lookup
+// must resolve the base role to apply the configured reviewer's prompt,
+// selection contract, and `selectedBy`; the judge has its own task.
+export function reviewerForAttempt(
+  node: WorkflowNode | undefined,
+  attempt: Attempt,
+): {
+  readonly reviewer: Reviewer | WorkflowReviewer | undefined;
+  readonly selectedBy: string;
+} {
+  const baseRole =
+    attempt.competition?.purpose === "candidate"
+      ? competitionAttemptBaseRole(attempt)
+      : attempt.role;
+  const configured = node?.review?.reviewers.find(
+    (candidate) => candidate.id === baseRole,
+  );
+  return {
+    reviewer: configured ?? reviewerForRole(baseRole),
+    selectedBy: configured?.selectedBy ?? "review-holistic",
+  };
+}
+
+// Selects the candidate evidence a judge attempt receives: exactly the
+// completed candidates belonging to this judge's own competition, scoped by
+// node and reviewer role so a review node with several competing reviewers
+// never mixes candidates across groups.
+export function judgementCandidateAttempts(
+  attempts: readonly Attempt[],
+  judge: Attempt,
+  competition: WorkflowCompetition | undefined,
+): readonly Attempt[] {
+  if (judge.competition?.purpose !== "judge") return [];
+  const baseRole = judge.role.endsWith("-judge")
+    ? judge.role.slice(0, -"-judge".length)
+    : judge.role;
+  return attempts.filter(
+    (candidate) =>
+      candidate.competition?.purpose === "candidate" &&
+      candidate.state === "completed" &&
+      candidate.role.startsWith(`${baseRole}-candidate-`) &&
+      (competition?.candidates.some(
+        (configured) =>
+          candidate.competition?.purpose === "candidate" &&
+          configured.id === candidate.competition.candidateId,
+      ) ??
+        true),
+  );
+}
+
+// Builds the untrusted evidence one judge receives per candidate. Beyond the
+// candidate's self-reported result, the judge gets the candidate's validated
+// checkpoint evidence — the workspace ref, base/result heads, and recorded
+// changed paths. Write candidates publish into their own artifact
+// repositories, so the judge's canonical-repository credential cannot reach
+// those refs; when an artifacts namespace is supplied and the candidate
+// actually changed code, the evidence also carries a short-lived read-only
+// credential for that candidate's repository so the judge can fetch the ref
+// and diff base..head itself. The judge never receives writable access to
+// candidate workspaces.
+export async function judgementCandidateEvidence(
+  runs: {
+    getAttemptCompletion(
+      attemptId: string,
+    ): Promise<AttemptCompletion | undefined>;
+  },
+  candidates: readonly Attempt[],
+  artifacts?: ArtifactsNamespace,
+): Promise<
+  readonly {
+    candidateId: string;
+    result: Readonly<Record<string, unknown>>;
+    model: string | null;
+    expectedHead: string;
+    acceptedHead: string;
+    change: {
+      ref: string;
+      baseHead: string;
+      head: string;
+      changedPaths: readonly string[];
+      access?: {
+        remote: string;
+        hostname: string;
+        tokenId: string;
+        token: string;
+      };
+    };
+  }[]
+> {
+  return Promise.all(
+    candidates.map(async (candidate) => {
+      const completion = await runs
+        .getAttemptCompletion(candidate.id)
+        .catch(() => undefined);
+      const change = {
+        ref: attemptWorkspaceRef(candidate),
+        baseHead: completion?.checkpoint.inputHead ?? candidate.expectedHead,
+        head:
+          completion?.checkpoint.outputHead ??
+          candidate.acceptedHead ??
+          candidate.expectedHead,
+        changedPaths: completion?.checkpoint.changedPaths ?? [],
+      };
+      let access;
+      if (artifacts && change.head !== change.baseHead) {
+        const startedAt = Date.now();
+        const repository = await artifacts.ensure(
+          artifactRepositoryName(candidate),
+        );
+        const token = await repository.createToken("read", 30 * 60);
+        access = {
+          remote: repository.remote,
+          hostname: repository.hostname,
+          tokenId: token.id,
+          token: token.plaintext,
+        };
+        console.log(
+          JSON.stringify({
+            message: "judgement_candidate_access_issued",
+            attemptId: candidate.id,
+            candidateId:
+              candidate.competition?.purpose === "candidate"
+                ? candidate.competition.candidateId
+                : null,
+            repository: repository.name,
+            tokenId: token.id,
+            durationMs: Date.now() - startedAt,
+          }),
+        );
+      }
+      return {
+        candidateId:
+          candidate.competition?.purpose === "candidate"
+            ? candidate.competition.candidateId
+            : "",
+        result: candidate.result ?? {},
+        model: candidate.routing?.model ?? null,
+        expectedHead: candidate.expectedHead,
+        acceptedHead: candidate.acceptedHead ?? candidate.expectedHead,
+        change: { ...change, ...(access ? { access } : {}) },
+      };
+    }),
+  );
+}
+
 class SandboxAttemptPreparer {
   constructor(
     private readonly env: AttemptPreparationEnv,
@@ -386,13 +628,7 @@ class SandboxAttemptPreparer {
       attempt.nodeId && run.profile?.workflow
         ? run.profile.workflow.nodes[attempt.nodeId]
         : undefined;
-    const requested =
-      node?.agent?.model ??
-      node?.review?.reviewers.find((reviewer) => reviewer.id === attempt.role)
-        ?.model ??
-      (run.profile
-        ? profileModelForAttempt(run.profile, attempt.stage, attempt.role)
-        : undefined);
+    const requested = requestedModelForAttempt(node, attempt, run);
     const startedAt = Date.now();
     const response = await observeResponse(
       await this.env.MODEL_BROKER.fetch(
@@ -476,8 +712,12 @@ class SandboxAttemptPreparer {
         schema: workflowNode.agent.result.schema,
         resultKey: workflowNode.agent.result.key,
         promptSource: workflowNode.agent.prompt?.sourcePath ?? null,
-        requestedModel: workflowNode.agent.model.id,
-        requestedReasoning: workflowNode.agent.model.reasoning,
+        requestedModel:
+          requestedModelForAttempt(workflowNode, attempt, run)?.id ?? null,
+        requestedReasoning:
+          requestedModelForAttempt(workflowNode, attempt, run)?.reasoning ??
+          null,
+        competition: attempt.competition ?? null,
         capabilities: workflowNode.capabilities,
         effectiveCapabilities: attempt.capabilities ?? [],
         previousOutcomeAttemptId: previousOutcomeAttempt?.id ?? null,
@@ -500,12 +740,15 @@ class SandboxAttemptPreparer {
       );
     }
     const taskType =
-      workflowNode?.agent?.task ??
-      (attempt.role === "conflict-resolution"
-        ? "implementation"
-        : attempt.stage === "review" || attempt.role === "review-integration"
-          ? "review"
-          : "validation");
+      attempt.competition?.purpose === "judge"
+        ? "judgement"
+        : (workflowNode?.agent?.task ??
+          (attempt.role === "conflict-resolution"
+            ? "implementation"
+            : attempt.stage === "review" ||
+                attempt.role === "review-integration"
+              ? "review"
+              : "validation"));
     // Mechanical integration is a no-model operation; only conflict
     // resolution routes to an implementation model.
     const route =
@@ -513,7 +756,7 @@ class SandboxAttemptPreparer {
         ? undefined
         : await this.resolveModelRoute(attempt, taskType, run);
     const artifactRepository = await artifactsNamespace(this.env).ensure(
-      workspaceName(attempt.runId),
+      artifactRepositoryName(attempt),
     );
     // Recovery invalidates every token from an interrupted container before a
     // replacement receives a fresh, short-lived credential.
@@ -720,15 +963,14 @@ class SandboxAttemptPreparer {
             review,
           }
         : undefined;
-    const configuredReviewer = workflowNode?.review?.reviewers.find(
-      (candidate) => candidate.id === attempt.role,
+    const { reviewer, selectedBy: selectorRole } = reviewerForAttempt(
+      workflowNode,
+      attempt,
     );
-    const reviewer = configuredReviewer ?? reviewerForRole(attempt.role);
     const sameRevisionReviews =
       attempt.stage === "review"
         ? await this.runs.attemptsForRevision(run.id, run.revision)
         : [];
-    const selectorRole = configuredReviewer?.selectedBy ?? "review-holistic";
     const holisticSelection = sameRevisionReviews.find(
       (candidate) => candidate.role === selectorRole,
     )?.result?.review;
@@ -740,6 +982,20 @@ class SandboxAttemptPreparer {
       throw new Error("implementation_plan_missing");
     if (attempt.stage === "review" && !implementation)
       throw new Error("review_implementation_missing");
+    // The judge receives exactly the candidates configured for its own
+    // competition as untrusted data, alongside the node's resolved inputs.
+    const judgementCandidates =
+      attempt.competition?.purpose === "judge"
+        ? await judgementCandidateEvidence(
+            this.runs,
+            judgementCandidateAttempts(
+              await this.runs.attemptsForRevision(run.id, run.revision),
+              attempt,
+              competitionForAttempt(workflowNode, attempt),
+            ),
+            artifactsNamespace(this.env),
+          )
+        : undefined;
     const assignment = {
       ...attempt,
       baseCommit: attempt.baseCommit,
@@ -748,6 +1004,9 @@ class SandboxAttemptPreparer {
       issueNumber: run.issueNumber,
       ...(workflowNode ? { workflowNode } : {}),
       ...(resolvedInputs ? { inputs: resolvedInputs.values } : {}),
+      ...(judgementCandidates
+        ? { judgement: { candidates: judgementCandidates } }
+        : {}),
       context: {
         ...(resolvedInputs?.values ??
           attemptContext({
@@ -773,7 +1032,7 @@ class SandboxAttemptPreparer {
         tokenId: token.id,
         token: token.plaintext,
         access: token.access,
-        ref: workspaceRef(attempt.runId),
+        ref: attemptWorkspaceRef(attempt),
       },
       ...(attempt.stage === "integrate"
         ? {
@@ -817,7 +1076,10 @@ class SandboxAttemptPreparer {
     try {
       const backup =
         attempt.stage === "implement"
-          ? await workspaceBackup(this.runs.database, run.id)
+          ? await workspaceBackup(
+              this.runs.database,
+              attemptWorkspaceBackupKey(attempt),
+            )
           : undefined;
       await sandbox.prepareAttempt(
         assignment,

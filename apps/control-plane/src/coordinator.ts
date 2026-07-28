@@ -3,15 +3,22 @@
 
 import {
   advanceWorkflow,
+  competitionAttemptId,
+  competitionCandidateRole,
+  competitionJudgeRole,
   immutableAttemptId,
   reviewerAttemptId,
+  validateCompetitionJudgement,
   type AppliedProfile,
   type Attempt,
+  type AttemptCompetition,
+  type CompetitionJudgement,
   type RunRepository,
   type RunSnapshot,
   type RunStage,
   type RunTransition,
   type WorkflowCapability,
+  type WorkflowCompetition,
   type WorkflowNode,
   type WorkflowReview,
   type Wakeup,
@@ -27,7 +34,25 @@ export interface AttemptReporter {
   reportStarted?(run: RunSnapshot, attempt: Attempt): Promise<void>;
 }
 
+// Publishes the judged winner's repository state (workspace backup and Git
+// refs) to the run's canonical locations. Wired from the environment in
+// production; tests promote durably without external side effects.
+export interface CompetitionPromoter {
+  promote(
+    run: RunSnapshot,
+    winner: Attempt,
+    judgement: CompetitionJudgement,
+  ): Promise<void>;
+}
+
 export const attemptInactivityMilliseconds = 10 * 60_000;
+
+// The judgement pass reads candidate evidence and returns scores; it never
+// needs more than the read-only review capability set.
+const judgeCapabilities: readonly WorkflowCapability[] = [
+  "repository.read",
+  "context.read",
+];
 
 export function effectiveAttemptCapabilities(
   node: WorkflowNode,
@@ -841,6 +866,422 @@ export function aggregateReviewAttempts(
   return aggregateReviews(exact, profile, configured);
 }
 
+type CompetitionStep =
+  | { readonly kind: "dispatched" | "waiting" }
+  | {
+      readonly kind: "failed";
+      readonly attempt: Attempt;
+      readonly reason?: string;
+    }
+  | { readonly kind: "promoted"; readonly attempt: Attempt };
+
+async function dispatchCompetitionAttempt(
+  repository: RunRepository,
+  dispatcher: AttemptDispatcher,
+  run: RunSnapshot,
+  node: WorkflowNode,
+  role: string,
+  competition: AttemptCompetition,
+  now: number,
+  leaseMilliseconds: number,
+  reporter?: AttemptReporter,
+  allowConcurrent = false,
+): Promise<void> {
+  const attemptId = competitionAttemptId(run.id, run.revision, role);
+  const claimed = await repository.claimLease(
+    run.id,
+    run.revision,
+    {
+      attemptId,
+      runRevision: run.revision,
+      expiresAt: now + leaseMilliseconds,
+    },
+    now,
+  );
+  if (!claimed) {
+    if (
+      await resumeCreatedDispatch(
+        repository,
+        dispatcher,
+        reporter,
+        run,
+        attemptId,
+      )
+    )
+      return;
+    await revisitStarted(repository, reporter, run, attemptId);
+    // Competition attempts fan out concurrently: when a sibling attempt
+    // already holds the run lease, dispatch without it. The attempt's own
+    // deadline still bounds inactivity, and the competition-aware expired
+    // attempt query recovers it independently of the run lease.
+    if (!allowConcurrent) return;
+  }
+  const capabilities =
+    competition.purpose === "judge"
+      ? // The judge only reads evidence and returns scores; it receives the
+        // minimal read-only capability set even when the competed stage is
+        // write-capable, so untrusted candidate output cannot prompt it into
+        // command, environment, network, preview, or publication authority.
+        effectiveAttemptCapabilities(node, role).filter((capability) =>
+          judgeCapabilities.includes(capability),
+        )
+      : effectiveAttemptCapabilities(node, role);
+  const attempt: Attempt = {
+    id: attemptId,
+    runId: run.id,
+    runRevision: run.revision,
+    kind: "agent",
+    ...(run.currentNodeId ? { nodeId: run.currentNodeId } : {}),
+    ...(node.executor === "agent.read" || node.executor === "agent.write"
+      ? { executor: node.executor }
+      : { executor: "review" as const }),
+    stage: run.stage,
+    role,
+    competition,
+    capabilities,
+    state: "created",
+    deadlineAt: now + leaseMilliseconds,
+    baseCommit: run.baseCommit,
+    expectedHead: run.currentHead,
+  };
+  const startedAt = Date.now();
+  const created = await repository.createAttempt(attempt);
+  if (created === "created")
+    await recordIssuedCapabilities(repository, attempt);
+  try {
+    await dispatcher.submit(attempt, run);
+  } catch (error) {
+    if (claimed)
+      await repository.releaseLease(run.id, run.revision, attempt.id);
+    throw error;
+  }
+  await repository.markDispatched(attempt.id);
+  const payload = {
+    workflowHash: run.workflowHash,
+    nodeId: run.currentNodeId ?? null,
+    role,
+    purpose: competition.purpose,
+    ...(competition.purpose === "candidate"
+      ? { candidateId: competition.candidateId }
+      : {}),
+    inputHead: run.currentHead,
+    durationMs: Date.now() - startedAt,
+  };
+  console.log(
+    JSON.stringify({
+      message: `competition_${competition.purpose}_dispatched`,
+      runId: run.id,
+      revision: run.revision,
+      attemptId: attempt.id,
+      ...payload,
+    }),
+  );
+  await repository.recordEvent?.(
+    run.id,
+    attempt.id,
+    `competition_${competition.purpose}_dispatched`,
+    payload,
+  );
+  await reportStarted(reporter, run, attempt);
+}
+
+// Finishes a durably recorded selection: publishes the winner's state (when a
+// promoter is wired) and marks the canonical attempt completed. Running this
+// after the selection attempt exists makes an interrupted promotion resume
+// idempotently on the next wakeup instead of repeating external effects
+// blindly or losing them entirely.
+async function finalizePromotion(
+  repository: RunRepository,
+  promoter: CompetitionPromoter | undefined,
+  run: RunSnapshot,
+  revisionAttempts: readonly Attempt[],
+  baseRole: string,
+  selected: Attempt,
+  startedAt: number,
+): Promise<CompetitionStep> {
+  if (selected.state === "completed")
+    return { kind: "promoted", attempt: selected };
+  const judgement =
+    selected.competition?.purpose === "selected"
+      ? selected.competition.judgement
+      : undefined;
+  const winner = judgement
+    ? revisionAttempts.find(
+        (attempt) =>
+          attempt.role ===
+          competitionCandidateRole(baseRole, judgement.selected),
+      )
+    : undefined;
+  if (promoter && winner && judgement)
+    await promoter.promote(run, winner, judgement);
+  // The winner's result and accepted head are reconstructed from the bound
+  // winner attempt rather than the selected attempt: attempt creation does
+  // not persist result/acceptedHead, so a promotion interrupted after the
+  // selection insert would otherwise complete the canonical attempt with an
+  // empty result and the input head on recovery.
+  await repository.completeAttempt(
+    selected.id,
+    run.revision,
+    winner?.acceptedHead ?? selected.acceptedHead ?? selected.expectedHead,
+    winner?.result ?? selected.result ?? {},
+  );
+  const completed = (await repository.getAttempt(selected.id)) ?? selected;
+  const payload = {
+    workflowHash: run.workflowHash,
+    nodeId: run.currentNodeId ?? null,
+    role: baseRole,
+    selected: judgement?.selected ?? null,
+    winnerAttemptId: winner?.id ?? null,
+    canonicalAttemptId: selected.id,
+    acceptedHead: completed.acceptedHead ?? null,
+    durationMs: Date.now() - startedAt,
+  };
+  console.log(
+    JSON.stringify({
+      message: "competition_winner_promoted",
+      runId: run.id,
+      revision: run.revision,
+      ...payload,
+    }),
+  );
+  await repository.recordEvent?.(
+    run.id,
+    selected.id,
+    "competition_winner_promoted",
+    payload,
+  );
+  return { kind: "promoted", attempt: completed };
+}
+
+// Drives one competition group (candidates, then judge, then promotion) for
+// an agent node or a single reviewer. Every step is idempotent: a wakeup
+// revisits the group and only advances when the required durable state is
+// present.
+async function coordinateCompetition(
+  repository: RunRepository,
+  dispatcher: AttemptDispatcher,
+  run: RunSnapshot,
+  node: WorkflowNode,
+  baseRole: string,
+  canonicalAttemptId: string,
+  competition: WorkflowCompetition,
+  now: number,
+  leaseMilliseconds: number,
+  reporter?: AttemptReporter,
+  promoter?: CompetitionPromoter,
+): Promise<CompetitionStep> {
+  const startedAt = Date.now();
+  const revisionAttempts = await repository.attemptsForRevision(
+    run.id,
+    run.revision,
+  );
+  const canonical = revisionAttempts.find(
+    (attempt) =>
+      attempt.role === baseRole && attempt.competition?.purpose === "selected",
+  );
+  if (canonical)
+    return finalizePromotion(
+      repository,
+      promoter,
+      run,
+      revisionAttempts,
+      baseRole,
+      canonical,
+      startedAt,
+    );
+  console.log(
+    JSON.stringify({
+      message: "competition_fanout_started",
+      runId: run.id,
+      revision: run.revision,
+      workflowHash: run.workflowHash,
+      nodeId: run.currentNodeId ?? null,
+      role: baseRole,
+      candidates: competition.candidates.map((candidate) => ({
+        candidateId: candidate.id,
+        model: candidate.model.id,
+        reasoning: candidate.model.reasoning,
+      })),
+      judgeModel: competition.judge.model.id,
+      inputHead: run.currentHead,
+    }),
+  );
+  const candidateAttempts = new Map<string, Attempt>();
+  // Dispatch every missing candidate in one pass so the independent
+  // attempts fan out concurrently instead of running one wakeup apart.
+  let inFlight = revisionAttempts.some(
+    (attempt) =>
+      attempt.competition &&
+      ["created", "dispatched", "executed"].includes(attempt.state),
+  );
+  let pending = false;
+  let dispatchedAny = false;
+  for (const candidate of competition.candidates) {
+    const role = competitionCandidateRole(baseRole, candidate.id);
+    const attempt = revisionAttempts.find(
+      (candidate_attempt) => candidate_attempt.role === role,
+    );
+    if (attempt?.state === "failed")
+      return {
+        kind: "failed",
+        attempt,
+        reason: "competition_candidate_failed",
+      };
+    // A missing or still-`created` candidate is (re)dispatched: dispatch is
+    // idempotent, so this also resumes a candidate that was recorded but
+    // whose handoff was interrupted before submission completed.
+    if (!attempt || attempt.state === "created") {
+      await dispatchCompetitionAttempt(
+        repository,
+        dispatcher,
+        run,
+        node,
+        role,
+        { purpose: "candidate", candidateId: candidate.id },
+        now,
+        leaseMilliseconds,
+        reporter,
+        inFlight,
+      );
+      inFlight = true;
+      pending = true;
+      dispatchedAny = true;
+      continue;
+    }
+    if (attempt.state !== "completed") {
+      pending = true;
+      continue;
+    }
+    if (attempt.expectedHead !== run.currentHead)
+      return {
+        kind: "failed",
+        attempt,
+        reason: "competition_candidate_head_mismatch",
+      };
+    candidateAttempts.set(candidate.id, attempt);
+    console.log(
+      JSON.stringify({
+        message: "competition_candidate_completed",
+        runId: run.id,
+        revision: run.revision,
+        nodeId: run.currentNodeId ?? null,
+        role: baseRole,
+        candidateId: candidate.id,
+        attemptId: attempt.id,
+        model: attempt.routing?.model ?? null,
+        acceptedHead: attempt.acceptedHead ?? null,
+      }),
+    );
+  }
+  if (pending) return { kind: dispatchedAny ? "dispatched" : "waiting" };
+  const judgeRole = competitionJudgeRole(baseRole);
+  const judge = revisionAttempts.find((attempt) => attempt.role === judgeRole);
+  if (judge?.state === "failed")
+    return {
+      kind: "failed",
+      attempt: judge,
+      reason: "competition_judge_failed",
+    };
+  if (!judge || judge.state === "created") {
+    await dispatchCompetitionAttempt(
+      repository,
+      dispatcher,
+      run,
+      node,
+      judgeRole,
+      { purpose: "judge" },
+      now,
+      leaseMilliseconds,
+      reporter,
+    );
+    return { kind: "dispatched" };
+  }
+  if (judge.state !== "completed") return { kind: "waiting" };
+  const judgement = validateCompetitionJudgement(
+    judge.result?.judgement,
+    competition.candidates.map((candidate) => candidate.id),
+  );
+  if (!judgement) {
+    const payload = {
+      workflowHash: run.workflowHash,
+      nodeId: run.currentNodeId ?? null,
+      role: baseRole,
+      judgeAttemptId: judge.id,
+      result: judge.result ?? null,
+    };
+    console.error(
+      JSON.stringify({
+        message: "competition_judgement_invalid",
+        runId: run.id,
+        revision: run.revision,
+        ...payload,
+      }),
+    );
+    await repository.recordEvent?.(
+      run.id,
+      judge.id,
+      "competition_judgement_invalid",
+      payload,
+    );
+    return {
+      kind: "failed",
+      attempt: judge,
+      reason: "competition_judgement_invalid",
+    };
+  }
+  const winner = candidateAttempts.get(judgement.selected)!;
+  console.log(
+    JSON.stringify({
+      message: "competition_judgement_validated",
+      runId: run.id,
+      revision: run.revision,
+      nodeId: run.currentNodeId ?? null,
+      role: baseRole,
+      judgeAttemptId: judge.id,
+      selected: judgement.selected,
+      scores: judgement.scores,
+      durationMs: Date.now() - startedAt,
+    }),
+  );
+  // Persist the selection before any external publication so a failure
+  // between the two is recovered from durable state rather than repeated.
+  const promoted: Attempt = {
+    id: canonicalAttemptId,
+    runId: run.id,
+    runRevision: run.revision,
+    kind: "agent",
+    ...(run.currentNodeId ? { nodeId: run.currentNodeId } : {}),
+    ...(node.executor === "agent.read" || node.executor === "agent.write"
+      ? { executor: node.executor }
+      : { executor: "review" as const }),
+    stage: run.stage,
+    role: baseRole,
+    capabilities: winner.capabilities,
+    state: "dispatched",
+    deadlineAt: now,
+    baseCommit: winner.baseCommit,
+    expectedHead: winner.expectedHead,
+    acceptedHead: winner.acceptedHead ?? winner.expectedHead,
+    result: winner.result,
+    ...(winner.routing ? { routing: winner.routing } : {}),
+    competition: {
+      purpose: "selected",
+      candidateId: judgement.selected,
+      judgement,
+    },
+  };
+  await repository.createAttempt(promoted);
+  return finalizePromotion(
+    repository,
+    promoter,
+    run,
+    [...revisionAttempts, promoted],
+    baseRole,
+    promoted,
+    startedAt,
+  );
+}
+
 export async function coordinate(
   repository: RunRepository,
   dispatcher: AttemptDispatcher,
@@ -848,6 +1289,7 @@ export async function coordinate(
   now: number,
   leaseMilliseconds = attemptInactivityMilliseconds,
   reporter?: AttemptReporter,
+  promoter?: CompetitionPromoter,
 ): Promise<"dispatched" | "duplicate" | "stale"> {
   const run = await repository.get(wakeup.runId);
   if (
@@ -1029,7 +1471,7 @@ export async function coordinate(
   }
   if (currentWorkflowNode.executor === "review") {
     const review = currentWorkflowNode.review!;
-    const current = await repository.attemptsForRevision(run.id, run.revision);
+    let current = await repository.attemptsForRevision(run.id, run.revision);
     const operationalOutcome = current.find((attempt) => attempt.outcome);
     if (operationalOutcome) {
       const next = await repository.transition(
@@ -1098,6 +1540,41 @@ export async function coordinate(
     )) {
       const role = definition.id;
       const attempt = current.find((candidate) => candidate.role === role);
+      if (
+        definition.competition &&
+        (!attempt || attempt.state !== "completed")
+      ) {
+        const step = await coordinateCompetition(
+          repository,
+          dispatcher,
+          run,
+          currentWorkflowNode,
+          role,
+          reviewerAttemptId(run.id, run.revision, role),
+          definition.competition,
+          now,
+          leaseMilliseconds,
+          reporter,
+          promoter,
+        );
+        if (step.kind === "promoted") {
+          current = [
+            ...current.filter((candidate) => candidate.role !== role),
+            step.attempt,
+          ];
+          continue;
+        }
+        if (step.kind === "failed") {
+          const next = await repository.transition(run.id, run.revision, {
+            status: "failed",
+            stage: "review",
+          });
+          if (!next) return "stale";
+          if (reporter) await reporter.report(next, step.attempt);
+          return "dispatched";
+        }
+        return step.kind === "dispatched" ? "dispatched" : "duplicate";
+      }
       if (!attempt || attempt.state !== "completed")
         return dispatchReview(
           repository,
@@ -1133,6 +1610,44 @@ export async function coordinate(
     const settled = await settleImmediateWorkflowWait(repository, next);
     if (reporter) await reporter.report(settled, aggregate);
     return "dispatched";
+  }
+  if (currentWorkflowNode.agent?.competition) {
+    const step = await coordinateCompetition(
+      repository,
+      dispatcher,
+      run,
+      currentWorkflowNode,
+      currentWorkflowNode.role ?? run.stage,
+      immutableAttemptId(run.id, run.revision),
+      currentWorkflowNode.agent.competition,
+      now,
+      leaseMilliseconds,
+      reporter,
+      promoter,
+    );
+    if (step.kind === "promoted") {
+      const transition = graphCompletedTransition(run, step.attempt);
+      const next = await repository.transition(
+        run.id,
+        run.revision,
+        transition,
+      );
+      if (!next) return "stale";
+      await recordWorkflowTransition(repository, run, step.attempt, next);
+      const settled = await settleImmediateWorkflowWait(repository, next);
+      if (reporter) await reporter.report(settled, step.attempt);
+      return "dispatched";
+    }
+    if (step.kind === "failed") {
+      const next = await repository.transition(run.id, run.revision, {
+        status: "failed",
+        stage: run.stage,
+      });
+      if (!next) return "stale";
+      if (reporter) await reporter.report(next, step.attempt);
+      return "dispatched";
+    }
+    return step.kind === "dispatched" ? "dispatched" : "duplicate";
   }
   const attemptId = immutableAttemptId(run.id, run.revision);
   const previous = await repository.getAttempt(attemptId);

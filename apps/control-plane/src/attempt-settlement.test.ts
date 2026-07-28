@@ -95,3 +95,72 @@ describe("attempt settlement", () => {
     ).resolves.toBe(true);
   });
 });
+
+describe("competition workspace isolation", () => {
+  it("keys candidate sandboxes, refs, and backups by attempt, not by run", async () => {
+    const {
+      attemptWorkspaceRef,
+      attemptWorkspaceBackupKey,
+      artifactRepositoryName,
+      sandboxName,
+    } = await import("./attempt-runtime.js");
+    const candidate = {
+      id: "run_1_rev_1_implement-candidate-alpha",
+      runId: "run_1",
+      stage: "implement" as const,
+      competition: {
+        purpose: "candidate" as const,
+        candidateId: "alpha",
+      },
+    };
+    const ordinary = {
+      id: "run_1_rev_1",
+      runId: "run_1",
+      stage: "implement" as const,
+    };
+    expect(attemptWorkspaceRef(candidate)).toBe(
+      "refs/heads/roundhouse/run_1_rev_1_implement-candidate-alpha",
+    );
+    expect(attemptWorkspaceRef(ordinary)).toBe("refs/heads/roundhouse/run_1");
+    expect(attemptWorkspaceBackupKey(candidate)).toBe(candidate.id);
+    expect(attemptWorkspaceBackupKey(ordinary)).toBe("run_1");
+    expect(sandboxName(candidate)).toBe(candidate.id);
+    expect(sandboxName(ordinary)).toBe("run_1");
+    // Two candidates of one run never share mutable workspace identity.
+    const beta = {
+      ...candidate,
+      id: "run_1_rev_1_implement-candidate-beta",
+      competition: { purpose: "candidate" as const, candidateId: "beta" },
+    };
+    expect(attemptWorkspaceRef(beta)).not.toBe(attemptWorkspaceRef(candidate));
+    expect(attemptWorkspaceBackupKey(beta)).not.toBe(
+      attemptWorkspaceBackupKey(candidate),
+    );
+    expect(sandboxName(beta)).not.toBe(sandboxName(candidate));
+    expect(artifactRepositoryName(candidate)).toBe(candidate.id);
+    expect(artifactRepositoryName(ordinary)).toBe("run_1");
+  });
+
+  it("isolates duplicate candidate IDs across separate reviewer competitions", async () => {
+    const { attemptWorkspaceRef, artifactRepositoryName } =
+      await import("./attempt-runtime.js");
+    const reviewDataAlpha = {
+      id: "run_1_rev_1_review-data-candidate-alpha",
+      runId: "run_1",
+      stage: "review" as const,
+      competition: { purpose: "candidate" as const, candidateId: "alpha" },
+    };
+    const reviewHolisticAlpha = {
+      id: "run_1_rev_1_review-holistic-candidate-alpha",
+      runId: "run_1",
+      stage: "review" as const,
+      competition: { purpose: "candidate" as const, candidateId: "alpha" },
+    };
+    expect(artifactRepositoryName(reviewDataAlpha)).not.toBe(
+      artifactRepositoryName(reviewHolisticAlpha),
+    );
+    expect(attemptWorkspaceRef(reviewDataAlpha)).not.toBe(
+      attemptWorkspaceRef(reviewHolisticAlpha),
+    );
+  });
+});

@@ -326,6 +326,26 @@ export interface WorkflowTransition {
   readonly terminal?: WorkflowTerminalStatus;
 }
 
+export interface WorkflowModel {
+  readonly id: string;
+  readonly reasoning: "off" | "minimal" | "low" | "medium" | "high";
+}
+
+export interface WorkflowCompetitionCandidate {
+  readonly id: string;
+  readonly model: WorkflowModel;
+}
+
+// A competition replaces a node's single model: each candidate runs the same
+// resolved inputs with its own model, then the judge model scores every
+// candidate and selects exactly one winner to promote.
+export interface WorkflowCompetition {
+  readonly candidates: readonly WorkflowCompetitionCandidate[];
+  readonly judge: {
+    readonly model: WorkflowModel;
+  };
+}
+
 export interface WorkflowAgent {
   readonly task: WorkflowAgentTask;
   readonly inputs: Readonly<Record<string, string>>;
@@ -333,10 +353,8 @@ export interface WorkflowAgent {
     readonly key: string;
     readonly schema: WorkflowAgentSchema;
   };
-  readonly model: {
-    readonly id: string;
-    readonly reasoning: "off" | "minimal" | "low" | "medium" | "high";
-  };
+  readonly model?: WorkflowModel;
+  readonly competition?: WorkflowCompetition;
   readonly prompt?: {
     readonly sourcePath: string;
     readonly content: string;
@@ -351,7 +369,8 @@ export interface WorkflowReviewer {
   readonly selects: readonly string[];
   readonly mode: WorkflowReviewMode;
   readonly blockingSeverities: readonly string[];
-  readonly model: WorkflowAgent["model"];
+  readonly model?: WorkflowModel;
+  readonly competition?: WorkflowCompetition;
   readonly prompt?: {
     readonly sourcePath: string;
     readonly content: string;
@@ -420,7 +439,12 @@ export function serializeWorkflow(workflow: CompiledWorkflow): string {
                 task: definition.agent.task,
                 inputs: definition.agent.inputs,
                 result: definition.agent.result,
-                model: definition.agent.model,
+                ...(definition.agent.model
+                  ? { model: definition.agent.model }
+                  : {}),
+                ...(definition.agent.competition
+                  ? { competition: definition.agent.competition }
+                  : {}),
                 ...(definition.agent.prompt
                   ? {
                       prompt: definition.agent.prompt.sourcePath.replace(
@@ -447,7 +471,10 @@ export function serializeWorkflow(workflow: CompiledWorkflow): string {
                     : {}),
                   mode: reviewer.mode,
                   blocking_severities: reviewer.blockingSeverities,
-                  model: reviewer.model,
+                  ...(reviewer.model ? { model: reviewer.model } : {}),
+                  ...(reviewer.competition
+                    ? { competition: reviewer.competition }
+                    : {}),
                   ...(reviewer.prompt
                     ? {
                         prompt: reviewer.prompt.sourcePath.replace(
@@ -733,6 +760,92 @@ function workflowReference(value: unknown, error: string): string {
   return `.roundhouse/${value}`;
 }
 
+function model(value: unknown, error: string): WorkflowModel {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["id", "reasoning"]) ||
+    typeof value.id !== "string" ||
+    !/^[a-z0-9._-]+\/[A-Za-z0-9._/-]+$/.test(value.id) ||
+    !["off", "minimal", "low", "medium", "high"].includes(
+      String(value.reasoning),
+    )
+  )
+    throw new Error(error);
+  return {
+    id: value.id,
+    reasoning: value.reasoning as WorkflowModel["reasoning"],
+  };
+}
+
+function competition(value: unknown): WorkflowCompetition {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["candidates", "judge"]) ||
+    !Array.isArray(value.candidates) ||
+    value.candidates.length < 2
+  )
+    throw new Error("workflow_competition_invalid");
+  const candidates = value.candidates.map(
+    (candidate): WorkflowCompetitionCandidate => {
+      if (
+        !isRecord(candidate) ||
+        !hasOnlyKeys(candidate, ["id", "model"]) ||
+        typeof candidate.id !== "string" ||
+        !/^[a-z][a-z0-9-]{0,63}$/.test(candidate.id)
+      )
+        throw new Error("workflow_competition_invalid");
+      return {
+        id: candidate.id,
+        model: model(candidate.model, "workflow_competition_invalid"),
+      };
+    },
+  );
+  if (
+    new Set(candidates.map((candidate) => candidate.id)).size !==
+    candidates.length
+  )
+    throw new Error("workflow_competition_duplicate");
+  if (!isRecord(value.judge) || !hasOnlyKeys(value.judge, ["model"]))
+    throw new Error("workflow_competition_judge_invalid");
+  return {
+    candidates,
+    judge: {
+      model: model(value.judge.model, "workflow_competition_judge_invalid"),
+    },
+  };
+}
+
+function modelOrCompetition(
+  value: Record<string, unknown>,
+  error: string,
+): Pick<WorkflowAgent, "model" | "competition"> {
+  const hasModel = value.model !== undefined;
+  const hasCompetition = value.competition !== undefined;
+  if (hasModel === hasCompetition) throw new Error(error);
+  if (hasModel) return { model: model(value.model, error) };
+  return { competition: competition(value.competition) };
+}
+
+// Candidate and judge attempts persist roles derived from the node's base
+// role, and the runtime attempt ID helper rejects roles longer than 64
+// characters. Compilation must reject definitions whose derived candidate or
+// judge role could never dispatch.
+const attemptRolePattern = /^[a-z][a-z0-9-]{0,63}$/;
+
+function validateCompetitionRoles(
+  baseRole: string,
+  competition: WorkflowCompetition,
+): void {
+  if (
+    !attemptRolePattern.test(`${baseRole}-judge`) ||
+    competition.candidates.some(
+      (candidate) =>
+        !attemptRolePattern.test(`${baseRole}-candidate-${candidate.id}`),
+    )
+  )
+    throw new Error("workflow_competition_role_invalid");
+}
+
 async function agent(
   value: unknown,
   executor: WorkflowExecutorKind,
@@ -740,7 +853,11 @@ async function agent(
 ): Promise<WorkflowAgent> {
   if (
     !isRecord(value) ||
-    !hasOnlyKeys(value, ["task", "inputs", "result", "model"], ["prompt"]) ||
+    !hasOnlyKeys(
+      value,
+      ["task", "inputs", "result"],
+      ["model", "competition", "prompt"],
+    ) ||
     !workflowAgentTasks.includes(value.task as WorkflowAgentTask) ||
     !isRecord(value.inputs) ||
     Object.keys(value.inputs).length === 0 ||
@@ -755,16 +872,7 @@ async function agent(
     !hasOnlyKeys(value.result, ["key", "schema"]) ||
     typeof value.result.key !== "string" ||
     !/^[A-Za-z][A-Za-z0-9_-]*$/.test(value.result.key) ||
-    !workflowAgentSchemas.includes(
-      value.result.schema as WorkflowAgentSchema,
-    ) ||
-    !isRecord(value.model) ||
-    !hasOnlyKeys(value.model, ["id", "reasoning"]) ||
-    typeof value.model.id !== "string" ||
-    !/^[a-z0-9._-]+\/[A-Za-z0-9._/-]+$/.test(value.model.id) ||
-    !["off", "minimal", "low", "medium", "high"].includes(
-      String(value.model.reasoning),
-    )
+    !workflowAgentSchemas.includes(value.result.schema as WorkflowAgentSchema)
   )
     throw new Error("workflow_agent_invalid");
   const task = value.task as WorkflowAgentTask;
@@ -798,10 +906,7 @@ async function agent(
       key: value.result.key,
       schema: value.result.schema as WorkflowAgentSchema,
     },
-    model: {
-      id: value.model.id,
-      reasoning: value.model.reasoning as WorkflowAgent["model"]["reasoning"],
-    },
+    ...modelOrCompetition(value, "workflow_agent_invalid"),
     ...(sourcePath && content !== undefined
       ? { prompt: { sourcePath, content } }
       : {}),
@@ -825,8 +930,8 @@ async function review(
         !isRecord(candidate) ||
         !hasOnlyKeys(
           candidate,
-          ["id", "label", "activation", "mode", "blocking_severities", "model"],
-          ["selected_by", "selects", "prompt"],
+          ["id", "label", "activation", "mode", "blocking_severities"],
+          ["model", "competition", "selected_by", "selects", "prompt"],
         ) ||
         typeof candidate.id !== "string" ||
         !/^[a-z][a-z0-9-]{0,63}$/.test(candidate.id) ||
@@ -835,14 +940,7 @@ async function review(
         !workflowReviewActivations.includes(
           candidate.activation as WorkflowReviewActivation,
         ) ||
-        !workflowReviewModes.includes(candidate.mode as WorkflowReviewMode) ||
-        !isRecord(candidate.model) ||
-        !hasOnlyKeys(candidate.model, ["id", "reasoning"]) ||
-        typeof candidate.model.id !== "string" ||
-        !/^[a-z0-9._-]+\/[A-Za-z0-9._/-]+$/.test(candidate.model.id) ||
-        !["off", "minimal", "low", "medium", "high"].includes(
-          String(candidate.model.reasoning),
-        )
+        !workflowReviewModes.includes(candidate.mode as WorkflowReviewMode)
       )
         throw new Error("workflow_reviewer_invalid");
       const blockingSeverities = stringList(
@@ -888,11 +986,7 @@ async function review(
         selects,
         mode: candidate.mode as WorkflowReviewMode,
         blockingSeverities,
-        model: {
-          id: candidate.model.id,
-          reasoning: candidate.model
-            .reasoning as WorkflowAgent["model"]["reasoning"],
-        },
+        ...modelOrCompetition(candidate, "workflow_reviewer_invalid"),
         ...(sourcePath && content !== undefined
           ? { prompt: { sourcePath, content } }
           : {}),
@@ -902,6 +996,9 @@ async function review(
   const byId = new Map(reviewers.map((reviewer) => [reviewer.id, reviewer]));
   if (byId.size !== reviewers.length)
     throw new Error("workflow_reviewer_duplicate");
+  for (const reviewer of reviewers)
+    if (reviewer.competition)
+      validateCompetitionRoles(reviewer.id, reviewer.competition);
   for (const reviewer of reviewers) {
     if (
       (reviewer.activation === "selected") !== Boolean(reviewer.selectedBy) ||
@@ -1255,7 +1352,7 @@ export async function compileWorkflow(
   )
     throw new Error("workflow_trigger_invalid");
   const triggers = value.triggers as Record<WorkflowTriggerKind, string>;
-  const nodes = Object.fromEntries(
+  const nodes: Record<string, WorkflowNode> = Object.fromEntries(
     await Promise.all(
       Object.entries(value.nodes).map(async ([nodeId, definition]) => [
         nodeId,
@@ -1264,6 +1361,12 @@ export async function compileWorkflow(
     ),
   );
   validateGraph(triggers, nodes);
+  for (const [nodeId, definition] of Object.entries(nodes))
+    if (definition.agent?.competition)
+      validateCompetitionRoles(
+        definition.role ?? nodeId,
+        definition.agent.competition,
+      );
   const normalized = {
     version: workflowVersion,
     triggers,

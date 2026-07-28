@@ -11,6 +11,7 @@ import {
   type Wakeup,
 } from "@roundhouse/core";
 import { attemptInactivityMilliseconds, coordinate } from "./coordinator.js";
+import { competitionPromoter } from "./attempt-settlement.js";
 import { validAttemptCompletion, verifyCallback } from "./callback.js";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
 import { renderDashboard } from "./dashboard.js";
@@ -56,10 +57,9 @@ import {
   destroyAttemptSandbox,
   destroyAttemptSandboxWithTrace,
   githubBranch,
+  artifactRepositoryName,
   sandboxName,
   workspaceBackup,
-  workspaceName,
-  workspaceRef,
   type AttemptNamespace,
   type SandboxDestructionTrace,
   type SandboxNamespace,
@@ -835,7 +835,9 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
         return json({ error: "stale_attempt" }, 409);
       const run = await repository.get(attempt.runId);
       if (!run) return json({ error: "stale_attempt" }, 409);
-      const artifact = await artifactsNamespace(env).get(workspaceName(run.id));
+      const artifact = await artifactsNamespace(env).get(
+        artifactRepositoryName(attempt),
+      );
       if (!artifact) return json({ error: "artifact_not_found" }, 404);
       try {
         await artifact.revokeToken(artifactTokenId);
@@ -1323,6 +1325,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
             Date.now(),
             attemptInactivityMilliseconds,
             reporter,
+            competitionPromoter(env),
           );
         const next = successorWakeup(
           await repository.get(message.body.runId),

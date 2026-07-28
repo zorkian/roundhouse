@@ -37,3 +37,73 @@ describe("model route contract", () => {
     expect(parseModelRoute("not-json")).toBeUndefined();
   });
 });
+
+describe("competition judgement contract", () => {
+  const candidateIds = ["alpha", "beta"];
+  const valid = {
+    selected: "alpha",
+    scores: [
+      { candidateId: "alpha", score: 9, rationale: "Stronger result" },
+      { candidateId: "beta", score: 6, rationale: "Weaker result" },
+    ],
+  };
+
+  it("accepts a complete judgement covering every candidate", async () => {
+    const { validateCompetitionJudgement } = await import("./contracts.js");
+    expect(validateCompetitionJudgement(valid, candidateIds)).toEqual(valid);
+  });
+
+  it("rejects malformed, unknown, duplicated, and incomplete judgements", async () => {
+    const { validateCompetitionJudgement } = await import("./contracts.js");
+    expect(
+      validateCompetitionJudgement(
+        { ...valid, selected: "gamma" },
+        candidateIds,
+      ),
+    ).toBeUndefined();
+    expect(
+      validateCompetitionJudgement(
+        { ...valid, scores: valid.scores.slice(0, 1) },
+        candidateIds,
+      ),
+    ).toBeUndefined();
+    expect(
+      validateCompetitionJudgement(
+        {
+          ...valid,
+          scores: [
+            ...valid.scores.slice(0, 1),
+            { candidateId: "alpha", score: 1, rationale: "Duplicate" },
+          ],
+        },
+        candidateIds,
+      ),
+    ).toBeUndefined();
+    expect(
+      validateCompetitionJudgement(
+        {
+          ...valid,
+          scores: [
+            valid.scores[0],
+            { candidateId: "beta", score: "high", rationale: "Wrong type" },
+          ],
+        },
+        candidateIds,
+      ),
+    ).toBeUndefined();
+    expect(
+      validateCompetitionJudgement(
+        {
+          ...valid,
+          scores: [
+            valid.scores[0],
+            { candidateId: "beta", score: 5, rationale: "  " },
+          ],
+        },
+        candidateIds,
+      ),
+    ).toBeUndefined();
+    expect(validateCompetitionJudgement(null, candidateIds)).toBeUndefined();
+    expect(validateCompetitionJudgement([], candidateIds)).toBeUndefined();
+  });
+});

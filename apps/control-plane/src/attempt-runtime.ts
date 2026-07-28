@@ -46,8 +46,11 @@ export function attemptSandbox(
 }
 
 export function sandboxName(
-  attempt: Pick<Attempt, "id" | "runId" | "stage">,
+  attempt: Pick<Attempt, "id" | "runId" | "stage" | "competition">,
 ): string {
+  // Competition candidates each get their own sandbox so parallel candidates
+  // can never observe or overwrite one another's in-progress state.
+  if (attempt.competition?.purpose === "candidate") return attempt.id;
   return attempt.stage === "implement" ? attempt.runId : attempt.id;
 }
 
@@ -191,21 +194,63 @@ export function workspaceRef(runId: string): string {
   return `refs/heads/roundhouse/${runId}`;
 }
 
+// Candidates publish checkpoints to attempt-specific refs inside their own
+// artifact repository; the canonical run ref is only written when the judged
+// winner is promoted. Refs are keyed by the deterministic attempt ID because
+// candidate IDs are unique only within one competition: two reviewers in one
+// review node may both define a candidate with the same ID.
+export function attemptWorkspaceRef(
+  attempt: Pick<Attempt, "id" | "runId" | "competition">,
+): string {
+  if (attempt.competition?.purpose === "candidate")
+    return `refs/heads/roundhouse/${attempt.id}`;
+  return workspaceRef(attempt.runId);
+}
+
+// Candidate workspace backups are keyed by attempt so they never overwrite
+// the run's canonical workspace backup before judgement.
+// Each write candidate receives its own artifact repository so the
+// repository-wide write credential one candidate holds can never enumerate,
+// fetch, or modify a competitor's state. Token revocation is likewise scoped
+// to the issuing attempt's repository.
+export function artifactRepositoryName(
+  attempt: Pick<Attempt, "id" | "runId" | "competition">,
+): string {
+  return attempt.competition?.purpose === "candidate"
+    ? attempt.id
+    : workspaceName(attempt.runId);
+}
+
+export function attemptWorkspaceBackupKey(
+  attempt: Pick<Attempt, "id" | "runId" | "competition">,
+): string {
+  return attempt.competition?.purpose === "candidate"
+    ? attempt.id
+    : attempt.runId;
+}
+
 export function checkpointIdentityExpectation(
-  attempt: Pick<Attempt, "baseCommit" | "expectedHead">,
+  attempt: Pick<Attempt, "baseCommit" | "expectedHead"> &
+    Partial<Pick<Attempt, "id" | "runId" | "competition">>,
   run: Pick<RunSnapshot, "id" | "profile" | "baseCommit">,
   repositoryId: string,
   enforcePathPolicy: boolean,
 ) {
   if (!run.profile) throw new Error("run_profile_missing");
+  const candidate =
+    attempt.competition?.purpose === "candidate" &&
+    attempt.id !== undefined &&
+    attempt.runId !== undefined;
   return {
     repositoryId,
-    repository: workspaceName(run.id),
+    repository: candidate ? attempt.id : workspaceName(run.id),
     // Integration attempts may deliberately select a newer target commit
     // than the run's original base. The attempt records that exact identity.
     baseCommit: attempt.baseCommit,
     inputHead: attempt.expectedHead,
-    ref: workspaceRef(run.id),
+    ref: candidate
+      ? `refs/heads/roundhouse/${attempt.id}`
+      : workspaceRef(run.id),
     profile: run.profile,
     enforcePathPolicy,
   };
@@ -397,7 +442,10 @@ export class SandboxCheckpointPublisher {
     private readonly githubEnv: GitHubEnv,
   ) {}
 
-  async publish(input: AttemptCallback): Promise<void> {
+  async publish(
+    input: AttemptCallback,
+    options?: { readonly promoteCompetitionWinner?: boolean },
+  ): Promise<void> {
     const attempt = await this.repository.getAttempt(input.attemptId);
     const run = attempt && (await this.repository.get(attempt.runId));
     if (!attempt || !run) throw new Error("attempt_not_found");
@@ -406,6 +454,25 @@ export class SandboxCheckpointPublisher {
       !attemptHasCapability(attempt, "artifact.write")
     )
       return;
+    // A losing candidate must never publish to the shared GitHub branch. Its
+    // checkpoint remains under its candidate ref in the artifact repository
+    // as evidence; only the promoted winner is published, via the promoter.
+    if (
+      attempt.competition?.purpose === "candidate" &&
+      !options?.promoteCompetitionWinner
+    ) {
+      console.log(
+        JSON.stringify({
+          message: "competition_candidate_publication_deferred",
+          attemptId: attempt.id,
+          runId: run.id,
+          candidateId: attempt.competition.candidateId,
+          ref: input.checkpoint.ref,
+          outputHead: input.checkpoint.outputHead,
+        }),
+      );
+      return;
+    }
     const artifact = await this.artifacts.get(input.checkpoint.repository);
     if (!artifact) throw new Error("artifact_repository_not_found");
     const token = await artifact.createToken("read", 5 * 60);
