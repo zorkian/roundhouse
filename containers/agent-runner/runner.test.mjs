@@ -913,6 +913,7 @@ describe("V2 agent runner", () => {
     const bootstrap = {
       id: "attempt_bootstrap",
       deadlineAt: Date.now() + 60_000,
+      baseCommit: "a".repeat(40),
       artifact: {
         remote: "https://artifacts.invalid/run.git",
         hostname: "artifacts.invalid",
@@ -967,6 +968,7 @@ describe("V2 agent runner", () => {
     git(artifact, ["config", "receive.shallowUpdate", "true"]);
     await bootstrapWorkspace({
       id: "attempt_bootstrap_git",
+      baseCommit: pinnedHead,
       artifact: { remote: artifact, token: "artifact-token" },
       source: {
         remote: pathToFileURL(source).toString(),
@@ -980,6 +982,64 @@ describe("V2 agent runner", () => {
         encoding: "utf8",
       }).trim(),
     ).toBe("1");
+  });
+
+  it("preserves source ancestry when an external branch update replaces a shallow artifact", async () => {
+    process.env.ROUNDHOUSE_WORKSPACE_ROOT = resolve(
+      testRoot,
+      "bootstrap-ancestry",
+    );
+    const source = resolve(testRoot, "bootstrap-ancestry-source");
+    const artifact = resolve(testRoot, "bootstrap-ancestry-artifact.git");
+    const checkout = resolve(testRoot, "bootstrap-ancestry-checkout");
+    await mkdir(source, { recursive: true });
+    git(source, ["init", "--initial-branch=main"]);
+    await writeFile(resolve(source, "README.md"), "baseline\n");
+    git(source, ["add", "README.md"]);
+    commit(source, "baseline");
+    const baseCommit = head(source);
+    git(process.cwd(), ["init", "--bare", "--initial-branch=main", artifact]);
+    git(artifact, ["config", "receive.shallowUpdate", "true"]);
+
+    await bootstrapWorkspace({
+      id: "attempt_bootstrap_ancestry_initial",
+      baseCommit,
+      artifact: { remote: artifact, token: "artifact-token" },
+      source: {
+        remote: pathToFileURL(source).toString(),
+        branch: "main",
+        head: baseCommit,
+      },
+    });
+
+    await writeFile(resolve(source, "README.md"), "baseline\ncandidate\n");
+    git(source, ["add", "README.md"]);
+    commit(source, "candidate");
+    await writeFile(
+      resolve(source, "README.md"),
+      "baseline\ncandidate\noperator update\n",
+    );
+    git(source, ["add", "README.md"]);
+    commit(source, "operator update");
+    const updatedHead = head(source);
+
+    await bootstrapWorkspace({
+      id: "attempt_bootstrap_ancestry_updated",
+      baseCommit,
+      artifact: { remote: artifact, token: "artifact-token" },
+      source: {
+        remote: pathToFileURL(source).toString(),
+        branch: "main",
+        head: updatedHead,
+        force: true,
+      },
+    });
+
+    git(process.cwd(), ["clone", artifact, checkout]);
+    expect(head(checkout)).toBe(updatedHead);
+    expect(() =>
+      git(checkout, ["merge-base", "--is-ancestor", baseCommit, updatedHead]),
+    ).not.toThrow();
   });
 
   it("returns an attempt-bound completion without persisting a capability", () => {
