@@ -49,6 +49,10 @@
       "tag": "runtime-host-v2",
       "new_sqlite_classes": ["RoundhouseRuntimeSandbox"],
     },
+    {
+      "tag": "runtime-host-v3",
+      "deleted_classes": ["RoundhouseAttemptSandbox"],
+    },
   ],
   "observability": {
     "enabled": true,

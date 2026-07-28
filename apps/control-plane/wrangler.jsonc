@@ -83,6 +83,10 @@
       "new_sqlite_classes": ["RoundhouseAttemptSandbox"],
       "deleted_classes": ["RoundhouseAttemptContainer"],
     },
+    {
+      "tag": "runtime-host-split",
+      "deleted_classes": ["RoundhouseAttemptSandbox"],
+    },
   ],
   "triggers": { "crons": ["*/5 * * * *"] },
   "vars": {
