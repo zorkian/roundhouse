@@ -24,7 +24,6 @@ import { D1RunRepository } from "./d1-store.js";
 import {
   aggregateReviewAttempts,
   attemptOutcomeTransition,
-  attemptInactivityMilliseconds,
   ciTransition,
   coordinate,
   effectiveAttemptCapabilities,
@@ -36,6 +35,7 @@ import {
   reviewTransition,
   reproductionTransition,
 } from "./coordinator.js";
+import { attemptInactivityMilliseconds } from "./attempt-timeouts.js";
 
 // Minimal D1-compatible harness backed by in-memory SQLite, mirroring
 // repository-contract.test.mjs, so persistence-backed recovery behavior is

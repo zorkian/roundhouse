@@ -10,8 +10,9 @@ import {
   type RunSnapshot,
   type Wakeup,
 } from "@roundhouse/core";
-import { attemptInactivityMilliseconds, coordinate } from "./coordinator.js";
 import { competitionPromoter } from "./attempt-settlement.js";
+import { coordinate } from "./coordinator.js";
+import { attemptInactivityMilliseconds } from "./attempt-timeouts.js";
 import { validAttemptCompletion, verifyCallback } from "./callback.js";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
 import { renderDashboard } from "./dashboard.js";
@@ -42,7 +43,6 @@ import {
   GitHubStageReporter,
 } from "./github.js";
 import { launch } from "@cloudflare/playwright";
-import { RoundhouseAttemptSandbox } from "./attempt-container.js";
 import { DurableAttemptDispatcher } from "./attempt-dispatch.js";
 import { recordAttemptCompletion } from "./attempt-settlement.js";
 import {
@@ -64,8 +64,6 @@ import {
   type SandboxDestructionTrace,
   type SandboxNamespace,
 } from "./attempt-runtime.js";
-export { ContainerProxy } from "@cloudflare/sandbox";
-export { RoundhouseAttemptSandbox } from "./attempt-container.js";
 export { AttemptExecutionWorkflow } from "./attempt-workflow.js";
 export {
   artifactNeedsSync,
@@ -396,6 +394,7 @@ export function validAttemptProgress(
 }
 type RuntimeEnv = Cloudflare.Env & {
   DB: D1Like;
+  ATTEMPT_SANDBOXES: SandboxNamespace;
   BROWSER: Fetcher;
   BACKUP_BUCKET: R2Bucket;
   CALLBACK_SIGNING_SECRET: string;

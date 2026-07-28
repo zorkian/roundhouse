@@ -286,14 +286,21 @@ containers. Those are authority expansions rather than missing graph features.
 
 ### 5.1 Control plane and storage
 
-One Cloudflare Worker owns GitHub intake, authorization, workflow progress,
-publication, checks, merge, and the dashboard. D1 stores lifecycle state and
-small structured results, including the durable wakeup outbox and current
-attempt transport owner. One at-least-once Queue wakes the coordinator; the
-outbox and scheduled reconciliation make Queue delivery a transport detail
-rather than workflow authority. Durable Objects exist only where the
-Cloudflare Sandbox/Container lifecycle requires them; they do not own workflow
-state.
+One Cloudflare control-plane Worker owns GitHub intake, authorization, workflow
+progress, publication, checks, merge, and the dashboard. A separately deployed
+runtime-host Worker owns the Cloudflare Sandbox Durable Objects and container
+image. The control plane reaches those objects through a typed cross-Worker
+Durable Object binding; there is no second workflow protocol or lifecycle
+authority. This deployment boundary lets control-plane changes ship without
+replacing active coding environments, while runtime and image changes still
+roll forward deliberately.
+
+D1 stores lifecycle state and small structured results, including the durable
+wakeup outbox and current attempt transport owner. One at-least-once Queue
+wakes the coordinator; the outbox and scheduled reconciliation make Queue
+delivery a transport detail rather than workflow authority. Runtime-host
+Durable Objects exist only where the Cloudflare Sandbox/Container lifecycle
+requires them; they do not own workflow state.
 
 Cloudflare Workflows provide the durable execution context for the generic
 restore-execute-settle Sandbox boundary. They do not mirror D1 run state or
@@ -570,6 +577,7 @@ request state without requiring direct D1, Queue, or container inspection.
 The implementation retains:
 
 - one lifecycle control plane and one private model broker;
+- one independently deployed Sandbox runtime host with no lifecycle authority;
 - one graph interpreter and lifecycle owner;
 - one runner image and one Sandbox security boundary;
 - D1 as the only lifecycle authority;

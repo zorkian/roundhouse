@@ -64,27 +64,12 @@
       "class_name": "AttemptExecutionWorkflow",
     },
   ],
-  "containers": [
-    {
-      "class_name": "RoundhouseAttemptSandbox",
-      "image": "../../Dockerfile.agent-runner",
-      "instance_type": {
-        "vcpu": 1,
-        "memory_mib": 10240,
-        "disk_mb": 20000,
-      },
-      "max_instances": 10,
-      // Let an active attempt finish naturally before a new container image
-      // rolls over it. Durable Workflow recovery remains authoritative if it
-      // runs longer than this grace period or is interrupted elsewhere.
-      "rollout_active_grace_period": 3600,
-    },
-  ],
   "durable_objects": {
     "bindings": [
       {
         "name": "ATTEMPT_SANDBOXES",
         "class_name": "RoundhouseAttemptSandbox",
+        "script_name": "roundhouse-v2-runtime-host",
       },
     ],
   },
@@ -97,6 +82,10 @@
       "tag": "resumable-visual-workspaces",
       "new_sqlite_classes": ["RoundhouseAttemptSandbox"],
       "deleted_classes": ["RoundhouseAttemptContainer"],
+    },
+    {
+      "tag": "runtime-host-split",
+      "deleted_classes": ["RoundhouseAttemptSandbox"],
     },
   ],
   "triggers": { "crons": ["*/5 * * * *"] },

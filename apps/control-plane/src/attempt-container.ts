@@ -26,7 +26,7 @@ import type { SandboxComponentHost } from "./attempt-sandbox-components.js";
 import { NestedContainerRuntime } from "./nested-container-runtime.js";
 import { PreviewTransport } from "./preview-transport.js";
 import { WorkspaceLifecycle } from "./workspace-lifecycle.js";
-import { attemptInactivityMilliseconds } from "./coordinator.js";
+import { attemptInactivityMilliseconds } from "./attempt-timeouts.js";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
 
 interface AttemptAssignment extends Attempt {
@@ -51,11 +51,11 @@ interface AttemptAssignment extends Attempt {
   readonly [key: string]: unknown;
 }
 
-type AttemptContainerEnv = Cloudflare.Env & {
+export interface AttemptContainerEnv {
   readonly DB: D1Like;
   readonly MODEL_BROKER: Fetcher;
   readonly CALLBACK_SIGNING_SECRET: string;
-};
+}
 
 interface PreparedAttempt {
   readonly attempt: AttemptAssignment;
@@ -185,7 +185,7 @@ export function attemptUsesProjectEnvironment(
 }
 
 async function modelEgress(request: Request, env: Cloudflare.Env) {
-  const runtime = env as AttemptContainerEnv;
+  const runtime = env as unknown as AttemptContainerEnv;
   const attemptId = request.headers.get("x-roundhouse-attempt-id") ?? "";
   const capability =
     request.headers.get("x-roundhouse-attempt-capability") ?? "";
@@ -502,7 +502,7 @@ export function extractModelUsage(
   };
 }
 
-export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
+export class RoundhouseAttemptSandbox extends Sandbox<AttemptContainerEnv> {
   // Sandbox.defaultPort is its reserved control API; the runner is separate.
   private readonly agentRunnerPort = 8090;
   private readonly durableState: DurableObjectState<{}>;
@@ -510,7 +510,7 @@ export class RoundhouseAttemptSandbox extends Sandbox<Cloudflare.Env> {
   override enableInternet = false;
   override interceptHttps = true;
 
-  constructor(ctx: DurableObjectState<{}>, env: Cloudflare.Env) {
+  constructor(ctx: DurableObjectState<{}>, env: AttemptContainerEnv) {
     super(ctx, env);
     this.durableState = ctx;
     this.runtimeEnv = env as AttemptContainerEnv;

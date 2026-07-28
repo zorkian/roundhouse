@@ -58,6 +58,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event.pull_request.merge_commit_sha }}
 
@@ -74,5 +75,42 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Deploy development
-        run: pnpm deploy:development
+      - name: Build deployment
+        run: pnpm build
+
+      - name: Determine runtime deployment
+        id: runtime
+        env:
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          DIFF_BASE="$(git rev-parse "${MERGE_SHA}^1")"
+          if git diff --quiet "$DIFF_BASE" "$MERGE_SHA" -- \
+            Dockerfile.agent-runner \
+            apps/runtime-host \
+            apps/control-plane/src/attempt-container.ts \
+            apps/control-plane/src/attempt-sandbox-components.ts \
+            apps/control-plane/src/attempt-timeouts.ts \
+            apps/control-plane/src/callback.ts \
+            apps/control-plane/src/d1-store.ts \
+            apps/control-plane/src/nested-container-runtime.ts \
+            apps/control-plane/src/preview-transport.ts \
+            apps/control-plane/src/runtime-host.ts \
+            apps/control-plane/src/workspace-lifecycle.ts \
+            containers/agent-runner \
+            packages/core \
+            packages/response-observer \
+            package.json \
+            pnpm-lock.yaml; then
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            echo '{"message":"development_runtime_deploy_selected","needed":false}'
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+            echo '{"message":"development_runtime_deploy_selected","needed":true}'
+          fi
+
+      - name: Deploy runtime host
+        if: steps.runtime.outputs.needed == 'true'
+        run: pnpm deploy:development:runtime
+
+      - name: Deploy control plane
+        run: pnpm deploy:development:control-plane

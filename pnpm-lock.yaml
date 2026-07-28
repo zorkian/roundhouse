@@ -54,6 +54,18 @@ importers:
         specifier: workspace:*
         version: link:../../packages/response-observer
 
+  apps/runtime-host:
+    dependencies:
+      '@cloudflare/sandbox':
+        specifier: 0.12.4
+        version: 0.12.4
+      '@roundhouse/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@roundhouse/response-observer':
+        specifier: workspace:*
+        version: link:../../packages/response-observer
+
   containers/agent-runner:
     dependencies:
       '@devcontainers/cli':
