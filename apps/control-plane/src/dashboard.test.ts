@@ -39,6 +39,9 @@ describe("dashboard", () => {
   it("persists GitHub repository and installation identity with enrollment metadata", async () => {
     const calls: { sql: string; values: unknown[] }[] = [];
     const db: D1Like = {
+      async batch(statements) {
+        return Promise.all(statements.map((statement) => statement.run()));
+      },
       prepare(sql) {
         const call = { sql, values: [] as unknown[] };
         calls.push(call);
@@ -78,6 +81,9 @@ describe("dashboard", () => {
   it("lists recently updated runs from D1", async () => {
     const calls: { sql: string; values: unknown[] }[] = [];
     const db: D1Like = {
+      async batch(statements) {
+        return Promise.all(statements.map((statement) => statement.run()));
+      },
       prepare(sql) {
         const call = { sql, values: [] as unknown[] };
         calls.push(call);

@@ -21,6 +21,7 @@ import {
   type SandboxNamespace,
 } from "./attempt-runtime.js";
 import type { GitHubEnv } from "./github.js";
+import { publishWakeup } from "./liveness.js";
 
 export type AttemptSettlementOutcome =
   "completed" | "duplicate" | "rejected" | "stale" | "unauthorized";
@@ -92,10 +93,11 @@ async function enqueueAttemptWakeup(
   env: AttemptSettlementEnv,
   attempt: { readonly runId: string; readonly runRevision: number },
 ): Promise<void> {
-  await env.RUN_WAKEUPS.send({
+  const wakeup = {
     runId: attempt.runId,
     expectedRevision: attempt.runRevision,
-  });
+  };
+  await publishWakeup(new D1RunRepository(env.DB), env.RUN_WAKEUPS, wakeup);
 }
 
 export async function recordAttemptCompletion(

@@ -36,6 +36,12 @@ Cloudflare Artifacts carries Git checkpoints between isolated containers. A
 private model broker selects models without exposing provider credentials to
 the agent container.
 
+D1 also records every active revision's wakeup before Queue delivery and binds
+each attempt lease to its current Cloudflare Workflow instance. Queue messages
+are therefore notifications rather than workflow state. A scheduled reconciler
+redelivers pending wakeups, observes terminal or inactive Workflow instances,
+and resumes recorded settlement work without invoking the model again.
+
 The credential boundary is central to the design: implementation agents do not
 receive GitHub App, Cloudflare administration, deployment, or model-provider
 credentials. Promotion happens separately, with a short-lived GitHub token,
