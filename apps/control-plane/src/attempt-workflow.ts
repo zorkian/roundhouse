@@ -90,7 +90,7 @@ async function recordTerminalWorkflowFailure(
   event: WorkflowEvent<AttemptWorkflowParams>,
   error: unknown,
 ): Promise<void> {
-  const { attemptId, mode } = event.payload;
+  const { attemptId, mode, sandboxName } = event.payload;
   const repository = new D1RunRepository(env.DB);
   const attempt = await repository.getAttempt(attemptId);
   const payload = {
@@ -143,6 +143,45 @@ async function recordTerminalWorkflowFailure(
       settlement,
     }),
   );
+  if (settlement === "failed" && sandboxName !== attempt.runId) {
+    try {
+      await destroyAttemptSandboxWithTrace(
+        env.ATTEMPT_SANDBOXES,
+        sandboxName,
+        attemptId,
+        async (tracedAttemptId, phase, detail) => {
+          await repository.recordAttemptEvent(
+            tracedAttemptId,
+            "sandbox_trace",
+            {
+              phase,
+              workflowInstanceId: event.instanceId,
+              reason: "terminal_workflow_failure",
+              ...detail,
+            },
+          );
+        },
+      );
+    } catch (cleanupError) {
+      console.error(
+        JSON.stringify({
+          message: "attempt_workflow_terminal_failure_cleanup_failed",
+          attemptId,
+          runId: attempt.runId,
+          workflowInstanceId: event.instanceId,
+          sandboxName,
+          errorType:
+            cleanupError instanceof Error
+              ? cleanupError.constructor.name
+              : typeof cleanupError,
+          error:
+            cleanupError instanceof Error
+              ? cleanupError.message
+              : String(cleanupError),
+        }),
+      );
+    }
+  }
   await publishWakeup(repository, env.RUN_WAKEUPS, wakeup);
 }
 
