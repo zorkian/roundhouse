@@ -4,6 +4,9 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-07-18",
   "compatibility_flags": ["nodejs_compat"],
+  // Bundle the Cytoscape browser build as text so the Worker can serve it
+  // from the same-origin /assets/workflow-graph.js route.
+  "rules": [{ "type": "Text", "globs": ["**/cytoscape.min.js"] }],
   "workers_dev": true,
   "routes": [
     {

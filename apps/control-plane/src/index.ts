@@ -16,6 +16,8 @@ import { D1RunRepository, type D1Like } from "./d1-store.js";
 import { renderDashboard } from "./dashboard.js";
 import { renderRunDetails } from "./run-details.js";
 import { renderWorkflowView } from "./workflow-view.js";
+import { workflowGraphAsset } from "./workflow-client.js";
+import cytoscapeSource from "cytoscape/dist/cytoscape.min.js";
 import {
   beginGitHubSignIn,
   handleGitHubCallback,
@@ -79,7 +81,7 @@ function html(value: string, status = 200): Response {
     headers: {
       "cache-control": "no-store",
       "content-security-policy":
-        "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
       "content-type": "text/html; charset=utf-8",
       "referrer-policy": "no-referrer",
       "x-content-type-options": "nosniff",
@@ -396,6 +398,32 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
         headers: {
           "cache-control": "no-store",
           "content-type": "image/png",
+          "x-content-type-options": "nosniff",
+        },
+      });
+    }
+    // Static same-origin client asset for the workflow graph; it carries no
+    // run data, so it does not require a browser session.
+    if (url.pathname === "/assets/workflow-graph.js" && isPublicUiRequest()) {
+      if (request.method !== "GET")
+        return json({ error: "method_not_allowed" }, 405, { allow: "GET" });
+      const assetStartedAt = Date.now();
+      const body = workflowGraphAsset(
+        typeof cytoscapeSource === "string" ? cytoscapeSource : "",
+      );
+      console.log(
+        JSON.stringify({
+          message: "workflow_graph_asset_served",
+          bytes: body.length,
+          durationMs: Date.now() - assetStartedAt,
+        }),
+      );
+      return new Response(body, {
+        headers: {
+          "cache-control": "no-store",
+          "content-security-policy":
+            "default-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+          "content-type": "text/javascript; charset=utf-8",
           "x-content-type-options": "nosniff",
         },
       });
