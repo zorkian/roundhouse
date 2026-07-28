@@ -1290,7 +1290,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
             dispatcher,
             message.body,
             Date.now(),
-            30 * 60_000,
+            attemptInactivityMilliseconds,
             reporter,
           );
         const next = successorWakeup(
