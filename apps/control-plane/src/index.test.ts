@@ -110,6 +110,9 @@ function detailsDb(found = true): D1Like {
   const enrolledRepository = "zorkian/roundhouse";
   const enrolledIssueNumber = 281;
   return {
+    async batch(statements) {
+      return Promise.all(statements.map((statement) => statement.run()));
+    },
     prepare(sql: string) {
       let values: unknown[] = [];
       const statement = {
@@ -158,6 +161,9 @@ function detailsDb(found = true): D1Like {
 
 function dashboardDb(): D1Like {
   return {
+    async batch(statements) {
+      return Promise.all(statements.map((statement) => statement.run()));
+    },
     prepare() {
       const statement = {
         bind: (..._values: unknown[]) => statement,
@@ -183,6 +189,7 @@ const authedUiCookie = "roundhouse_ui_session=test-session";
 // Extends a UI database stub with one valid, unexpired browser session.
 function withUiSession(DB: D1Like, repositoryIds = '["1297678423"]'): D1Like {
   return {
+    batch: DB.batch.bind(DB),
     prepare(sql: string) {
       if (sql.includes("FROM ui_sessions")) {
         const statement = {

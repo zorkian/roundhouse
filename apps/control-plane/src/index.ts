@@ -40,6 +40,11 @@ import { launch } from "@cloudflare/playwright";
 import { RoundhouseAttemptSandbox } from "./attempt-container.js";
 import { DurableAttemptDispatcher } from "./attempt-dispatch.js";
 import {
+  publishPendingWakeups,
+  publishWakeup,
+  wakeupRedeliveryMilliseconds,
+} from "./liveness.js";
+import {
   artifactsNamespace,
   attemptSandbox,
   conflictedIntegrationOutcome,
@@ -147,6 +152,26 @@ export function scheduleAttemptSandboxDestruction(
 
 type RecoveryWakeup = Wakeup & { readonly attemptId?: string };
 type ExpiredAttemptRecoveryAction = "settle" | "reconcile";
+type AttemptTransportStatus =
+  | "queued"
+  | "running"
+  | "paused"
+  | "errored"
+  | "terminated"
+  | "complete"
+  | "waiting"
+  | "waitingForPause"
+  | "unknown";
+
+export function attemptTransportRecoveryReason(
+  status: AttemptTransportStatus,
+  expiresAt: number,
+  now: number,
+): "terminal" | "inactive" | undefined {
+  if (status === "errored" || status === "terminated" || status === "complete")
+    return "terminal";
+  return expiresAt <= now ? "inactive" : undefined;
+}
 
 interface ExpiredAttemptRecoveryHandlers {
   readonly decide: (
@@ -1043,7 +1068,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
     if (url.pathname === "/github/webhook" && request.method === "POST") {
       const repository = new D1RunRepository(env.DB);
       const enqueue = async (wakeup: Wakeup) => {
-        await env.RUN_WAKEUPS.send(wakeup);
+        await publishWakeup(repository, env.RUN_WAKEUPS, wakeup);
       };
       const event = request.headers.get("x-github-event");
       let outcome: string;
@@ -1105,27 +1130,84 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
     for (const message of batch.messages) {
       try {
         const run = await repository.get(message.body.runId);
-        if (!run) throw new Error("run_not_found");
+        if (!run) {
+          console.log(
+            JSON.stringify({
+              message: "durable_wakeup_superseded",
+              runId: message.body.runId,
+              expectedRevision: message.body.expectedRevision,
+              reason: "run_not_found",
+            }),
+          );
+          message.ack();
+          continue;
+        }
+        await repository.requestWakeup(message.body);
         const github = githubClientForRun(env, run);
         const automation = new GitHubCiAutomation(repository, github);
         const reporter = new GitHubStageReporter(github, env.PUBLIC_ORIGIN);
-        if (run?.status === "active" && run.stage === "ci")
-          await automation.reconcileCi(run);
-        if (run?.status === "active" && run.stage === "merge")
-          await automation.merge(run);
-        await coordinate(
-          repository,
-          dispatcher,
-          message.body,
-          Date.now(),
-          30 * 60_000,
-          reporter,
-        );
+        let externalPending = false;
+        if (run.status === "active" && run.stage === "ci") {
+          const outcome = await automation.reconcileCi(run);
+          externalPending = outcome !== "recorded";
+          console.log(
+            JSON.stringify({
+              message: "github_checks_reconciliation_completed",
+              runId: run.id,
+              revision: run.revision,
+              outcome,
+            }),
+          );
+        }
+        if (run.status === "active" && run.stage === "merge") {
+          const outcome = await automation.merge(run);
+          externalPending = outcome !== "recorded";
+          console.log(
+            JSON.stringify({
+              message: "github_merge_reconciliation_completed",
+              runId: run.id,
+              revision: run.revision,
+              outcome,
+            }),
+          );
+        }
+        if (!externalPending)
+          await coordinate(
+            repository,
+            dispatcher,
+            message.body,
+            Date.now(),
+            30 * 60_000,
+            reporter,
+          );
         const next = successorWakeup(
           await repository.get(message.body.runId),
           message.body,
         );
-        if (next) await env.RUN_WAKEUPS.send(next);
+        if (next) await publishWakeup(repository, env.RUN_WAKEUPS, next);
+        const settled = await repository.completeWakeupIfOwned(message.body);
+        if (settled === "pending") {
+          const current = await repository.get(message.body.runId);
+          const pollable =
+            externalPending &&
+            current?.status === "active" &&
+            current.revision === message.body.expectedRevision &&
+            (current.stage === "ci" || current.stage === "merge");
+          if (!pollable) throw new Error("active_run_has_no_durable_owner");
+          await repository.deferWakeup(
+            message.body,
+            Date.now() + wakeupRedeliveryMilliseconds,
+          );
+          console.log(
+            JSON.stringify({
+              message: "durable_wakeup_external_poll_deferred",
+              runId: message.body.runId,
+              expectedRevision: message.body.expectedRevision,
+              stage: current.stage,
+              nextPollInMs: wakeupRedeliveryMilliseconds,
+            }),
+          );
+        }
         message.ack();
       } catch (error) {
         console.error(
@@ -1143,43 +1225,106 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
   async scheduled(_controller, env) {
     const repository = new D1RunRepository(env.DB);
     const expiredAt = Date.now();
-    await recoverExpiredAttempts(
-      env.ATTEMPT_SANDBOXES,
-      await repository.expiredAttemptLeases(expiredAt),
-      {
-        async decide(attemptId) {
-          const attempt = await repository.getAttempt(attemptId);
-          const completion = await repository.getAttemptCompletion(attemptId);
-          if (attempt?.state === "executed" && completion) return "settle";
-          return "reconcile";
-        },
-        async resumeSettlement(attemptId, wakeup, attemptSandboxName) {
-          const renewed = await repository.renewExecutedAttemptLease(
-            attemptId,
-            Date.now() + attemptInactivityMilliseconds,
-          );
-          if (!renewed)
-            throw new Error("settlement_recovery_lease_not_renewed");
-          const workflowInstanceId = `${attemptId}-settlement-${expiredAt}`;
-          const instances = await env.ATTEMPT_EXECUTIONS.createBatch([
-            {
-              id: workflowInstanceId,
-              params: {
-                attemptId,
-                sandboxName: attemptSandboxName,
-                mode: "settle",
-              },
+    const recoveryHandlers: ExpiredAttemptRecoveryHandlers = {
+      async decide(attemptId) {
+        const attempt = await repository.getAttempt(attemptId);
+        const completion = await repository.getAttemptCompletion(attemptId);
+        if (attempt?.state === "executed" && completion) return "settle";
+        return "reconcile";
+      },
+      async resumeSettlement(attemptId, wakeup, attemptSandboxName) {
+        const workflowInstanceId = `${attemptId}-settlement-${expiredAt}`;
+        const renewed = await repository.renewExecutedAttemptLease(
+          attemptId,
+          Date.now() + attemptInactivityMilliseconds,
+          workflowInstanceId,
+        );
+        if (!renewed) throw new Error("settlement_recovery_lease_not_renewed");
+        const instances = await env.ATTEMPT_EXECUTIONS.createBatch([
+          {
+            id: workflowInstanceId,
+            params: {
+              attemptId,
+              sandboxName: attemptSandboxName,
+              mode: "settle",
             },
-          ]);
+          },
+        ]);
+        const payload = {
+          phase: "settlement_resumed",
+          workflowInstanceId,
+          expectedRevision: wakeup.expectedRevision,
+          created: instances.length === 1,
+        };
+        console.log(
+          JSON.stringify({
+            message: "attempt_settlement_resumed",
+            attemptId,
+            runId: wakeup.runId,
+            ...payload,
+          }),
+        );
+        await repository.recordAttemptEvent(
+          attemptId,
+          "attempt_recovery_trace",
+          payload,
+        );
+      },
+      async reconcile(attemptId, wakeup) {
+        const attempt = await repository.getAttempt(attemptId);
+        const run = attempt && (await repository.get(attempt.runId));
+        if (
+          !attempt ||
+          !run ||
+          run.revision !== wakeup.expectedRevision ||
+          attempt.runRevision !== wakeup.expectedRevision
+        )
+          return;
+        const outcome = {
+          kind: "execution_interrupted",
+          source: "attempt_recovery",
+        } as const;
+        const settled = await repository.settleAttemptOutcome(
+          attempt.id,
+          attempt.runRevision,
+          "failed",
+          outcome,
+        );
+        if (settled === "failed" || settled === "duplicate")
+          await publishWakeup(repository, env.RUN_WAKEUPS, wakeup);
+        const payload = {
+          phase: "execution_interrupted_recorded",
+          runRevision: run.revision,
+          attemptRevision: attempt.runRevision,
+          outcome,
+          attemptSettlement: settled,
+        };
+        console.log(
+          JSON.stringify({
+            message: "attempt_execution_interruption_recorded",
+            attemptId,
+            runId: run.id,
+            ...payload,
+          }),
+        );
+        await repository.recordAttemptEvent(
+          attemptId,
+          "attempt_recovery_trace",
+          payload,
+        );
+      },
+      async diagnose(attemptId, wakeup) {
+        try {
+          const snapshot =
+            await repository.attemptDiagnosticSnapshot(attemptId);
           const payload = {
-            phase: "settlement_resumed",
-            workflowInstanceId,
             expectedRevision: wakeup.expectedRevision,
-            created: instances.length === 1,
+            expiredAt,
+            ...(snapshot ?? {}),
           };
-          console.log(
+          console.error(
             JSON.stringify({
-              message: "attempt_settlement_resumed",
+              message: "attempt_lease_expired",
               attemptId,
               runId: wakeup.runId,
               ...payload,
@@ -1187,118 +1332,126 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
           );
           await repository.recordAttemptEvent(
             attemptId,
-            "attempt_recovery_trace",
+            "attempt_lease_expired",
             payload,
           );
-        },
-        async reconcile(attemptId, wakeup) {
-          const attempt = await repository.getAttempt(attemptId);
-          const run = attempt && (await repository.get(attempt.runId));
-          if (
-            !attempt ||
-            !run ||
-            run.revision !== wakeup.expectedRevision ||
-            attempt.runRevision !== wakeup.expectedRevision
-          )
-            return;
-          const outcome = {
-            kind: "execution_interrupted",
-            source: "attempt_recovery",
-          } as const;
-          const settled = await repository.settleAttemptOutcome(
-            attempt.id,
-            attempt.runRevision,
-            "failed",
-            outcome,
-          );
-          if (settled === "failed" || settled === "duplicate")
-            await env.RUN_WAKEUPS.send(wakeup);
-          const payload = {
-            phase: "execution_interrupted_recorded",
-            runRevision: run.revision,
-            attemptRevision: attempt.runRevision,
-            outcome,
-            attemptSettlement: settled,
-          };
-          console.log(
+        } catch (error) {
+          console.error(
             JSON.stringify({
-              message: "attempt_execution_interruption_recorded",
+              message: "attempt_expiry_diagnostic_failed",
               attemptId,
-              runId: run.id,
-              ...payload,
+              runId: wakeup.runId,
+              error: error instanceof Error ? error.message : String(error),
             }),
           );
+        }
+      },
+      async resolveName(attemptId) {
+        const attempt = await repository.getAttempt(attemptId);
+        return attempt ? sandboxName(attempt) : attemptId;
+      },
+      async trace(attemptId, phase, detail) {
+        const payload = { phase, ...detail };
+        console.log(
+          JSON.stringify({
+            message: "attempt_recovery_trace",
+            attemptId,
+            ...payload,
+          }),
+        );
+        try {
           await repository.recordAttemptEvent(
             attemptId,
             "attempt_recovery_trace",
             payload,
           );
-        },
-        async diagnose(attemptId, wakeup) {
-          try {
-            const snapshot =
-              await repository.attemptDiagnosticSnapshot(attemptId);
-            const payload = {
-              expectedRevision: wakeup.expectedRevision,
-              expiredAt,
-              ...(snapshot ?? {}),
-            };
-            console.error(
-              JSON.stringify({
-                message: "attempt_lease_expired",
-                attemptId,
-                runId: wakeup.runId,
-                ...payload,
-              }),
-            );
-            await repository.recordAttemptEvent(
-              attemptId,
-              "attempt_lease_expired",
-              payload,
-            );
-          } catch (error) {
-            console.error(
-              JSON.stringify({
-                message: "attempt_expiry_diagnostic_failed",
-                attemptId,
-                runId: wakeup.runId,
-                error: error instanceof Error ? error.message : String(error),
-              }),
-            );
-          }
-        },
-        async resolveName(attemptId) {
-          const attempt = await repository.getAttempt(attemptId);
-          return attempt ? sandboxName(attempt) : attemptId;
-        },
-        async trace(attemptId, phase, detail) {
-          const payload = { phase, ...detail };
-          console.log(
+        } catch (error) {
+          console.error(
             JSON.stringify({
-              message: "attempt_recovery_trace",
+              message: "attempt_recovery_trace_persist_failed",
               attemptId,
-              ...payload,
+              phase,
+              error: error instanceof Error ? error.message : String(error),
             }),
           );
-          try {
-            await repository.recordAttemptEvent(
-              attemptId,
-              "attempt_recovery_trace",
-              payload,
-            );
-          } catch (error) {
-            console.error(
-              JSON.stringify({
-                message: "attempt_recovery_trace_persist_failed",
-                attemptId,
-                phase,
-                error: error instanceof Error ? error.message : String(error),
-              }),
-            );
-          }
-        },
+        }
       },
+    };
+    const leases = await repository.activeAttemptLeases();
+    console.log(
+      JSON.stringify({
+        message: "attempt_transport_scan_started",
+        activeLeases: leases.length,
+        observedAt: expiredAt,
+      }),
     );
+    for (const lease of leases) {
+      const startedAt = Date.now();
+      let status: AttemptTransportStatus = "unknown";
+      let statusError: unknown;
+      try {
+        const workflow = await env.ATTEMPT_EXECUTIONS.get(
+          lease.workflowInstanceId,
+        );
+        status = (await workflow.status()).status;
+      } catch (error) {
+        statusError = error;
+      }
+      const reason = attemptTransportRecoveryReason(
+        status,
+        lease.expiresAt,
+        expiredAt,
+      );
+      console.log(
+        JSON.stringify({
+          message: "attempt_transport_observed",
+          attemptId: lease.attemptId,
+          workflowInstanceId: lease.workflowInstanceId,
+          runId: lease.runId,
+          expectedRevision: lease.expectedRevision,
+          leaseExpiresAt: lease.expiresAt,
+          status,
+          recoveryReason: reason ?? null,
+          statusError:
+            statusError instanceof Error
+              ? statusError.message
+              : statusError === undefined
+                ? null
+                : String(statusError),
+          durationMs: Date.now() - startedAt,
+        }),
+      );
+      if (!reason) continue;
+      try {
+        await recoverExpiredAttempts(
+          env.ATTEMPT_SANDBOXES,
+          [lease],
+          recoveryHandlers,
+        );
+      } catch (error) {
+        console.error(
+          JSON.stringify({
+            message: "attempt_transport_recovery_failed",
+            attemptId: lease.attemptId,
+            workflowInstanceId: lease.workflowInstanceId,
+            runId: lease.runId,
+            expectedRevision: lease.expectedRevision,
+            status,
+            recoveryReason: reason,
+            durationMs: Date.now() - startedAt,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+      }
+    }
+    console.log(
+      JSON.stringify({
+        message: "attempt_transport_scan_completed",
+        activeLeases: leases.length,
+        durationMs: Date.now() - expiredAt,
+      }),
+    );
+    await publishPendingWakeups(repository, env.RUN_WAKEUPS, Date.now());
   },
 };
 

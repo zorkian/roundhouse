@@ -32,6 +32,7 @@ interface Statement {
 }
 export interface D1Like {
   prepare(sql: string): Statement;
+  batch(statements: Statement[]): Promise<Result<unknown>[]>;
 }
 
 type RunRow = { document_json: string };
@@ -89,6 +90,18 @@ export interface AttemptDiagnosticSnapshot {
   readonly modelCalls: number;
   readonly completedModelCalls: number;
   readonly lastProgress?: Readonly<Record<string, unknown>>;
+}
+
+export interface PendingWakeup {
+  readonly wakeup: Wakeup;
+  readonly attempts: number;
+  readonly availableAt: number;
+}
+
+export interface ActiveAttemptLease extends Wakeup {
+  readonly attemptId: string;
+  readonly workflowInstanceId: string;
+  readonly expiresAt: number;
 }
 
 type UsageRow = {
@@ -173,50 +186,88 @@ export class D1RunRepository implements RunRepository {
     return this.database;
   }
 
+  private async batch(statements: Statement[]): Promise<Result<unknown>[]> {
+    return this.db.batch(statements);
+  }
+
+  private wakeupId(wakeup: Wakeup): string {
+    return `wakeup:${wakeup.runId}:${wakeup.expectedRevision}`;
+  }
+
+  private requestWakeupStatement(wakeup: Wakeup, availableAt: number) {
+    return this.db
+      .prepare(
+        `INSERT INTO outbox
+           (id,run_id,kind,payload_json,state,attempts,available_at,created_at,completed_at)
+         SELECT ?1,?2,'run_wakeup',?3,'pending',0,?4,?4,NULL
+         FROM runs
+         WHERE id=?2 AND revision=?5 AND status='active'
+         ON CONFLICT(id) DO UPDATE SET
+           payload_json=excluded.payload_json,
+           state='pending',
+           available_at=MIN(outbox.available_at,excluded.available_at),
+           completed_at=NULL`,
+      )
+      .bind(
+        this.wakeupId(wakeup),
+        wakeup.runId,
+        JSON.stringify(wakeup),
+        availableAt,
+        wakeup.expectedRevision,
+      );
+  }
+
   async create(run: RunSnapshot): Promise<void> {
     const time = this.now();
     const repositoryId = `repo_${run.githubRepositoryId ?? run.repository}`;
     const workItemId = `work_${run.id}`;
-    await this.db
-      .prepare(
-        "INSERT OR IGNORE INTO repositories (id, github_id, profile_version, profile_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-      )
-      .bind(
-        repositoryId,
-        String(run.githubRepositoryId ?? run.repository),
-        run.profileVersion,
-        JSON.stringify({
-          repository: run.repository,
-          ...(run.githubInstallationId
-            ? { installationId: run.githubInstallationId }
-            : {}),
-          ...(run.profile ? { profile: run.profile } : {}),
-        }),
-        time,
-      )
-      .run();
-    await this.db
-      .prepare(
-        "INSERT OR IGNORE INTO work_items (id, repository_id, issue_number, current_run_id) VALUES (?1, ?2, ?3, ?4)",
-      )
-      .bind(workItemId, repositoryId, run.issueNumber, run.id)
-      .run();
-    await this.db
-      .prepare(
-        "INSERT INTO runs (id, work_item_id, status, stage, current_node_id, workflow_hash, revision, document_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
-      )
-      .bind(
-        run.id,
-        workItemId,
-        run.status,
-        run.stage,
-        run.currentNodeId ?? null,
-        run.workflowHash ?? null,
-        run.revision,
-        JSON.stringify(run),
-        time,
-      )
-      .run();
+    const statements = [
+      this.db
+        .prepare(
+          "INSERT OR IGNORE INTO repositories (id, github_id, profile_version, profile_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        )
+        .bind(
+          repositoryId,
+          String(run.githubRepositoryId ?? run.repository),
+          run.profileVersion,
+          JSON.stringify({
+            repository: run.repository,
+            ...(run.githubInstallationId
+              ? { installationId: run.githubInstallationId }
+              : {}),
+            ...(run.profile ? { profile: run.profile } : {}),
+          }),
+          time,
+        ),
+      this.db
+        .prepare(
+          "INSERT OR IGNORE INTO work_items (id, repository_id, issue_number, current_run_id) VALUES (?1, ?2, ?3, ?4)",
+        )
+        .bind(workItemId, repositoryId, run.issueNumber, run.id),
+      this.db
+        .prepare(
+          "INSERT INTO runs (id, work_item_id, status, stage, current_node_id, workflow_hash, revision, document_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+        )
+        .bind(
+          run.id,
+          workItemId,
+          run.status,
+          run.stage,
+          run.currentNodeId ?? null,
+          run.workflowHash ?? null,
+          run.revision,
+          JSON.stringify(run),
+          time,
+        ),
+    ];
+    if (run.status === "active")
+      statements.push(
+        this.requestWakeupStatement(
+          { runId: run.id, expectedRevision: run.revision },
+          time,
+        ),
+      );
+    await this.batch(statements);
   }
 
   async get(runId: string): Promise<RunSnapshot | undefined> {
@@ -426,23 +477,33 @@ export class D1RunRepository implements RunRepository {
     const current = await this.get(runId);
     if (!current || current.revision !== expectedRevision) return undefined;
     const next = transitionRun(current, expectedRevision, transition);
-    const result = await this.db
-      .prepare(
-        "UPDATE runs SET status=?1, stage=?2, current_node_id=?3, workflow_hash=?4, revision=?5, document_json=?6, lease_attempt_id=NULL, lease_revision=NULL, lease_expires_at=NULL, updated_at=?7 WHERE id=?8 AND revision=?9",
-      )
-      .bind(
-        next.status,
-        next.stage,
-        next.currentNodeId ?? null,
-        next.workflowHash ?? null,
-        next.revision,
-        JSON.stringify(next),
-        this.now(),
-        runId,
-        expectedRevision,
-      )
-      .run();
-    return (result.meta.changes ?? 0) === 1 ? next : undefined;
+    const changedAt = this.now();
+    const statements = [
+      this.db
+        .prepare(
+          "UPDATE runs SET status=?1, stage=?2, current_node_id=?3, workflow_hash=?4, revision=?5, document_json=?6, lease_attempt_id=NULL, lease_workflow_instance_id=NULL, lease_acquisition_id=NULL, lease_revision=NULL, lease_expires_at=NULL, updated_at=?7 WHERE id=?8 AND revision=?9",
+        )
+        .bind(
+          next.status,
+          next.stage,
+          next.currentNodeId ?? null,
+          next.workflowHash ?? null,
+          next.revision,
+          JSON.stringify(next),
+          changedAt,
+          runId,
+          expectedRevision,
+        ),
+    ];
+    if (next.status === "active")
+      statements.push(
+        this.requestWakeupStatement(
+          { runId: next.id, expectedRevision: next.revision },
+          changedAt,
+        ),
+      );
+    const [result] = await this.batch(statements);
+    return (result?.meta.changes ?? 0) === 1 ? next : undefined;
   }
 
   async resume(
@@ -463,23 +524,29 @@ export class D1RunRepository implements RunRepository {
       continuationHead,
       signal,
     );
-    const result = await this.db
-      .prepare(
-        "UPDATE runs SET status=?1, stage=?2, current_node_id=?3, workflow_hash=?4, revision=?5, document_json=?6, lease_attempt_id=NULL, lease_revision=NULL, lease_expires_at=NULL, updated_at=?7 WHERE id=?8 AND revision=?9",
-      )
-      .bind(
-        next.status,
-        next.stage,
-        next.currentNodeId ?? null,
-        next.workflowHash ?? null,
-        next.revision,
-        JSON.stringify(next),
-        this.now(),
-        runId,
-        expectedRevision,
-      )
-      .run();
-    return (result.meta.changes ?? 0) === 1 ? next : undefined;
+    const changedAt = this.now();
+    const [result] = await this.batch([
+      this.db
+        .prepare(
+          "UPDATE runs SET status=?1, stage=?2, current_node_id=?3, workflow_hash=?4, revision=?5, document_json=?6, lease_attempt_id=NULL, lease_workflow_instance_id=NULL, lease_acquisition_id=NULL, lease_revision=NULL, lease_expires_at=NULL, updated_at=?7 WHERE id=?8 AND revision=?9",
+        )
+        .bind(
+          next.status,
+          next.stage,
+          next.currentNodeId ?? null,
+          next.workflowHash ?? null,
+          next.revision,
+          JSON.stringify(next),
+          changedAt,
+          runId,
+          expectedRevision,
+        ),
+      this.requestWakeupStatement(
+        { runId: next.id, expectedRevision: next.revision },
+        changedAt,
+      ),
+    ]);
+    return (result?.meta.changes ?? 0) === 1 ? next : undefined;
   }
 
   async claimLease(
@@ -490,11 +557,121 @@ export class D1RunRepository implements RunRepository {
   ): Promise<boolean> {
     const result = await this.db
       .prepare(
-        "UPDATE runs SET lease_attempt_id=?1, lease_revision=?2, lease_expires_at=?3, updated_at=?4 WHERE id=?5 AND revision=?2 AND status='active' AND (lease_expires_at IS NULL OR lease_expires_at<=?4)",
+        "UPDATE runs SET lease_attempt_id=?1, lease_workflow_instance_id=?1, lease_acquisition_id=NULL, lease_revision=?2, lease_expires_at=?3, updated_at=?4 WHERE id=?5 AND revision=?2 AND status='active' AND (lease_expires_at IS NULL OR lease_expires_at<=?4)",
       )
       .bind(lease.attemptId, expectedRevision, lease.expiresAt, now, runId)
       .run();
     return (result.meta.changes ?? 0) === 1;
+  }
+
+  async acquireAttempt(
+    runId: string,
+    expectedRevision: number,
+    lease: Lease,
+    attempt: Attempt,
+    now: number,
+  ): Promise<"created" | "exists" | "busy"> {
+    const startedAt = Date.now();
+    if (
+      lease.attemptId !== attempt.id ||
+      lease.runRevision !== expectedRevision ||
+      attempt.runId !== runId ||
+      attempt.runRevision !== expectedRevision
+    )
+      throw new Error("attempt_acquisition_identity_mismatch");
+    const existing = await this.getAttempt(attempt.id);
+    const acquisitionId = crypto.randomUUID();
+    try {
+      const [claimed, inserted] = await this.batch([
+        this.db
+          .prepare(
+            "UPDATE runs SET lease_attempt_id=?1, lease_workflow_instance_id=?1, lease_acquisition_id=?5, lease_revision=?2, lease_expires_at=?3, updated_at=?4 WHERE id=?6 AND revision=?2 AND status='active' AND (lease_expires_at IS NULL OR lease_expires_at<=?4)",
+          )
+          .bind(
+            lease.attemptId,
+            expectedRevision,
+            lease.expiresAt,
+            now,
+            acquisitionId,
+            runId,
+          ),
+        this.db
+          .prepare(
+            `INSERT INTO attempts
+               (id,run_id,run_revision,kind,node_id,executor,stage,role,capabilities_json,state,deadline_at,base_commit,expected_head,routing_json,outcome_json,created_at,updated_at)
+             SELECT ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?16
+             FROM runs
+             WHERE id=?2 AND revision=?3 AND status='active'
+               AND lease_attempt_id=?1 AND lease_revision=?3
+               AND lease_acquisition_id=?17
+             ON CONFLICT(id) DO UPDATE SET
+               state='created',
+               capabilities_json=excluded.capabilities_json,
+               completion_json=NULL,
+               result_json=NULL,
+               outcome_json=NULL,
+               deadline_at=excluded.deadline_at,
+               updated_at=excluded.updated_at
+             WHERE attempts.run_id=excluded.run_id
+               AND attempts.run_revision=excluded.run_revision
+               AND attempts.state NOT IN ('executed','completed')`,
+          )
+          .bind(
+            attempt.id,
+            attempt.runId,
+            attempt.runRevision,
+            attempt.kind,
+            attempt.nodeId ?? null,
+            attempt.executor ?? null,
+            attempt.stage,
+            attempt.role,
+            JSON.stringify(attempt.capabilities ?? []),
+            attempt.state,
+            attempt.deadlineAt,
+            attempt.baseCommit,
+            attempt.expectedHead,
+            attempt.routing ? JSON.stringify(attempt.routing) : null,
+            attempt.outcome ? JSON.stringify(attempt.outcome) : null,
+            this.now(),
+            acquisitionId,
+          ),
+      ]);
+      const outcome =
+        (inserted?.meta.changes ?? 0) === 1
+          ? existing
+            ? "exists"
+            : "created"
+          : (claimed?.meta.changes ?? 0) === 1
+            ? "exists"
+            : "busy";
+      console.log(
+        JSON.stringify({
+          message: "attempt_acquisition_completed",
+          runId,
+          expectedRevision,
+          attemptId: attempt.id,
+          acquisitionId,
+          outcome,
+          durationMs: Date.now() - startedAt,
+        }),
+      );
+      return outcome;
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          message: "attempt_acquisition_failed",
+          runId,
+          expectedRevision,
+          attemptId: attempt.id,
+          acquisitionId,
+          durationMs: Date.now() - startedAt,
+          errorType:
+            error instanceof Error ? error.constructor.name : typeof error,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+      throw error;
+    }
   }
 
   async releaseLease(
@@ -504,7 +681,7 @@ export class D1RunRepository implements RunRepository {
   ): Promise<boolean> {
     const result = await this.db
       .prepare(
-        "UPDATE runs SET lease_attempt_id=NULL, lease_revision=NULL, lease_expires_at=NULL, updated_at=?1 WHERE id=?2 AND revision=?3 AND lease_attempt_id=?4 AND lease_revision=?3",
+        "UPDATE runs SET lease_attempt_id=NULL, lease_workflow_instance_id=NULL, lease_acquisition_id=NULL, lease_revision=NULL, lease_expires_at=NULL, updated_at=?1 WHERE id=?2 AND revision=?3 AND lease_attempt_id=?4 AND lease_revision=?3",
       )
       .bind(this.now(), runId, expectedRevision, attemptId)
       .run();
@@ -599,6 +776,7 @@ export class D1RunRepository implements RunRepository {
   async renewExecutedAttemptLease(
     attemptId: string,
     expiresAt: number,
+    workflowInstanceId: string,
   ): Promise<boolean> {
     const now = this.now();
     const attempt = await this.db
@@ -610,9 +788,9 @@ export class D1RunRepository implements RunRepository {
     if ((attempt.meta.changes ?? 0) !== 1) return false;
     const run = await this.db
       .prepare(
-        "UPDATE runs SET lease_expires_at=?1,updated_at=?2 WHERE lease_attempt_id=?3 AND lease_revision=(SELECT run_revision FROM attempts WHERE id=?3) AND status='active'",
+        "UPDATE runs SET lease_expires_at=?1,lease_workflow_instance_id=?2,updated_at=?3 WHERE lease_attempt_id=?4 AND lease_revision=(SELECT run_revision FROM attempts WHERE id=?4) AND status='active'",
       )
-      .bind(expiresAt, now, attemptId)
+      .bind(expiresAt, workflowInstanceId, now, attemptId)
       .run();
     return (run.meta.changes ?? 0) === 1;
   }
@@ -625,26 +803,43 @@ export class D1RunRepository implements RunRepository {
   ): Promise<"completed" | "duplicate" | "stale"> {
     const attempt = await this.getAttempt(attemptId);
     if (!attempt || attempt.runRevision !== expectedRevision) return "stale";
-    if (attempt.state === "completed") return "duplicate";
-    const updated = await this.db
-      .prepare(
-        "UPDATE attempts SET state='completed', accepted_head=?1, result_json=?2, updated_at=?3 WHERE id=?4 AND run_revision=?5 AND state IN ('created','dispatched','executed') AND EXISTS (SELECT 1 FROM runs WHERE id=attempts.run_id AND revision=?5)",
-      )
-      .bind(
-        acceptedHead,
-        JSON.stringify(result),
-        this.now(),
-        attemptId,
-        expectedRevision,
-      )
-      .run();
-    if ((updated.meta.changes ?? 0) !== 1) return "stale";
-    await this.db
-      .prepare(
-        "UPDATE runs SET lease_attempt_id=NULL, lease_revision=NULL, lease_expires_at=NULL WHERE id=?1 AND lease_attempt_id=?2 AND revision=?3",
-      )
-      .bind(attempt.runId, attemptId, expectedRevision)
-      .run();
+    const wakeup = {
+      runId: attempt.runId,
+      expectedRevision,
+    };
+    if (attempt.state === "completed") {
+      const changedAt = this.now();
+      await this.batch([
+        this.db
+          .prepare(
+            "UPDATE runs SET lease_attempt_id=NULL, lease_workflow_instance_id=NULL, lease_acquisition_id=NULL, lease_revision=NULL, lease_expires_at=NULL WHERE id=?1 AND lease_attempt_id=?2 AND revision=?3",
+          )
+          .bind(attempt.runId, attemptId, expectedRevision),
+        this.requestWakeupStatement(wakeup, changedAt),
+      ]);
+      return "duplicate";
+    }
+    const changedAt = this.now();
+    const [updated] = await this.batch([
+      this.db
+        .prepare(
+          "UPDATE attempts SET state='completed', accepted_head=?1, result_json=?2, updated_at=?3 WHERE id=?4 AND run_revision=?5 AND state IN ('created','dispatched','executed') AND EXISTS (SELECT 1 FROM runs WHERE id=attempts.run_id AND revision=?5)",
+        )
+        .bind(
+          acceptedHead,
+          JSON.stringify(result),
+          changedAt,
+          attemptId,
+          expectedRevision,
+        ),
+      this.db
+        .prepare(
+          "UPDATE runs SET lease_attempt_id=NULL, lease_workflow_instance_id=NULL, lease_acquisition_id=NULL, lease_revision=NULL, lease_expires_at=NULL WHERE id=?1 AND lease_attempt_id=?2 AND revision=?3",
+        )
+        .bind(attempt.runId, attemptId, expectedRevision),
+      this.requestWakeupStatement(wakeup, changedAt),
+    ]);
+    if ((updated?.meta.changes ?? 0) !== 1) return "stale";
     return "completed";
   }
 
@@ -679,25 +874,49 @@ export class D1RunRepository implements RunRepository {
     if (
       attempt.state === state &&
       JSON.stringify(attempt.outcome) === JSON.stringify(outcome)
-    )
+    ) {
+      const changedAt = this.now();
+      await this.batch([
+        this.db
+          .prepare(
+            "UPDATE runs SET lease_attempt_id=NULL, lease_workflow_instance_id=NULL, lease_acquisition_id=NULL, lease_revision=NULL, lease_expires_at=NULL WHERE id=?1 AND lease_attempt_id=?2 AND revision=?3",
+          )
+          .bind(attempt.runId, attemptId, expectedRevision),
+        this.requestWakeupStatement(
+          { runId: attempt.runId, expectedRevision },
+          changedAt,
+        ),
+      ]);
       return "duplicate";
+    }
     if (attempt.state === "completed" || attempt.state === "failed")
       return "stale";
-    const updated = await this.db
-      .prepare(
-        "UPDATE attempts SET state=?1,accepted_head=?2,result_json=?3,outcome_json=?4,updated_at=?5 WHERE id=?6 AND run_revision=?7 AND state IN ('created','dispatched','executed') AND EXISTS (SELECT 1 FROM runs WHERE id=attempts.run_id AND revision=?7 AND status='active')",
-      )
-      .bind(
-        state,
-        acceptedHead ?? null,
-        result ? JSON.stringify(result) : null,
-        JSON.stringify(outcome),
-        this.now(),
-        attemptId,
-        expectedRevision,
-      )
-      .run();
-    if ((updated.meta.changes ?? 0) !== 1) return "stale";
+    const changedAt = this.now();
+    const [updated] = await this.batch([
+      this.db
+        .prepare(
+          "UPDATE attempts SET state=?1,accepted_head=?2,result_json=?3,outcome_json=?4,updated_at=?5 WHERE id=?6 AND run_revision=?7 AND state IN ('created','dispatched','executed') AND EXISTS (SELECT 1 FROM runs WHERE id=attempts.run_id AND revision=?7 AND status='active')",
+        )
+        .bind(
+          state,
+          acceptedHead ?? null,
+          result ? JSON.stringify(result) : null,
+          JSON.stringify(outcome),
+          changedAt,
+          attemptId,
+          expectedRevision,
+        ),
+      this.db
+        .prepare(
+          "UPDATE runs SET lease_attempt_id=NULL, lease_workflow_instance_id=NULL, lease_acquisition_id=NULL, lease_revision=NULL, lease_expires_at=NULL WHERE id=?1 AND lease_attempt_id=?2 AND revision=?3",
+        )
+        .bind(attempt.runId, attemptId, expectedRevision),
+      this.requestWakeupStatement(
+        { runId: attempt.runId, expectedRevision },
+        changedAt,
+      ),
+    ]);
+    if ((updated?.meta.changes ?? 0) !== 1) return "stale";
     return state;
   }
 
@@ -804,6 +1023,128 @@ export class D1RunRepository implements RunRepository {
       expectedRevision: row.revision,
       attemptId: row.lease_attempt_id,
     }));
+  }
+
+  async activeAttemptLeases(): Promise<readonly ActiveAttemptLease[]> {
+    const result = await this.db
+      .prepare(
+        "SELECT id,revision,lease_attempt_id,COALESCE(lease_workflow_instance_id,lease_attempt_id) AS lease_workflow_instance_id,lease_expires_at FROM runs WHERE status='active' AND lease_attempt_id IS NOT NULL AND lease_expires_at IS NOT NULL",
+      )
+      .all<{
+        id: string;
+        revision: number;
+        lease_attempt_id: string;
+        lease_workflow_instance_id: string;
+        lease_expires_at: number;
+      }>();
+    return (result.results ?? []).map((row) => ({
+      runId: row.id,
+      expectedRevision: row.revision,
+      attemptId: row.lease_attempt_id,
+      workflowInstanceId: row.lease_workflow_instance_id,
+      expiresAt: row.lease_expires_at,
+    }));
+  }
+
+  async requestWakeup(
+    wakeup: Wakeup,
+    availableAt = this.now(),
+  ): Promise<boolean> {
+    const result = await this.requestWakeupStatement(wakeup, availableAt).run();
+    return (result.meta.changes ?? 0) === 1;
+  }
+
+  async pendingWakeups(
+    now: number,
+    limit = 50,
+  ): Promise<readonly PendingWakeup[]> {
+    const result = await this.db
+      .prepare(
+        "SELECT payload_json,attempts,available_at FROM outbox WHERE kind='run_wakeup' AND state='pending' AND available_at<=?1 ORDER BY available_at,id LIMIT ?2",
+      )
+      .bind(now, limit)
+      .all<{
+        payload_json: string;
+        attempts: number;
+        available_at: number;
+      }>();
+    return (result.results ?? []).map((row) => {
+      const wakeup = JSON.parse(row.payload_json) as Wakeup;
+      if (
+        !wakeup ||
+        typeof wakeup.runId !== "string" ||
+        !Number.isSafeInteger(wakeup.expectedRevision)
+      )
+        throw new Error("outbox_wakeup_invalid");
+      return {
+        wakeup,
+        attempts: row.attempts,
+        availableAt: row.available_at,
+      };
+    });
+  }
+
+  async markWakeupSent(
+    wakeup: Wakeup,
+    nextAvailableAt: number,
+  ): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        "UPDATE outbox SET attempts=attempts+1,available_at=?1 WHERE id=?2 AND kind='run_wakeup' AND state='pending'",
+      )
+      .bind(nextAvailableAt, this.wakeupId(wakeup))
+      .run();
+    return (result.meta.changes ?? 0) === 1;
+  }
+
+  async deferWakeup(wakeup: Wakeup, nextAvailableAt: number): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        "UPDATE outbox SET available_at=MAX(available_at,?1) WHERE id=?2 AND kind='run_wakeup' AND state='pending'",
+      )
+      .bind(nextAvailableAt, this.wakeupId(wakeup))
+      .run();
+    return (result.meta.changes ?? 0) === 1;
+  }
+
+  async completeWakeupIfOwned(
+    wakeup: Wakeup,
+    completedAt = this.now(),
+  ): Promise<"completed" | "pending" | "missing"> {
+    const result = await this.db
+      .prepare(
+        `UPDATE outbox
+         SET state='completed',completed_at=?1
+         WHERE id=?2 AND kind='run_wakeup' AND state='pending'
+           AND (
+             NOT EXISTS (
+               SELECT 1 FROM runs
+               WHERE id=?3 AND revision=?4 AND status='active'
+             )
+             OR EXISTS (
+               SELECT 1 FROM attempts
+               WHERE run_id=?3 AND run_revision=?4
+                 AND state IN ('created','dispatched','executed')
+             )
+           )`,
+      )
+      .bind(
+        completedAt,
+        this.wakeupId(wakeup),
+        wakeup.runId,
+        wakeup.expectedRevision,
+      )
+      .run();
+    if ((result.meta.changes ?? 0) === 1) return "completed";
+    const row = await this.db
+      .prepare("SELECT state FROM outbox WHERE id=?1 AND kind='run_wakeup'")
+      .bind(this.wakeupId(wakeup))
+      .first<{ state: string }>();
+    return row
+      ? row.state === "completed"
+        ? "completed"
+        : "pending"
+      : "missing";
   }
 
   async recordGitHubDelivery(

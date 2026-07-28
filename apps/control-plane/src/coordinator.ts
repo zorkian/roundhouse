@@ -1101,7 +1101,7 @@ export async function coordinate(
         );
     }
     const aggregate = aggregateReviewAttempts(current, run.profile, review);
-    if (!aggregate) return "stale";
+    if (!aggregate) throw new Error("workflow_review_join_invariant");
     await repository.recordEvent?.(
       run.id,
       aggregate.id,
@@ -1151,7 +1151,9 @@ export async function coordinate(
       currentWorkflowNode.executor,
     )
   )
-    return "stale";
+    throw new Error(
+      `workflow_executor_not_runnable:${currentWorkflowNode.executor}`,
+    );
   // A conflicted mechanical integration is followed by exactly one narrowly
   // scoped conflict-resolution attempt for the same reviewed candidate; any
   // other integrate wakeup retries the no-model mechanical merge.
@@ -1182,30 +1184,6 @@ export async function coordinate(
     return "integrate";
   };
   const role = await integrateRole();
-  const claimed = await repository.claimLease(
-    run.id,
-    run.revision,
-    {
-      attemptId,
-      runRevision: run.revision,
-      expiresAt: now + leaseMilliseconds,
-    },
-    now,
-  );
-  if (!claimed) {
-    if (
-      await resumeCreatedDispatch(
-        repository,
-        dispatcher,
-        reporter,
-        run,
-        attemptId,
-      )
-    )
-      return "dispatched";
-    await revisitStarted(repository, reporter, run, attemptId);
-    return "duplicate";
-  }
   const attempt: Attempt = {
     id: attemptId,
     runId: run.id,
@@ -1229,11 +1207,35 @@ export async function coordinate(
           : (run.reviewedHead ?? run.currentHead)
         : run.currentHead,
   };
-  const created = await repository.createAttempt(attempt);
-  if (created === "created")
+  const acquired = await repository.acquireAttempt(
+    run.id,
+    run.revision,
+    {
+      attemptId,
+      runRevision: run.revision,
+      expiresAt: now + leaseMilliseconds,
+    },
+    attempt,
+    now,
+  );
+  if (acquired === "busy") {
+    if (
+      await resumeCreatedDispatch(
+        repository,
+        dispatcher,
+        reporter,
+        run,
+        attemptId,
+      )
+    )
+      return "dispatched";
+    await revisitStarted(repository, reporter, run, attemptId);
+    return "duplicate";
+  }
+  if (acquired === "created")
     await recordIssuedCapabilities(repository, attempt);
   const durable = await repository.getAttempt(attemptId);
-  if (created === "exists" && durable?.state === "completed")
+  if (acquired === "exists" && durable?.state === "completed")
     return "duplicate";
   try {
     await dispatcher.submit(attempt, run);
@@ -1256,30 +1258,6 @@ async function dispatchReview(
   reporter?: AttemptReporter,
 ): Promise<"dispatched" | "duplicate"> {
   const attemptId = reviewerAttemptId(run.id, run.revision, role);
-  const claimed = await repository.claimLease(
-    run.id,
-    run.revision,
-    {
-      attemptId,
-      runRevision: run.revision,
-      expiresAt: now + leaseMilliseconds,
-    },
-    now,
-  );
-  if (!claimed) {
-    if (
-      await resumeCreatedDispatch(
-        repository,
-        dispatcher,
-        reporter,
-        run,
-        attemptId,
-      )
-    )
-      return "dispatched";
-    await revisitStarted(repository, reporter, run, attemptId);
-    return "duplicate";
-  }
   const attempt: Attempt = {
     id: attemptId,
     runId: run.id,
@@ -1299,8 +1277,32 @@ async function dispatchReview(
     baseCommit: run.baseCommit,
     expectedHead: run.currentHead,
   };
-  const created = await repository.createAttempt(attempt);
-  if (created === "created")
+  const acquired = await repository.acquireAttempt(
+    run.id,
+    run.revision,
+    {
+      attemptId,
+      runRevision: run.revision,
+      expiresAt: now + leaseMilliseconds,
+    },
+    attempt,
+    now,
+  );
+  if (acquired === "busy") {
+    if (
+      await resumeCreatedDispatch(
+        repository,
+        dispatcher,
+        reporter,
+        run,
+        attemptId,
+      )
+    )
+      return "dispatched";
+    await revisitStarted(repository, reporter, run, attemptId);
+    return "duplicate";
+  }
+  if (acquired === "created")
     await recordIssuedCapabilities(repository, attempt);
   try {
     await dispatcher.submit(attempt, run);

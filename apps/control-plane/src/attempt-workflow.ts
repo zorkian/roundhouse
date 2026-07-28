@@ -29,6 +29,7 @@ import {
   type AttemptSettlementResult,
 } from "./attempt-settlement.js";
 import { D1RunRepository } from "./d1-store.js";
+import { publishWakeup } from "./liveness.js";
 
 type AttemptWorkflowEnv = AttemptSettlementEnv &
   AttemptPreparationEnv & {
@@ -85,11 +86,102 @@ async function trace(
   }
 }
 
+async function recordTerminalWorkflowFailure(
+  env: AttemptWorkflowEnv,
+  event: WorkflowEvent<AttemptWorkflowParams>,
+  error: unknown,
+): Promise<void> {
+  const { attemptId, mode } = event.payload;
+  const repository = new D1RunRepository(env.DB);
+  const attempt = await repository.getAttempt(attemptId);
+  const payload = {
+    phase: "attempt_workflow_terminal_failure",
+    workflowInstanceId: event.instanceId,
+    mode: mode ?? "execute",
+    attemptState: attempt?.state ?? "missing",
+    errorType: error instanceof Error ? error.constructor.name : typeof error,
+    error: error instanceof Error ? error.message : String(error),
+  };
+  console.error(
+    JSON.stringify({
+      message: "attempt_workflow_terminal_failure",
+      attemptId,
+      ...payload,
+    }),
+  );
+  if (!attempt) return;
+  await repository.recordAttemptEvent(
+    attemptId,
+    "attempt_workflow_terminal_failure",
+    payload,
+  );
+  const wakeup = {
+    runId: attempt.runId,
+    expectedRevision: attempt.runRevision,
+  };
+  let settlement: "completed" | "failed" | "duplicate" | "stale" | "deferred";
+  if (attempt.state === "created" || attempt.state === "dispatched") {
+    settlement = await repository.settleAttemptOutcome(
+      attempt.id,
+      attempt.runRevision,
+      "failed",
+      {
+        kind: "execution_interrupted",
+        source: "attempt_workflow",
+      },
+    );
+  } else {
+    settlement = "deferred";
+    await repository.requestWakeup(wakeup);
+  }
+  console.log(
+    JSON.stringify({
+      message: "attempt_workflow_terminal_failure_recorded",
+      attemptId,
+      runId: attempt.runId,
+      expectedRevision: attempt.runRevision,
+      attemptState: attempt.state,
+      settlement,
+    }),
+  );
+  await publishWakeup(repository, env.RUN_WAKEUPS, wakeup);
+}
+
 export class AttemptExecutionWorkflow extends WorkflowEntrypoint<
   AttemptWorkflowEnv,
   AttemptWorkflowParams
 > {
   override async run(
+    event: WorkflowEvent<AttemptWorkflowParams>,
+    step: WorkflowStep,
+  ): Promise<AttemptSettlementResult> {
+    try {
+      return await this.execute(event, step);
+    } catch (error) {
+      try {
+        await recordTerminalWorkflowFailure(this.env, event, error);
+      } catch (recordError) {
+        console.error(
+          JSON.stringify({
+            message: "attempt_workflow_terminal_failure_record_failed",
+            attemptId: event.payload.attemptId,
+            workflowInstanceId: event.instanceId,
+            errorType:
+              recordError instanceof Error
+                ? recordError.constructor.name
+                : typeof recordError,
+            error:
+              recordError instanceof Error
+                ? recordError.message
+                : String(recordError),
+          }),
+        );
+      }
+      throw error;
+    }
+  }
+
+  private async execute(
     event: WorkflowEvent<AttemptWorkflowParams>,
     step: WorkflowStep,
   ): Promise<AttemptSettlementResult> {
