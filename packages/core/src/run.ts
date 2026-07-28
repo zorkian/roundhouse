@@ -245,6 +245,7 @@ export function resumeRun(
     (run.stage === "merge" || run.stage === "implement");
   const resumable =
     run.status === "waiting" ||
+    run.status === "failed" ||
     run.status === "cancelled" ||
     (run.status === "succeeded" &&
       (run.stage === "qualify" ||

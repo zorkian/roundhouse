@@ -219,6 +219,29 @@ describe("resumeRun", () => {
     });
   });
 
+  it("retries failed work at the same durable stage and heads", () => {
+    const candidate = "c".repeat(40);
+    const failed = transitionRun(
+      {
+        ...createRun(input),
+        currentHead: candidate,
+        candidateHead: candidate,
+        reviewedHead: candidate,
+      },
+      1,
+      { status: "failed", stage: "integrate" },
+    );
+    expect(resumeRun(failed, 2, issue)).toMatchObject({
+      status: "active",
+      stage: "integrate",
+      currentHead: candidate,
+      candidateHead: candidate,
+      reviewedHead: candidate,
+      revision: 3,
+      issue,
+    });
+  });
+
   it("continues a completed merge as implementation from the new default-branch head", () => {
     const candidate = "c".repeat(40);
     const merged = "d".repeat(40);
@@ -271,18 +294,6 @@ describe("resumeRun", () => {
       }),
     );
   });
-
-  it.each([[{ status: "failed", stage: "qualify" }]])(
-    "rejects an unrelated run state %o",
-    (state) => {
-      const run = transitionRun(
-        createRun(input),
-        1,
-        state as Parameters<typeof transitionRun>[2],
-      );
-      expect(() => resumeRun(run, 2, issue)).toThrow("run_not_resumable");
-    },
-  );
 
   it("rejects an active run and a stale revision", () => {
     expect(() => resumeRun(createRun(input), 1, issue)).toThrow(
