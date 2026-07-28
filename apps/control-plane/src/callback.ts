@@ -15,6 +15,40 @@ export interface AttemptCallback {
 
 export type AttemptCompletion = Omit<AttemptCallback, "signature">;
 
+function record(value: unknown): value is Readonly<Record<string, unknown>> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+export function validAttemptCompletion(
+  value: unknown,
+): value is AttemptCompletion {
+  if (!record(value) || !record(value.checkpoint) || !record(value.result))
+    return false;
+  const checkpoint = value.checkpoint;
+  return (
+    typeof value.attemptId === "string" &&
+    value.attemptId.length > 0 &&
+    typeof value.expectedRevision === "number" &&
+    Number.isSafeInteger(value.expectedRevision) &&
+    typeof value.artifactTokenId === "string" &&
+    value.artifactTokenId.length > 0 &&
+    typeof checkpoint.repositoryId === "string" &&
+    checkpoint.repositoryId.length > 0 &&
+    typeof checkpoint.repository === "string" &&
+    checkpoint.repository.length > 0 &&
+    typeof checkpoint.baseCommit === "string" &&
+    /^[a-f0-9]{40}$/.test(checkpoint.baseCommit) &&
+    typeof checkpoint.inputHead === "string" &&
+    /^[a-f0-9]{40}$/.test(checkpoint.inputHead) &&
+    typeof checkpoint.outputHead === "string" &&
+    /^[a-f0-9]{40}$/.test(checkpoint.outputHead) &&
+    typeof checkpoint.ref === "string" &&
+    checkpoint.ref.startsWith("refs/heads/") &&
+    Array.isArray(checkpoint.changedPaths) &&
+    checkpoint.changedPaths.every((path) => typeof path === "string")
+  );
+}
+
 export interface CheckpointValidator {
   validate(input: AttemptCallback): Promise<void>;
 }

@@ -58,7 +58,7 @@ export interface Attempt {
 export type AttemptOutcome =
   | {
       readonly kind: "execution_interrupted";
-      readonly source: "attempt_recovery";
+      readonly source: "attempt_recovery" | "attempt_workflow";
     }
   | {
       readonly kind: "checkpoint_rejected";
@@ -245,6 +245,13 @@ export interface RunRepository {
     lease: Lease,
     now: number,
   ): Promise<boolean>;
+  acquireAttempt(
+    runId: string,
+    expectedRevision: number,
+    lease: Lease,
+    attempt: Attempt,
+    now: number,
+  ): Promise<"created" | "exists" | "busy">;
   releaseLease(
     runId: string,
     expectedRevision: number,

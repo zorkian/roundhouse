@@ -46,6 +46,19 @@ class LocalD1 {
   prepare(sql) {
     return new LocalD1Statement(this.database.prepare(sql));
   }
+
+  async batch(statements) {
+    this.database.exec("BEGIN");
+    try {
+      const results = [];
+      for (const statement of statements) results.push(await statement.run());
+      this.database.exec("COMMIT");
+      return results;
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
 }
 
 const input = {
@@ -563,6 +576,68 @@ function repositoryContract(label, createRepository) {
 
 repositoryContract("memory", () => new MemoryRunRepository());
 repositoryContract("D1", () => new D1RunRepository(new LocalD1(), () => 100));
+
+it("atomically rolls back a D1 attempt lease when attempt creation fails", async () => {
+  const database = new LocalD1();
+  const repository = new D1RunRepository(database, () => 100);
+  const run = createRun({ ...input, id: "run_atomic_acquisition" });
+  await repository.create(run);
+  database.database.exec(`
+    CREATE TRIGGER reject_attempt_insert
+    BEFORE INSERT ON attempts
+    BEGIN
+      SELECT RAISE(ABORT, 'injected_attempt_insert_failure');
+    END
+  `);
+  const attempt = {
+    id: "run_atomic_acquisition_rev_1",
+    runId: run.id,
+    runRevision: 1,
+    kind: "agent",
+    stage: "qualify",
+    role: "qualification",
+    state: "created",
+    deadlineAt: 200,
+    baseCommit: run.baseCommit,
+    expectedHead: run.currentHead,
+  };
+
+  await expect(
+    repository.acquireAttempt(
+      run.id,
+      1,
+      { attemptId: attempt.id, runRevision: 1, expiresAt: 200 },
+      attempt,
+      100,
+    ),
+  ).rejects.toThrow("injected_attempt_insert_failure");
+  await expect(repository.activeAttemptLeases()).resolves.toEqual([]);
+  await expect(repository.getAttempt(attempt.id)).resolves.toBeUndefined();
+
+  database.database.exec("DROP TRIGGER reject_attempt_insert");
+  await expect(
+    repository.acquireAttempt(
+      run.id,
+      1,
+      { attemptId: attempt.id, runRevision: 1, expiresAt: 200 },
+      attempt,
+      100,
+    ),
+  ).resolves.toBe("created");
+  await repository.markDispatched(attempt.id);
+  await expect(
+    repository.acquireAttempt(
+      run.id,
+      1,
+      { attemptId: attempt.id, runRevision: 1, expiresAt: 200 },
+      attempt,
+      100,
+    ),
+  ).resolves.toBe("busy");
+  await expect(repository.getAttempt(attempt.id)).resolves.toMatchObject({
+    state: "dispatched",
+  });
+});
 
 it("preserves the explicit path profile through D1 persistence", async () => {
   const commit = "a".repeat(40);

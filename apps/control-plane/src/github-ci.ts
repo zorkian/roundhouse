@@ -701,17 +701,6 @@ export class GitHubCiAutomation {
       return waiting ? "recorded" : "stale";
     }
 
-    const claimed = await this.repository.claimLease(
-      run.id,
-      run.revision,
-      {
-        attemptId,
-        runRevision: run.revision,
-        expiresAt: now + leaseMilliseconds,
-      },
-      now,
-    );
-    if (!claimed) return "pending";
     const attempt: Attempt = {
       id: attemptId,
       runId: run.id,
@@ -732,7 +721,18 @@ export class GitHubCiAutomation {
       baseCommit: run.baseCommit,
       expectedHead: run.currentHead,
     };
-    await this.repository.createAttempt(attempt);
+    const acquired = await this.repository.acquireAttempt(
+      run.id,
+      run.revision,
+      {
+        attemptId,
+        runRevision: run.revision,
+        expiresAt: now + leaseMilliseconds,
+      },
+      attempt,
+      now,
+    );
+    if (acquired === "busy") return "pending";
     await this.repository.markDispatched(attempt.id);
 
     const result = pull.merged

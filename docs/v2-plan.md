@@ -183,7 +183,11 @@ plugin, MCP server, URL, or secret as a provider.
 ### 3.3 Durable execution
 
 D1 is the only workflow authority. Queue messages contain a run ID and expected
-revision and serve only as wakeups.
+revision and serve only as wakeups. Every active run revision atomically
+creates or reopens a D1 outbox record. Queue delivery may be duplicated or
+lost temporarily without losing the work: the consumer completes that outbox
+record only after the revision becomes inactive or a durable attempt owns it,
+and the scheduled reconciler republishes pending records.
 
 One Cloudflare Workflow instance owns the transport lifetime of each Sandbox
 attempt. Its durable steps restore the prepared workspace, keep the runner
@@ -201,6 +205,17 @@ implementation to reconcile it. Workspace backup improves continuation speed
 but is not a correctness boundary: the Artifacts checkpoint and Git commit
 remain authoritative when backup is unavailable. The Cloudflare Workflow does
 not choose nodes, transitions, or product outcomes.
+
+Attempt acquisition writes the run lease and attempt in one D1 transaction.
+The lease records both the logical attempt and the current Cloudflare Workflow
+instance, since settlement recovery may use a different Workflow instance
+without rerunning the model. A top-level Workflow failure records a typed
+interruption immediately when execution has not completed. The scheduled
+reconciler also observes every active Workflow transport, resumes settlement
+for recorded executions, and reconciles terminal or inactive transports
+independently so one broken recovery cannot prevent other runs from moving.
+GitHub checks and merge waits retain pending outbox records and are polled until
+GitHub supplies the external outcome.
 
 For each node execution the coordinator:
 
@@ -273,9 +288,12 @@ containers. Those are authority expansions rather than missing graph features.
 
 One Cloudflare Worker owns GitHub intake, authorization, workflow progress,
 publication, checks, merge, and the dashboard. D1 stores lifecycle state and
-small structured results. One Queue plus a dead-letter queue wakes the
-coordinator. Durable Objects exist only where the Cloudflare Sandbox/Container
-lifecycle requires them; they do not own workflow state.
+small structured results, including the durable wakeup outbox and current
+attempt transport owner. One at-least-once Queue wakes the coordinator; the
+outbox and scheduled reconciliation make Queue delivery a transport detail
+rather than workflow authority. Durable Objects exist only where the
+Cloudflare Sandbox/Container lifecycle requires them; they do not own workflow
+state.
 
 Cloudflare Workflows provide the durable execution context for the generic
 restore-execute-settle Sandbox boundary. They do not mirror D1 run state or

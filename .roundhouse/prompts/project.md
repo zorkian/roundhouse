@@ -15,6 +15,9 @@ development environment, and GitHub permission boundaries. Add structured,
 observable logging with timing at every new boundary and important step so a
 live run can be diagnosed from its logs.
 
-For a visual change, capture before-and-after screenshots using the real
-development environment and include both in the pull request before it is
-considered ready to merge.
+For a visual change, capture before-and-after screenshots from the isolated
+development workspace at the relevant source revision and include both in the
+pull request before it is considered ready to merge. A repository-local
+preview or deterministic fixture renderer is valid when it exercises the
+actual candidate UI. Do not depend on a shared development or production
+deployment for visual evidence.
