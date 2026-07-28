@@ -33,9 +33,16 @@ export interface WorkflowGraphElement {
   readonly data: Readonly<Record<string, string>>;
 }
 
+// Bound a label line so the fixed-size graph node always contains its text
+// vertically: at 13px in a 210px-wide, 110px-high node, these caps keep the
+// wrapped label within the box regardless of authored content length.
+function truncateLabel(value: string, max: number): string {
+  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
+}
+
 // Human-readable stage name: prefer the authored role, fall back to the ID.
 export function workflowNodeName(id: string, node: WorkflowNode): string {
-  return node.role ?? id;
+  return truncateLabel(node.role ?? id, 48);
 }
 
 // One-sentence purpose derived from existing executor configuration.
@@ -85,7 +92,7 @@ export function workflowGraphElements(
         external: node.external
           ? `${node.external.adapter} event ${node.external.event}`
           : "",
-        label: `${name}\n${summary}`,
+        label: `${name}\n${truncateLabel(summary, 96)}`,
       },
     };
   });
@@ -133,7 +140,7 @@ export function renderWorkflowView(run: RunSnapshot): string {
 </style></head><body><p><a href="/">← Dashboard</a></p><header><div><p>Repository workflow</p><h1>${escapeHtml(run.repository)}</h1></div><a class="button" href="${escapeHtml(workflowEditUrl(run))}" target="_blank" rel="noreferrer">Edit and propose on GitHub</a></header>
 <dl class="meta"><dt>Workflow hash</dt><dd><code>${escapeHtml(workflow.hash)}</code></dd><dt>Source commit</dt><dd><code>${escapeHtml(workflow.sourceCommit)}</code></dd><dt>Snapshot run</dt><dd>${escapeHtml(run.id)} revision ${run.revision}</dd></dl>
 <p>This is the immutable workflow snapshot attached to the repository’s latest run. Editing below changes only your browser. Validate it here, then copy the YAML into GitHub’s editor and create a branch and pull request. Existing runs keep their original snapshot.</p>
-<h2>Graph and authority</h2><div id="workflow-stages" role="group" aria-label="Workflow stages">${stageButtons}</div><div id="workflow-layout"><div id="workflow-graph" role="application" aria-label="Workflow graph. Drag nodes to rearrange them, scroll or pinch to zoom, and select a node to highlight its transitions and show its details."></div><section id="stage-details" aria-live="polite" aria-label="Stage details"><h3>Stage details</h3><p id="stage-details-status">Select a stage in the graph or the stage list to see its details.</p><dl id="stage-details-list"></dl></section></div><script id="workflow-graph-data" type="application/json">${graphData}</script><script src="/assets/workflow-graph.js" defer></script>
+<h2>Graph and authority</h2><div id="workflow-stages" role="group" aria-label="Workflow stages">${stageButtons}</div><div id="workflow-layout"><div id="workflow-graph"${run.currentNodeId && workflow.nodes[run.currentNodeId] ? ` data-select="${escapeHtml(run.currentNodeId)}"` : ""} role="application" aria-label="Workflow graph. Drag nodes to rearrange them, scroll or pinch to zoom, and select a node to highlight its transitions and show its details."></div><section id="stage-details" aria-live="polite" aria-label="Stage details"><h3>Stage details</h3><p id="stage-details-status">Select a stage in the graph or the stage list to see its details.</p><dl id="stage-details-list"></dl></section></div><script id="workflow-graph-data" type="application/json">${graphData}</script><script src="/assets/workflow-graph.js" defer></script>
 <h2>Routes</h2><table><thead><tr><th>From</th><th>Condition</th><th>Destination</th></tr></thead><tbody>${routes}</tbody></table>
 <h2>Workflow editor</h2><textarea id="source" spellcheck="false" data-source-commit="${escapeHtml(workflow.sourceCommit)}">${escapeHtml(source)}</textarea><div class="actions"><button id="validate" type="button">Validate workflow</button><button id="copy" class="secondary" type="button">Copy YAML</button><a href="${escapeHtml(workflowEditUrl(run))}" target="_blank" rel="noreferrer">Open GitHub editor</a><span id="validation" aria-live="polite"></span></div>
 </body></html>`;

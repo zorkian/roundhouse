@@ -41,6 +41,17 @@ async function runFixture(): Promise<RunSnapshot> {
 }
 
 describe("workflow graph view", () => {
+  it("preselects the run's current node through data-select", async () => {
+    const run = await runFixture();
+    const html = renderWorkflowView(run);
+    expect(html).toContain('id="workflow-graph" data-select="implement"');
+    const { renderWorkflowView: render } = await import("./workflow-view.js");
+    const unselected = render({ ...run, currentNodeId: undefined });
+    expect(unselected).not.toContain("data-select");
+    const unknown = render({ ...run, currentNodeId: 'missing"><script>' });
+    expect(unknown).not.toContain("data-select");
+  });
+
   it("renders the labeled graph container, editor, and GitHub proposal path", async () => {
     const run = await runFixture();
     const html = renderWorkflowView(run);
@@ -115,20 +126,31 @@ describe("workflow graph view", () => {
     expect(synthetic[0]!.data["authority"]).toBe("no external authority");
     expect(synthetic[0]!.data["outputs"]).toBe("none");
 
-    // Long names and summaries stay in the label as-is; the client wraps
-    // them inside the fixed node box.
-    const longName = "a-very-long-stage-".repeat(4);
+    // Long names and summaries are truncated so the wrapped label always
+    // stays inside the fixed 240x110 node box vertically as well as
+    // horizontally.
+    const longName = "a-very-long-stage-".repeat(8);
+    const longEvent = "very.long.external.event.".repeat(8);
     const longLabeled = workflowGraphElements({
       ...workflow,
       nodes: {
         lone: {
-          ...workflow.nodes["plan"]!,
+          ...workflow.nodes["implement"]!,
           role: `${longName} stage`,
+          agent: undefined,
+          external: { adapter: "pagerduty", event: longEvent, resultKey: "r" },
         },
       },
     });
-    expect(longLabeled[0]!.data["name"]).toContain(longName);
-    expect(longLabeled[0]!.data["label"]).toContain(longName);
+    const longData = longLabeled[0]!.data;
+    expect(longData["name"]!.length).toBeLessThanOrEqual(48);
+    expect(longData["name"]!.endsWith("…")).toBe(true);
+    const labelLines = longData["label"]!.split("\n");
+    expect(labelLines).toHaveLength(2);
+    expect(labelLines[0]!.length).toBeLessThanOrEqual(48);
+    expect(labelLines[1]!.length).toBeLessThanOrEqual(96);
+    // The full untruncated text remains available in the detail fields.
+    expect(longData["external"]).toContain(longEvent);
 
     // One directed edge per transition with a destination, with unique IDs.
     const routed = Object.values(workflow.nodes).flatMap((node) =>
