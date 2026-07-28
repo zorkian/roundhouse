@@ -65,6 +65,7 @@ import {
   type SandboxNamespace,
 } from "./attempt-runtime.js";
 export { AttemptExecutionWorkflow } from "./attempt-workflow.js";
+export { RoundhouseRuntimeSandbox as RoundhouseAttemptSandbox } from "./attempt-container.js";
 export {
   artifactNeedsSync,
   attemptArtifactAccess,
