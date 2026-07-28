@@ -175,6 +175,7 @@ describe("usageForRepositories", () => {
     onBind: (values: unknown[]) => void,
     results: unknown[] = [],
   ): D1Like => ({
+    batch: async () => [],
     prepare(_sql: string) {
       let values: unknown[] = [];
       const statement = {
