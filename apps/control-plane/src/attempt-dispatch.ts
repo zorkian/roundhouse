@@ -10,12 +10,14 @@ import {
   reviewerForRole,
   type Attempt,
   type ModelRoute,
+  type Reviewer,
   type RunRepository,
   type RunSnapshot,
   type WorkflowAgent,
   type WorkflowCompetition,
   type WorkflowModel,
   type WorkflowNode,
+  type WorkflowReviewer,
 } from "@roundhouse/core";
 import { aggregatedReview } from "./aggregated-review.js";
 import { signCallback } from "./callback.js";
@@ -412,6 +414,47 @@ function requestedModelForAttempt(
   );
 }
 
+// Resolves the base role a competition candidate or judge attempt derives
+// from, so reviewer metadata, prompts, and selection contracts configured on
+// the base reviewer apply to its competing attempts.
+function competitionAttemptBaseRole(attempt: Attempt): string {
+  if (attempt.competition?.purpose === "candidate") {
+    const suffix = `-candidate-${attempt.competition.candidateId}`;
+    if (attempt.role.endsWith(suffix))
+      return attempt.role.slice(0, -suffix.length);
+  }
+  if (
+    attempt.competition?.purpose === "judge" &&
+    attempt.role.endsWith("-judge")
+  )
+    return attempt.role.slice(0, -"-judge".length);
+  return attempt.role;
+}
+
+// Resolves the reviewer definition governing an attempt. Competition
+// candidates run under roles derived from the base reviewer, so the lookup
+// must resolve the base role to apply the configured reviewer's prompt,
+// selection contract, and `selectedBy`; the judge has its own task.
+export function reviewerForAttempt(
+  node: WorkflowNode | undefined,
+  attempt: Attempt,
+): {
+  readonly reviewer: Reviewer | WorkflowReviewer | undefined;
+  readonly selectedBy: string;
+} {
+  const baseRole =
+    attempt.competition?.purpose === "candidate"
+      ? competitionAttemptBaseRole(attempt)
+      : attempt.role;
+  const configured = node?.review?.reviewers.find(
+    (candidate) => candidate.id === baseRole,
+  );
+  return {
+    reviewer: configured ?? reviewerForRole(baseRole),
+    selectedBy: configured?.selectedBy ?? "review-holistic",
+  };
+}
+
 // Selects the candidate evidence a judge attempt receives: exactly the
 // completed candidates belonging to this judge's own competition, scoped by
 // node and reviewer role so a review node with several competing reviewers
@@ -789,15 +832,14 @@ class SandboxAttemptPreparer {
             review,
           }
         : undefined;
-    const configuredReviewer = workflowNode?.review?.reviewers.find(
-      (candidate) => candidate.id === attempt.role,
+    const { reviewer, selectedBy: selectorRole } = reviewerForAttempt(
+      workflowNode,
+      attempt,
     );
-    const reviewer = configuredReviewer ?? reviewerForRole(attempt.role);
     const sameRevisionReviews =
       attempt.stage === "review"
         ? await this.runs.attemptsForRevision(run.id, run.revision)
         : [];
-    const selectorRole = configuredReviewer?.selectedBy ?? "review-holistic";
     const holisticSelection = sameRevisionReviews.find(
       (candidate) => candidate.role === selectorRole,
     )?.result?.review;

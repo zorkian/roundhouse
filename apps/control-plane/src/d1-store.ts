@@ -1050,7 +1050,7 @@ export class D1RunRepository implements RunRepository {
     // recovery also picks them up directly from their own deadlines.
     const result = await this.db
       .prepare(
-        "SELECT id,revision,lease_attempt_id FROM runs WHERE status='active' AND stage IN ('qualify','reproduce','plan','implement','review','integrate','merge') AND lease_expires_at<=?1 AND lease_attempt_id IS NOT NULL UNION SELECT attempts.run_id AS id,attempts.run_revision AS revision,attempts.id AS lease_attempt_id FROM attempts JOIN runs ON runs.id=attempts.run_id AND runs.revision=attempts.run_revision WHERE runs.status='active' AND attempts.competition_json IS NOT NULL AND attempts.state IN ('dispatched','executed') AND attempts.deadline_at<=?1",
+        "SELECT id,revision,lease_attempt_id FROM runs WHERE status='active' AND stage IN ('qualify','reproduce','plan','implement','review','integrate','merge') AND lease_expires_at<=?1 AND lease_attempt_id IS NOT NULL UNION SELECT attempts.run_id AS id,attempts.run_revision AS revision,attempts.id AS lease_attempt_id FROM attempts JOIN runs ON runs.id=attempts.run_id AND runs.revision=attempts.run_revision WHERE runs.status='active' AND attempts.competition_json IS NOT NULL AND attempts.state IN ('created','dispatched','executed') AND attempts.deadline_at<=?1",
       )
       .bind(now)
       .all<{ id: string; revision: number; lease_attempt_id: string }>();

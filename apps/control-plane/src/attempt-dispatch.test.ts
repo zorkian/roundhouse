@@ -1,11 +1,12 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import type { Attempt, RunSnapshot } from "@roundhouse/core";
+import type { Attempt, RunSnapshot, WorkflowNode } from "@roundhouse/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DurableAttemptDispatcher,
   judgementCandidateAttempts,
+  reviewerForAttempt,
 } from "./attempt-dispatch.js";
 
 const attempt = {
@@ -110,6 +111,71 @@ describe("durable attempt dispatch", () => {
       "review-data-candidate-alpha",
       "review-data-candidate-beta",
     ]);
+  });
+
+  it("resolves the base reviewer for competition candidates", () => {
+    const node = {
+      executor: "review",
+      role: "review",
+      capabilities: ["repository.read", "context.read"],
+      review: {
+        reviewers: [
+          {
+            id: "review-holistic",
+            model: { id: "openai/gpt-holistic", reasoning: "low" },
+            prompt: "Select the applicable specialists.",
+            selects: ["review-security"],
+            competition: {
+              candidates: [
+                {
+                  id: "alpha",
+                  model: { id: "openai/gpt-alpha", reasoning: "low" },
+                },
+                {
+                  id: "beta",
+                  model: { id: "anthropic/claude-beta", reasoning: "medium" },
+                },
+              ],
+              judge: { model: { id: "openai/gpt-judge", reasoning: "high" } },
+            },
+          },
+        ],
+      },
+    } as unknown as WorkflowNode;
+    const candidate: Attempt = {
+      ...attempt,
+      id: "run_1_rev_2_review-holistic-candidate-alpha",
+      stage: "review",
+      role: "review-holistic-candidate-alpha",
+      competition: { purpose: "candidate", candidateId: "alpha" },
+    };
+    // A competing candidate keeps the configured reviewer's prompt,
+    // selection contract, and selectedBy instead of falling back to the
+    // generic review prompt.
+    const resolved = reviewerForAttempt(node, candidate);
+    expect(resolved.reviewer).toMatchObject({
+      id: "review-holistic",
+      prompt: "Select the applicable specialists.",
+      selects: ["review-security"],
+    });
+    expect(resolved.selectedBy).toBe("review-holistic");
+    // The judge keeps its own task rather than inheriting reviewer metadata.
+    const judge: Attempt = {
+      ...candidate,
+      id: "run_1_rev_2_review-holistic-judge",
+      role: "review-holistic-judge",
+      competition: { purpose: "judge" },
+    };
+    expect(reviewerForAttempt(node, judge).reviewer).toBeUndefined();
+    // Non-competition attempts are unaffected.
+    const plain: Attempt = {
+      ...attempt,
+      stage: "review",
+      role: "review-security",
+    };
+    expect(reviewerForAttempt(node, plain).reviewer).toMatchObject({
+      role: "review-security",
+    });
   });
 
   it("resumes when that Workflow instance already exists", async () => {

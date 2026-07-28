@@ -2101,6 +2101,159 @@ nodes:
     expect(submitted).toHaveLength(2);
   });
 
+  it("resumes a candidate recorded before an interrupted dispatch handoff", async () => {
+    const competition = await competitionInput();
+    const store = new MemoryRunRepository();
+    await store.create(createRun(competition));
+    const submitted: Attempt[] = [];
+    let interrupt = true;
+    const dispatcher = {
+      submit: async (attempt: Attempt) => {
+        // The attempt is recorded before submit; interrupt the first handoff
+        // to simulate a crash between recording and dispatch.
+        if (interrupt && submitted.length === 0)
+          throw new Error("handoff_interrupted");
+        submitted.push(attempt);
+      },
+    };
+    const wakeup = { runId: competition.id, expectedRevision: 1 };
+    interrupt = true;
+    await expect(coordinate(store, dispatcher, wakeup, 100)).rejects.toThrow(
+      "handoff_interrupted",
+    );
+    const recorded = await store.getAttempt(
+      "run_competition_rev_1_qualify-candidate-alpha",
+    );
+    expect(recorded?.state).toBe("created");
+    // The next wakeup resumes the recorded candidate instead of waiting
+    // forever, and the remaining fan-out proceeds.
+    interrupt = false;
+    await expect(coordinate(store, dispatcher, wakeup, 101)).resolves.toBe(
+      "dispatched",
+    );
+    expect(submitted.map((attempt) => attempt.role)).toEqual([
+      "qualify-candidate-alpha",
+      "qualify-candidate-beta",
+    ]);
+    await expect(
+      store.getAttempt("run_competition_rev_1_qualify-candidate-alpha"),
+    ).resolves.toMatchObject({ state: "dispatched" });
+  });
+
+  it("gives the judge only read-only capabilities on a write-capable stage", async () => {
+    const writeWorkflow = await compileWorkflow(
+      `
+version: 1
+triggers:
+  github.issue.started: qualify
+nodes:
+  qualify:
+    executor: agent.read
+    role: qualify
+    agent:
+      task: qualification
+      inputs:
+        issue: trigger.issue
+      result:
+        key: qualification
+        schema: roundhouse.qualification.v1
+      model: { id: openai/gpt-5.6-sol, reasoning: low }
+    capabilities:
+      - repository.read
+      - context.read
+    outputs:
+      - qualification.classification
+      - reproduction.status
+      - plan.status
+    transitions:
+      - to: implement
+  implement:
+    executor: agent.write
+    role: implement
+    agent:
+      task: implementation
+      inputs:
+        issue: trigger.issue
+        qualification: nodes.qualify.qualification
+        reproduction: nodes.qualify.reproduction
+        plan: nodes.qualify.plan
+      result:
+        key: implementation
+        schema: roundhouse.implementation.v1
+      competition:
+        candidates:
+          - id: alpha
+            model: { id: openai/gpt-alpha, reasoning: low }
+          - id: beta
+            model: { id: anthropic/claude-beta, reasoning: medium }
+        judge:
+          model: { id: openai/gpt-judge, reasoning: high }
+    capabilities:
+      - repository.read
+      - artifact.write
+      - commands.execute
+      - environment.project
+      - network.project
+      - preview.capture
+    outputs:
+      - implementation.summary
+    transitions:
+      - terminal: succeeded
+`,
+      sourceCommit,
+    );
+    const competition = {
+      ...input,
+      id: "run_competition",
+      profile: { ...input.profile, workflow: writeWorkflow },
+    };
+    const store = new MemoryRunRepository();
+    await store.create(createRun(competition));
+    const submitted: Attempt[] = [];
+    const dispatcher = {
+      submit: async (attempt: Attempt) => {
+        submitted.push(attempt);
+      },
+    };
+    const wakeup = { runId: competition.id, expectedRevision: 1 };
+    const step = (now: number) => coordinate(store, dispatcher, wakeup, now);
+    await step(100);
+    // Advance the single-model qualification node to reach the competition.
+    const qualify = submitted.find((attempt) => attempt.role === "qualify")!;
+    await store.completeAttempt(qualify.id, 1, qualify.expectedHead, {
+      qualification: {
+        classification: "bug",
+        summary: "qualify",
+        acceptanceCriteria: [],
+        uncertainties: [],
+        sources: [],
+      },
+      reproduction: { status: "reproduced" },
+      plan: { status: "ready" },
+    });
+    await step(101);
+    // Advancing to the implement node bumped the run revision.
+    const implementWakeup = { runId: competition.id, expectedRevision: 2 };
+    await coordinate(store, dispatcher, implementWakeup, 102);
+    const candidates = submitted.filter(
+      (attempt) => attempt.competition?.purpose === "candidate",
+    );
+    expect(candidates).toHaveLength(2);
+    // Candidates keep the stage's write capabilities.
+    expect(candidates[0]!.capabilities).toContain("artifact.write");
+    for (const candidate of candidates)
+      await store.completeAttempt(candidate.id, 2, candidate.expectedHead, {
+        implementation: { summary: candidate.role },
+      });
+    await coordinate(store, dispatcher, implementWakeup, 103);
+    const judge = submitted.find(
+      (attempt) => attempt.role === "implement-judge",
+    )!;
+    // The judge receives only the read-only subset: no command,
+    // environment, network, preview, publication, or write authority.
+    expect(judge.capabilities).toEqual(["repository.read"]);
+  });
+
   it("records the selection durably before publication and resumes an interrupted promotion", async () => {
     const competition = await competitionInput();
     const store = new MemoryRunRepository();

@@ -47,6 +47,13 @@ export interface CompetitionPromoter {
 
 export const attemptInactivityMilliseconds = 10 * 60_000;
 
+// The judgement pass reads candidate evidence and returns scores; it never
+// needs more than the read-only review capability set.
+const judgeCapabilities: readonly WorkflowCapability[] = [
+  "repository.read",
+  "context.read",
+];
+
 export function effectiveAttemptCapabilities(
   node: WorkflowNode,
   role: string,
@@ -900,12 +907,16 @@ async function dispatchCompetitionAttempt(
     // attempt query recovers it independently of the run lease.
     if (!allowConcurrent) return;
   }
-  const capabilities = effectiveAttemptCapabilities(node, role).filter(
-    (capability) =>
-      // The judge only reads evidence; it never receives write authority even
-      // when the competed stage is write-capable.
-      competition.purpose === "judge" ? capability !== "artifact.write" : true,
-  );
+  const capabilities =
+    competition.purpose === "judge"
+      ? // The judge only reads evidence and returns scores; it receives the
+        // minimal read-only capability set even when the competed stage is
+        // write-capable, so untrusted candidate output cannot prompt it into
+        // command, environment, network, preview, or publication authority.
+        effectiveAttemptCapabilities(node, role).filter((capability) =>
+          judgeCapabilities.includes(capability),
+        )
+      : effectiveAttemptCapabilities(node, role);
   const attempt: Attempt = {
     id: attemptId,
     runId: run.id,
@@ -1102,7 +1113,10 @@ async function coordinateCompetition(
         attempt,
         reason: "competition_candidate_failed",
       };
-    if (!attempt) {
+    // A missing or still-`created` candidate is (re)dispatched: dispatch is
+    // idempotent, so this also resumes a candidate that was recorded but
+    // whose handoff was interrupted before submission completed.
+    if (!attempt || attempt.state === "created") {
       await dispatchCompetitionAttempt(
         repository,
         dispatcher,
@@ -1154,7 +1168,7 @@ async function coordinateCompetition(
       attempt: judge,
       reason: "competition_judge_failed",
     };
-  if (!judge) {
+  if (!judge || judge.state === "created") {
     await dispatchCompetitionAttempt(
       repository,
       dispatcher,
