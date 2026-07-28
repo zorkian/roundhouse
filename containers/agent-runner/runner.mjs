@@ -1968,6 +1968,55 @@ export async function bootstrapWorkspace(assignment) {
     cwd: directory,
   });
   if (head !== assignment.source.head) throw new Error("source_head_changed");
+  if (assignment.baseCommit !== head) {
+    const ancestryStartedAt = Date.now();
+    runnerLog("info", "bootstrap_source_ancestry_check_started", {
+      sourceHead: head,
+      baseCommit: assignment.baseCommit,
+    });
+    const isAncestor = () =>
+      command(
+        "git",
+        ["merge-base", "--is-ancestor", assignment.baseCommit, head],
+        { cwd: directory },
+      ).then(
+        () => true,
+        () => false,
+      );
+    let outcome = "present";
+    if (!(await isAncestor())) {
+      outcome = "fetched";
+      runnerLog("info", "bootstrap_source_ancestry_fetch_started", {
+        sourceHead: head,
+        baseCommit: assignment.baseCommit,
+      });
+      await command(
+        "git",
+        ["fetch", "--unshallow", "--no-tags", "origin", head],
+        { cwd: directory, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
+      );
+      if (!(await isAncestor())) {
+        runnerLog("error", "bootstrap_source_ancestry_check_failed", {
+          sourceHead: head,
+          baseCommit: assignment.baseCommit,
+          durationMs: Date.now() - ancestryStartedAt,
+          reason: "source_head_not_descendant",
+        });
+        throw new Error("source_head_not_descendant");
+      }
+      runnerLog("info", "bootstrap_source_ancestry_fetch_completed", {
+        sourceHead: head,
+        baseCommit: assignment.baseCommit,
+        durationMs: Date.now() - ancestryStartedAt,
+      });
+    }
+    runnerLog("info", "bootstrap_source_ancestry_check_completed", {
+      sourceHead: head,
+      baseCommit: assignment.baseCommit,
+      outcome,
+      durationMs: Date.now() - ancestryStartedAt,
+    });
+  }
   await command(
     "git",
     [
@@ -2804,6 +2853,7 @@ function validBootstrap(body) {
   if (
     !body?.id ||
     !Number.isInteger(body?.deadlineAt) ||
+    !/^[a-f0-9]{40}$/.test(body?.baseCommit ?? "") ||
     body?.artifact?.access !== "write" ||
     !body?.artifact?.remote?.startsWith("https://") ||
     !body?.artifact?.hostname ||
