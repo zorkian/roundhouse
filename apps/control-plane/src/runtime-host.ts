@@ -4,7 +4,10 @@
 import { runSchemaVersion } from "@roundhouse/core";
 
 export { ContainerProxy } from "@cloudflare/sandbox";
-export { RoundhouseRuntimeSandbox } from "./attempt-container.js";
+export {
+  RoundhouseRuntimeSandbox,
+  RoundhouseRuntimeSandbox as RoundhouseAttemptSandbox,
+} from "./attempt-container.js";
 
 export const runtimeHostService = "roundhouse-v2-runtime-host";
 
