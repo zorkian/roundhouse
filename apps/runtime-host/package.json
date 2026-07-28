@@ -1,0 +1,12 @@
+{
+  "name": "@roundhouse/runtime-host",
+  "version": "0.0.0",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@cloudflare/sandbox": "0.12.4",
+    "@roundhouse/core": "workspace:*",
+    "@roundhouse/response-observer": "workspace:*"
+  }
+}

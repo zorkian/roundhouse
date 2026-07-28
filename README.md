@@ -31,10 +31,12 @@ when information or judgment is genuinely required.
    repository profile.
 
 GitHub remains the source of truth for issues, pull requests, CI, and merged
-code. A Cloudflare Worker coordinates each run, D1 stores workflow state, and
-Cloudflare Artifacts carries Git checkpoints between isolated containers. A
-private model broker selects models without exposing provider credentials to
-the agent container.
+code. A Cloudflare control-plane Worker coordinates each run, D1 stores
+workflow state, and Cloudflare Artifacts carries Git checkpoints between
+isolated containers. A separately deployed runtime-host Worker owns the
+Sandbox Durable Objects and container image, so ordinary control-plane deploys
+do not replace active coding environments. A private model broker selects
+models without exposing provider credentials to the agent container.
 
 D1 also records every active revision's wakeup before Queue delivery and binds
 each attempt lease to its current Cloudflare Workflow instance. Queue messages
@@ -118,6 +120,7 @@ the normative product and architecture document.
 | Path                          | Purpose                                                           |
 | ----------------------------- | ----------------------------------------------------------------- |
 | `apps/control-plane`          | Cloudflare Worker that handles GitHub intake and coordinates runs |
+| `apps/runtime-host`           | Independently deployed Sandbox and Container host                 |
 | `apps/model-broker`           | Private model routing and credential boundary                     |
 | `containers/agent-runner`     | Isolated coding-agent runtime                                     |
 | `packages/core`               | Shared workflow state, contracts, and repository profiles         |
@@ -156,9 +159,12 @@ pnpm typecheck
 pnpm format:check
 ```
 
-`pnpm deploy:development` deploys the development model broker, applies D1
-migrations, and deploys the control plane. It requires an authenticated
-Cloudflare development environment and is not needed for local checks.
+`pnpm deploy:development` deploys the runtime host and control plane together.
+The merged-PR workflow deploys the runtime host only when its image, host code,
+or direct shared dependencies changed; every merge can deploy the model
+broker, D1 migrations, and control plane without replacing active Sandboxes.
+The deployment requires an authenticated Cloudflare development environment
+and is not needed for local checks.
 
 ## License
 

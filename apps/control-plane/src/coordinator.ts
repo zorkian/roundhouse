@@ -24,6 +24,7 @@ import {
   type Wakeup,
 } from "@roundhouse/core";
 import { aggregatedReview } from "./aggregated-review.js";
+import { attemptInactivityMilliseconds } from "./attempt-timeouts.js";
 
 export interface AttemptDispatcher {
   submit(attempt: Attempt, run: RunSnapshot): Promise<void>;
@@ -44,8 +45,6 @@ export interface CompetitionPromoter {
     judgement: CompetitionJudgement,
   ): Promise<void>;
 }
-
-export const attemptInactivityMilliseconds = 10 * 60_000;
 
 // The judgement pass reads candidate evidence and returns scores; it never
 // needs more than the read-only review capability set.
