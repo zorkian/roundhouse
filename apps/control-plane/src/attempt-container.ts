@@ -17,7 +17,11 @@ import {
   type RunRepository,
 } from "@roundhouse/core";
 import { observeResponse } from "@roundhouse/response-observer";
-import { verifyCallback, type AttemptCompletion } from "./callback.js";
+import {
+  validAttemptCompletion,
+  verifyCallback,
+  type AttemptCompletion,
+} from "./callback.js";
 import type { SandboxComponentHost } from "./attempt-sandbox-components.js";
 import { NestedContainerRuntime } from "./nested-container-runtime.js";
 import { PreviewTransport } from "./preview-transport.js";
@@ -70,26 +74,12 @@ function attemptCompletion(
   prepared: PreparedAttempt,
 ): AttemptCompletion {
   if (
-    !value ||
-    typeof value !== "object" ||
-    Array.isArray(value) ||
-    !("attemptId" in value) ||
+    !validAttemptCompletion(value) ||
     value.attemptId !== prepared.attempt.id ||
-    !("expectedRevision" in value) ||
-    value.expectedRevision !== prepared.attempt.runRevision ||
-    !("artifactTokenId" in value) ||
-    typeof value.artifactTokenId !== "string" ||
-    !("checkpoint" in value) ||
-    !value.checkpoint ||
-    typeof value.checkpoint !== "object" ||
-    Array.isArray(value.checkpoint) ||
-    !("result" in value) ||
-    !value.result ||
-    typeof value.result !== "object" ||
-    Array.isArray(value.result)
+    value.expectedRevision !== prepared.attempt.runRevision
   )
     throw new Error("invalid_runner_completion");
-  return value as AttemptCompletion;
+  return value;
 }
 
 const modelHost = "model.roundhouse.internal";

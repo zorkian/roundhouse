@@ -23,7 +23,6 @@ import {
   backupRecordedAttemptWorkspace,
   loadRecordedAttemptCompletion,
   publishRecordedAttemptCompletion,
-  recordAttemptCompletion,
   validateRecordedAttemptCompletion,
   type AttemptSettlementEnv,
   type AttemptSettlementResult,
@@ -192,7 +191,6 @@ export class AttemptExecutionWorkflow extends WorkflowEntrypoint<
       enableDefaultSession: false,
     });
 
-    let completion: AttemptCompletion;
     if (mode === "execute") {
       await step.do("confirm durable dispatch", async (): Promise<void> => {
         const startedAt = Date.now();
@@ -293,10 +291,10 @@ export class AttemptExecutionWorkflow extends WorkflowEntrypoint<
         },
       );
 
-      const serializedCompletion = await step.do(
+      await step.do(
         "execute prepared attempt",
         { ...noExecutionRetry, timeout: attachedStepTimeout },
-        async (): Promise<string> => {
+        async (): Promise<void> => {
           const startedAt = Date.now();
           await trace(
             repository,
@@ -306,7 +304,7 @@ export class AttemptExecutionWorkflow extends WorkflowEntrypoint<
             "attempt_workflow_execution_started",
           );
           try {
-            const result = await sandbox.executePreparedAttempt(attemptId);
+            await sandbox.executePreparedAttempt(attemptId);
             await trace(
               repository,
               attemptId,
@@ -315,7 +313,6 @@ export class AttemptExecutionWorkflow extends WorkflowEntrypoint<
               "attempt_workflow_execution_completed",
               startedAt,
             );
-            return JSON.stringify(result);
           } catch (error) {
             await trace(
               repository,
@@ -336,36 +333,29 @@ export class AttemptExecutionWorkflow extends WorkflowEntrypoint<
           }
         },
       );
-      completion = JSON.parse(serializedCompletion) as AttemptCompletion;
-      const recorded = await step.do(
-        "record completed execution",
-        async (): Promise<"recorded" | "duplicate" | "stale"> =>
-          recordAttemptCompletion(this.env, completion),
-      );
-      if (recorded === "stale")
-        throw new Error("attempt_execution_record_stale");
-    } else {
-      const serializedCompletion = await step.do(
-        "load recorded execution",
-        async (): Promise<string> =>
-          JSON.stringify(
-            await loadRecordedAttemptCompletion(this.env, attemptId),
-          ),
-      );
-      completion = JSON.parse(serializedCompletion) as AttemptCompletion;
-      await trace(
-        repository,
-        attemptId,
-        event.instanceId,
-        sandboxName,
-        "attempt_workflow_settlement_resumed",
-        undefined,
-        {
-          expectedRevision: completion.expectedRevision,
-          outputHead: completion.checkpoint.outputHead,
-        },
-      );
     }
+    const serializedCompletion = await step.do(
+      "load recorded execution",
+      async (): Promise<string> =>
+        JSON.stringify(
+          await loadRecordedAttemptCompletion(this.env, attemptId),
+        ),
+    );
+    const completion = JSON.parse(serializedCompletion) as AttemptCompletion;
+    await trace(
+      repository,
+      attemptId,
+      event.instanceId,
+      sandboxName,
+      mode === "settle"
+        ? "attempt_workflow_settlement_resumed"
+        : "attempt_workflow_completion_loaded",
+      undefined,
+      {
+        expectedRevision: completion.expectedRevision,
+        outputHead: completion.checkpoint.outputHead,
+      },
+    );
 
     const validation = await step.do(
       "validate completed attempt",
