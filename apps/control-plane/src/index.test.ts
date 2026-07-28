@@ -482,6 +482,7 @@ describe("V2 control plane", () => {
     );
     const body = await response.text();
     expect(body).toContain("Development runs across enrolled repositories");
+    expect(body).toContain('<a href="/usage">Model usage</a>');
     expect(body).toContain("Sign out");
 
     for (const path of [
@@ -496,6 +497,56 @@ describe("V2 control plane", () => {
       );
       expect(directOrigin.status).toBe(404);
     }
+  });
+
+  it("serves the model usage page only to signed-in users", async () => {
+    const fetch = worker.fetch as unknown as (
+      request: Request,
+      env: unknown,
+      context: unknown,
+    ) => Promise<Response>;
+    const signedOut = await fetch(
+      new Request("https://v2.invalid/usage"),
+      uiEnv(dashboardDb()) as never,
+      {} as never,
+    );
+    expect(signedOut.status).toBe(200);
+    await expect(signedOut.text()).resolves.toContain("Sign in with GitHub");
+
+    const post = await fetch(
+      new Request("https://v2.invalid/usage", {
+        method: "POST",
+        headers: { cookie: authedUiCookie },
+      }),
+      uiEnv(withUiSession(dashboardDb())) as never,
+      {} as never,
+    );
+    expect(post.status).toBe(405);
+
+    const response = await fetch(
+      new Request("https://v2.invalid/usage", {
+        headers: { cookie: authedUiCookie },
+      }),
+      uiEnv(withUiSession(dashboardDb())) as never,
+      {} as never,
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe(
+      "text/html; charset=utf-8",
+    );
+    const body = await response.text();
+    expect(body).toContain("Model usage");
+    expect(body).toContain("Rolling 30-day window");
+    expect(body).toContain("No model usage was recorded in this 30-day window");
+
+    const directOrigin = await fetch(
+      new Request("https://direct-worker.invalid/usage", {
+        headers: { cookie: authedUiCookie },
+      }),
+      uiEnv(withUiSession(dashboardDb())) as never,
+      {} as never,
+    );
+    expect(directOrigin.status).toBe(404);
   });
 
   it("serves the workflow graph asset from the public UI origin", async () => {
