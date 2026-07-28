@@ -1719,6 +1719,64 @@ describe("single coordinator", () => {
     });
   });
 
+  it("resolves a reintegration conflict from the published branch head", async () => {
+    const store = new MemoryRunRepository();
+    const reviewed = "b".repeat(40);
+    const published = "e".repeat(40);
+    const movedBase = "f".repeat(40);
+    await store.create(
+      runFixture({
+        revision: 10,
+        stage: "integrate",
+        currentNodeId: "integrate",
+        currentHead: published,
+        candidateHead: reviewed,
+        reviewedHead: reviewed,
+        targetBaseHead: movedBase,
+      }),
+    );
+    await store.createAttempt({
+      id: "run_slice_rev_9",
+      runId: input.id,
+      runRevision: 9,
+      kind: "agent",
+      stage: "integrate",
+      role: "integrate",
+      state: "completed",
+      deadlineAt: 1_000,
+      baseCommit: input.baseCommit,
+      expectedHead: reviewed,
+      acceptedHead: reviewed,
+      result: {
+        integration: {
+          status: "conflict",
+          candidateHead: reviewed,
+          baseHead: movedBase,
+          conflicts: [{ path: "src/route.ts", hunks: "@@" }],
+        },
+      },
+    });
+    const submitted: Attempt[] = [];
+    await expect(
+      coordinate(
+        store,
+        {
+          submit: async (attempt: Attempt) => {
+            submitted.push(attempt);
+          },
+        },
+        { runId: input.id, expectedRevision: 10 },
+        100,
+      ),
+    ).resolves.toBe("dispatched");
+    expect(submitted[0]).toMatchObject({
+      role: "conflict-resolution",
+      stage: "integrate",
+      baseCommit: movedBase,
+      expectedHead: published,
+    });
+  });
+
   it("requires exact successful CI before merge", () => {
     const head = "b".repeat(40);
     const attempt = attemptFixture({
