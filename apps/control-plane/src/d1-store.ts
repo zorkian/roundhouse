@@ -652,6 +652,8 @@ export class D1RunRepository implements RunRepository {
           attemptId: attempt.id,
           acquisitionId,
           outcome,
+          leaseExpiresAt: attempt.deadlineAt,
+          leaseDurationMs: Math.max(0, attempt.deadlineAt - startedAt),
           durationMs: Date.now() - startedAt,
         }),
       );
@@ -664,6 +666,8 @@ export class D1RunRepository implements RunRepository {
           expectedRevision,
           attemptId: attempt.id,
           acquisitionId,
+          leaseExpiresAt: attempt.deadlineAt,
+          leaseDurationMs: Math.max(0, attempt.deadlineAt - startedAt),
           durationMs: Date.now() - startedAt,
           errorType:
             error instanceof Error ? error.constructor.name : typeof error,
