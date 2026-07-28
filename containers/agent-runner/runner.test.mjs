@@ -14,10 +14,12 @@ import {
   artifactWriteTokenRequest,
   bootstrapWorkspace,
   commandProgress,
+  completionRequest,
   completionResult,
   configureAgentToolExecution,
   createAssignmentExecutor,
   createRunnerServer,
+  deliverCompletion,
   checkpointWorkspace,
   devContainerConfigIdentity,
   implementationPrompt,
@@ -1027,6 +1029,75 @@ describe("V2 agent runner", () => {
     await expect(request.json()).resolves.toEqual({
       artifactTokenId: "initial-token",
     });
+  });
+
+  it("delivers completion directly to the durable control-plane boundary", async () => {
+    const assignment = { id: "attempt_completion" };
+    const completion = {
+      attemptId: assignment.id,
+      expectedRevision: 3,
+      checkpoint: {
+        repositoryId: "repo-id",
+        repository: "run_1",
+        baseCommit: "a".repeat(40),
+        inputHead: "a".repeat(40),
+        outputHead: "b".repeat(40),
+        ref: "refs/heads/roundhouse/run_1",
+        changedPaths: ["src/fix.ts"],
+      },
+      artifactTokenId: "token-id",
+      result: { outcome: "ok" },
+    };
+    const request = completionRequest(
+      assignment,
+      "https://v2.invalid",
+      "attempt-secret",
+      completion,
+    );
+
+    expect(request.method).toBe("POST");
+    expect(new URL(request.url).pathname).toBe("/attempts/completion");
+    expect(request.headers.get("x-roundhouse-attempt-id")).toBe(assignment.id);
+    expect(request.headers.get("x-roundhouse-attempt-capability")).toBe(
+      "attempt-secret",
+    );
+    await expect(request.json()).resolves.toEqual(completion);
+  });
+
+  it("retries ambiguous completion delivery with the same completion", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const assignment = { id: "attempt_completion_retry" };
+    const completion = {
+      attemptId: assignment.id,
+      expectedRevision: 4,
+      checkpoint: { outputHead: "b".repeat(40) },
+    };
+    const send = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("connection_reset"))
+      .mockResolvedValueOnce(
+        Response.json({ outcome: "duplicate" }, { status: 200 }),
+      );
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      deliverCompletion(
+        assignment,
+        "https://v2.invalid",
+        "attempt-secret",
+        completion,
+        send,
+        wait,
+      ),
+    ).resolves.toBe("duplicate");
+
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(wait).toHaveBeenCalledOnce();
+    const deliveries = await Promise.all(
+      send.mock.calls.map(([request]) => request.json()),
+    );
+    expect(deliveries).toEqual([completion, completion]);
   });
 
   it("reports activity and can complete after the inactivity lease expires", async () => {

@@ -11,7 +11,7 @@ import {
   type Wakeup,
 } from "@roundhouse/core";
 import { attemptInactivityMilliseconds, coordinate } from "./coordinator.js";
-import { verifyCallback } from "./callback.js";
+import { validAttemptCompletion, verifyCallback } from "./callback.js";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
 import { renderDashboard } from "./dashboard.js";
 import { renderRunDetails } from "./run-details.js";
@@ -41,6 +41,7 @@ import {
 import { launch } from "@cloudflare/playwright";
 import { RoundhouseAttemptSandbox } from "./attempt-container.js";
 import { DurableAttemptDispatcher } from "./attempt-dispatch.js";
+import { recordAttemptCompletion } from "./attempt-settlement.js";
 import {
   publishPendingWakeups,
   publishWakeup,
@@ -307,6 +308,7 @@ const progressPhases = new Set([
   "checkpoint_started",
   "checkpoint_completed",
   "completion_started",
+  "completion_ready",
   "completion_completed",
   ...observedDevcontainerPhases.flatMap((phase) => [
     `${phase}_started`,
@@ -641,6 +643,89 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       );
       if (!details) return html(renderNotFoundPage(), 404);
       return html(renderRunDetails(details));
+    }
+    if (url.pathname === "/attempts/completion") {
+      const startedAt = Date.now();
+      if (request.method !== "POST")
+        return json({ error: "method_not_allowed" }, 405, { allow: "POST" });
+      const attemptId = request.headers.get("x-roundhouse-attempt-id") ?? "";
+      const capability =
+        request.headers.get("x-roundhouse-attempt-capability") ?? "";
+      console.log(
+        JSON.stringify({
+          message: "runner_completion_request_started",
+          attemptId: attemptId || null,
+        }),
+      );
+      if (
+        !attemptId ||
+        !capability ||
+        !(await verifyCallback(
+          env.CALLBACK_SIGNING_SECRET,
+          attemptId,
+          capability,
+        ))
+      ) {
+        console.error(
+          JSON.stringify({
+            message: "runner_completion_request_rejected",
+            attemptId: attemptId || null,
+            reason: "unauthorized",
+            durationMs: Date.now() - startedAt,
+          }),
+        );
+        return json({ error: "unauthorized" }, 401);
+      }
+      let completion: unknown;
+      try {
+        completion = await request.json();
+      } catch {
+        completion = undefined;
+      }
+      if (
+        !validAttemptCompletion(completion) ||
+        completion.attemptId !== attemptId
+      ) {
+        console.error(
+          JSON.stringify({
+            message: "runner_completion_request_rejected",
+            attemptId,
+            reason: "invalid_completion",
+            durationMs: Date.now() - startedAt,
+          }),
+        );
+        return json({ error: "invalid_completion" }, 400);
+      }
+      try {
+        const outcome = await recordAttemptCompletion(env, completion);
+        console.log(
+          JSON.stringify({
+            message: "runner_completion_request_completed",
+            attemptId,
+            expectedRevision: completion.expectedRevision,
+            outputHead: completion.checkpoint.outputHead,
+            outcome,
+            durationMs: Date.now() - startedAt,
+          }),
+        );
+        return outcome === "stale"
+          ? json({ error: "stale_attempt", outcome }, 409)
+          : json({ outcome });
+      } catch (error) {
+        console.error(
+          JSON.stringify({
+            message: "runner_completion_request_failed",
+            attemptId,
+            expectedRevision: completion.expectedRevision,
+            outputHead: completion.checkpoint.outputHead,
+            durationMs: Date.now() - startedAt,
+            errorType:
+              error instanceof Error ? error.constructor.name : typeof error,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+        throw error;
+      }
     }
     if (url.pathname === "/attempts/activity") {
       if (request.method !== "POST")
