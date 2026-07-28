@@ -227,7 +227,7 @@ describe("attempt execution Workflow", () => {
     expect(destroy).toHaveBeenCalledOnce();
   });
 
-  it("records a failed execution without validating or cleaning it up", async () => {
+  it("records a failed one-off execution and destroys its sandbox", async () => {
     sandbox.restorePreparedAttempt.mockResolvedValue(undefined);
     sandbox.executePreparedAttempt.mockRejectedValue(
       new Error("runner_connection_lost"),
@@ -247,7 +247,7 @@ describe("attempt execution Workflow", () => {
     ]);
     expect(loadRecordedAttemptCompletion).not.toHaveBeenCalled();
     expect(validateRecordedAttemptCompletion).not.toHaveBeenCalled();
-    expect(destroy).not.toHaveBeenCalled();
+    expect(destroy).toHaveBeenCalledOnce();
     expect(settleAttemptOutcome).toHaveBeenCalledWith(
       completion.attemptId,
       completion.expectedRevision,
@@ -265,6 +265,39 @@ describe("attempt execution Workflow", () => {
         expectedRevision: completion.expectedRevision,
       },
     );
+  });
+
+  it("preserves a failed implementation sandbox for a resumable workspace", async () => {
+    getAttempt.mockResolvedValue({
+      id: completion.attemptId,
+      runId: "run_1",
+      runRevision: completion.expectedRevision,
+      stage: "implement",
+      state: "created",
+    });
+    sandbox.restorePreparedAttempt.mockResolvedValue(undefined);
+    sandbox.executePreparedAttempt.mockRejectedValue(
+      new Error("runner_connection_lost"),
+    );
+    const { destroy, instance } = workflow();
+    const { step } = steps();
+    const implementationEvent = {
+      instanceId: "workflow_1",
+      payload: {
+        attemptId: "attempt_1",
+        sandboxName: "run_1",
+      },
+      timestamp: new Date(10_000),
+      workflowName: "attempt-execution",
+    } as never;
+
+    await expect(
+      instance.run(implementationEvent, step as never),
+    ).rejects.toThrow("runner_connection_lost");
+
+    expect(settleAttemptOutcome).toHaveBeenCalledOnce();
+    expect(destroy).not.toHaveBeenCalled();
+    expect(publishWakeup).toHaveBeenCalledOnce();
   });
 
   it("preserves a runner-recorded completion when the Sandbox RPC is lost", async () => {
