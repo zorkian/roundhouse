@@ -363,7 +363,14 @@ export function reviewTransition(attempt: Attempt) {
     return {
       status: "active",
       stage: "integrate",
-      heads: { reviewedHead: attempt.expectedHead },
+      // A newly reviewed candidate starts a new integration cycle. Any base
+      // or integration head from an earlier cycle belongs to different
+      // evidence and must not influence role selection for this candidate.
+      heads: {
+        reviewedHead: attempt.expectedHead,
+        targetBaseHead: null,
+        integrationHead: null,
+      },
     } as const;
   if (status === "changes_requested")
     return { status: "active", stage: "implement" } as const;
@@ -1157,11 +1164,14 @@ export async function coordinate(
       `workflow_executor_not_runnable:${currentWorkflowNode.executor}`,
     );
   // A conflicted mechanical integration is followed by exactly one narrowly
-  // scoped conflict-resolution attempt for the same reviewed candidate; any
-  // other integrate wakeup retries the no-model mechanical merge.
+  // scoped conflict-resolution attempt for the same reviewed candidate, then
+  // an integration-delta review. Completed attempts from an older integration
+  // cycle are not evidence for the current cycle even though they share the
+  // same stage.
   const integrateRole = async (): Promise<string> => {
     if (currentWorkflowNode.role !== "integrate")
       return currentWorkflowNode.role ?? run.stage;
+    const startedAt = Date.now();
     const previous = await repository.latestCompletedAttempt(
       run.id,
       "integrate",
@@ -1169,21 +1179,67 @@ export async function coordinate(
     );
     const integration = previous?.result?.integration as
       Record<string, unknown> | undefined;
-    if (integration?.status === "conflict") return "conflict-resolution";
-    // A conflict resolution is reviewed as an integration delta before CI.
+    const currentCandidate = run.reviewedHead ?? run.candidateHead;
+    const matchesCurrentIntegration =
+      Boolean(run.targetBaseHead) &&
+      integration?.candidateHead === currentCandidate &&
+      integration?.baseHead === run.targetBaseHead;
+    let role = "integrate";
+    let reason = "mechanical_integration_required";
     if (
+      previous?.role === "integrate" &&
+      integration?.status === "conflict" &&
+      matchesCurrentIntegration
+    ) {
+      role = "conflict-resolution";
+      reason = "current_integration_conflicted";
+    }
+    // A conflict resolution is reviewed as an integration delta before CI.
+    else if (
       previous?.role === "conflict-resolution" &&
-      integration?.status === "clean"
-    )
-      return "review-integration";
+      integration?.status === "clean" &&
+      matchesCurrentIntegration &&
+      previous.acceptedHead === run.integrationHead
+    ) {
+      role = "review-integration";
+      reason = "current_conflict_resolution_completed";
+    }
     const deltaReview = previous?.result?.review as
       Record<string, unknown> | undefined;
     if (
       previous?.role === "review-integration" &&
-      deltaReview?.status === "changes_requested"
-    )
-      return "conflict-resolution";
-    return "integrate";
+      deltaReview?.status === "changes_requested" &&
+      Boolean(run.targetBaseHead) &&
+      previous.expectedHead === run.currentHead
+    ) {
+      role = "conflict-resolution";
+      reason = "current_integration_review_requested_changes";
+    }
+    const payload = {
+      role,
+      reason,
+      previousAttemptId: previous?.id ?? null,
+      previousRole: previous?.role ?? null,
+      candidateHead: currentCandidate ?? null,
+      targetBaseHead: run.targetBaseHead ?? null,
+      integrationHead: run.integrationHead ?? null,
+      durationMs: Date.now() - startedAt,
+    };
+    console.log(
+      JSON.stringify({
+        message: "integration_role_selected",
+        runId: run.id,
+        revision: run.revision,
+        ...payload,
+      }),
+    );
+    await repository.recordEvent?.(
+      run.id,
+      previous?.id,
+      "integration_role_selected",
+      payload,
+    );
+    return role;
   };
   const role = await integrateRole();
   const attempt: Attempt = {
