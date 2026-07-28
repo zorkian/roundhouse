@@ -2,10 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { runSchemaVersion } from "@roundhouse/core";
-import { RoundhouseAttemptSandbox } from "./attempt-container.js";
 
 export { ContainerProxy } from "@cloudflare/sandbox";
-export { RoundhouseAttemptSandbox } from "./attempt-container.js";
+export { RoundhouseRuntimeSandbox } from "./attempt-container.js";
 
 export const runtimeHostService = "roundhouse-v2-runtime-host";
 

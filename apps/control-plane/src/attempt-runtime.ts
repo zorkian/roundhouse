@@ -18,7 +18,7 @@ import {
   type AttemptCallback,
   type CheckpointValidator,
 } from "./callback.js";
-import type { RoundhouseAttemptSandbox } from "./attempt-container.js";
+import type { RoundhouseRuntimeSandbox } from "./attempt-container.js";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
 import { githubClientForRun, type GitHubEnv } from "./github.js";
 
@@ -31,7 +31,7 @@ export interface AttemptNamespace {
   get(id: unknown): AttemptStub;
 }
 
-export type SandboxNamespace = DurableObjectNamespace<RoundhouseAttemptSandbox>;
+export type SandboxNamespace = DurableObjectNamespace<RoundhouseRuntimeSandbox>;
 
 export type AttemptRuntimeEnv = Cloudflare.Env &
   GitHubEnv & {
@@ -41,7 +41,7 @@ export type AttemptRuntimeEnv = Cloudflare.Env &
 export function attemptSandbox(
   sandboxes: SandboxNamespace,
   name: string,
-): RoundhouseAttemptSandbox {
+): RoundhouseRuntimeSandbox {
   return getSandbox(sandboxes, name, { enableDefaultSession: false });
 }
 
