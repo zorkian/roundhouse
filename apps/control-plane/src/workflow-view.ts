@@ -5,6 +5,7 @@ import {
   serializeWorkflow,
   type CompiledWorkflow,
   type RunSnapshot,
+  type WorkflowNode,
 } from "@roundhouse/core";
 
 function escapeHtml(value: unknown): string {
@@ -32,21 +33,66 @@ export interface WorkflowGraphElement {
   readonly data: Readonly<Record<string, string>>;
 }
 
+// Bound a label line so the fixed-size graph node always contains its text
+// vertically: at 13px in a 210px-wide, 110px-high node, these caps keep the
+// wrapped label within the box regardless of authored content length.
+function truncateLabel(value: string, max: number): string {
+  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
+}
+
+// Human-readable stage name: prefer the authored role, fall back to the ID.
+export function workflowNodeName(id: string, node: WorkflowNode): string {
+  return truncateLabel(node.role ?? id, 48);
+}
+
+// One-sentence purpose derived from existing executor configuration.
+export function workflowNodeSummary(node: WorkflowNode): string {
+  if (node.agent) return `Runs the ${node.agent.task} agent.`;
+  if (node.review)
+    return `Collects reviews from ${node.review.reviewers.length} reviewer${node.review.reviewers.length === 1 ? "" : "s"}.`;
+  if (node.human)
+    return `Waits for a ${node.human.audience} to ${node.human.reason}.`;
+  if (node.external)
+    return `Waits for the ${node.external.event} event from ${node.external.adapter}.`;
+  if (node.executor === "validate") return "Validates the workflow outputs.";
+  if (node.executor === "github.checks")
+    return "Waits for GitHub check results.";
+  if (node.executor === "github.merge") return "Merges the pull request.";
+  if (node.executor === "terminal") return "Terminal stage of the workflow.";
+  return "Runs this stage of the workflow.";
+}
+
 // Serializable Cytoscape elements: one node per workflow node and one
 // directed edge per transition with a destination, with stable IDs for
-// parallel edges and self-cycles.
+// parallel edges and self-cycles. Each node carries a compact name/summary
+// label plus detail fields the client renders in the stage-details panel.
 export function workflowGraphElements(
   workflow: CompiledWorkflow,
 ): WorkflowGraphElement[] {
   const nodes = Object.entries(workflow.nodes).map(([id, node]) => {
-    const authority = node.capabilities.join(", ") || "no external authority";
+    const name = workflowNodeName(id, node);
+    const summary = workflowNodeSummary(node);
     return {
       group: "nodes" as const,
       data: {
         id,
+        name,
+        summary,
         executor: node.executor,
-        authority,
-        label: `${id}\n${node.executor}\n${authority}`,
+        role: node.role ?? "",
+        task: node.agent?.task ?? "",
+        authority: node.capabilities.join(", ") || "no external authority",
+        outputs: node.outputs.join(", ") || "none",
+        reviewers: node.review
+          ? node.review.reviewers
+              .map((reviewer) => reviewer.label ?? reviewer.id)
+              .join(", ")
+          : "",
+        human: node.human ? `${node.human.audience}: ${node.human.reason}` : "",
+        external: node.external
+          ? `${node.external.adapter} event ${node.external.event}`
+          : "",
+        label: `${name}\n${truncateLabel(summary, 96)}`,
       },
     };
   });
@@ -75,6 +121,12 @@ export function renderWorkflowView(run: RunSnapshot): string {
   if (!workflow) throw new Error("workflow_snapshot_missing");
   const source = serializeWorkflow(workflow);
   const graphData = escapeJsonForHtml(workflowGraphElements(workflow));
+  const stageButtons = Object.entries(workflow.nodes)
+    .map(
+      ([id, node]) =>
+        `<button type="button" class="stage-button" data-stage="${escapeHtml(id)}" aria-pressed="false">${escapeHtml(workflowNodeName(id, node))}</button>`,
+    )
+    .join("");
   const routes = Object.entries(workflow.nodes)
     .flatMap(([id, node]) =>
       node.transitions.map(
@@ -84,11 +136,11 @@ export function renderWorkflowView(run: RunSnapshot): string {
     )
     .join("");
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(run.repository)} workflow</title><style>
-*{box-sizing:border-box}body{font:15px/1.5 system-ui,sans-serif;color:#18212f;max-width:1180px;margin:0 auto;padding:1.5rem}a{color:#175cd3}header{display:flex;justify-content:space-between;gap:1rem;align-items:start;flex-wrap:wrap}h1{margin:.2rem 0}p{color:#5f6b7a}.meta{display:grid;grid-template-columns:10rem 1fr;gap:.35rem 1rem}.meta dt{font-weight:700}.meta dd{margin:0;overflow-wrap:anywhere}#workflow-graph{width:100%;height:560px;background:#f6f8fa;border:1px solid #d8dee6;border-radius:12px;margin:1rem 0}table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:top;border-bottom:1px solid #ddd;padding:.5rem}textarea{font:13px/1.45 ui-monospace,monospace;width:100%;min-height:32rem;padding:1rem;border:1px solid #aab4c2;border-radius:8px}.actions{display:flex;gap:.75rem;align-items:center;flex-wrap:wrap;margin:.75rem 0}button,.button{border:0;border-radius:7px;padding:.6rem .9rem;background:#18212f;color:white;text-decoration:none;cursor:pointer}.secondary{background:#e8edf3;color:#18212f}#validation.ok{color:#087443}#validation.error{color:#b42318}@media(max-width:700px){body{padding:.8rem}.meta{grid-template-columns:1fr}table{display:block;overflow-x:auto}#workflow-graph{height:420px}}
+*{box-sizing:border-box}body{font:15px/1.5 system-ui,sans-serif;color:#18212f;max-width:1180px;margin:0 auto;padding:1.5rem}a{color:#175cd3}header{display:flex;justify-content:space-between;gap:1rem;align-items:start;flex-wrap:wrap}h1{margin:.2rem 0}p{color:#5f6b7a}.meta{display:grid;grid-template-columns:10rem 1fr;gap:.35rem 1rem}.meta dt{font-weight:700}.meta dd{margin:0;overflow-wrap:anywhere}#workflow-layout{display:flex;gap:1rem;align-items:flex-start;flex-wrap:wrap}#workflow-graph{flex:3 1 480px;width:100%;height:560px;background:#f6f8fa;border:1px solid #d8dee6;border-radius:12px;margin:1rem 0}#workflow-stages{display:flex;flex-wrap:wrap;gap:.4rem;margin:.5rem 0}.stage-button{background:#e8edf3;color:#18212f}.stage-button[aria-pressed="true"]{background:#175cd3;color:#fff}#stage-details{flex:2 1 260px;border:1px solid #d8dee6;border-radius:12px;padding:1rem;margin:1rem 0;background:#fbfcfe}#stage-details h3{margin:.2rem 0 .5rem}#stage-details-list{display:grid;grid-template-columns:8rem 1fr;gap:.35rem .75rem;margin:0}#stage-details-list dt{font-weight:700}#stage-details-list dd{margin:0;overflow-wrap:anywhere}table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:top;border-bottom:1px solid #ddd;padding:.5rem}textarea{font:13px/1.45 ui-monospace,monospace;width:100%;min-height:32rem;padding:1rem;border:1px solid #aab4c2;border-radius:8px}.actions{display:flex;gap:.75rem;align-items:center;flex-wrap:wrap;margin:.75rem 0}button,.button{border:0;border-radius:7px;padding:.6rem .9rem;background:#18212f;color:white;text-decoration:none;cursor:pointer}.secondary{background:#e8edf3;color:#18212f}#validation.ok{color:#087443}#validation.error{color:#b42318}@media(max-width:700px){body{padding:.8rem}.meta{grid-template-columns:1fr}table{display:block;overflow-x:auto}#workflow-graph{height:420px}}
 </style></head><body><p><a href="/">← Dashboard</a></p><header><div><p>Repository workflow</p><h1>${escapeHtml(run.repository)}</h1></div><a class="button" href="${escapeHtml(workflowEditUrl(run))}" target="_blank" rel="noreferrer">Edit and propose on GitHub</a></header>
 <dl class="meta"><dt>Workflow hash</dt><dd><code>${escapeHtml(workflow.hash)}</code></dd><dt>Source commit</dt><dd><code>${escapeHtml(workflow.sourceCommit)}</code></dd><dt>Snapshot run</dt><dd>${escapeHtml(run.id)} revision ${run.revision}</dd></dl>
 <p>This is the immutable workflow snapshot attached to the repository’s latest run. Editing below changes only your browser. Validate it here, then copy the YAML into GitHub’s editor and create a branch and pull request. Existing runs keep their original snapshot.</p>
-<h2>Graph and authority</h2><div id="workflow-graph" role="application" aria-label="Workflow graph. Drag nodes to rearrange them, scroll or pinch to zoom, and select a node to highlight its incoming and outgoing transitions."></div><script id="workflow-graph-data" type="application/json">${graphData}</script><script src="/assets/workflow-graph.js" defer></script>
+<h2>Graph and authority</h2><div id="workflow-stages" role="group" aria-label="Workflow stages">${stageButtons}</div><div id="workflow-layout"><div id="workflow-graph"${run.currentNodeId && workflow.nodes[run.currentNodeId] ? ` data-select="${escapeHtml(run.currentNodeId)}"` : ""} role="application" aria-label="Workflow graph. Drag nodes to rearrange them, scroll or pinch to zoom, and select a node to highlight its transitions and show its details."></div><section id="stage-details" aria-live="polite" aria-label="Stage details"><h3>Stage details</h3><p id="stage-details-status">Select a stage in the graph or the stage list to see its details.</p><dl id="stage-details-list"></dl></section></div><script id="workflow-graph-data" type="application/json">${graphData}</script><script src="/assets/workflow-graph.js" defer></script>
 <h2>Routes</h2><table><thead><tr><th>From</th><th>Condition</th><th>Destination</th></tr></thead><tbody>${routes}</tbody></table>
 <h2>Workflow editor</h2><textarea id="source" spellcheck="false" data-source-commit="${escapeHtml(workflow.sourceCommit)}">${escapeHtml(source)}</textarea><div class="actions"><button id="validate" type="button">Validate workflow</button><button id="copy" class="secondary" type="button">Copy YAML</button><a href="${escapeHtml(workflowEditUrl(run))}" target="_blank" rel="noreferrer">Open GitHub editor</a><span id="validation" aria-live="polite"></span></div>
 </body></html>`;
