@@ -21,7 +21,7 @@
   ],
   "containers": [
     {
-      "class_name": "RoundhouseAttemptSandbox",
+      "class_name": "RoundhouseRuntimeSandbox",
       "image": "../../Dockerfile.agent-runner",
       "instance_type": {
         "vcpu": 1,
@@ -36,7 +36,7 @@
     "bindings": [
       {
         "name": "ATTEMPT_SANDBOXES",
-        "class_name": "RoundhouseAttemptSandbox",
+        "class_name": "RoundhouseRuntimeSandbox",
       },
     ],
   },
@@ -44,6 +44,11 @@
     {
       "tag": "runtime-host-v1",
       "new_sqlite_classes": ["RoundhouseAttemptSandbox"],
+    },
+    {
+      "tag": "runtime-host-v2",
+      "new_sqlite_classes": ["RoundhouseRuntimeSandbox"],
+      "deleted_classes": ["RoundhouseAttemptSandbox"],
     },
   ],
   "observability": {

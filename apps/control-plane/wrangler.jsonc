@@ -68,7 +68,7 @@
     "bindings": [
       {
         "name": "ATTEMPT_SANDBOXES",
-        "class_name": "RoundhouseAttemptSandbox",
+        "class_name": "RoundhouseRuntimeSandbox",
         "script_name": "roundhouse-v2-runtime-host",
       },
     ],

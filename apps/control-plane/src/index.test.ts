@@ -19,7 +19,7 @@ import {
   attemptAllowedHosts,
   attemptUsesProjectEnvironment,
   pauseForModelBudget,
-  RoundhouseAttemptSandbox,
+  RoundhouseRuntimeSandbox,
 } from "./attempt-container.js";
 import {
   artifactNeedsSync,
@@ -345,8 +345,8 @@ describe("V2 control plane", () => {
     const storage = new Map<string, unknown>();
     const phases: string[] = [];
     const sandbox = Object.create(
-      RoundhouseAttemptSandbox.prototype,
-    ) as RoundhouseAttemptSandbox & Record<string, unknown>;
+      RoundhouseRuntimeSandbox.prototype,
+    ) as RoundhouseRuntimeSandbox & Record<string, unknown>;
     Object.assign(sandbox, {
       durableState: {
         storage: {
@@ -757,7 +757,7 @@ describe("V2 control plane", () => {
 
   it("registers the private model egress handler with the Containers SDK", () => {
     expect(
-      RoundhouseAttemptSandbox.outboundByHost?.["model.roundhouse.internal"],
+      RoundhouseRuntimeSandbox.outboundByHost?.["model.roundhouse.internal"],
     ).toBeTypeOf("function");
   });
 

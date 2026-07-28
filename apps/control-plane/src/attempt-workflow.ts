@@ -8,7 +8,6 @@ import {
   type WorkflowStep,
 } from "cloudflare:workers";
 import type { AttemptCompletion } from "./callback.js";
-import type { RoundhouseAttemptSandbox } from "./attempt-container.js";
 import {
   prepareAttemptExecution,
   type AttemptPreparationEnv,

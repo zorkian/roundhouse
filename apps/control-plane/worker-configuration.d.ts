@@ -16,7 +16,7 @@ interface __BaseEnv_Env {
   SANDBOX_TRANSPORT: "rpc";
   BACKUP_BUCKET_NAME: "roundhouse-v2-development-workspaces";
   CLOUDFLARE_R2_ACCOUNT_ID: "07ff5b32b60ae3e5d613b90ddde90069";
-  ATTEMPT_SANDBOXES: DurableObjectNamespace /* RoundhouseAttemptSandbox from roundhouse-v2-runtime-host */;
+  ATTEMPT_SANDBOXES: DurableObjectNamespace /* RoundhouseRuntimeSandbox from roundhouse-v2-runtime-host */;
   MODEL_BROKER: Fetcher /* roundhouse-v2-model-broker */;
   ATTEMPT_EXECUTIONS: Workflow<
     Parameters<

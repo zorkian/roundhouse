@@ -502,7 +502,7 @@ export function extractModelUsage(
   };
 }
 
-export class RoundhouseAttemptSandbox extends Sandbox<AttemptContainerEnv> {
+export class RoundhouseRuntimeSandbox extends Sandbox<AttemptContainerEnv> {
   // Sandbox.defaultPort is its reserved control API; the runner is separate.
   private readonly agentRunnerPort = 8090;
   private readonly durableState: DurableObjectState<{}>;
@@ -1155,4 +1155,4 @@ export class RoundhouseAttemptSandbox extends Sandbox<AttemptContainerEnv> {
   }
 }
 
-RoundhouseAttemptSandbox.outboundByHost = { [modelHost]: modelEgress };
+RoundhouseRuntimeSandbox.outboundByHost = { [modelHost]: modelEgress };
