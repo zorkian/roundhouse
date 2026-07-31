@@ -375,9 +375,10 @@ remain the authority for a human merge. Under maintainer merge mode, Roundhouse
 leaves a clean CI-passing pull request and completes when GitHub reports its
 merge.
 
-The dashboard visualizes the compiled workflow graph and configuration revision
-from the latest immutable run snapshot. Its editor validates changes with the
-production compiler, then hands the repository-file proposal to GitHub's
+The repository workflow page visualizes the compiled graph from the current
+default-branch profile. Each run details page links to the distinct immutable
+workflow snapshot used by that run. The browser editor validates changes with
+the production compiler, then hands the repository-file proposal to GitHub's
 authenticated branch and pull-request flow. D1 is not a second configuration
 authority.
 

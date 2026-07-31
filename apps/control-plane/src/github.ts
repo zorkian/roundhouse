@@ -896,7 +896,7 @@ function runId(repositoryId: number, issueNumber: number): string {
   return `run_${repositoryId}_issue_${issueNumber}`;
 }
 
-async function loadRepositoryProfile(
+export async function loadRepositoryProfile(
   api: GitHubApi,
   repository: string,
   commit: string,
@@ -944,6 +944,27 @@ async function loadRepositoryProfile(
     }),
   );
   return profile;
+}
+
+export async function loadDefaultBranchProfile(
+  api: GitHubApi,
+  repository: string,
+): Promise<{
+  readonly defaultBranch: string;
+  readonly commit: string;
+  readonly profile: AppliedProfile;
+}> {
+  const repo = await api.get<{ default_branch: string }>(
+    `/repos/${repository}`,
+  );
+  const commit = await api.get<{ sha: string }>(
+    `/repos/${repository}/commits/${encodeURIComponent(repo.default_branch)}`,
+  );
+  return {
+    defaultBranch: repo.default_branch,
+    commit: commit.sha,
+    profile: await loadRepositoryProfile(api, repository, commit.sha),
+  };
 }
 
 export function githubClientForRun(

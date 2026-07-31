@@ -17,6 +17,7 @@ import {
   acceptGitHubIssueClosed,
   GitHubClient,
   GitHubStageReporter,
+  loadDefaultBranchProfile,
   operatorAuthorized,
   verifyGitHubWebhook,
   type GitHubApi,
@@ -274,6 +275,25 @@ async function concludeQualification(
 }
 
 describe("GitHub intake", () => {
+  it("loads a repository profile from the current default-branch commit", async () => {
+    const current = await loadDefaultBranchProfile(
+      github(),
+      "zorkian/roundhouse",
+    );
+
+    expect(current.defaultBranch).toBe("main");
+    expect(current.commit).toBe("a".repeat(40));
+    expect(current.profile.sourceCommit).toBe("a".repeat(40));
+    expect(current.profile.workflow?.nodes.approval).toMatchObject({
+      executor: "human",
+      role: "approval",
+      human: {
+        reason: "visual_feedback",
+        audience: "operator",
+      },
+    });
+  });
+
   it("authorizes explicit profile users without repository permission", async () => {
     const get = vi.fn(async () => {
       throw new Error("repository_permission_must_not_be_required");

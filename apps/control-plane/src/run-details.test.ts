@@ -1,12 +1,18 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
+import { compileWorkflow, defaultIssueWorkflowSource } from "@roundhouse/core";
 import { describe, expect, it } from "vitest";
 import type { RunDetails } from "./d1-store.js";
 import { renderRunDetails } from "./run-details.js";
 
 type DetailsRun = RunDetails["run"];
 type DetailsAttempt = RunDetails["attempts"][number];
+const workflowCommit = "c".repeat(40);
+const workflow = await compileWorkflow(
+  defaultIssueWorkflowSource,
+  workflowCommit,
+);
 
 function runFixture(overrides: Partial<DetailsRun> = {}): DetailsRun {
   return {
@@ -229,6 +235,27 @@ describe("run details", () => {
     expect(html).toContain("<dt>Allowed paths</dt>");
     expect(html).toContain("<dt>Protected paths</dt>");
     expect(html).toContain(".github/workflows/**");
+  });
+
+  it("links to the immutable workflow used by this run", () => {
+    const html = renderRunDetails(
+      detailsFixture({
+        run: {
+          profile: {
+            sourcePath: ".roundhouse/profile.yaml",
+            sourceCommit: workflowCommit,
+            version: 1,
+            hash: "e".repeat(64),
+            workflow,
+            paths: { allowed: ["**"], protected: [] },
+          },
+        },
+      }),
+    );
+
+    expect(html).toContain(
+      '<a href="/repositories/zorkian/roundhouse/issues/281/workflow">View workflow for this run</a>',
+    );
   });
 
   it("separates recovered executions and their usage", () => {

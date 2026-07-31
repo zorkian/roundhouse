@@ -41,6 +41,7 @@ import {
   acceptGitHubIssueClosed,
   githubClientForRun,
   GitHubStageReporter,
+  loadDefaultBranchProfile,
 } from "./github.js";
 import { launch } from "@cloudflare/playwright";
 import { DurableAttemptDispatcher } from "./attempt-dispatch.js";
@@ -477,7 +478,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       url.pathname === "/" ||
       url.pathname === "/runs" ||
       url.pathname === "/usage" ||
-      /^\/repositories\/[^/]+\/[^/]+\/(workflow|issues\/\d+)$/.test(
+      /^\/repositories\/[^/]+\/[^/]+\/(workflow|issues\/\d+(?:\/workflow)?)$/.test(
         url.pathname,
       );
     let uiSession: UiSession | undefined;
@@ -566,30 +567,78 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       } catch {
         return json({ error: "not_found" }, 404);
       }
+      if (!["GET", "POST"].includes(request.method))
+        return json({ error: "method_not_allowed" }, 405, {
+          allow: "GET, POST",
+        });
       const repository = new D1RunRepository(env.DB);
-      const run = await repository.latestWorkflowRunForRepository(
+      const snapshotRun = await repository.latestWorkflowRunForRepository(
         repositoryName,
         uiSession!.repositoryIds,
       );
-      if (!run?.profile?.workflow) return html(renderNotFoundPage(), 404);
+      if (!snapshotRun?.githubInstallationId)
+        return html(renderNotFoundPage(), 404);
+      const profileStartedAt = Date.now();
+      console.log(
+        JSON.stringify({
+          message: "workflow_graph_profile_load_started",
+          repository: repositoryName,
+          installationId: snapshotRun.githubInstallationId,
+        }),
+      );
+      let current: Awaited<ReturnType<typeof loadDefaultBranchProfile>>;
+      try {
+        current = await loadDefaultBranchProfile(
+          githubClientForRun(env, snapshotRun),
+          repositoryName,
+        );
+      } catch (error) {
+        console.error(
+          JSON.stringify({
+            message: "workflow_graph_profile_load_failed",
+            repository: repositoryName,
+            installationId: snapshotRun.githubInstallationId,
+            durationMs: Date.now() - profileStartedAt,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+        return json({ error: "workflow_profile_unavailable" }, 502);
+      }
+      const currentWorkflow = current.profile.workflow;
+      if (!currentWorkflow) return html(renderNotFoundPage(), 404);
+      const run: RunSnapshot = {
+        ...snapshotRun,
+        githubDefaultBranch: current.defaultBranch,
+        profileVersion: current.profile.hash,
+        profile: current.profile,
+        workflowHash: currentWorkflow.hash,
+      };
+      console.log(
+        JSON.stringify({
+          message: "workflow_graph_profile_load_completed",
+          repository: repositoryName,
+          installationId: snapshotRun.githubInstallationId,
+          defaultBranch: current.defaultBranch,
+          sourceCommit: current.commit,
+          workflowHash: currentWorkflow.hash,
+          nodes: Object.keys(currentWorkflow.nodes).length,
+          durationMs: Date.now() - profileStartedAt,
+        }),
+      );
       if (request.method === "GET") {
         console.log(
           JSON.stringify({
             message: "workflow_graph_rendered",
             repository: repositoryName,
-            runId: run.id,
-            runRevision: run.revision,
-            sourceCommit: run.profile.workflow.sourceCommit,
-            workflowHash: run.profile.workflow.hash,
-            nodes: Object.keys(run.profile.workflow.nodes).length,
+            source: "default_branch",
+            defaultBranch: current.defaultBranch,
+            sourceCommit: currentWorkflow.sourceCommit,
+            workflowHash: currentWorkflow.hash,
+            nodes: Object.keys(currentWorkflow.nodes).length,
           }),
         );
-        return html(renderWorkflowView(run));
+        return html(renderWorkflowView(run, { source: "default_branch" }));
       }
-      if (request.method !== "POST")
-        return json({ error: "method_not_allowed" }, 405, {
-          allow: "GET, POST",
-        });
       let input: { source?: unknown; sourceCommit?: unknown };
       try {
         input = (await request.json()) as typeof input;
@@ -598,11 +647,11 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       }
       if (
         typeof input.source !== "string" ||
-        input.sourceCommit !== run.profile.workflow.sourceCommit
+        input.sourceCommit !== currentWorkflow.sourceCommit
       )
         return json({ error: "invalid_request" }, 400);
       const promptContents = new Map<string, string>();
-      for (const node of Object.values(run.profile.workflow.nodes)) {
+      for (const node of Object.values(currentWorkflow.nodes)) {
         for (const prompt of [
           node.agent?.prompt,
           node.human?.prompt,
@@ -613,7 +662,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       try {
         const compiled = await compileWorkflow(
           input.source,
-          run.profile.workflow.sourceCommit,
+          currentWorkflow.sourceCommit,
           async (path) => {
             const content = promptContents.get(path);
             if (content === undefined)
@@ -642,12 +691,45 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
           JSON.stringify({
             message: "workflow_editor_validation_failed",
             repository: repositoryName,
-            sourceCommit: run.profile.workflow.sourceCommit,
+            sourceCommit: currentWorkflow.sourceCommit,
             error: message,
           }),
         );
         return json({ error: message }, 400);
       }
+    }
+    const runWorkflowMatch = url.pathname.match(
+      /^\/repositories\/([^/]+)\/([^/]+)\/issues\/(\d+)\/workflow$/,
+    );
+    if (runWorkflowMatch && isPublicUiRequest()) {
+      if (request.method !== "GET")
+        return json({ error: "method_not_allowed" }, 405, { allow: "GET" });
+      let repositoryName: string;
+      try {
+        repositoryName = `${decodeURIComponent(runWorkflowMatch[1]!)}\/${decodeURIComponent(runWorkflowMatch[2]!)}`;
+      } catch {
+        return json({ error: "not_found" }, 404);
+      }
+      const details = await new D1RunRepository(env.DB).detailsByIssue(
+        repositoryName,
+        Number(runWorkflowMatch[3]),
+        uiSession!.repositoryIds,
+      );
+      if (!details?.run.profile?.workflow)
+        return html(renderNotFoundPage(), 404);
+      console.log(
+        JSON.stringify({
+          message: "workflow_graph_rendered",
+          repository: repositoryName,
+          source: "run_snapshot",
+          runId: details.run.id,
+          runRevision: details.run.revision,
+          sourceCommit: details.run.profile.workflow.sourceCommit,
+          workflowHash: details.run.profile.workflow.hash,
+          nodes: Object.keys(details.run.profile.workflow.nodes).length,
+        }),
+      );
+      return html(renderWorkflowView(details.run));
     }
     const detailsMatch = url.pathname.match(
       /^\/repositories\/([^/]+)\/([^/]+)\/issues\/(\d+)$/,
