@@ -185,20 +185,51 @@ describe("workflow graph view", () => {
     expect(new Set(edges.map((edge) => edge.data["id"])).size).toBe(
       edges.length,
     );
+    expect(edges.every((edge) => edge.data["outcome"])).toBe(true);
 
     // The default workflow's self-cycle and backward transition survive as
-    // directed edges instead of collapsing.
+    // directed edges instead of collapsing. Return routes alternate outside
+    // lanes so distinct revision paths cannot be mistaken for duplicate lines.
     const selfCycle = edges.find(
       (edge) =>
         edge.data["source"] === "integrate" &&
         edge.data["target"] === "integrate",
     );
-    expect(selfCycle).toBeDefined();
-    const backward = edges.find(
+    expect(selfCycle?.data).toMatchObject({
+      route: "self",
+      outcome: "needs resolution",
+    });
+    const reviewReturn = edges.find(
       (edge) =>
         edge.data["source"] === "review" && edge.data["target"] === "implement",
     );
-    expect(backward).toBeDefined();
+    expect(reviewReturn?.data).toMatchObject({
+      route: "return",
+      outcome: "changes requested",
+      returnSide: "left",
+      returnLane: "1",
+      returnBend: "-300",
+    });
+    const integrationReturn = edges.find(
+      (edge) =>
+        edge.data["source"] === "integrate" &&
+        edge.data["target"] === "implement",
+    );
+    expect(integrationReturn?.data).toMatchObject({
+      route: "return",
+      outcome: "changes requested",
+      returnSide: "right",
+      returnLane: "1",
+      returnBend: "300",
+    });
+    const forward = edges.find(
+      (edge) =>
+        edge.data["source"] === "implement" && edge.data["target"] === "review",
+    );
+    expect(forward?.data).toMatchObject({
+      route: "forward",
+      outcome: "accepted head",
+    });
   });
 
   it("embeds the graph data as escaped JSON inside the page", async () => {
@@ -224,6 +255,10 @@ describe("workflow graph view", () => {
     expect(html).toContain('id="stage-details"');
     expect(html).toContain('aria-live="polite"');
     expect(html).toContain("Stage details");
+    expect(html).toContain('id="workflow-legend"');
+    expect(html).toContain("Next stage");
+    expect(html).toContain("Return for more work");
+    expect(html).toContain("Retry this stage");
     expect(html).toContain(
       "Select a stage in the graph or the stage list to see its details.",
     );
@@ -244,6 +279,13 @@ describe("workflow graph view", () => {
     expect(workflowGraphClientScript).toContain("avoidOverlap: true");
     expect(workflowGraphClientScript).not.toContain('name: "cose"');
     expect(workflowGraphClientScript).toContain('"target-arrow-shape"');
+    expect(workflowGraphClientScript).toContain('"unbundled-bezier"');
+    expect(workflowGraphClientScript).toContain('"returnBend"');
+    expect(workflowGraphClientScript).toContain('"line-style": "dashed"');
+    expect(workflowGraphClientScript).toContain("data(outcome)");
+    expect(workflowGraphClientScript).toContain(
+      "workflow_graph_routes_initialized",
+    );
     // Selecting a node emphasizes it and its connected edges, mutes the
     // rest, and tapping the background clears the state.
     expect(workflowGraphClientScript).toContain('"select", "node"');
