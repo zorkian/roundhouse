@@ -19,6 +19,15 @@ export const workflowGraphClientScript = `(function () {
   if (container && dataElement && window.cytoscape) {
     var initStartedAt = Date.now();
     var elements = JSON.parse(dataElement.textContent);
+    var graphLayout = {
+      name: "cose",
+      animate: false,
+      nodeDimensionsIncludeLabels: true,
+      padding: 40,
+      idealEdgeLength: 260,
+      nodeRepulsion: function () { return 900000; },
+      gravity: 0.4
+    };
     var cy = window.cytoscape({
       container: container,
       elements: elements,
@@ -81,13 +90,7 @@ export const workflowGraphClientScript = `(function () {
         { selector: ".muted", style: { opacity: 0.18 } }
       ],
       layout: {
-        name: "cose",
-        animate: false,
-        nodeDimensionsIncludeLabels: true,
-        padding: 40,
-        idealEdgeLength: 260,
-        nodeRepulsion: function () { return 900000; },
-        gravity: 0.4
+        name: "preset"
       }
     });
     log("workflow_graph_initialized", {
@@ -102,34 +105,38 @@ export const workflowGraphClientScript = `(function () {
         layoutMs: Date.now() - initStartedAt
       });
     });
-    // One-time post-layout framing: the cose fit leaves the whole graph in
-    // view at a distant, hard-to-read scale, so enforce a readable minimum
-    // zoom and pan if needed to keep the workflow entry stage visible.
+    // One-time post-layout framing: always anchor the camera on the workflow
+    // entry at a readable scale. The graph is created with a preset layout
+    // and cose is run explicitly below so these handlers are installed before
+    // the synchronous, non-animated layoutstop event can fire.
     var entryId = container.getAttribute("data-entry");
     cy.on("layoutstop", function frameOnce() {
       cy.off("layoutstop", frameOnce);
       var mobile = container.clientWidth <= 700;
-      var zoomFloor = mobile ? 0.6 : 1;
+      var zoomFloor = mobile ? 0.85 : 1;
+      var initialZoom = cy.zoom();
       if (cy.zoom() < zoomFloor) cy.zoom(zoomFloor);
       var entry = entryId ? cy.getElementById(entryId) : null;
-      var entryVisible = true;
-      if (entry && entry.nonempty()) {
+      var entryFound = Boolean(entry && entry.nonempty());
+      var entryVisible = false;
+      if (entryFound) {
+        cy.center(entry);
         var bounds = entry.renderedBoundingBox();
         entryVisible =
           bounds.x1 >= 0 &&
           bounds.y1 >= 0 &&
           bounds.x2 <= container.clientWidth &&
           bounds.y2 <= container.clientHeight;
-        if (!entryVisible) {
-          cy.center(entry);
-          entryVisible = true;
-        }
       }
       log("workflow_graph_viewport_initialized", {
         entryStage: entryId,
+        entryFound: entryFound,
         mobile: mobile,
+        initialZoom: initialZoom,
         zoom: cy.zoom(),
         entryVisible: entryVisible,
+        containerWidth: container.clientWidth,
+        containerHeight: container.clientHeight,
         framingMs: Date.now() - initStartedAt
       });
     });
@@ -238,6 +245,12 @@ export const workflowGraphClientScript = `(function () {
         if (candidate.nonempty()) candidate.select();
       });
     }
+    log("workflow_graph_layout_started", {
+      layout: graphLayout.name,
+      nodes: cy.nodes().length,
+      edges: cy.edges().length
+    });
+    cy.layout(graphLayout).run();
   }
   var source = document.getElementById("source");
   var validation = document.getElementById("validation");
