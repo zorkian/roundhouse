@@ -48,6 +48,43 @@ import {
 } from "./runner.mjs";
 
 const testRoot = resolve(process.cwd(), ".runner-test-workspaces");
+const openAiRuntime = Object.freeze({
+  contextWindow: 1_050_000,
+  maxOutputTokens: 128_000,
+  thinkingLevelMap: Object.freeze({
+    off: "none",
+    minimal: null,
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: "max",
+  }),
+});
+const kimiRuntime = Object.freeze({
+  contextWindow: 1_048_576,
+  maxOutputTokens: 131_072,
+  thinkingLevelMap: Object.freeze({
+    off: null,
+    minimal: null,
+    low: "low",
+    medium: null,
+    high: "high",
+    xhigh: null,
+    max: "max",
+  }),
+});
+const anthropicRuntime = Object.freeze({
+  contextWindow: 1_000_000,
+  maxOutputTokens: 128_000,
+  thinkingLevelMap: Object.freeze({
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: "max",
+  }),
+});
 
 function git(cwd, args, options = {}) {
   return execFileSync("git", args, { cwd, ...options });
@@ -317,7 +354,8 @@ describe("V2 agent runner", () => {
           provider: "moonshotai",
           model: "moonshotai/kimi-k3",
           protocol: "openai-completions",
-          thinkingLevel: "low",
+          thinkingLevel: "max",
+          runtime: kimiRuntime,
           rule: "review-security-v1",
         },
       },
@@ -352,6 +390,8 @@ describe("V2 agent runner", () => {
             low: "low",
             medium: null,
             high: "high",
+            xhigh: null,
+            max: "max",
           },
           contextWindow: 1_048_576,
           maxTokens: 131_072,
@@ -370,6 +410,7 @@ describe("V2 agent runner", () => {
             model: "provider/model",
             protocol,
             thinkingLevel: "low",
+            runtime: openAiRuntime,
             rule: "test-v1",
           },
         },
@@ -397,6 +438,7 @@ describe("V2 agent runner", () => {
           model: "anthropic/claude-fable-5",
           protocol: "anthropic-messages",
           thinkingLevel: "low",
+          runtime: anthropicRuntime,
           rule: "review-holistic-v1",
         },
       },
@@ -415,6 +457,7 @@ describe("V2 agent runner", () => {
         model: "openai/gpt-5.6-sol",
         protocol: "openai-responses",
         thinkingLevel: "low",
+        runtime: openAiRuntime,
         rule: "implementation-default-v1",
       }),
     ).toBe(false);
@@ -745,6 +788,7 @@ describe("V2 agent runner", () => {
         model: "openai/gpt-5.6-sol",
         protocol: "openai-responses",
         thinkingLevel: "low",
+        runtime: openAiRuntime,
         rule: "implementation-default-v1",
       },
       artifact: {
@@ -788,6 +832,7 @@ describe("V2 agent runner", () => {
         model: "openai/gpt-5.6-sol",
         protocol: "openai-responses",
         thinkingLevel: "low",
+        runtime: openAiRuntime,
         rule: "review-default-v1",
       },
       artifact: {
@@ -855,6 +900,7 @@ describe("V2 agent runner", () => {
         model: "openai/gpt-5.6-sol",
         protocol: "openai-responses",
         thinkingLevel: "low",
+        runtime: openAiRuntime,
         rule: "review-default-v1",
       },
       artifact: {

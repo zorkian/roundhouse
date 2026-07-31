@@ -8,6 +8,10 @@ import {
   type CompiledWorkflow,
   workflowSourcePath,
 } from "./workflow.js";
+import {
+  modelThinkingLevels,
+  type ModelThinkingLevel,
+} from "./model-catalog.js";
 
 export const profileSourcePath = ".roundhouse/profile.yaml" as const;
 export const profileStageNames = [
@@ -20,13 +24,7 @@ export const profileReviewerNames = ["holistic", "security", "data"] as const;
 export const repositoryPermissions = ["admin", "maintain", "write"] as const;
 export const mergeModes = ["automatic", "maintainer"] as const;
 export const mergeMethods = ["merge", "squash", "rebase"] as const;
-export const profileReasoningLevels = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-] as const;
+export const profileReasoningLevels = modelThinkingLevels;
 export const findingSeverities = ["critical", "high", "medium", "low"] as const;
 
 export type ProfileStageName = (typeof profileStageNames)[number];
@@ -34,7 +32,7 @@ export type ProfileReviewerName = (typeof profileReviewerNames)[number];
 export type RepositoryPermission = (typeof repositoryPermissions)[number];
 export type MergeMode = (typeof mergeModes)[number];
 export type MergeMethod = (typeof mergeMethods)[number];
-export type ProfileReasoningLevel = (typeof profileReasoningLevels)[number];
+export type ProfileReasoningLevel = ModelThinkingLevel;
 export type FindingSeverity = (typeof findingSeverities)[number];
 
 export interface ProfileInstruction {
@@ -99,13 +97,39 @@ export interface AppliedProfile {
 
 export type ProfileFileLoader = (path: string) => Promise<string>;
 
-const defaultModel: ProfileModel = {
-  id: "openai/gpt-5.6-sol",
-  reasoning: "low",
+const defaultStageModels: Readonly<Record<ProfileStageName, ProfileModel>> = {
+  qualification: {
+    id: "openai/gpt-5.6-luna",
+    reasoning: "high",
+  },
+  investigation: {
+    id: "openai/gpt-5.6-terra",
+    reasoning: "high",
+  },
+  planning: {
+    id: "openai/gpt-5.6-sol",
+    reasoning: "max",
+  },
+  implementation: {
+    id: "openai/gpt-5.6-terra",
+    reasoning: "max",
+  },
 };
-const defaultImplementationModel: ProfileModel = {
-  id: "moonshotai/kimi-k3",
-  reasoning: "low",
+const defaultReviewerModels: Readonly<
+  Record<ProfileReviewerName, ProfileModel>
+> = {
+  holistic: {
+    id: "anthropic/claude-opus-5",
+    reasoning: "max",
+  },
+  security: {
+    id: "moonshotai/kimi-k3",
+    reasoning: "max",
+  },
+  data: {
+    id: "openai/gpt-5.6-sol",
+    reasoning: "max",
+  },
 };
 const defaultBlockingSeverities: readonly FindingSeverity[] = [
   "critical",
@@ -260,8 +284,7 @@ async function v1Profile(
     profileStageNames.map((name) => [
       name,
       {
-        model:
-          name === "implementation" ? defaultImplementationModel : defaultModel,
+        model: defaultStageModels[name],
       },
     ]),
   ) as unknown as Record<ProfileStageName, ProfileStage>;
@@ -282,19 +305,19 @@ async function v1Profile(
     reviewers: {
       holistic: {
         enabled: true,
-        model: defaultModel,
+        model: defaultReviewerModels.holistic,
         blockingSeverities: defaultBlockingSeverities,
       },
       security: {
         enabled: true,
         selectedBy: "holistic",
-        model: defaultModel,
+        model: defaultReviewerModels.security,
         blockingSeverities: defaultBlockingSeverities,
       },
       data: {
         enabled: true,
         selectedBy: "holistic",
-        model: defaultModel,
+        model: defaultReviewerModels.data,
         blockingSeverities: defaultBlockingSeverities,
       },
     },

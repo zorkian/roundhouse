@@ -3,8 +3,10 @@
 
 import {
   modelStopReasonHeader,
+  modelSupportsThinkingLevel,
   modelThinkingLevels,
   modelProtocols,
+  runtimeCapabilitiesForModel,
   type ModelProtocol,
   type ModelRoute,
 } from "@roundhouse/core";
@@ -47,32 +49,52 @@ interface RoutingEnvelope {
 }
 
 const defaultRoutes: Readonly<
-  Record<string, Pick<ModelRoute, "provider" | "model" | "protocol">>
+  Record<
+    string,
+    Pick<ModelRoute, "provider" | "model" | "protocol" | "thinkingLevel">
+  >
 > = {
+  qualify: {
+    provider: "openai",
+    model: "openai/gpt-5.6-luna",
+    protocol: "openai-responses",
+    thinkingLevel: "high",
+  },
+  investigate: {
+    provider: "openai",
+    model: "openai/gpt-5.6-terra",
+    protocol: "openai-responses",
+    thinkingLevel: "high",
+  },
   plan: {
     provider: "openai",
     model: "openai/gpt-5.6-sol",
     protocol: "openai-responses",
+    thinkingLevel: "max",
   },
   implement: {
+    provider: "openai",
+    model: "openai/gpt-5.6-terra",
+    protocol: "openai-responses",
+    thinkingLevel: "max",
+  },
+  "review-holistic": {
+    provider: "anthropic",
+    model: "anthropic/claude-opus-5",
+    protocol: "anthropic-messages",
+    thinkingLevel: "max",
+  },
+  "review-security": {
     provider: "moonshotai",
     model: "moonshotai/kimi-k3",
     protocol: "openai-completions",
-  },
-  "review-holistic": {
-    provider: "openai",
-    model: "openai/gpt-5.6-sol",
-    protocol: "openai-responses",
-  },
-  "review-security": {
-    provider: "openai",
-    model: "openai/gpt-5.6-sol",
-    protocol: "openai-responses",
+    thinkingLevel: "max",
   },
   "review-data": {
     provider: "openai",
     model: "openai/gpt-5.6-sol",
     protocol: "openai-responses",
+    thinkingLevel: "max",
   },
 };
 
@@ -141,12 +163,22 @@ export function resolveRoute(
     ? defaultProtocol(provider)
     : (configured?.protocol ?? defaultProtocol(provider));
   const thinkingLevel =
-    envelope.requestedReasoning ?? env.ROUTING_REASONING_EFFORT;
+    envelope.requestedReasoning ??
+    configured?.thinkingLevel ??
+    env.ROUTING_REASONING_EFFORT;
+  const runtime = runtimeCapabilitiesForModel(model);
   if (
     !provider ||
     !model ||
     !modelProtocols.includes(protocol) ||
-    !modelThinkingLevels.includes(thinkingLevel as ModelRoute["thinkingLevel"])
+    !modelThinkingLevels.includes(
+      thinkingLevel as ModelRoute["thinkingLevel"],
+    ) ||
+    !runtime ||
+    !modelSupportsThinkingLevel(
+      runtime,
+      thinkingLevel as ModelRoute["thinkingLevel"],
+    )
   )
     throw new Error("invalid_routing_configuration");
   return {
@@ -154,6 +186,7 @@ export function resolveRoute(
     model,
     protocol,
     thinkingLevel: thinkingLevel as ModelRoute["thinkingLevel"],
+    runtime,
     rule: envelope.requestedModel
       ? `profile-${envelope.role}-v2`
       : routingRule(envelope.role),
@@ -177,11 +210,21 @@ function routeFromHeaders(request: Request): ModelRoute {
     )
   )
     throw new Error("invalid_route_thinking_level");
+  const runtime = runtimeCapabilitiesForModel(values.model!);
+  if (
+    !runtime ||
+    !modelSupportsThinkingLevel(
+      runtime,
+      values.thinkingLevel as ModelRoute["thinkingLevel"],
+    )
+  )
+    throw new Error("invalid_route_model_capabilities");
   return {
     provider: values.provider!,
     model: values.model!,
     protocol: values.protocol as ModelProtocol,
     thinkingLevel: values.thinkingLevel as ModelRoute["thinkingLevel"],
+    runtime,
     rule: values.rule!,
   };
 }

@@ -15,8 +15,8 @@ nodes:
         key: qualification
         schema: roundhouse.qualification.v1
       model:
-        id: openai/gpt-5.6-sol
-        reasoning: low
+        id: openai/gpt-5.6-luna
+        reasoning: high
       prompt: prompts/qualification.md
     capabilities:
       - repository.read
@@ -50,8 +50,8 @@ nodes:
         key: reproduction
         schema: roundhouse.investigation.v1
       model:
-        id: openai/gpt-5.6-sol
-        reasoning: low
+        id: openai/gpt-5.6-terra
+        reasoning: high
       prompt: prompts/investigation.md
     capabilities:
       - repository.read
@@ -90,7 +90,7 @@ nodes:
         schema: roundhouse.plan.v1
       model:
         id: openai/gpt-5.6-sol
-        reasoning: low
+        reasoning: max
       prompt: prompts/planning.md
     capabilities:
       - repository.read
@@ -127,8 +127,8 @@ nodes:
         key: implementation
         schema: roundhouse.implementation.v1
       model:
-        id: moonshotai/kimi-k3
-        reasoning: low
+        id: openai/gpt-5.6-terra
+        reasoning: max
       prompt: prompts/implementation.md
     capabilities:
       - repository.read
@@ -198,8 +198,8 @@ nodes:
             - high
             - medium
           model:
-            id: openai/gpt-5.6-sol
-            reasoning: low
+            id: anthropic/claude-opus-5
+            reasoning: max
           prompt: prompts/review-holistic.md
         - id: review-security
           label: Security review
@@ -211,8 +211,8 @@ nodes:
             - high
             - medium
           model:
-            id: openai/gpt-5.6-sol
-            reasoning: low
+            id: moonshotai/kimi-k3
+            reasoning: max
           prompt: prompts/review-security.md
         - id: review-data
           label: Data consistency review
@@ -225,7 +225,7 @@ nodes:
             - medium
           model:
             id: openai/gpt-5.6-sol
-            reasoning: low
+            reasoning: max
           prompt: prompts/review-data.md
     capabilities:
       - repository.read

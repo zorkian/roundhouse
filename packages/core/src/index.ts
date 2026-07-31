@@ -20,6 +20,7 @@ export {
   type WaitingReason,
 } from "./run.js";
 export * from "./contracts.js";
+export * from "./model-catalog.js";
 export * from "./profile.js";
 export * from "./workflow.js";
 export { MemoryRunRepository } from "./memory-store.js";
