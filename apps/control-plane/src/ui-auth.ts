@@ -18,9 +18,18 @@ export interface UiSession {
   readonly expiresAt: number;
 }
 
+export interface ValidatedUiSession extends UiSession {
+  readonly sessionToken: string;
+}
+
 export const uiSessionCookie = "roundhouse_ui_session";
 export const uiStateCookie = "roundhouse_ui_state";
-export const uiSessionLifetimeMs = 8 * 60 * 60 * 1000;
+export const uiSessionLifetimeMs = 30 * 24 * 60 * 60 * 1000;
+// The browser session slides for 30 days, but the repository authorization
+// snapshot resolved at sign-in does not: once it is this old, the next
+// validated visit re-resolves repository access against GitHub before the
+// session is renewed, so revoked access cannot be extended indefinitely.
+export const uiAuthorizationLifetimeMs = 8 * 60 * 60 * 1000;
 const uiStateLifetimeMs = 10 * 60 * 1000;
 
 const escapeHtml = (value: unknown) =>
@@ -60,6 +69,75 @@ async function sha256Hex(value: string): Promise<string> {
     .join("");
 }
 
+function base64UrlEncode(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
+}
+
+function base64UrlDecode(value: string): Uint8Array {
+  const base64 = value.replaceAll("-", "+").replaceAll("_", "/");
+  const binary = atob(base64 + "=".repeat((4 - (base64.length % 4)) % 4));
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1)
+    bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+// The stored GitHub access token is a reusable bearer credential, so it is
+// never written to the database in plaintext. It is encrypted with AES-GCM
+// under a key derived from the OAuth client secret — key material held by
+// the Worker, outside the database — and decrypted only in memory for the
+// bounded authorization refresh. Format: v1.<iv>.<ciphertext>, base64url.
+async function uiTokenEncryptionKey(secret: string): Promise<CryptoKey> {
+  const material = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`roundhouse-ui-session-token:${secret}`),
+  );
+  return crypto.subtle.importKey("raw", material, "AES-GCM", false, [
+    "encrypt",
+    "decrypt",
+  ]);
+}
+
+export async function encryptUiAccessToken(
+  token: string,
+  secret: string,
+): Promise<string> {
+  const iv = new Uint8Array(12);
+  crypto.getRandomValues(iv);
+  const ciphertext = new Uint8Array(
+    await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv },
+      await uiTokenEncryptionKey(secret),
+      new TextEncoder().encode(token),
+    ),
+  );
+  return `v1.${base64UrlEncode(iv)}.${base64UrlEncode(ciphertext)}`;
+}
+
+export async function decryptUiAccessToken(
+  stored: string,
+  secret: string,
+): Promise<string | undefined> {
+  const [version, iv, ciphertext] = stored.split(".");
+  if (version !== "v1" || iv === undefined || ciphertext === undefined)
+    return undefined;
+  try {
+    const plaintext = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: base64UrlDecode(iv) as BufferSource },
+      await uiTokenEncryptionKey(secret),
+      base64UrlDecode(ciphertext) as BufferSource,
+    );
+    return new TextDecoder().decode(plaintext);
+  } catch {
+    return undefined;
+  }
+}
+
 function randomToken(): string {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
@@ -88,6 +166,21 @@ function readCookie(request: Request, name: string): string | undefined {
 
 function stateCookieHeader(token: string, maxAgeSeconds: number): string {
   return `${uiStateCookie}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/auth/github/callback; Max-Age=${maxAgeSeconds}`;
+}
+
+// The cookie carries the same absolute deadline as the stored session: an
+// Expires attribute derived from expiresAtMs plus the Max-Age remaining at
+// the moment the header is built. Max-Age is rounded up so the emitted
+// browser lifetime is never shorter than the full session lifetime
+// (browsers give Max-Age precedence over Expires). Building the header when
+// the response is decorated keeps both sides aligned even on slow requests.
+export function sessionCookieHeader(
+  token: string,
+  expiresAtMs: number,
+  nowMs = Date.now(),
+): string {
+  const maxAgeSeconds = Math.max(0, Math.ceil((expiresAtMs - nowMs) / 1000));
+  return `${uiSessionCookie}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAgeSeconds}; Expires=${new Date(expiresAtMs).toUTCString()}`;
 }
 
 // The state cookie binds the OAuth state to the browser that began sign-in,
@@ -186,6 +279,27 @@ async function enrolledRepositoryIds(db: D1Like): Promise<ReadonlySet<string>> {
     .prepare("SELECT github_id FROM repositories")
     .all<{ github_id: string }>();
   return new Set((result.results ?? []).map((row) => String(row.github_id)));
+}
+
+// Resolves the enrolled repositories the GitHub user behind `accessToken`
+// can currently read. Used at sign-in and again when a sliding session's
+// cached authorization snapshot reaches its bound.
+async function authorizedRepositoryIds(
+  accessToken: string,
+  db: D1Like,
+): Promise<string[]> {
+  const readable = await githubUserRepositories(accessToken);
+  const enrolled = await enrolledRepositoryIds(db);
+  const readableSet = new Set(readable);
+  const repositoryIds = readable.filter((id) => enrolled.has(id));
+  // /user/repos only lists repositories affiliated with the user; enrolled
+  // public repositories must be visible to any signed-in GitHub user, so
+  // check the remaining enrolled repositories directly.
+  for (const id of enrolled) {
+    if (readableSet.has(id)) continue;
+    if (await githubRepositoryReadable(accessToken, id)) repositoryIds.push(id);
+  }
+  return repositoryIds;
 }
 
 export async function handleGitHubCallback(
@@ -293,33 +407,32 @@ export async function handleGitHubCallback(
     if (!userResponse.ok)
       throw new Error(`github_user_http_${userResponse.status}`);
     const user = (await userResponse.json()) as { id: number; login: string };
-    const readable = await githubUserRepositories(accessToken);
-    const enrolled = await enrolledRepositoryIds(env.DB);
-    const readableSet = new Set(readable);
-    const repositoryIds = readable.filter((id) => enrolled.has(id));
-    // /user/repos only lists repositories affiliated with the user; enrolled
-    // public repositories must be visible to any signed-in GitHub user, so
-    // check the remaining enrolled repositories directly.
-    for (const id of enrolled) {
-      if (readableSet.has(id)) continue;
-      if (await githubRepositoryReadable(accessToken, id))
-        repositoryIds.push(id);
-    }
+    const repositoryIds = await authorizedRepositoryIds(accessToken, env.DB);
     const sessionToken = randomToken();
+    // One expiration timestamp feeds both the persisted session and the
+    // cookie so the browser and server deadlines stay aligned.
+    const expiresAt = Date.now() + uiSessionLifetimeMs;
     await env.DB.prepare(
-      "INSERT INTO ui_sessions (session_hash, github_user_id, github_login, repository_ids_json, expires_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+      "INSERT INTO ui_sessions (session_hash, github_user_id, github_login, repository_ids_json, expires_at, created_at, github_access_token, authorized_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
     )
       .bind(
         await sha256Hex(sessionToken),
         user.id,
         user.login,
         JSON.stringify(repositoryIds),
-        Date.now() + uiSessionLifetimeMs,
+        expiresAt,
+        Date.now(),
+        await encryptUiAccessToken(
+          accessToken,
+          env.ROUNDHOUSE_GITHUB_CLIENT_SECRET,
+        ),
         Date.now(),
       )
       .run();
-    // The GitHub access and refresh tokens are discarded here; only the
-    // resolved identity and authorized repository IDs persist.
+    // The GitHub access token persists with the session — encrypted with
+    // key material outside the database — so a stale authorization
+    // snapshot can be re-resolved against GitHub during sliding renewal;
+    // it is never exposed to the browser and never stored in plaintext.
     log("ui_auth_callback", {
       outcome: "signed_in",
       githubUserId: user.id,
@@ -327,7 +440,7 @@ export async function handleGitHubCallback(
       durationMs: Date.now() - startedAt,
     });
     const success = redirect("/", {
-      "set-cookie": `${uiSessionCookie}=${sessionToken}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${Math.floor(uiSessionLifetimeMs / 1000)}`,
+      "set-cookie": sessionCookieHeader(sessionToken, expiresAt),
     });
     return clearStateCookie(success);
   } catch (error) {
@@ -347,7 +460,7 @@ export async function handleGitHubCallback(
 export async function validateUiSession(
   request: Request,
   env: UiAuthEnv,
-): Promise<UiSession | undefined> {
+): Promise<ValidatedUiSession | undefined> {
   const startedAt = Date.now();
   const cookie = request.headers.get("cookie") ?? "";
   const token = cookie
@@ -363,7 +476,7 @@ export async function validateUiSession(
     return undefined;
   }
   const row = await env.DB.prepare(
-    "SELECT github_user_id, github_login, repository_ids_json, expires_at FROM ui_sessions WHERE session_hash = ?1",
+    "SELECT github_user_id, github_login, repository_ids_json, expires_at, created_at, github_access_token, authorized_at FROM ui_sessions WHERE session_hash = ?1",
   )
     .bind(await sha256Hex(token))
     .first<{
@@ -371,6 +484,9 @@ export async function validateUiSession(
       github_login: string;
       repository_ids_json: string;
       expires_at: number;
+      created_at: number;
+      github_access_token: string | null;
+      authorized_at: number | null;
     }>();
   if (!row) {
     log("ui_session_validated", {
@@ -379,9 +495,11 @@ export async function validateUiSession(
     });
     return undefined;
   }
-  if (row.expires_at <= Date.now()) {
-    await env.DB.prepare("DELETE FROM ui_sessions WHERE expires_at <= ?1")
-      .bind(Date.now())
+  if (row.expires_at <= startedAt) {
+    await env.DB.prepare(
+      "DELETE FROM ui_sessions WHERE session_hash = ?1 AND expires_at <= ?2",
+    )
+      .bind(await sha256Hex(token), startedAt)
       .run();
     log("ui_session_validated", {
       outcome: "expired",
@@ -395,11 +513,105 @@ export async function validateUiSession(
     githubUserId: row.github_user_id,
     durationMs: Date.now() - startedAt,
   });
+  // Sliding expiration: every validated visit extends the server-side session
+  // and returns a matching renewed browser cookie, so active users stay
+  // signed in. The session token itself is unchanged.
+  // Bound the cached repository authorization: once the snapshot resolved
+  // at sign-in is old enough, re-resolve repository access against GitHub
+  // before renewing. Sliding renewal must not extend revoked privileges
+  // indefinitely; failure to reauthorize ends the session instead.
+  let repositoryIds = JSON.parse(row.repository_ids_json) as string[];
+  let authorizedAt = row.authorized_at ?? row.created_at;
+  if (startedAt - authorizedAt >= uiAuthorizationLifetimeMs) {
+    const reauthorizationStartedAt = Date.now();
+    // Decrypt the stored bearer token only in memory, for this refresh.
+    // Sessions predating token encryption hold plaintext here; they cannot
+    // be decrypted safely and must reauthenticate.
+    const accessToken = row.github_access_token
+      ? await decryptUiAccessToken(
+          row.github_access_token,
+          env.ROUNDHOUSE_GITHUB_CLIENT_SECRET,
+        )
+      : undefined;
+    if (!accessToken) {
+      await env.DB.prepare("DELETE FROM ui_sessions WHERE session_hash = ?1")
+        .bind(await sha256Hex(token))
+        .run();
+      log("ui_session_reauthorized", {
+        outcome: "reauthentication_required",
+        githubUserId: row.github_user_id,
+        previousAuthorizedAt: authorizedAt,
+        durationMs: Date.now() - reauthorizationStartedAt,
+      });
+      return undefined;
+    }
+    try {
+      repositoryIds = await authorizedRepositoryIds(accessToken, env.DB);
+      authorizedAt = Date.now();
+      log("ui_session_reauthorized", {
+        outcome: "refreshed",
+        githubUserId: row.github_user_id,
+        previousAuthorizedAt: row.authorized_at ?? row.created_at,
+        authorizedAt,
+        authorizedRepositories: repositoryIds.length,
+        durationMs: Date.now() - reauthorizationStartedAt,
+      });
+    } catch (error) {
+      await env.DB.prepare("DELETE FROM ui_sessions WHERE session_hash = ?1")
+        .bind(await sha256Hex(token))
+        .run();
+      log("ui_session_reauthorized", {
+        outcome: "failed",
+        githubUserId: row.github_user_id,
+        previousAuthorizedAt: row.authorized_at ?? row.created_at,
+        error: error instanceof Error ? error.message : String(error),
+        durationMs: Date.now() - reauthorizationStartedAt,
+      });
+      return undefined;
+    }
+  }
+  const renewalStartedAt = Date.now();
+  const previousExpiresAt = row.expires_at;
+  // Renewal is monotonic and atomic: MAX() keeps any newer expiration a
+  // concurrent request may have written, and RETURNING yields the actual
+  // persisted deadline so the issued cookie can never be out of sync with
+  // the database, even if a write lands between our SELECT and UPDATE.
+  const updated = await env.DB.prepare(
+    "UPDATE ui_sessions SET expires_at = MAX(expires_at, ?1), repository_ids_json = ?2, authorized_at = ?3 WHERE session_hash = ?4 RETURNING expires_at",
+  )
+    .bind(
+      startedAt + uiSessionLifetimeMs,
+      JSON.stringify(repositoryIds),
+      authorizedAt,
+      await sha256Hex(token),
+    )
+    .first<{ expires_at: number }>();
+  if (!updated) {
+    // The row vanished between the SELECT and the UPDATE — typically a
+    // concurrent sign-out deleted it. Treat this as failed validation so we
+    // do not issue a fresh cookie for a session that no longer exists.
+    log("ui_session_renewed", {
+      outcome: "missing",
+      githubUserId: row.github_user_id,
+      previousExpiresAt,
+      durationMs: Date.now() - renewalStartedAt,
+    });
+    return undefined;
+  }
+  const renewedExpiresAt = updated.expires_at;
+  log("ui_session_renewed", {
+    outcome: "renewed",
+    githubUserId: row.github_user_id,
+    previousExpiresAt,
+    expiresAt: renewedExpiresAt,
+    durationMs: Date.now() - renewalStartedAt,
+  });
   return {
     githubUserId: row.github_user_id,
     githubLogin: row.github_login,
-    repositoryIds: JSON.parse(row.repository_ids_json) as string[],
-    expiresAt: row.expires_at,
+    repositoryIds,
+    expiresAt: renewedExpiresAt,
+    sessionToken: token,
   };
 }
 
@@ -423,6 +635,6 @@ export async function signOut(
     durationMs: Date.now() - startedAt,
   });
   return redirect("/", {
-    "set-cookie": `${uiSessionCookie}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`,
+    "set-cookie": sessionCookieHeader("", Date.now()),
   });
 }
