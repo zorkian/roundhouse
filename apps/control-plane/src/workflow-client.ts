@@ -40,7 +40,7 @@ export const workflowGraphClientScript = `(function () {
       grid: true,
       nodeDimensionsIncludeLabels: true,
       padding: 24,
-      spacingFactor: 0.4,
+      spacingFactor: 0.55,
       avoidOverlap: true
     };
     var cy = window.cytoscape({

@@ -310,7 +310,7 @@ describe("workflow graph view", () => {
     expect(workflowGraphClientScript).toContain('"text-max-width"');
     expect(workflowGraphClientScript).toContain('label: "data(name)"');
     expect(workflowGraphClientScript).toContain('"font-weight": 700');
-    expect(workflowGraphClientScript).toContain("spacingFactor: 0.4");
+    expect(workflowGraphClientScript).toContain("spacingFactor: 0.55");
     expect(workflowGraphClientScript).toContain("selectStage");
     expect(workflowGraphClientScript).toContain("renderDetails");
     expect(workflowGraphClientScript).toContain("syncStageButtons");
