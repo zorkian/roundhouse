@@ -332,19 +332,51 @@ const uiEnv = (DB: D1Like) => ({
 const authedUiCookie = "roundhouse_ui_session=test-session";
 
 // Extends a UI database stub with one valid, unexpired browser session.
-function withUiSession(DB: D1Like, repositoryIds = '["1297678423"]'): D1Like {
+// Pass `renewals` to record the expires_at values written by session renewal.
+function withUiSession(
+  DB: D1Like,
+  repositoryIds = '["1297678423"]',
+  renewals?: number[],
+): D1Like {
   return {
     batch: DB.batch.bind(DB),
     prepare(sql: string) {
       if (sql.includes("FROM ui_sessions")) {
+        let values: unknown[] = [];
         const statement = {
-          bind: (..._values: unknown[]) => statement,
+          bind: (...bound: unknown[]) => {
+            values = bound;
+            return statement;
+          },
           first: async () => ({
             github_user_id: 7,
             github_login: "octocat",
             repository_ids_json: repositoryIds,
             expires_at: Date.now() + 60_000,
+            created_at: Date.now(),
           }),
+          run: async () => {
+            if (sql.includes("UPDATE ui_sessions SET expires_at"))
+              renewals?.push(Number(values[0]));
+            return { meta: {} };
+          },
+          all: async () => ({ meta: {}, results: [] }),
+        };
+        return statement as unknown as ReturnType<D1Like["prepare"]>;
+      }
+      if (sql.includes("UPDATE ui_sessions SET expires_at")) {
+        let values: unknown[] = [];
+        const statement = {
+          bind: (...bound: unknown[]) => {
+            values = bound;
+            return statement;
+          },
+          // Mirrors UPDATE ... RETURNING: no concurrent writes in these
+          // tests, so the proposed expiration is the persisted one.
+          first: async () => {
+            renewals?.push(Number(values[0]));
+            return { expires_at: Number(values[0]) };
+          },
           run: async () => ({ meta: {} }),
           all: async () => ({ meta: {}, results: [] }),
         };
@@ -541,17 +573,39 @@ describe("V2 control plane", () => {
     expect(signedOut.status).toBe(200);
     await expect(signedOut.text()).resolves.toContain("Sign in with GitHub");
 
+    const renewals: number[] = [];
     const response = await fetch(
       new Request("https://v2.invalid/", {
         headers: { cookie: authedUiCookie },
       }),
-      uiEnv(withUiSession(dashboardDb())) as never,
+      uiEnv(withUiSession(dashboardDb(), '["1297678423"]', renewals)) as never,
       {} as never,
     );
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe(
       "text/html; charset=utf-8",
     );
+    // Valid activity renews the session: the stored expiration extends to at
+    // least 30 days out and the response carries a matching renewed cookie.
+    expect(renewals).toHaveLength(1);
+    expect(renewals[0]! - Date.now()).toBeGreaterThanOrEqual(
+      30 * 24 * 60 * 60 * 1000 - 60_000,
+    );
+    const renewedCookie = response.headers.get("set-cookie")!;
+    expect(renewedCookie).toContain("roundhouse_ui_session=test-session");
+    expect(renewedCookie).toContain("HttpOnly");
+    expect(renewedCookie).toContain("Secure");
+    const renewedMaxAge = Number(renewedCookie.match(/Max-Age=(\d+)/)![1]);
+    expect(renewedMaxAge).toBeGreaterThanOrEqual(30 * 24 * 60 * 60);
+    expect(renewals[0]!).toBeLessThanOrEqual(
+      Date.now() + (renewedMaxAge + 1) * 1000,
+    );
+    // The cookie's absolute Expires deadline equals the persisted expiration.
+    expect(renewedCookie).toContain(
+      `Expires=${new Date(renewals[0]!).toUTCString()}`,
+    );
+    // The signed-out fallback does not set a renewed session cookie.
+    expect(signedOut.headers.get("set-cookie")).toBeNull();
     expect(response.headers.get("content-security-policy")).toContain(
       "frame-ancestors 'none'",
     );
@@ -588,15 +642,29 @@ describe("V2 control plane", () => {
     expect(signedOut.status).toBe(200);
     await expect(signedOut.text()).resolves.toContain("Sign in with GitHub");
 
+    const renewals: number[] = [];
     const post = await fetch(
       new Request("https://v2.invalid/usage", {
         method: "POST",
         headers: { cookie: authedUiCookie },
       }),
-      uiEnv(withUiSession(dashboardDb())) as never,
+      uiEnv(withUiSession(dashboardDb(), '["1297678423"]', renewals)) as never,
       {} as never,
     );
     expect(post.status).toBe(405);
+    // The session was renewed during authorization, so even this error
+    // response carries a matching renewed cookie.
+    expect(renewals).toHaveLength(1);
+    const errorCookie = post.headers.get("set-cookie")!;
+    expect(errorCookie).toContain("roundhouse_ui_session=test-session");
+    const errorMaxAge = Number(errorCookie.match(/Max-Age=(\d+)/)![1]);
+    expect(errorMaxAge).toBeGreaterThanOrEqual(30 * 24 * 60 * 60);
+    expect(renewals[0]!).toBeLessThanOrEqual(
+      Date.now() + (errorMaxAge + 1) * 1000,
+    );
+    expect(errorCookie).toContain(
+      `Expires=${new Date(renewals[0]!).toUTCString()}`,
+    );
 
     const response = await fetch(
       new Request("https://v2.invalid/usage", {

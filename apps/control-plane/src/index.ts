@@ -27,9 +27,10 @@ import {
   handleGitHubCallback,
   renderNotFoundPage,
   renderSignInPage,
+  sessionCookieHeader,
   signOut,
   validateUiSession,
-  type UiSession,
+  type ValidatedUiSession,
 } from "./ui-auth.js";
 import {
   acceptGitHubCheckSuite,
@@ -481,7 +482,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       /^\/repositories\/[^/]+\/[^/]+\/(workflow|issues\/\d+(?:\/workflow)?)$/.test(
         url.pathname,
       );
-    let uiSession: UiSession | undefined;
+    let uiSession: ValidatedUiSession | undefined;
     if (isUiRoute && isPublicUiRequest()) {
       const boundaryStartedAt = Date.now();
       uiSession = await validateUiSession(request, env);
@@ -506,12 +507,35 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
         }),
       );
     }
+    // Successful UI authorization renews the session; attach the renewed
+    // cookie to every response produced for that authorized request. The
+    // header is built here, when the response is produced, so the cookie's
+    // remaining lifetime matches the persisted expiration.
+    const withUiSession = (response: Response): Response => {
+      if (!uiSession) return response;
+      const headers = new Headers(response.headers);
+      headers.append(
+        "set-cookie",
+        sessionCookieHeader(uiSession.sessionToken, uiSession.expiresAt),
+      );
+      return new Response(response.body, {
+        status: response.status,
+        headers,
+      });
+    };
+    const uiHtml = (value: string, status = 200): Response =>
+      withUiSession(html(value, status));
+    const uiJson = (
+      value: unknown,
+      status = 200,
+      headers?: HeadersInit,
+    ): Response => withUiSession(json(value, status, headers));
     if (
       (url.pathname === "/" || url.pathname === "/runs") &&
       isPublicUiRequest()
     ) {
       if (request.method !== "GET")
-        return json({ error: "method_not_allowed" }, 405, { allow: "GET" });
+        return uiJson({ error: "method_not_allowed" }, 405, { allow: "GET" });
       const queryStartedAt = Date.now();
       const runs = await new D1RunRepository(env.DB).listRunsForRepositories(
         uiSession!.repositoryIds,
@@ -525,13 +549,13 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
           durationMs: Date.now() - queryStartedAt,
         }),
       );
-      return html(
+      return uiHtml(
         renderDashboard(runs, { githubLogin: uiSession!.githubLogin }),
       );
     }
     if (url.pathname === "/usage" && isPublicUiRequest()) {
       if (request.method !== "GET")
-        return json({ error: "method_not_allowed" }, 405, { allow: "GET" });
+        return uiJson({ error: "method_not_allowed" }, 405, { allow: "GET" });
       const queryStartedAt = Date.now();
       const endAt = Date.now();
       const startAt = endAt - 30 * 24 * 60 * 60_000;
@@ -553,7 +577,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
           durationMs: Date.now() - queryStartedAt,
         }),
       );
-      return html(
+      return uiHtml(
         renderModelUsage(summary, { githubLogin: uiSession!.githubLogin }),
       );
     }
@@ -565,10 +589,10 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       try {
         repositoryName = `${decodeURIComponent(workflowMatch[1]!)}\/${decodeURIComponent(workflowMatch[2]!)}`;
       } catch {
-        return json({ error: "not_found" }, 404);
+        return uiJson({ error: "not_found" }, 404);
       }
       if (!["GET", "POST"].includes(request.method))
-        return json({ error: "method_not_allowed" }, 405, {
+        return uiJson({ error: "method_not_allowed" }, 405, {
           allow: "GET, POST",
         });
       const repository = new D1RunRepository(env.DB);
@@ -577,7 +601,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
         uiSession!.repositoryIds,
       );
       if (!snapshotRun?.githubInstallationId)
-        return html(renderNotFoundPage(), 404);
+        return uiHtml(renderNotFoundPage(), 404);
       const profileStartedAt = Date.now();
       console.log(
         JSON.stringify({
@@ -602,10 +626,10 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
             error: error instanceof Error ? error.message : String(error),
           }),
         );
-        return json({ error: "workflow_profile_unavailable" }, 502);
+        return uiJson({ error: "workflow_profile_unavailable" }, 502);
       }
       const currentWorkflow = current.profile.workflow;
-      if (!currentWorkflow) return html(renderNotFoundPage(), 404);
+      if (!currentWorkflow) return uiHtml(renderNotFoundPage(), 404);
       const run: RunSnapshot = {
         ...snapshotRun,
         githubDefaultBranch: current.defaultBranch,
@@ -637,19 +661,19 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
             nodes: Object.keys(currentWorkflow.nodes).length,
           }),
         );
-        return html(renderWorkflowView(run, { source: "default_branch" }));
+        return uiHtml(renderWorkflowView(run, { source: "default_branch" }));
       }
       let input: { source?: unknown; sourceCommit?: unknown };
       try {
         input = (await request.json()) as typeof input;
       } catch {
-        return json({ error: "invalid_request" }, 400);
+        return uiJson({ error: "invalid_request" }, 400);
       }
       if (
         typeof input.source !== "string" ||
         input.sourceCommit !== currentWorkflow.sourceCommit
       )
-        return json({ error: "invalid_request" }, 400);
+        return uiJson({ error: "invalid_request" }, 400);
       const promptContents = new Map<string, string>();
       for (const node of Object.values(currentWorkflow.nodes)) {
         for (const prompt of [
@@ -679,7 +703,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
             nodes: Object.keys(compiled.nodes).length,
           }),
         );
-        return json({
+        return uiJson({
           valid: true,
           hash: compiled.hash,
           nodes: Object.keys(compiled.nodes).length,
@@ -695,7 +719,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
             error: message,
           }),
         );
-        return json({ error: message }, 400);
+        return uiJson({ error: message }, 400);
       }
     }
     const runWorkflowMatch = url.pathname.match(
@@ -703,12 +727,12 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
     );
     if (runWorkflowMatch && isPublicUiRequest()) {
       if (request.method !== "GET")
-        return json({ error: "method_not_allowed" }, 405, { allow: "GET" });
+        return uiJson({ error: "method_not_allowed" }, 405, { allow: "GET" });
       let repositoryName: string;
       try {
         repositoryName = `${decodeURIComponent(runWorkflowMatch[1]!)}\/${decodeURIComponent(runWorkflowMatch[2]!)}`;
       } catch {
-        return json({ error: "not_found" }, 404);
+        return uiJson({ error: "not_found" }, 404);
       }
       const details = await new D1RunRepository(env.DB).detailsByIssue(
         repositoryName,
@@ -716,7 +740,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
         uiSession!.repositoryIds,
       );
       if (!details?.run.profile?.workflow)
-        return html(renderNotFoundPage(), 404);
+        return uiHtml(renderNotFoundPage(), 404);
       console.log(
         JSON.stringify({
           message: "workflow_graph_rendered",
@@ -729,32 +753,32 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
           nodes: Object.keys(details.run.profile.workflow.nodes).length,
         }),
       );
-      return html(renderWorkflowView(details.run));
+      return uiHtml(renderWorkflowView(details.run));
     }
     const detailsMatch = url.pathname.match(
       /^\/repositories\/([^/]+)\/([^/]+)\/issues\/(\d+)$/,
     );
     if (detailsMatch && isPublicUiRequest()) {
       if (request.method !== "GET")
-        return json({ error: "method_not_allowed" }, 405, { allow: "GET" });
+        return uiJson({ error: "method_not_allowed" }, 405, { allow: "GET" });
       let repository: string;
       const owner = detailsMatch[1];
       const name = detailsMatch[2];
       const issueNumber = detailsMatch[3];
       if (!owner || !name || !issueNumber)
-        return json({ error: "not_found" }, 404);
+        return uiJson({ error: "not_found" }, 404);
       try {
         repository = `${decodeURIComponent(owner)}/${decodeURIComponent(name)}`;
       } catch {
-        return json({ error: "not_found" }, 404);
+        return uiJson({ error: "not_found" }, 404);
       }
       const details = await new D1RunRepository(env.DB).detailsByIssue(
         repository,
         Number(issueNumber),
         uiSession!.repositoryIds,
       );
-      if (!details) return html(renderNotFoundPage(), 404);
-      return html(renderRunDetails(details));
+      if (!details) return uiHtml(renderNotFoundPage(), 404);
+      return uiHtml(renderRunDetails(details));
     }
     if (url.pathname === "/attempts/completion") {
       const startedAt = Date.now();

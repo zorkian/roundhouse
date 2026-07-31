@@ -5,9 +5,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { D1Like } from "./d1-store.js";
 import {
   beginGitHubSignIn,
+  decryptUiAccessToken,
+  encryptUiAccessToken,
   handleGitHubCallback,
+  sessionCookieHeader,
   signOut,
   uiSessionCookie,
+  uiSessionLifetimeMs,
   uiStateCookie,
   validateUiSession,
 } from "./ui-auth.js";
@@ -24,7 +28,17 @@ function authDb(options?: {
   sessions?: readonly {
     hash: string;
     expiresAt: number;
+    createdAt?: number;
+    accessToken?: string | null;
+    authorizedAt?: number | null;
   }[];
+  // Hook invoked after the session SELECT but before the renewal UPDATE
+  // commits, to simulate a concurrent write landing in between.
+  beforeRenewalCommit?: (hash: string) => void;
+  // Hook invoked after the session SELECT observes an expired row but before
+  // the conditional cleanup delete commits, to simulate a concurrent
+  // renewal landing in between.
+  beforeExpiredCleanup?: (hash: string) => void;
 }) {
   const states = new Map<string, { expiresAt: number; cookieHash: string }>();
   const sessions = new Map(
@@ -35,6 +49,15 @@ function authDb(options?: {
         github_login: "octocat",
         repository_ids_json: '["1297678423"]',
         expires_at: session.expiresAt,
+        created_at: session.createdAt ?? Date.now(),
+        github_access_token:
+          session.accessToken === undefined
+            ? ENCRYPTED_USER_TOKEN
+            : session.accessToken,
+        authorized_at:
+          session.authorizedAt === undefined
+            ? (session.createdAt ?? Date.now())
+            : session.authorizedAt,
       },
     ]),
   );
@@ -58,6 +81,22 @@ function authDb(options?: {
                   expires_at: state.expiresAt,
                   state_cookie_hash: state.cookieHash,
                 };
+          }
+          if (sql.includes("UPDATE ui_sessions SET expires_at")) {
+            // Mirrors UPDATE ... MAX() ... RETURNING: apply any concurrent
+            // write that landed after our SELECT, keep the later deadline,
+            // and return the actual persisted expiration.
+            const hash = String(values[3]);
+            options?.beforeRenewalCommit?.(hash);
+            const session = sessions.get(hash);
+            if (!session) return null;
+            session.expires_at = Math.max(
+              session.expires_at,
+              Number(values[0]),
+            );
+            session.repository_ids_json = String(values[1]);
+            session.authorized_at = Number(values[2]);
+            return { expires_at: session.expires_at };
           }
           if (sql.includes("FROM ui_sessions")) {
             return sessions.get(String(values[0])) ?? null;
@@ -88,13 +127,21 @@ function authDb(options?: {
               github_login: String(values[2]),
               repository_ids_json: String(values[3]),
               expires_at: Number(values[4]),
+              created_at: Number(values[5]),
+              github_access_token: String(values[6]),
+              authorized_at: Number(values[7]),
             });
-          if (sql.includes("DELETE FROM ui_sessions WHERE session_hash"))
-            sessions.delete(String(values[0]));
-          if (sql.includes("DELETE FROM ui_sessions WHERE expires_at"))
-            for (const [hash, session] of sessions)
-              if (session.expires_at <= Number(values[0]))
-                sessions.delete(hash);
+          if (sql.includes("DELETE FROM ui_sessions WHERE session_hash")) {
+            if (sql.includes("expires_at <= ?2"))
+              options?.beforeExpiredCleanup?.(String(values[0]));
+            const session = sessions.get(String(values[0]));
+            if (
+              session &&
+              (!sql.includes("expires_at <= ?2") ||
+                session.expires_at <= Number(values[1]))
+            )
+              sessions.delete(String(values[0]));
+          }
           return { meta: { changes: 1 } };
         },
       };
@@ -108,6 +155,13 @@ function callbackRequest(url: string, start?: Response): Request {
   const cookie = start?.headers.get("set-cookie")?.split(";")[0] ?? "";
   return new Request(url, cookie ? { headers: { cookie } } : {});
 }
+
+// Sessions store the GitHub access token encrypted under the client
+// secret, so seeded stub sessions use an encrypted default token.
+const ENCRYPTED_USER_TOKEN = await encryptUiAccessToken(
+  "user-token",
+  "client-secret",
+);
 
 const env = (db: D1Like) => ({
   DB: db,
@@ -200,14 +254,37 @@ describe("GitHub UI sign-in", () => {
     expect(cookie).toContain("SameSite=Lax");
     // State is one-time: consumed by the callback.
     expect(states.size).toBe(0);
-    // Only the enrolled repository ID was stored; GitHub tokens were not.
+    // Only the enrolled repository ID was stored, alongside the GitHub
+    // access token used to re-resolve authorization when it goes stale.
     const session = [...sessions.values()][0]!;
     expect(session.github_login).toBe("octocat");
     expect(JSON.parse(session.repository_ids_json)).toEqual(["1297678423"]);
-    expect(session.expires_at).toBeGreaterThan(Date.now());
-    expect(JSON.stringify([...sessions.values()])).not.toContain("user-token");
-    // The access token never appears in the redirect target.
+    // The bearer token is encrypted at rest; the database never holds the
+    // reusable plaintext credential.
+    expect(session.github_access_token).not.toContain("user-token");
+    expect(
+      await decryptUiAccessToken(session.github_access_token!, "client-secret"),
+    ).toBe("user-token");
+    expect(session.authorized_at).toBeGreaterThan(0);
+    // The session and its cookie share a lifetime of at least 30 days.
+    expect(session.expires_at - Date.now()).toBeGreaterThanOrEqual(
+      30 * 24 * 60 * 60 * 1000 - 60_000,
+    );
+    const maxAge = Number(cookie.match(/Max-Age=(\d+)/)![1]);
+    // Max-Age is rounded up, so the browser lifetime is at least the full
+    // 30-day session lifetime regardless of when the header was built
+    // relative to the persisted expiration.
+    expect(maxAge).toBeGreaterThanOrEqual(uiSessionLifetimeMs / 1000);
+    expect(maxAge).toBeGreaterThanOrEqual(30 * 24 * 60 * 60);
+    // Rounding up adds less than a second beyond the stored deadline.
+    expect(maxAge).toBeLessThanOrEqual(uiSessionLifetimeMs / 1000 + 1);
+    // The cookie's absolute Expires deadline matches the stored expiration.
+    expect(cookie).toContain(
+      `Expires=${new Date(session.expires_at).toUTCString()}`,
+    );
+    // The access token never appears in the redirect target or the cookie.
     expect(response.headers.get("location")).not.toContain("token");
+    expect(cookie).not.toContain("user-token");
   });
 
   it("includes enrolled public repositories not listed for the user", async () => {
@@ -339,7 +416,7 @@ describe("GitHub UI sign-in", () => {
         env(db),
       ),
     ).resolves.toBeUndefined();
-    // Expired sessions are removed on validation.
+    // Expired sessions are removed on validation without renewal.
     expect(sessions.has(await sha256Hex(expiredToken))).toBe(false);
 
     const out = await signOut(
@@ -359,6 +436,370 @@ describe("GitHub UI sign-in", () => {
         env(db),
       ),
     ).resolves.toBeUndefined();
+  });
+
+  it("renews a valid session's stored and cookie expiration on validation", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      const token = "renewable-session";
+      const hash = await sha256Hex(token);
+      const initialExpiresAt = Date.now() + 60_000;
+      const { db, sessions } = authDb({
+        sessions: [{ hash, expiresAt: initialExpiresAt }],
+      });
+      const logs: Record<string, unknown>[] = [];
+      const logSpy = vi
+        .spyOn(console, "log")
+        .mockImplementation((line: unknown) => {
+          logs.push(JSON.parse(String(line)) as Record<string, unknown>);
+        });
+      const session = await validateUiSession(
+        new Request("https://v2.invalid/", {
+          headers: { cookie: `${uiSessionCookie}=${token}` },
+        }),
+        env(db),
+      );
+      expect(session).toBeDefined();
+      const expectedExpiresAt = Date.now() + uiSessionLifetimeMs;
+      expect(session?.expiresAt).toBe(expectedExpiresAt);
+      expect(sessions.get(hash)?.expires_at).toBe(expectedExpiresAt);
+      expect(session?.sessionToken).toBe(token);
+      // The renewed cookie shares the persisted absolute expiration.
+      const renewedCookie = sessionCookieHeader(token, session!.expiresAt);
+      expect(renewedCookie).toContain(`${uiSessionCookie}=${token}`);
+      expect(renewedCookie).toContain("HttpOnly");
+      expect(renewedCookie).toContain("Secure");
+      expect(renewedCookie).toContain(
+        `Max-Age=${Math.floor(uiSessionLifetimeMs / 1000)}`,
+      );
+      expect(renewedCookie).toContain(
+        `Expires=${new Date(expectedExpiresAt).toUTCString()}`,
+      );
+      const renewed = logs.find(
+        (entry) => entry.message === "ui_session_renewed",
+      );
+      expect(renewed).toMatchObject({
+        outcome: "renewed",
+        githubUserId: 7,
+        previousExpiresAt: initialExpiresAt,
+        expiresAt: expectedExpiresAt,
+      });
+      expect(typeof renewed?.durationMs).toBe("number");
+      logSpy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("renews sessions regardless of age so active users stay signed in", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-02-01T00:00:00Z"));
+      const token = "active-session";
+      const hash = await sha256Hex(token);
+      // Signed in 31 days ago but still within its sliding expiration: each
+      // valid visit renews for a full lifetime from that activity.
+      const createdAt = Date.now() - 31 * 24 * 60 * 60 * 1000;
+      const { db, sessions } = authDb({
+        sessions: [
+          {
+            hash,
+            expiresAt: Date.now() + 60_000,
+            createdAt,
+            // Repository authorization was re-resolved recently, so no
+            // GitHub recheck is needed for this renewal.
+            authorizedAt: Date.now() - 60_000,
+          },
+        ],
+      });
+      const session = await validateUiSession(
+        new Request("https://v2.invalid/", {
+          headers: { cookie: `${uiSessionCookie}=${token}` },
+        }),
+        env(db),
+      );
+      const expectedExpiresAt = Date.now() + uiSessionLifetimeMs;
+      expect(session?.expiresAt).toBe(expectedExpiresAt);
+      expect(sessions.get(hash)?.expires_at).toBe(expectedExpiresAt);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-resolves repository authorization against GitHub once the snapshot is stale", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      const token = "stale-authorization-session";
+      const hash = await sha256Hex(token);
+      const authorizedAt = Date.now() - 9 * 60 * 60 * 1000;
+      const { db, sessions } = authDb({
+        sessions: [{ hash, expiresAt: Date.now() + 60_000, authorizedAt }],
+      });
+      stubGitHubOAuth([{ id: 1297678423 }, { id: 42 }]);
+      const logs: Record<string, unknown>[] = [];
+      const logSpy = vi
+        .spyOn(console, "log")
+        .mockImplementation((line: unknown) => {
+          logs.push(JSON.parse(String(line)) as Record<string, unknown>);
+        });
+      const session = await validateUiSession(
+        new Request("https://v2.invalid/", {
+          headers: { cookie: `${uiSessionCookie}=${token}` },
+        }),
+        env(db),
+      );
+      expect(session).toBeDefined();
+      expect(session?.repositoryIds).toEqual(["1297678423"]);
+      const stored = sessions.get(hash)!;
+      expect(JSON.parse(stored.repository_ids_json)).toEqual(["1297678423"]);
+      expect(stored.authorized_at).toBe(Date.now());
+      expect(stored.expires_at).toBe(Date.now() + uiSessionLifetimeMs);
+      const reauthorized = logs.find(
+        (entry) => entry.message === "ui_session_reauthorized",
+      );
+      expect(reauthorized).toMatchObject({
+        outcome: "refreshed",
+        githubUserId: 7,
+        previousAuthorizedAt: authorizedAt,
+        authorizedAt: Date.now(),
+        authorizedRepositories: 1,
+      });
+      expect(typeof reauthorized?.durationMs).toBe("number");
+      logSpy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops revoked access when reauthorization re-resolves permissions", async () => {
+    const token = "revoked-repository-session";
+    const hash = await sha256Hex(token);
+    const { db, sessions } = authDb({
+      sessions: [
+        {
+          hash,
+          expiresAt: Date.now() + 60_000,
+          authorizedAt: Date.now() - 9 * 60 * 60 * 1000,
+        },
+      ],
+    });
+    // The user can no longer read the enrolled repository.
+    stubGitHubOAuth([{ id: 42 }]);
+    const session = await validateUiSession(
+      new Request("https://v2.invalid/", {
+        headers: { cookie: `${uiSessionCookie}=${token}` },
+      }),
+      env(db),
+    );
+    expect(session?.repositoryIds).toEqual([]);
+    expect(JSON.parse(sessions.get(hash)!.repository_ids_json)).toEqual([]);
+    expect(sessions.get(hash)!.expires_at).toBeGreaterThan(Date.now());
+  });
+
+  it("ends the session when reauthorization fails against GitHub", async () => {
+    const token = "revoked-token-session";
+    const hash = await sha256Hex(token);
+    const { db, sessions } = authDb({
+      sessions: [
+        {
+          hash,
+          expiresAt: Date.now() + 60_000,
+          authorizedAt: Date.now() - 9 * 60 * 60 * 1000,
+        },
+      ],
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("bad credentials", { status: 401 })),
+    );
+    const logs: Record<string, unknown>[] = [];
+    const logSpy = vi
+      .spyOn(console, "log")
+      .mockImplementation((line: unknown) => {
+        logs.push(JSON.parse(String(line)) as Record<string, unknown>);
+      });
+    const session = await validateUiSession(
+      new Request("https://v2.invalid/", {
+        headers: { cookie: `${uiSessionCookie}=${token}` },
+      }),
+      env(db),
+    );
+    // The session is rejected and deleted rather than renewed on stale,
+    // unverifiable authorization.
+    expect(session).toBeUndefined();
+    expect(sessions.has(hash)).toBe(false);
+    expect(
+      logs.find((entry) => entry.message === "ui_session_reauthorized"),
+    ).toMatchObject({ outcome: "failed", githubUserId: 7 });
+    logSpy.mockRestore();
+  });
+
+  it("requires reauthentication when a stale session has no stored GitHub token", async () => {
+    const token = "legacy-session";
+    const hash = await sha256Hex(token);
+    const { db, sessions } = authDb({
+      sessions: [
+        {
+          hash,
+          expiresAt: Date.now() + 60_000,
+          accessToken: null,
+          authorizedAt: Date.now() - 9 * 60 * 60 * 1000,
+        },
+      ],
+    });
+    const session = await validateUiSession(
+      new Request("https://v2.invalid/", {
+        headers: { cookie: `${uiSessionCookie}=${token}` },
+      }),
+      env(db),
+    );
+    expect(session).toBeUndefined();
+    expect(sessions.has(hash)).toBe(false);
+  });
+
+  it("requires reauthentication when a stale session holds an undecryptable token", async () => {
+    const token = "plaintext-token-session";
+    const hash = await sha256Hex(token);
+    const { db, sessions } = authDb({
+      sessions: [
+        {
+          hash,
+          expiresAt: Date.now() + 60_000,
+          // A legacy or tampered row whose stored token is not a ciphertext
+          // produced by this deployment cannot be used for reauthorization.
+          accessToken: "user-token",
+          authorizedAt: Date.now() - 9 * 60 * 60 * 1000,
+        },
+      ],
+    });
+    const logs: Record<string, unknown>[] = [];
+    const logSpy = vi
+      .spyOn(console, "log")
+      .mockImplementation((line: unknown) => {
+        logs.push(JSON.parse(String(line)) as Record<string, unknown>);
+      });
+    const session = await validateUiSession(
+      new Request("https://v2.invalid/", {
+        headers: { cookie: `${uiSessionCookie}=${token}` },
+      }),
+      env(db),
+    );
+    expect(session).toBeUndefined();
+    expect(sessions.has(hash)).toBe(false);
+    expect(
+      logs.find((entry) => entry.message === "ui_session_reauthorized"),
+    ).toMatchObject({ outcome: "reauthentication_required", githubUserId: 7 });
+    logSpy.mockRestore();
+  });
+
+  it("keeps the later expiration when renewals overlap", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      const token = "concurrent-session";
+      const hash = await sha256Hex(token);
+      const { db, sessions } = authDb({
+        sessions: [{ hash, expiresAt: Date.now() + 60_000 }],
+      });
+      const newer = await validateUiSession(
+        new Request("https://v2.invalid/", {
+          headers: { cookie: `${uiSessionCookie}=${token}` },
+        }),
+        env(db),
+      );
+      expect(newer?.expiresAt).toBe(Date.now() + uiSessionLifetimeMs);
+      // A second request starting later must not shorten the deadline, and
+      // an already-persisted later expiration is preserved and returned.
+      sessions.get(hash)!.expires_at = Date.now() + 90 * 24 * 60 * 60 * 1000;
+      const request = new Request("https://v2.invalid/", {
+        headers: { cookie: `${uiSessionCookie}=${token}` },
+      });
+      const session = await validateUiSession(request, env(db));
+      const preserved = Date.now() + 90 * 24 * 60 * 60 * 1000;
+      expect(session?.expiresAt).toBe(preserved);
+      expect(sessions.get(hash)?.expires_at).toBe(preserved);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("returns the expiration from the atomic update when a concurrent write lands after the SELECT", async () => {
+    const token = "valid-token";
+    const hash = await sha256Hex(token);
+    vi.useFakeTimers();
+    try {
+      const { db, sessions } = authDb({
+        sessions: [{ hash, expiresAt: Date.now() + 60_000 }],
+        // Simulate a concurrent request extending the same session after
+        // this request's SELECT but before its UPDATE commits.
+        beforeRenewalCommit: (updatedHash) => {
+          sessions.get(updatedHash)!.expires_at =
+            Date.now() + 60 * 24 * 60 * 60 * 1000;
+        },
+      });
+      const session = await validateUiSession(
+        new Request("https://v2.invalid/", {
+          headers: { cookie: `${uiSessionCookie}=${token}` },
+        }),
+        env(db),
+      );
+      // The cookie expiration must match the actual persisted deadline
+      // (the concurrent writer's later value), not the stale local one.
+      const persisted = Date.now() + 60 * 24 * 60 * 60 * 1000;
+      expect(session?.expiresAt).toBe(persisted);
+      expect(sessions.get(hash)?.expires_at).toBe(persisted);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects validation when the session is deleted between SELECT and UPDATE", async () => {
+    const token = "deleted-token";
+    const hash = await sha256Hex(token);
+    const { db, sessions } = authDb({
+      sessions: [{ hash, expiresAt: Date.now() + 60_000 }],
+      // Simulate a concurrent sign-out deleting the row after this
+      // request's SELECT but before its renewal UPDATE commits.
+      beforeRenewalCommit: (updatedHash) => {
+        sessions.delete(updatedHash);
+      },
+    });
+    const session = await validateUiSession(
+      new Request("https://v2.invalid/", {
+        headers: { cookie: `${uiSessionCookie}=${token}` },
+      }),
+      env(db),
+    );
+    // No server-side session remains, so validation must fail rather than
+    // fabricating an expiration and issuing a fresh 30-day cookie.
+    expect(session).toBeUndefined();
+  });
+
+  it("does not delete a session renewed concurrently with expired cleanup", async () => {
+    const token = "raced-expired-token";
+    const hash = await sha256Hex(token);
+    const renewed = Date.now() + 30 * 24 * 60 * 60 * 1000;
+    const { db, sessions } = authDb({
+      sessions: [{ hash, expiresAt: Date.now() - 1 }],
+      // Simulate a concurrent valid request renewing the row after this
+      // request's SELECT saw it expired but before its cleanup delete
+      // commits.
+      beforeExpiredCleanup: (deletedHash) => {
+        sessions.get(deletedHash)!.expires_at = renewed;
+      },
+    });
+    const session = await validateUiSession(
+      new Request("https://v2.invalid/", {
+        headers: { cookie: `${uiSessionCookie}=${token}` },
+      }),
+      env(db),
+    );
+    // This request still sees an expired session and is rejected, but the
+    // cleanup must not delete the concurrently renewed row.
+    expect(session).toBeUndefined();
+    expect(sessions.get(hash)?.expires_at).toBe(renewed);
   });
 });
 
