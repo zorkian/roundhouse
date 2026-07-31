@@ -19,14 +19,19 @@ export const workflowGraphClientScript = `(function () {
   if (container && dataElement && window.cytoscape) {
     var initStartedAt = Date.now();
     var elements = JSON.parse(dataElement.textContent);
+    var entryId = container.getAttribute("data-entry");
     var graphLayout = {
-      name: "cose",
+      name: "breadthfirst",
       animate: false,
+      fit: true,
+      directed: true,
+      direction: "downward",
+      circle: false,
+      grid: true,
       nodeDimensionsIncludeLabels: true,
       padding: 40,
-      idealEdgeLength: 260,
-      nodeRepulsion: function () { return 900000; },
-      gravity: 0.4
+      spacingFactor: 1.4,
+      avoidOverlap: true
     };
     var cy = window.cytoscape({
       container: container,
@@ -97,30 +102,83 @@ export const workflowGraphClientScript = `(function () {
       nodes: cy.nodes().length,
       edges: cy.edges().length
     });
+    var entry = entryId ? cy.getElementById(entryId) : null;
+    var entryFound = Boolean(entry && entry.nonempty());
+    if (entryFound) graphLayout.roots = entry;
+    function layoutGeometry() {
+      var nodes = cy.nodes();
+      var overlappingNodePairs = 0;
+      var topmostY = null;
+      for (var i = 0; i < nodes.length; i += 1) {
+        var first = nodes[i];
+        var firstY = first.position("y");
+        if (topmostY === null || firstY < topmostY) topmostY = firstY;
+        var firstBounds = first.boundingBox({
+          includeLabels: true,
+          includeOverlays: false
+        });
+        for (var j = i + 1; j < nodes.length; j += 1) {
+          var secondBounds = nodes[j].boundingBox({
+            includeLabels: true,
+            includeOverlays: false
+          });
+          if (
+            firstBounds.x1 < secondBounds.x2 &&
+            firstBounds.x2 > secondBounds.x1 &&
+            firstBounds.y1 < secondBounds.y2 &&
+            firstBounds.y2 > secondBounds.y1
+          ) {
+            overlappingNodePairs += 1;
+          }
+        }
+      }
+      var entryY = entryFound ? entry.position("y") : null;
+      return {
+        overlappingNodePairs: overlappingNodePairs,
+        entryY: entryY,
+        topmostY: topmostY,
+        entryTopmost: entryY !== null && entryY === topmostY
+      };
+    }
     cy.on("layoutstop", function () {
+      var geometry = layoutGeometry();
       log("workflow_graph_layout_completed", {
-        layout: "cose",
+        layout: graphLayout.name,
+        direction: graphLayout.direction,
+        rootStage: entryId,
+        rootApplied: entryFound,
         nodes: cy.nodes().length,
         edges: cy.edges().length,
+        overlappingNodePairs: geometry.overlappingNodePairs,
+        entryY: geometry.entryY,
+        topmostY: geometry.topmostY,
+        entryTopmost: geometry.entryTopmost,
         layoutMs: Date.now() - initStartedAt
       });
     });
-    // One-time post-layout framing: always anchor the camera on the workflow
-    // entry at a readable scale. The graph is created with a preset layout
-    // and cose is run explicitly below so these handlers are installed before
-    // the synchronous, non-animated layoutstop event can fire.
-    var entryId = container.getAttribute("data-entry");
+    // One-time post-layout framing: anchor the workflow entry near the top of
+    // the viewport at a readable scale so the graph visibly flows downward.
+    // The graph is created with a preset layout and breadthfirst is run
+    // explicitly below so these handlers are installed before the synchronous,
+    // non-animated layoutstop event can fire.
     cy.on("layoutstop", function frameOnce() {
       cy.off("layoutstop", frameOnce);
       var mobile = container.clientWidth <= 700;
       var zoomFloor = mobile ? 0.85 : 1;
+      var entryTopPadding = 32;
       var initialZoom = cy.zoom();
       if (cy.zoom() < zoomFloor) cy.zoom(zoomFloor);
-      var entry = entryId ? cy.getElementById(entryId) : null;
-      var entryFound = Boolean(entry && entry.nonempty());
       var entryVisible = false;
       if (entryFound) {
-        cy.center(entry);
+        var entryPosition = entry.position();
+        var zoom = cy.zoom();
+        cy.pan({
+          x: container.clientWidth / 2 - entryPosition.x * zoom,
+          y:
+            entryTopPadding +
+            (entry.outerHeight() * zoom) / 2 -
+            entryPosition.y * zoom
+        });
         var bounds = entry.renderedBoundingBox();
         entryVisible =
           bounds.x1 >= 0 &&
@@ -135,6 +193,8 @@ export const workflowGraphClientScript = `(function () {
         initialZoom: initialZoom,
         zoom: cy.zoom(),
         entryVisible: entryVisible,
+        entryTop: entryFound ? entry.renderedBoundingBox().y1 : null,
+        entryTopPadding: entryTopPadding,
         containerWidth: container.clientWidth,
         containerHeight: container.clientHeight,
         framingMs: Date.now() - initStartedAt
@@ -247,6 +307,9 @@ export const workflowGraphClientScript = `(function () {
     }
     log("workflow_graph_layout_started", {
       layout: graphLayout.name,
+      direction: graphLayout.direction,
+      rootStage: entryId,
+      rootApplied: entryFound,
       nodes: cy.nodes().length,
       edges: cy.edges().length
     });

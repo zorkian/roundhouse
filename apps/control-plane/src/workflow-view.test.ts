@@ -238,8 +238,11 @@ describe("workflow graph view", () => {
   });
 
   it("ships client behavior for selection highlighting and the editor actions", () => {
-    // Cycle-capable force-directed layout with directed arrows.
-    expect(workflowGraphClientScript).toContain('"cose"');
+    // Entry-rooted hierarchical layout with directed arrows.
+    expect(workflowGraphClientScript).toContain('"breadthfirst"');
+    expect(workflowGraphClientScript).toContain('direction: "downward"');
+    expect(workflowGraphClientScript).toContain("avoidOverlap: true");
+    expect(workflowGraphClientScript).not.toContain('name: "cose"');
     expect(workflowGraphClientScript).toContain('"target-arrow-shape"');
     // Selecting a node emphasizes it and its connected edges, mutes the
     // rest, and tapping the background clears the state.
@@ -317,16 +320,29 @@ describe("workflow graph view", () => {
         layoutRuns: 0,
         constructorLayout: "",
         explicitLayout: "",
+        explicitDirection: "",
+        rootApplied: false,
+        pan: { x: 0, y: 0 },
       };
-      let entryCentered = false;
+      const entryPosition = { x: 100, y: 400 };
       const entryNode = {
         nonempty: () => true,
+        position: (axis?: "x" | "y") =>
+          axis ? entryPosition[axis] : entryPosition,
+        outerHeight: () => 110,
+        boundingBox: () => ({
+          x1: entryPosition.x - 120,
+          y1: entryPosition.y - 55,
+          x2: entryPosition.x + 120,
+          y2: entryPosition.y + 55,
+        }),
         renderedBoundingBox: () => {
-          if (!entryCentered) return options.entryBounds;
+          if (state.pan.x === 0 && state.pan.y === 0)
+            return options.entryBounds;
           const width = 240 * state.zoom;
           const height = 110 * state.zoom;
-          const x1 = (options.width - width) / 2;
-          const y1 = (560 - height) / 2;
+          const x1 = entryPosition.x * state.zoom + state.pan.x - width / 2;
+          const y1 = entryPosition.y * state.zoom + state.pan.y - height / 2;
           return { x1, y1, x2: x1 + width, y2: y1 + height };
         },
         select: () => {},
@@ -345,18 +361,24 @@ describe("workflow graph view", () => {
           if (level !== undefined) state.zoom = level;
           return state.zoom;
         },
-        center: (node: unknown) => {
-          centered.push(node === entryNode ? "entry" : "other");
-          if (node === entryNode) entryCentered = true;
+        pan: (position: { x: number; y: number }) => {
+          state.pan = position;
+          centered.push("entry");
         },
-        layout: (layout: { name: string }) => ({
+        layout: (layout: {
+          name: string;
+          direction?: string;
+          roots?: unknown;
+        }) => ({
           run: () => {
             state.layoutRuns += 1;
             state.explicitLayout = layout.name;
+            state.explicitDirection = layout.direction ?? "";
+            state.rootApplied = layout.roots === entryNode;
             for (const handler of [...layoutstopHandlers]) handler();
           },
         }),
-        nodes: () => ({ length: 3 }),
+        nodes: () => [entryNode],
         edges: () => ({ length: 2 }),
         getElementById: (id: string) =>
           id === options.entryId || id === options.preselect
@@ -408,8 +430,8 @@ describe("workflow graph view", () => {
       return { state, centered, viewportLog, logs };
     }
 
-    // Desktop: handlers are attached before the explicit cose run, then the
-    // entry is centered even if it happened to be inside the prior fit.
+    // Desktop: handlers are attached before the explicit hierarchical run,
+    // then the entry is placed at the top even if it was previously visible.
     const desktop = harness({
       width: 1186,
       initialZoom: 0.4,
@@ -418,10 +440,13 @@ describe("workflow graph view", () => {
       entryBounds: { x1: 100, y1: 100, x2: 400, y2: 240 },
     });
     expect(desktop.state.constructorLayout).toBe("preset");
-    expect(desktop.state.explicitLayout).toBe("cose");
+    expect(desktop.state.explicitLayout).toBe("breadthfirst");
+    expect(desktop.state.explicitDirection).toBe("downward");
+    expect(desktop.state.rootApplied).toBe(true);
     expect(desktop.state.layoutRuns).toBe(1);
     expect(desktop.state.zoom).toBe(1);
     expect(desktop.centered).toEqual(["entry"]);
+    expect(desktop.state.pan).toEqual({ x: 493, y: -313 });
     expect(desktop.viewportLog).toMatchObject({
       entryStage: "qualify",
       entryFound: true,
@@ -429,6 +454,20 @@ describe("workflow graph view", () => {
       initialZoom: 0.4,
       zoom: 1,
       entryVisible: true,
+      entryTop: 32,
+      entryTopPadding: 32,
+    });
+    expect(
+      desktop.logs.find(
+        (entry) => entry.message === "workflow_graph_layout_completed",
+      ),
+    ).toMatchObject({
+      layout: "breadthfirst",
+      direction: "downward",
+      rootStage: "qualify",
+      rootApplied: true,
+      overlappingNodePairs: 0,
+      entryTopmost: true,
     });
     expect(
       desktop.logs.filter(
