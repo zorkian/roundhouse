@@ -115,13 +115,11 @@ describe("workflow graph view", () => {
       expect(node.data["authority"]).toBe(
         compiled.capabilities.join(", ") || "no external authority",
       );
-      // The compact primary label shows only the stage name and summary.
+      // The compact graph box shows only the stage name. Purpose and
+      // authority remain available to the stage-details panel.
       expect(node.data["name"]).toBeTruthy();
       expect(node.data["summary"]).toBeTruthy();
-      expect(node.data["label"]).toBe(
-        `${node.data["name"]}\n${node.data["summary"]}`,
-      );
-      expect(node.data["label"]).not.toContain(node.data["authority"]!);
+      expect(node.data["label"]).toBeUndefined();
       expect(node.data["outputs"]).toBeTruthy();
     }
     expect(nodes.some((node) => node.data["executor"] === "agent.write")).toBe(
@@ -151,9 +149,7 @@ describe("workflow graph view", () => {
     expect(synthetic[0]!.data["authority"]).toBe("no external authority");
     expect(synthetic[0]!.data["outputs"]).toBe("none");
 
-    // Long names and summaries are truncated so the wrapped label always
-    // stays inside the fixed 240x110 node box vertically as well as
-    // horizontally.
+    // Long names remain bounded while full detail text is preserved.
     const longName = "a-very-long-stage-".repeat(8);
     const longEvent = "very.long.external.event.".repeat(8);
     const longLabeled = workflowGraphElements({
@@ -170,10 +166,7 @@ describe("workflow graph view", () => {
     const longData = longLabeled[0]!.data;
     expect(longData["name"]!.length).toBeLessThanOrEqual(48);
     expect(longData["name"]!.endsWith("…")).toBe(true);
-    const labelLines = longData["label"]!.split("\n");
-    expect(labelLines).toHaveLength(2);
-    expect(labelLines[0]!.length).toBeLessThanOrEqual(48);
-    expect(labelLines[1]!.length).toBeLessThanOrEqual(96);
+    expect(longData["label"]).toBeUndefined();
     // The full untruncated text remains available in the detail fields.
     expect(longData["external"]).toContain(longEvent);
 
@@ -281,6 +274,7 @@ describe("workflow graph view", () => {
     expect(workflowGraphClientScript).toContain('"target-arrow-shape"');
     expect(workflowGraphClientScript).toContain('"unbundled-bezier"');
     expect(workflowGraphClientScript).toContain('"returnBend"');
+    expect(workflowGraphClientScript).toContain("returnBendScale");
     expect(workflowGraphClientScript).toContain('"line-style": "dashed"');
     expect(workflowGraphClientScript).toContain("data(outcome)");
     expect(workflowGraphClientScript).toContain(
@@ -312,8 +306,11 @@ describe("workflow graph view", () => {
     );
     expect(workflowGraphClientScript).toContain("elapsedMs");
     // Overflow-safe node labels and the selection/details synchronization.
-    expect(workflowGraphClientScript).toContain('"text-overflow-wrap"');
+    expect(workflowGraphClientScript).toContain('"text-wrap": "ellipsis"');
     expect(workflowGraphClientScript).toContain('"text-max-width"');
+    expect(workflowGraphClientScript).toContain('label: "data(name)"');
+    expect(workflowGraphClientScript).toContain('"font-weight": 700');
+    expect(workflowGraphClientScript).toContain("spacingFactor: 0.4");
     expect(workflowGraphClientScript).toContain("selectStage");
     expect(workflowGraphClientScript).toContain("renderDetails");
     expect(workflowGraphClientScript).toContain("syncStageButtons");
@@ -371,18 +368,18 @@ describe("workflow graph view", () => {
         nonempty: () => true,
         position: (axis?: "x" | "y") =>
           axis ? entryPosition[axis] : entryPosition,
-        outerHeight: () => 110,
+        outerHeight: () => 52,
         boundingBox: () => ({
-          x1: entryPosition.x - 120,
-          y1: entryPosition.y - 55,
-          x2: entryPosition.x + 120,
-          y2: entryPosition.y + 55,
+          x1: entryPosition.x - 80,
+          y1: entryPosition.y - 26,
+          x2: entryPosition.x + 80,
+          y2: entryPosition.y + 26,
         }),
         renderedBoundingBox: () => {
           if (state.pan.x === 0 && state.pan.y === 0)
             return options.entryBounds;
-          const width = 240 * state.zoom;
-          const height = 110 * state.zoom;
+          const width = 160 * state.zoom;
+          const height = 52 * state.zoom;
           const x1 = entryPosition.x * state.zoom + state.pan.x - width / 2;
           const y1 = entryPosition.y * state.zoom + state.pan.y - height / 2;
           return { x1, y1, x2: x1 + width, y2: y1 + height };
@@ -488,7 +485,7 @@ describe("workflow graph view", () => {
     expect(desktop.state.layoutRuns).toBe(1);
     expect(desktop.state.zoom).toBe(1);
     expect(desktop.centered).toEqual(["entry"]);
-    expect(desktop.state.pan).toEqual({ x: 493, y: -313 });
+    expect(desktop.state.pan).toEqual({ x: 493, y: -342 });
     expect(desktop.viewportLog).toMatchObject({
       entryStage: "qualify",
       entryFound: true,
@@ -517,22 +514,24 @@ describe("workflow graph view", () => {
       ),
     ).toHaveLength(1);
 
-    // Mobile: a slightly smaller readable scale still centers the entry.
+    // Mobile: compact framing keeps the complete default workflow visible
+    // while retaining the bold name-only node treatment.
     const mobile = harness({
       width: 390,
       initialZoom: 0.3,
       entryId: "qualify",
       entryBounds: { x1: -500, y1: 60, x2: -200, y2: 200 },
     });
-    expect(mobile.state.zoom).toBe(0.85);
+    expect(mobile.state.zoom).toBe(0.77);
     expect(mobile.centered).toEqual(["entry"]);
     expect(mobile.viewportLog).toMatchObject({
       entryStage: "qualify",
       entryFound: true,
       mobile: true,
       initialZoom: 0.3,
-      zoom: 0.85,
+      zoom: 0.77,
       entryVisible: true,
+      entryTopPadding: 20,
     });
 
     // Entry-stage preselection runs alongside the framing.
@@ -541,7 +540,7 @@ describe("workflow graph view", () => {
       initialZoom: 0.5,
       entryId: "qualify",
       preselect: "qualify",
-      entryBounds: { x1: 0, y1: 0, x2: 240, y2: 110 },
+      entryBounds: { x1: 0, y1: 0, x2: 160, y2: 52 },
     });
     expect(both.viewportLog).toMatchObject({ entryStage: "qualify", zoom: 1 });
   });

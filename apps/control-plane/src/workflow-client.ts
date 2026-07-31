@@ -20,6 +20,10 @@ export const workflowGraphClientScript = `(function () {
     var initStartedAt = Date.now();
     var elements = JSON.parse(dataElement.textContent);
     var entryId = container.getAttribute("data-entry");
+    var nodeWidth = 160;
+    var nodeHeight = 52;
+    var nodeFontSize = 18;
+    var returnBendScale = container.clientWidth <= 700 ? 0.7 : 1;
     var routeCounts = { forward: 0, return: 0, self: 0 };
     elements.forEach(function (element) {
       if (element.group !== "edges") return;
@@ -35,8 +39,8 @@ export const workflowGraphClientScript = `(function () {
       circle: false,
       grid: true,
       nodeDimensionsIncludeLabels: true,
-      padding: 40,
-      spacingFactor: 1.4,
+      padding: 24,
+      spacingFactor: 0.4,
       avoidOverlap: true
     };
     var cy = window.cytoscape({
@@ -48,17 +52,17 @@ export const workflowGraphClientScript = `(function () {
         {
           selector: "node",
           style: {
-            label: "data(label)",
-            "text-wrap": "wrap",
-            "text-max-width": "210px",
-            "text-overflow-wrap": "anywhere",
+            label: "data(name)",
+            "text-wrap": "ellipsis",
+            "text-max-width": "136px",
             "text-valign": "center",
             "text-halign": "center",
-            "font-size": 13,
-            "line-height": 1.4,
+            "font-size": nodeFontSize,
+            "font-weight": 700,
+            "line-height": 1.1,
             color: "#18212f",
-            width: 240,
-            height: 110,
+            width: nodeWidth,
+            height: nodeHeight,
             shape: "round-rectangle",
             "background-color": "#ffffff",
             "border-width": 1.5,
@@ -84,7 +88,7 @@ export const workflowGraphClientScript = `(function () {
             label: "data(outcome)",
             "curve-style": "unbundled-bezier",
             "control-point-distances": function (edge) {
-              return [Number(edge.data("returnBend"))];
+              return [Number(edge.data("returnBend")) * returnBendScale];
             },
             "control-point-weights": [0.5],
             "line-style": "dashed",
@@ -159,12 +163,17 @@ export const workflowGraphClientScript = `(function () {
     });
     log("workflow_graph_initialized", {
       nodes: cy.nodes().length,
-      edges: cy.edges().length
+      edges: cy.edges().length,
+      nodeWidth: nodeWidth,
+      nodeHeight: nodeHeight,
+      nodeFontSize: nodeFontSize,
+      spacingFactor: graphLayout.spacingFactor
     });
     log("workflow_graph_routes_initialized", {
       forwardEdges: routeCounts.forward,
       returnEdges: routeCounts.return,
-      selfEdges: routeCounts.self
+      selfEdges: routeCounts.self,
+      returnBendScale: returnBendScale
     });
     var entry = entryId ? cy.getElementById(entryId) : null;
     var entryFound = Boolean(entry && entry.nonempty());
@@ -228,8 +237,8 @@ export const workflowGraphClientScript = `(function () {
     cy.on("layoutstop", function frameOnce() {
       cy.off("layoutstop", frameOnce);
       var mobile = container.clientWidth <= 700;
-      var zoomFloor = mobile ? 0.85 : 1;
-      var entryTopPadding = 32;
+      var zoomFloor = mobile ? 0.77 : 1;
+      var entryTopPadding = mobile ? 20 : 32;
       var initialZoom = cy.zoom();
       if (cy.zoom() < zoomFloor) cy.zoom(zoomFloor);
       var entryVisible = false;
@@ -378,7 +387,12 @@ export const workflowGraphClientScript = `(function () {
       edges: cy.edges().length,
       forwardEdges: routeCounts.forward,
       returnEdges: routeCounts.return,
-      selfEdges: routeCounts.self
+      selfEdges: routeCounts.self,
+      nodeWidth: nodeWidth,
+      nodeHeight: nodeHeight,
+      nodeFontSize: nodeFontSize,
+      spacingFactor: graphLayout.spacingFactor,
+      returnBendScale: returnBendScale
     });
     cy.layout(graphLayout).run();
   }
