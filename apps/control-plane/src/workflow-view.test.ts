@@ -135,6 +135,13 @@ describe("workflow graph view", () => {
     const review = nodes.find((node) => node.data["id"] === "review")!;
     expect(review.data["reviewers"]).toBeTruthy();
     expect(review.data["summary"]).toContain("reviewer");
+    expect(
+      nodes.find((node) => node.data["id"] === "approval")?.data,
+    ).toMatchObject({
+      name: "approval",
+      role: "approval",
+      human: "operator: visual_feedback",
+    });
     // A capability-free node falls back to explicit no-authority text.
     const synthetic = workflowGraphElements({
       ...workflow,
@@ -192,6 +199,18 @@ describe("workflow graph view", () => {
       route: "self",
       outcome: "needs resolution",
     });
+    const approvalReturn = edges.find(
+      (edge) =>
+        edge.data["source"] === "approval" &&
+        edge.data["target"] === "implement",
+    );
+    expect(approvalReturn?.data).toMatchObject({
+      route: "return",
+      outcome: "answered",
+      returnSide: "left",
+      returnLane: "1",
+      returnBend: "-300",
+    });
     const reviewReturn = edges.find(
       (edge) =>
         edge.data["source"] === "review" && edge.data["target"] === "implement",
@@ -199,9 +218,9 @@ describe("workflow graph view", () => {
     expect(reviewReturn?.data).toMatchObject({
       route: "return",
       outcome: "changes requested",
-      returnSide: "left",
+      returnSide: "right",
       returnLane: "1",
-      returnBend: "-300",
+      returnBend: "300",
     });
     const integrationReturn = edges.find(
       (edge) =>
@@ -211,13 +230,15 @@ describe("workflow graph view", () => {
     expect(integrationReturn?.data).toMatchObject({
       route: "return",
       outcome: "changes requested",
-      returnSide: "right",
-      returnLane: "1",
-      returnBend: "300",
+      returnSide: "left",
+      returnLane: "2",
+      returnBend: "-390",
     });
     const forward = edges.find(
       (edge) =>
-        edge.data["source"] === "implement" && edge.data["target"] === "review",
+        edge.data["source"] === "implement" &&
+        edge.data["target"] === "review" &&
+        edge.data["outcome"] === "accepted head",
     );
     expect(forward?.data).toMatchObject({
       route: "forward",

@@ -24,9 +24,12 @@ when information or judgment is genuinely required.
    repository's validation commands.
 4. Roundhouse validates and promotes the resulting Git checkpoint, then opens
    a draft pull request.
-5. Independent reviewers inspect the exact candidate commit. Actionable
+5. When the implementation includes visual evidence, a repository operator
+   reviews its before-and-after screenshots. Feedback returns to the same
+   durable implementation workspace; acceptance continues the workflow.
+6. Independent reviewers inspect the exact candidate commit. Actionable
    findings send the change back through implementation and validation.
-6. Repository CI must pass for that same commit before Roundhouse can merge it
+7. Repository CI must pass for that same commit before Roundhouse can merge it
    automatically or leave it ready for a maintainer, according to the
    repository profile.
 
@@ -79,7 +82,8 @@ result-submission rules take precedence over repository instructions.
 
 The lifecycle now runs through that declarative graph rather than a compiled
 stage switch. Agent and review fan-out/join nodes are repository-composable.
-Human nodes wait for participant prose or an operator decision, while named
+Human nodes wait for participant prose or an operator decision, including
+repository-configured visual feedback before review and merge. Named
 external adapters resume typed external nodes without gaining agent or GitHub
 authority. Boundary events carry a common workflow, node, actor, source, and
 exact-head audit envelope.
@@ -106,8 +110,8 @@ qualify and investigate an issue, plan and implement a change, validate and
 review the exact commit, run repository CI, and merge it. It is not ready for
 general production use.
 
-The Phase 7 workflow-graph foundation described in the V2 plan is deployed in
-development. No post-Phase-7 integration is approved yet. The foundation can
+The Phase 7 workflow-graph foundation and the first post-Phase-7 journey,
+operator visual feedback, are deployed in development. The foundation can
 accept future typed adapters for organizational context, scanners, deployment
 observation, alert triage, and audit export; those integrations are not
 implemented or approved merely because the extension points exist.

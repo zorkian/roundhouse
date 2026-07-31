@@ -28,6 +28,7 @@ export const runStages = [
 
 export const waitingReasons = [
   "clarification",
+  "visual_feedback",
   "plan_approval",
   "final_approval",
   "maintainer_judgment",
