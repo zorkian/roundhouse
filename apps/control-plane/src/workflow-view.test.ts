@@ -45,15 +45,14 @@ async function runFixture(): Promise<RunSnapshot> {
 }
 
 describe("workflow graph view", () => {
-  it("preselects the run's current node through data-select", async () => {
+  it("preselects the workflow entry rather than the run's current node", async () => {
     const run = await runFixture();
     const html = renderWorkflowView(run);
-    expect(html).toContain('id="workflow-graph" data-select="implement"');
-    const { renderWorkflowView: render } = await import("./workflow-view.js");
-    const unselected = render({ ...run, currentNodeId: undefined });
-    expect(unselected).not.toContain("data-select");
-    const unknown = render({ ...run, currentNodeId: 'missing"><script>' });
-    expect(unknown).not.toContain("data-select");
+    expect(html).toContain('id="workflow-graph" data-select="qualify"');
+    expect(html).not.toContain('data-select="implement"');
+    expect(
+      renderWorkflowView({ ...run, currentNodeId: 'missing"><script>' }),
+    ).toContain('data-select="qualify"');
   });
 
   it("emits the trigger-derived entry stage as graph metadata", async () => {
@@ -62,7 +61,7 @@ describe("workflow graph view", () => {
     expect(workflowEntryStage(workflow)).toBe("qualify");
     const html = renderWorkflowView(run);
     expect(html).toContain(
-      'id="workflow-graph" data-select="implement" data-entry="qualify"',
+      'id="workflow-graph" data-select="qualify" data-entry="qualify"',
     );
     // A trigger pointing at a missing node emits no entry metadata.
     const broken = {
@@ -75,6 +74,7 @@ describe("workflow graph view", () => {
       profile: { ...run.profile!, workflow: broken },
     });
     expect(rendered).not.toContain("data-entry");
+    expect(rendered).not.toContain("data-select");
   });
 
   it("renders the labeled graph container, editor, and GitHub proposal path", async () => {
@@ -255,6 +255,11 @@ describe("workflow graph view", () => {
     expect(workflowGraphClientScript).toContain(
       "workflow_graph_viewport_initialized",
     );
+    expect(workflowGraphClientScript).toContain(
+      "workflow_graph_layout_started",
+    );
+    expect(workflowGraphClientScript).toContain('name: "preset"');
+    expect(workflowGraphClientScript).toContain("cy.layout(graphLayout).run()");
     // Structured timing logs at the graph initialization boundary.
     expect(workflowGraphClientScript).toContain("workflow_graph_initialized");
     expect(workflowGraphClientScript).toContain(
@@ -280,7 +285,7 @@ describe("workflow graph view", () => {
     expect(workflowGraphClientScript).toContain("data-source-commit");
   });
 
-  it("frames the initial viewport after layout, keeping the entry visible", () => {
+  it("runs layout after handlers and frames the viewport on the entry", () => {
     class FakeElement {
       attributes: Record<string, string> = {};
       listeners: Record<string, Array<() => void>> = {};
@@ -307,10 +312,23 @@ describe("workflow graph view", () => {
       const logs: Record<string, unknown>[] = [];
       const layoutstopHandlers: Array<() => void> = [];
       const centered: string[] = [];
-      const state = { zoom: options.initialZoom };
+      const state = {
+        zoom: options.initialZoom,
+        layoutRuns: 0,
+        constructorLayout: "",
+        explicitLayout: "",
+      };
+      let entryCentered = false;
       const entryNode = {
         nonempty: () => true,
-        renderedBoundingBox: () => options.entryBounds,
+        renderedBoundingBox: () => {
+          if (!entryCentered) return options.entryBounds;
+          const width = 240 * state.zoom;
+          const height = 110 * state.zoom;
+          const x1 = (options.width - width) / 2;
+          const y1 = (560 - height) / 2;
+          return { x1, y1, x2: x1 + width, y2: y1 + height };
+        },
         select: () => {},
       };
       const cy = {
@@ -329,7 +347,15 @@ describe("workflow graph view", () => {
         },
         center: (node: unknown) => {
           centered.push(node === entryNode ? "entry" : "other");
+          if (node === entryNode) entryCentered = true;
         },
+        layout: (layout: { name: string }) => ({
+          run: () => {
+            state.layoutRuns += 1;
+            state.explicitLayout = layout.name;
+            for (const handler of [...layoutstopHandlers]) handler();
+          },
+        }),
         nodes: () => ({ length: 3 }),
         edges: () => ({ length: 2 }),
         getElementById: (id: string) =>
@@ -358,7 +384,12 @@ describe("workflow graph view", () => {
         querySelectorAll: () => [],
         createElement: () => new FakeElement(),
       };
-      const window = { cytoscape: () => cy };
+      const window = {
+        cytoscape: (configuration: { layout: { name: string } }) => {
+          state.constructorLayout = configuration.layout.name;
+          return cy;
+        },
+      };
       const originalLog = console.log;
       console.log = (line: string) => logs.push(JSON.parse(line));
       try {
@@ -366,8 +397,6 @@ describe("workflow graph view", () => {
           window,
           document,
         );
-        const handlers = [...layoutstopHandlers];
-        for (const handler of handlers) handler();
         // A second layoutstop must not re-frame: the handler runs once.
         for (const handler of [...layoutstopHandlers]) handler();
       } finally {
@@ -379,8 +408,8 @@ describe("workflow graph view", () => {
       return { state, centered, viewportLog, logs };
     }
 
-    // Desktop: the distant cose fit is raised to a readable zoom floor and
-    // the entry stage already in view is left alone.
+    // Desktop: handlers are attached before the explicit cose run, then the
+    // entry is centered even if it happened to be inside the prior fit.
     const desktop = harness({
       width: 1186,
       initialZoom: 0.4,
@@ -388,11 +417,16 @@ describe("workflow graph view", () => {
       preselect: "qualify",
       entryBounds: { x1: 100, y1: 100, x2: 400, y2: 240 },
     });
+    expect(desktop.state.constructorLayout).toBe("preset");
+    expect(desktop.state.explicitLayout).toBe("cose");
+    expect(desktop.state.layoutRuns).toBe(1);
     expect(desktop.state.zoom).toBe(1);
-    expect(desktop.centered).toEqual([]);
+    expect(desktop.centered).toEqual(["entry"]);
     expect(desktop.viewportLog).toMatchObject({
       entryStage: "qualify",
+      entryFound: true,
       mobile: false,
+      initialZoom: 0.4,
       zoom: 1,
       entryVisible: true,
     });
@@ -402,28 +436,30 @@ describe("workflow graph view", () => {
       ),
     ).toHaveLength(1);
 
-    // Mobile: a lower zoom floor applies and an off-screen entry is panned
-    // back into view.
+    // Mobile: a slightly smaller readable scale still centers the entry.
     const mobile = harness({
       width: 390,
       initialZoom: 0.3,
       entryId: "qualify",
       entryBounds: { x1: -500, y1: 60, x2: -200, y2: 200 },
     });
-    expect(mobile.state.zoom).toBe(0.6);
+    expect(mobile.state.zoom).toBe(0.85);
     expect(mobile.centered).toEqual(["entry"]);
     expect(mobile.viewportLog).toMatchObject({
+      entryStage: "qualify",
+      entryFound: true,
       mobile: true,
-      zoom: 0.6,
+      initialZoom: 0.3,
+      zoom: 0.85,
       entryVisible: true,
     });
 
-    // Current-stage preselection still runs alongside the framing.
+    // Entry-stage preselection runs alongside the framing.
     const both = harness({
       width: 1186,
       initialZoom: 0.5,
       entryId: "qualify",
-      preselect: "implement",
+      preselect: "qualify",
       entryBounds: { x1: 0, y1: 0, x2: 240, y2: 110 },
     });
     expect(both.viewportLog).toMatchObject({ entryStage: "qualify", zoom: 1 });
@@ -524,6 +560,7 @@ describe("workflow graph view", () => {
       $: () => collection(nodes.filter((node) => node.selected())),
       getElementById: (id: string) =>
         nodes.find((node) => node.id() === id) ?? { nonempty: () => false },
+      layout: () => ({ run: () => {} }),
       nodes: () => ({ length: nodes.length }),
       edges: () => ({ length: 0 }),
     };
