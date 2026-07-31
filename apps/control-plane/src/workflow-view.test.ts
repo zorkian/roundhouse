@@ -261,6 +261,29 @@ describe("workflow graph view", () => {
     });
   });
 
+  it("describes every default workflow stage in human terms", async () => {
+    const run = await runFixture();
+    const summaries = Object.fromEntries(
+      workflowGraphElements(run.profile!.workflow!)
+        .filter((element) => element.group === "nodes")
+        .map((element) => [element.data["id"], element.data["summary"]]),
+    );
+
+    expect(summaries).toEqual({
+      qualify: "Classifies the issue and identifies any needed clarification.",
+      investigate: "Investigates the current behavior and gathers evidence.",
+      plan: "Creates an implementation plan from the issue and evidence.",
+      implement: "Implements and validates the planned change.",
+      approval: "Waits for visual feedback from an operator.",
+      review: "Coordinates up to 3 configured reviewers.",
+      integrate:
+        "Integrates the reviewed change with the latest target branch.",
+      checks: "Waits for GitHub checks on the integrated commit.",
+      merge:
+        "Merges the pull request after checks pass, or waits for a maintainer.",
+    });
+  });
+
   it("embeds the graph data as escaped JSON inside the page", async () => {
     const run = await runFixture();
     const html = renderWorkflowView(run);

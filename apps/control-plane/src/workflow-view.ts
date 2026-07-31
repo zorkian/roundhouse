@@ -52,17 +52,37 @@ export function workflowNodeName(id: string, node: WorkflowNode): string {
 
 // One-sentence purpose derived from existing executor configuration.
 export function workflowNodeSummary(node: WorkflowNode): string {
-  if (node.agent) return `Runs the ${node.agent.task} agent.`;
+  if (node.agent) {
+    if (node.agent.task === "qualification")
+      return "Classifies the issue and identifies any needed clarification.";
+    if (node.agent.task === "investigation")
+      return "Investigates the current behavior and gathers evidence.";
+    if (node.agent.task === "planning")
+      return "Creates an implementation plan from the issue and evidence.";
+    if (node.agent.task === "implementation")
+      return "Implements and validates the planned change.";
+  }
   if (node.review)
-    return `Collects reviews from ${node.review.reviewers.length} reviewer${node.review.reviewers.length === 1 ? "" : "s"}.`;
+    return `Coordinates up to ${node.review.reviewers.length} configured reviewer${node.review.reviewers.length === 1 ? "" : "s"}.`;
   if (node.human)
-    return `Waits for a ${node.human.audience} to ${node.human.reason}.`;
+    return `Waits for ${humanizeWorkflowValue(node.human.reason)} from ${
+      node.human.audience === "operator" ? "an operator" : "a participant"
+    }.`;
   if (node.external)
-    return `Waits for the ${node.external.event} event from ${node.external.adapter}.`;
-  if (node.executor === "validate") return "Validates the workflow outputs.";
+    return `Waits for ${humanizeWorkflowValue(node.external.event)} from ${node.external.adapter}.`;
+  if (node.executor === "validate" && node.role === "integrate")
+    return "Integrates the reviewed change with the latest target branch.";
+  if (node.executor === "validate")
+    return "Validates the candidate before continuing.";
+  if (node.executor === "github.publish")
+    return "Publishes the validated candidate to GitHub.";
   if (node.executor === "github.checks")
-    return "Waits for GitHub check results.";
-  if (node.executor === "github.merge") return "Merges the pull request.";
+    return "Waits for GitHub checks on the integrated commit.";
+  if (node.executor === "github.merge")
+    return "Merges the pull request after checks pass, or waits for a maintainer.";
+  if (node.executor === "fanout") return "Starts the configured parallel work.";
+  if (node.executor === "join")
+    return "Collects the configured parallel results.";
   if (node.executor === "terminal") return "Terminal stage of the workflow.";
   return "Runs this stage of the workflow.";
 }
