@@ -346,7 +346,11 @@ describe("workflow graph view", () => {
     expect(workflowGraphClientScript).toContain('"text-max-width"');
     expect(workflowGraphClientScript).toContain('label: "data(name)"');
     expect(workflowGraphClientScript).toContain('"font-weight": 700');
-    expect(workflowGraphClientScript).toContain("spacingFactor: 0.55");
+    expect(workflowGraphClientScript).toContain("spacingFactor: 1.15");
+    expect(workflowGraphClientScript).toContain("verticalSpacingFactor = 0.5");
+    expect(workflowGraphClientScript).toContain(
+      "workflow_graph_vertical_spacing_applied",
+    );
     expect(workflowGraphClientScript).toContain("selectStage");
     expect(workflowGraphClientScript).toContain("renderDetails");
     expect(workflowGraphClientScript).toContain("syncStageButtons");
@@ -386,6 +390,7 @@ describe("workflow graph view", () => {
       entryBounds: { x1: number; y1: number; x2: number; y2: number };
       entryId?: string;
       preselect?: string;
+      includeSiblingStages?: boolean;
     }) {
       const logs: Record<string, unknown>[] = [];
       const layoutstopHandlers: Array<() => void> = [];
@@ -399,29 +404,43 @@ describe("workflow graph view", () => {
         rootApplied: false,
         pan: { x: 0, y: 0 },
       };
-      const entryPosition = { x: 100, y: 400 };
-      const entryNode = {
-        nonempty: () => true,
-        position: (axis?: "x" | "y") =>
-          axis ? entryPosition[axis] : entryPosition,
-        outerHeight: () => 52,
-        boundingBox: () => ({
-          x1: entryPosition.x - 80,
-          y1: entryPosition.y - 26,
-          x2: entryPosition.x + 80,
-          y2: entryPosition.y + 26,
-        }),
-        renderedBoundingBox: () => {
-          if (state.pan.x === 0 && state.pan.y === 0)
-            return options.entryBounds;
-          const width = 160 * state.zoom;
-          const height = 52 * state.zoom;
-          const x1 = entryPosition.x * state.zoom + state.pan.x - width / 2;
-          const y1 = entryPosition.y * state.zoom + state.pan.y - height / 2;
-          return { x1, y1, x2: x1 + width, y2: y1 + height };
-        },
-        select: () => {},
-      };
+      function makeNode(id: string, x: number, y: number) {
+        const position = { x, y };
+        const node = {
+          id: () => id,
+          nonempty: () => true,
+          position: (axis?: "x" | "y", value?: number) => {
+            if (axis && value !== undefined) {
+              position[axis] = value;
+              return node;
+            }
+            return axis ? position[axis] : position;
+          },
+          outerHeight: () => 52,
+          boundingBox: () => ({
+            x1: position.x - 80,
+            y1: position.y - 26,
+            x2: position.x + 80,
+            y2: position.y + 26,
+          }),
+          renderedBoundingBox: () => {
+            if (state.pan.x === 0 && state.pan.y === 0)
+              return options.entryBounds;
+            const width = 160 * state.zoom;
+            const height = 52 * state.zoom;
+            const x1 = position.x * state.zoom + state.pan.x - width / 2;
+            const y1 = position.y * state.zoom + state.pan.y - height / 2;
+            return { x1, y1, x2: x1 + width, y2: y1 + height };
+          },
+          select: () => {},
+        };
+        return node;
+      }
+      const entryNode = makeNode("qualify", 100, 400);
+      const siblingNodes = options.includeSiblingStages
+        ? [makeNode("approval", 0, 560), makeNode("review", 0, 560)]
+        : [];
+      const nodes = [entryNode, ...siblingNodes];
       const cy = {
         on: (event: string, _selector: unknown, handler?: unknown) => {
           if (event === "layoutstop") {
@@ -444,21 +463,27 @@ describe("workflow graph view", () => {
           name: string;
           direction?: string;
           roots?: unknown;
+          spacingFactor?: number;
         }) => ({
           run: () => {
             state.layoutRuns += 1;
             state.explicitLayout = layout.name;
             state.explicitDirection = layout.direction ?? "";
             state.rootApplied = layout.roots === entryNode;
+            if (siblingNodes.length === 2) {
+              const siblingDistance = 160 * (layout.spacingFactor ?? 1);
+              siblingNodes[0]!.position("x", 100 - siblingDistance / 2);
+              siblingNodes[1]!.position("x", 100 + siblingDistance / 2);
+            }
             for (const handler of [...layoutstopHandlers]) handler();
           },
         }),
-        nodes: () => [entryNode],
+        nodes: () => nodes,
         edges: () => ({ length: 2 }),
         getElementById: (id: string) =>
-          id === options.entryId || id === options.preselect
-            ? entryNode
-            : { nonempty: () => false },
+          nodes.find((node) => node.id() === id) ?? {
+            nonempty: () => false,
+          },
         elements: () => ({ removeClass: () => {} }),
         $: () => ({ difference: () => ({ unselect: () => {} }) }),
       };
@@ -470,7 +495,10 @@ describe("workflow graph view", () => {
         container.setAttribute("data-select", options.preselect);
       const dataElement = new FakeElement();
       dataElement.textContent = JSON.stringify([
-        { group: "nodes", data: { id: "qualify" } },
+        ...nodes.map((node) => ({
+          group: "nodes",
+          data: { id: node.id() },
+        })),
       ]);
       const byId: Record<string, FakeElement> = {
         "workflow-graph": container,
@@ -502,7 +530,15 @@ describe("workflow graph view", () => {
       const viewportLog = logs.find(
         (entry) => entry.message === "workflow_graph_viewport_initialized",
       );
-      return { state, centered, viewportLog, logs };
+      return {
+        state,
+        centered,
+        viewportLog,
+        logs,
+        nodePositions: Object.fromEntries(
+          nodes.map((node) => [node.id(), node.position()]),
+        ),
+      };
     }
 
     // Desktop: handlers are attached before the explicit hierarchical run,
@@ -512,6 +548,7 @@ describe("workflow graph view", () => {
       initialZoom: 0.4,
       entryId: "qualify",
       preselect: "qualify",
+      includeSiblingStages: true,
       entryBounds: { x1: 100, y1: 100, x2: 400, y2: 240 },
     });
     expect(desktop.state.constructorLayout).toBe("preset");
@@ -522,6 +559,19 @@ describe("workflow graph view", () => {
     expect(desktop.state.zoom).toBe(1);
     expect(desktop.centered).toEqual(["entry"]);
     expect(desktop.state.pan).toEqual({ x: 493, y: -342 });
+    expect(desktop.nodePositions).toMatchObject({
+      qualify: { x: 100, y: 400 },
+      approval: { x: 8, y: 480 },
+      review: { x: 192, y: 480 },
+    });
+    expect(
+      desktop.logs.find(
+        (entry) => entry.message === "workflow_graph_vertical_spacing_applied",
+      ),
+    ).toMatchObject({
+      verticalSpacingFactor: 0.5,
+      movedNodes: 2,
+    });
     expect(desktop.viewportLog).toMatchObject({
       entryStage: "qualify",
       entryFound: true,

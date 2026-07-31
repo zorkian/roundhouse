@@ -23,6 +23,7 @@ export const workflowGraphClientScript = `(function () {
     var nodeWidth = 160;
     var nodeHeight = 52;
     var nodeFontSize = 18;
+    var verticalSpacingFactor = 0.5;
     var returnBendScale = container.clientWidth <= 700 ? 0.7 : 1;
     var routeCounts = { forward: 0, return: 0, self: 0 };
     elements.forEach(function (element) {
@@ -40,7 +41,7 @@ export const workflowGraphClientScript = `(function () {
       grid: true,
       nodeDimensionsIncludeLabels: true,
       padding: 24,
-      spacingFactor: 0.55,
+      spacingFactor: 1.15,
       avoidOverlap: true
     };
     var cy = window.cytoscape({
@@ -167,7 +168,8 @@ export const workflowGraphClientScript = `(function () {
       nodeWidth: nodeWidth,
       nodeHeight: nodeHeight,
       nodeFontSize: nodeFontSize,
-      spacingFactor: graphLayout.spacingFactor
+      spacingFactor: graphLayout.spacingFactor,
+      verticalSpacingFactor: verticalSpacingFactor
     });
     log("workflow_graph_routes_initialized", {
       forwardEdges: routeCounts.forward,
@@ -213,6 +215,31 @@ export const workflowGraphClientScript = `(function () {
         entryTopmost: entryY !== null && entryY === topmostY
       };
     }
+    // Cytoscape's spacingFactor scales both axes. Values below 1 compact the
+    // vertical journey nicely but can make sibling nodes overlap. Let the
+    // layout keep horizontal ranks separated, then compact only the y axis.
+    cy.on("layoutstop", function compactVerticalSpacingOnce() {
+      cy.off("layoutstop", compactVerticalSpacingOnce);
+      var compactStartedAt = Date.now();
+      var anchorY = entryFound ? entry.position("y") : 0;
+      var nodes = cy.nodes();
+      var movedNodes = 0;
+      for (var i = 0; i < nodes.length; i += 1) {
+        var node = nodes[i];
+        var originalY = node.position("y");
+        var compactedY =
+          anchorY + (originalY - anchorY) * verticalSpacingFactor;
+        if (compactedY !== originalY) {
+          node.position("y", compactedY);
+          movedNodes += 1;
+        }
+      }
+      log("workflow_graph_vertical_spacing_applied", {
+        verticalSpacingFactor: verticalSpacingFactor,
+        movedNodes: movedNodes,
+        compactMs: Date.now() - compactStartedAt
+      });
+    });
     cy.on("layoutstop", function () {
       var geometry = layoutGeometry();
       log("workflow_graph_layout_completed", {
@@ -392,6 +419,7 @@ export const workflowGraphClientScript = `(function () {
       nodeHeight: nodeHeight,
       nodeFontSize: nodeFontSize,
       spacingFactor: graphLayout.spacingFactor,
+      verticalSpacingFactor: verticalSpacingFactor,
       returnBendScale: returnBendScale
     });
     cy.layout(graphLayout).run();
