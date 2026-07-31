@@ -3,6 +3,10 @@
 
 import { parseDocument, stringify } from "yaml";
 import type { WaitingReason } from "./run.js";
+import {
+  modelThinkingLevels,
+  type ModelThinkingLevel,
+} from "./model-catalog.js";
 
 export const workflowSourcePath = ".roundhouse/workflow.yaml" as const;
 export const workflowVersion = 1 as const;
@@ -25,7 +29,7 @@ nodes:
       result:
         key: qualification
         schema: roundhouse.qualification.v1
-      model: { id: openai/gpt-5.6-sol, reasoning: low }
+      model: { id: openai/gpt-5.6-luna, reasoning: high }
     capabilities: [repository.read, context.read, research.public]
     outputs: [qualification.classification]
     transitions:
@@ -50,7 +54,7 @@ nodes:
       result:
         key: reproduction
         schema: roundhouse.investigation.v1
-      model: { id: openai/gpt-5.6-sol, reasoning: low }
+      model: { id: openai/gpt-5.6-terra, reasoning: high }
     capabilities:
       [repository.read, context.read, research.public, commands.execute, environment.project, network.project, preview.capture]
     outputs: [reproduction.status]
@@ -77,7 +81,7 @@ nodes:
       result:
         key: plan
         schema: roundhouse.plan.v1
-      model: { id: openai/gpt-5.6-sol, reasoning: low }
+      model: { id: openai/gpt-5.6-sol, reasoning: max }
     capabilities: [repository.read, context.read, research.public]
     outputs: [plan.status]
     transitions:
@@ -108,7 +112,7 @@ nodes:
       result:
         key: implementation
         schema: roundhouse.implementation.v1
-      model: { id: moonshotai/kimi-k3, reasoning: low }
+      model: { id: openai/gpt-5.6-terra, reasoning: max }
     capabilities:
       [repository.read, artifact.write, commands.execute, environment.project, network.project, preview.capture]
     outputs: [implementation.screenshots]
@@ -163,21 +167,21 @@ nodes:
           selects: [review-security, review-data]
           mode: blocking
           blocking_severities: [critical, high, medium]
-          model: { id: openai/gpt-5.6-sol, reasoning: low }
+          model: { id: anthropic/claude-opus-5, reasoning: max }
         - id: review-security
           label: Security review
           activation: selected
           selected_by: review-holistic
           mode: blocking
           blocking_severities: [critical, high, medium]
-          model: { id: openai/gpt-5.6-sol, reasoning: low }
+          model: { id: moonshotai/kimi-k3, reasoning: max }
         - id: review-data
           label: Data consistency review
           activation: selected
           selected_by: review-holistic
           mode: blocking
           blocking_severities: [critical, high, medium]
-          model: { id: openai/gpt-5.6-sol, reasoning: low }
+          model: { id: openai/gpt-5.6-sol, reasoning: max }
     capabilities: [repository.read, context.read]
     outputs: [review.status]
     transitions:
@@ -354,7 +358,7 @@ export interface WorkflowTransition {
 
 export interface WorkflowModel {
   readonly id: string;
-  readonly reasoning: "off" | "minimal" | "low" | "medium" | "high";
+  readonly reasoning: ModelThinkingLevel;
 }
 
 export interface WorkflowCompetitionCandidate {
@@ -793,9 +797,7 @@ function model(value: unknown, error: string): WorkflowModel {
     !hasOnlyKeys(value, ["id", "reasoning"]) ||
     typeof value.id !== "string" ||
     !/^[a-z0-9._-]+\/[A-Za-z0-9._/-]+$/.test(value.id) ||
-    !["off", "minimal", "low", "medium", "high"].includes(
-      String(value.reasoning),
-    )
+    !modelThinkingLevels.includes(value.reasoning as ModelThinkingLevel)
   )
     throw new Error(error);
   return {

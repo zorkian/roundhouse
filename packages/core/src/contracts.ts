@@ -10,6 +10,11 @@ import type {
 } from "./run.js";
 import type { AppliedProfile } from "./profile.js";
 import type { WorkflowCapability, WorkflowExecutorKind } from "./workflow.js";
+import {
+  modelThinkingLevels,
+  type ModelRuntimeCapabilities,
+  type ModelThinkingLevel,
+} from "./model-catalog.js";
 
 export const attemptKinds = ["agent", "external"] as const;
 export const attemptStates = [
@@ -114,25 +119,21 @@ export const modelStopReasonHeader = "x-roundhouse-model-stop-reason";
 
 export type ModelProtocol = (typeof modelProtocols)[number];
 
-export const modelThinkingLevels = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-] as const;
-
 export interface ModelRoute {
   readonly provider: string;
   readonly model: string;
   readonly protocol: ModelProtocol;
-  readonly thinkingLevel: (typeof modelThinkingLevels)[number];
+  readonly thinkingLevel: ModelThinkingLevel;
+  readonly runtime: ModelRuntimeCapabilities;
   readonly rule: string;
 }
 
 export function isModelRoute(value: unknown): value is ModelRoute {
   if (!value || typeof value !== "object") return false;
   const route = value as Record<string, unknown>;
+  const runtime = route.runtime as Record<string, unknown> | undefined;
+  const thinkingLevelMap = runtime?.thinkingLevelMap as
+    Record<string, unknown> | undefined;
   return (
     typeof route.provider === "string" &&
     route.provider.length > 0 &&
@@ -142,6 +143,20 @@ export function isModelRoute(value: unknown): value is ModelRoute {
     modelThinkingLevels.includes(
       route.thinkingLevel as ModelRoute["thinkingLevel"],
     ) &&
+    Boolean(runtime) &&
+    Number.isInteger(runtime?.contextWindow) &&
+    Number(runtime?.contextWindow) > 0 &&
+    Number.isInteger(runtime?.maxOutputTokens) &&
+    Number(runtime?.maxOutputTokens) > 0 &&
+    Number(runtime?.maxOutputTokens) <= Number(runtime?.contextWindow) &&
+    Boolean(thinkingLevelMap) &&
+    Object.keys(thinkingLevelMap ?? {}).every((level) =>
+      modelThinkingLevels.includes(level as ModelThinkingLevel),
+    ) &&
+    Object.values(thinkingLevelMap ?? {}).every(
+      (level) => level === null || (typeof level === "string" && level.length),
+    ) &&
+    thinkingLevelMap?.[String(route.thinkingLevel)] !== null &&
     typeof route.rule === "string" &&
     route.rule.length > 0
   );
@@ -196,8 +211,8 @@ export const reviewers = [
   {
     role: "review-holistic",
     label: "Holistic design review",
-    provider: "openai",
-    model: "openai/gpt-5.6-sol",
+    provider: "anthropic",
+    model: "anthropic/claude-opus-5",
     blockingSeverities: ["critical", "high", "medium"],
     prompt:
       "Review the change holistically for design and correctness. Do not perform the specialist reviews. Select which of review-security and review-data should run, and give a rationale for each selection.",
@@ -205,8 +220,8 @@ export const reviewers = [
   {
     role: "review-security",
     label: "Security review",
-    provider: "openai",
-    model: "openai/gpt-5.6-sol",
+    provider: "moonshotai",
+    model: "moonshotai/kimi-k3",
     blockingSeverities: ["critical", "high", "medium"],
     prompt:
       "Perform a focused security review, including authorization, authentication, injection, secrets, trust boundaries, and unsafe input handling.",

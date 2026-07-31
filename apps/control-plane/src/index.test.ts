@@ -1242,11 +1242,11 @@ describe("V2 control plane", () => {
         judge:
           model: { id: openai/gpt-judge, reasoning: high }`;
     const planCompetitionWorkflow = defaultIssueWorkflowSource.replace(
-      "        key: plan\n        schema: roundhouse.plan.v1\n      model: { id: openai/gpt-5.6-sol, reasoning: low }",
+      "        key: plan\n        schema: roundhouse.plan.v1\n      model: { id: openai/gpt-5.6-sol, reasoning: max }",
       `        key: plan\n        schema: roundhouse.plan.v1\n      competition:\n        ${competitionModels}`,
     );
     const reviewCompetitionWorkflow = defaultIssueWorkflowSource.replace(
-      "        - id: review-security\n          label: Security review\n          activation: selected\n          selected_by: review-holistic\n          mode: blocking\n          blocking_severities: [critical, high, medium]\n          model: { id: openai/gpt-5.6-sol, reasoning: low }",
+      "        - id: review-security\n          label: Security review\n          activation: selected\n          selected_by: review-holistic\n          mode: blocking\n          blocking_severities: [critical, high, medium]\n          model: { id: moonshotai/kimi-k3, reasoning: max }",
       `        - id: review-security\n          label: Security review\n          activation: selected\n          selected_by: review-holistic\n          mode: blocking\n          blocking_severities: [critical, high, medium]\n          competition:\n            candidates:\n              - id: alpha\n                model: { id: openai/gpt-alpha, reasoning: low }\n              - id: beta\n                model: { id: anthropic/claude-beta, reasoning: medium }\n            judge:\n              model: { id: openai/gpt-judge, reasoning: high }`,
     );
 

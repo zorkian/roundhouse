@@ -13,6 +13,11 @@ const workflow = await compileWorkflow(
   defaultIssueWorkflowSource,
   workflowCommit,
 );
+const runtime = {
+  contextWindow: 1_000_000,
+  maxOutputTokens: 128_000,
+  thinkingLevelMap: { low: "low", high: "high" },
+} as const;
 
 function runFixture(overrides: Partial<DetailsRun> = {}): DetailsRun {
   return {
@@ -101,6 +106,7 @@ describe("run details", () => {
               model: "test-model",
               protocol: "openai-responses",
               thinkingLevel: "low",
+              runtime,
               rule: "implementation-default-v1",
             },
           }),
@@ -632,6 +638,7 @@ describe("run details competitions", () => {
               model: "gpt-alpha-actual",
               protocol: "openai-responses",
               thinkingLevel: "low",
+              runtime,
               rule: "configured",
             },
           }),
@@ -653,6 +660,7 @@ describe("run details competitions", () => {
               model: "gpt-judge-actual",
               protocol: "openai-responses",
               thinkingLevel: "high",
+              runtime,
               rule: "configured",
             },
           }),

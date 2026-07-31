@@ -37,13 +37,14 @@ describe("model usage", () => {
       "attempt_sol",
       "openai/gpt-5.6-sol",
     );
-    expect(usage?.costUsd).toBe(0.00252);
+    expect(usage?.costUsd).toBe(0.0062);
   });
 
   it.each([
-    ["anthropic/claude-opus-4.8", 0.0225],
-    ["anthropic/claude-fable-5", 0.0045],
-    ["moonshotai/kimi-k3", 0.00085],
+    ["anthropic/claude-opus-4.8", 0.0075],
+    ["anthropic/claude-fable-5", 0.015],
+    ["anthropic/claude-opus-5", 0.0075],
+    ["moonshotai/kimi-k3", 0.0045],
   ])("calculates fallback cost for %s", (model, expected) => {
     const usage = extractModelUsage(
       JSON.stringify({
@@ -84,8 +85,25 @@ describe("model usage", () => {
     expect(usage).toMatchObject({
       cachedInputTokens: 100,
       cacheCreationInputTokens: 20,
-      costUsd: 0.00105,
+      costUsd: 0.00035,
     });
+  });
+
+  it("uses GPT-5.6 long-context rates after 272k input tokens", () => {
+    const usage = extractModelUsage(
+      JSON.stringify({
+        id: "resp_long",
+        model: "openai/gpt-5.6-sol",
+        usage: {
+          input_tokens: 273_000,
+          output_tokens: 100,
+          total_tokens: 273_100,
+        },
+      }),
+      "attempt_long",
+      "openai/gpt-5.6-sol",
+    );
+    expect(usage?.costUsd).toBeCloseTo(2.7345);
   });
 
   it("extracts usage from a native Anthropic message stream", () => {
