@@ -20,6 +20,12 @@ export const workflowGraphClientScript = `(function () {
     var initStartedAt = Date.now();
     var elements = JSON.parse(dataElement.textContent);
     var entryId = container.getAttribute("data-entry");
+    var routeCounts = { forward: 0, return: 0, self: 0 };
+    elements.forEach(function (element) {
+      if (element.group !== "edges") return;
+      var route = element.data.route;
+      if (routeCounts[route] !== undefined) routeCounts[route] += 1;
+    });
     var graphLayout = {
       name: "breadthfirst",
       animate: false,
@@ -67,9 +73,62 @@ export const workflowGraphClientScript = `(function () {
             "target-arrow-color": "#8391a5",
             "target-arrow-shape": "triangle",
             "arrow-scale": 1.2,
-            "curve-style": "bezier",
+            "curve-style": "straight",
             "loop-direction": "0deg",
             "loop-sweep": "45deg"
+          }
+        },
+        {
+          selector: 'edge[route = "return"]',
+          style: {
+            label: "data(outcome)",
+            "curve-style": "unbundled-bezier",
+            "control-point-distances": function (edge) {
+              return [Number(edge.data("returnBend"))];
+            },
+            "control-point-weights": [0.5],
+            "line-style": "dashed",
+            "line-dash-pattern": [8, 6],
+            "line-color": "#b54708",
+            "target-arrow-color": "#b54708",
+            color: "#7a2e0e",
+            "font-size": 11,
+            "font-weight": 600,
+            "text-rotation": "none",
+            "text-background-color": "#fffaf5",
+            "text-background-opacity": 0.96,
+            "text-background-shape": "round-rectangle",
+            "text-background-padding": 4
+          }
+        },
+        {
+          selector: 'edge[route = "return"][returnSide = "left"]',
+          style: {
+            "text-margin-x": -8
+          }
+        },
+        {
+          selector: 'edge[route = "return"][returnSide = "right"]',
+          style: {
+            "text-margin-x": 8
+          }
+        },
+        {
+          selector: 'edge[route = "self"]',
+          style: {
+            label: "data(outcome)",
+            "curve-style": "bezier",
+            "line-style": "dotted",
+            "line-color": "#7f56d9",
+            "target-arrow-color": "#7f56d9",
+            "loop-direction": "90deg",
+            "loop-sweep": "-55deg",
+            color: "#53389e",
+            "font-size": 11,
+            "text-background-color": "#f9f5ff",
+            "text-background-opacity": 0.96,
+            "text-background-shape": "round-rectangle",
+            "text-background-padding": 4
           }
         },
         {
@@ -86,7 +145,7 @@ export const workflowGraphClientScript = `(function () {
             width: 4,
             "line-color": "#175cd3",
             "target-arrow-color": "#175cd3",
-            "line-style": "solid",
+            color: "#175cd3",
             "underlay-color": "#175cd3",
             "underlay-opacity": 0.2,
             "underlay-padding": 4
@@ -101,6 +160,11 @@ export const workflowGraphClientScript = `(function () {
     log("workflow_graph_initialized", {
       nodes: cy.nodes().length,
       edges: cy.edges().length
+    });
+    log("workflow_graph_routes_initialized", {
+      forwardEdges: routeCounts.forward,
+      returnEdges: routeCounts.return,
+      selfEdges: routeCounts.self
     });
     var entry = entryId ? cy.getElementById(entryId) : null;
     var entryFound = Boolean(entry && entry.nonempty());
@@ -311,7 +375,10 @@ export const workflowGraphClientScript = `(function () {
       rootStage: entryId,
       rootApplied: entryFound,
       nodes: cy.nodes().length,
-      edges: cy.edges().length
+      edges: cy.edges().length,
+      forwardEdges: routeCounts.forward,
+      returnEdges: routeCounts.return,
+      selfEdges: routeCounts.self
     });
     cy.layout(graphLayout).run();
   }
