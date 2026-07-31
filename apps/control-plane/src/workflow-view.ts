@@ -34,9 +34,9 @@ export interface WorkflowGraphElement {
   readonly data: Readonly<Record<string, string>>;
 }
 
-// Bound a label line so the fixed-size graph node always contains its text
-// vertically: at 13px in a 210px-wide, 110px-high node, these caps keep the
-// wrapped label within the box regardless of authored content length.
+// Bound names used by graph nodes and stage buttons. The graph itself renders
+// the name on one ellipsized line; complete role and purpose text remains in
+// the stage-details panel.
 function truncateLabel(value: string, max: number): string {
   return value.length > max ? `${value.slice(0, max - 1)}…` : value;
 }
@@ -122,8 +122,8 @@ function workflowNodeDepths(
 
 // Serializable Cytoscape elements: one node per workflow node and one
 // directed edge per transition with a destination, with stable IDs for
-// parallel edges and self-cycles. Each node carries a compact name/summary
-// label plus detail fields the client renders in the stage-details panel.
+// parallel edges and self-cycles. Each node carries a compact name plus
+// summary and detail fields the client renders in the stage-details panel.
 export function workflowGraphElements(
   workflow: CompiledWorkflow,
 ): WorkflowGraphElement[] {
@@ -150,7 +150,6 @@ export function workflowGraphElements(
         external: node.external
           ? `${node.external.adapter} event ${node.external.event}`
           : "",
-        label: `${name}\n${truncateLabel(summary, 96)}`,
       },
     };
   });
