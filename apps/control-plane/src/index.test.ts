@@ -35,6 +35,7 @@ import {
 } from "./index.js";
 import { signCallback, type AttemptCompletion } from "./callback.js";
 import { ciDiagnosticsNotice } from "./github-ci.js";
+import { GitHubClient } from "./github.js";
 import worker from "./index.js";
 import type { D1Like } from "./d1-store.js";
 
@@ -51,6 +52,19 @@ const workflowProfile = {
   workflow,
   paths: { allowed: ["**"], protected: [] },
 };
+const staleWorkflow = await compileWorkflow(
+  `version: 1
+triggers:
+  github.issue.started: legacy
+nodes:
+  legacy:
+    executor: terminal
+    role: legacy
+    transitions:
+      - terminal: succeeded
+`,
+  workflowCommit,
+);
 
 function workflowRun(
   id: string,
@@ -177,6 +191,63 @@ function dashboardDb(): D1Like {
   };
 }
 
+function workflowPageDb(): D1Like {
+  const run = createRun({
+    id: "run_stale_workflow",
+    repository: "zorkian/roundhouse",
+    githubRepositoryId: 1297678423,
+    githubInstallationId: 456,
+    githubDefaultBranch: "main",
+    issueNumber: 281,
+    baseCommit: workflowCommit,
+    profileVersion: "stale-profile",
+    profile: {
+      sourcePath: ".roundhouse/profile.yaml",
+      sourceCommit: workflowCommit,
+      version: 2,
+      hash: "stale-profile",
+      workflow: staleWorkflow,
+      paths: { allowed: ["**"], protected: [] },
+    },
+  });
+  return {
+    async batch(statements) {
+      return Promise.all(statements.map((statement) => statement.run()));
+    },
+    prepare(sql: string) {
+      let values: unknown[] = [];
+      const statement = {
+        bind: (...bound: unknown[]) => {
+          values = bound;
+          return statement;
+        },
+        first: async () => {
+          if (sql.includes("SELECT r.id FROM repositories"))
+            return values.includes("1297678423") ? { id: run.id } : null;
+          if (sql === "SELECT document_json FROM runs WHERE id = ?1")
+            return values[0] === run.id
+              ? { document_json: JSON.stringify(run) }
+              : null;
+          if (sql.includes("SELECT r.document_json,r.created_at,r.updated_at"))
+            return values.includes("zorkian/roundhouse") &&
+              values.includes(281) &&
+              values.includes("1297678423")
+              ? {
+                  document_json: JSON.stringify(run),
+                  created_at: 1,
+                  updated_at: 2,
+                }
+              : null;
+          return null;
+        },
+        run: async () => ({ meta: {} }),
+        all: async () => ({ meta: {}, results: [] }),
+      };
+      return statement as unknown as ReturnType<D1Like["prepare"]>;
+    },
+  };
+}
+
 function completionDb() {
   let state = "dispatched";
   let completion: string | null = null;
@@ -250,7 +321,11 @@ const uiEnv = (DB: D1Like) => ({
   DB,
   PUBLIC_ORIGIN: "https://v2.invalid",
   CONTROL_PLANE_ORIGIN: "https://direct-worker.invalid",
+  GITHUB_APP_ID: "development-app",
   GITHUB_CLIENT_ID: "client-id",
+  GITHUB_START_COMMAND: "/roundhouse-dev start",
+  ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY: "not-used-by-mocked-client",
+  ROUNDHOUSE_GITHUB_WEBHOOK_SECRET: "not-used",
   ROUNDHOUSE_GITHUB_CLIENT_SECRET: "client-secret",
 });
 
@@ -653,6 +728,77 @@ describe("V2 control plane", () => {
       {} as never,
     );
     expect(directOrigin.status).toBe(404);
+  });
+
+  it("serves the current default-branch workflow instead of the latest run snapshot", async () => {
+    const currentCommit = "b".repeat(40);
+    const get = vi
+      .spyOn(GitHubClient.prototype, "get")
+      .mockImplementation(async (path: string) => {
+        if (path === "/repos/zorkian/roundhouse")
+          return { default_branch: "main" } as never;
+        if (path.endsWith("/commits/main"))
+          return { sha: currentCommit } as never;
+        if (path.includes("/contents/.roundhouse/profile.yaml?ref="))
+          return {
+            name: "profile.yaml",
+            type: "file",
+            encoding: "base64",
+            content: btoa(
+              'version: 1\npaths:\n  allowed:\n    - "**"\n  protected: []\n',
+            ),
+          } as never;
+        throw new Error(`unexpected_github_path:${path}`);
+      });
+    try {
+      const fetch = worker.fetch as unknown as (
+        request: Request,
+        env: unknown,
+        context: unknown,
+      ) => Promise<Response>;
+      const response = await fetch(
+        new Request(
+          "https://v2.invalid/repositories/zorkian/roundhouse/workflow",
+          { headers: { cookie: authedUiCookie } },
+        ),
+        uiEnv(withUiSession(workflowPageDb())) as never,
+        {} as never,
+      );
+
+      expect(response.status).toBe(200);
+      const body = await response.text();
+      expect(body).toContain(
+        "workflow currently on the repository’s <code>main</code> branch",
+      );
+      expect(body).toContain(currentCommit);
+      expect(body).toContain('data-stage="approval"');
+      expect(body).not.toContain('data-stage="legacy"');
+    } finally {
+      get.mockRestore();
+    }
+  });
+
+  it("serves the immutable workflow snapshot linked from a run", async () => {
+    const fetch = worker.fetch as unknown as (
+      request: Request,
+      env: unknown,
+      context: unknown,
+    ) => Promise<Response>;
+    const response = await fetch(
+      new Request(
+        "https://v2.invalid/repositories/zorkian/roundhouse/issues/281/workflow",
+        { headers: { cookie: authedUiCookie } },
+      ),
+      uiEnv(withUiSession(workflowPageDb())) as never,
+      {} as never,
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain("immutable workflow snapshot attached to this run");
+    expect(body).toContain('data-stage="legacy"');
+    expect(body).not.toContain('data-stage="approval"');
+    expect(body).toContain("run_stale_workflow revision 1");
   });
 
   it("allows same-origin scripts on UI pages", async () => {

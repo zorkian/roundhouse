@@ -95,7 +95,22 @@ describe("workflow graph view", () => {
       "https://github.com/zorkian/roundhouse/edit/main/.roundhouse/workflow.yaml",
     );
     expect(html).toContain(run.profile!.workflow!.hash);
-    expect(html).toContain("Existing runs keep their original snapshot.");
+    expect(html).toContain("immutable workflow snapshot attached to this run");
+    expect(html).toContain("Snapshot run");
+  });
+
+  it("labels the current default-branch workflow separately from a run snapshot", async () => {
+    const run = await runFixture();
+    const html = renderWorkflowView(run, { source: "default_branch" });
+
+    expect(html).toContain(
+      "workflow currently on the repository’s <code>main</code> branch",
+    );
+    expect(html).toContain(
+      "Existing runs keep their original immutable snapshot",
+    );
+    expect(html).toContain("<dt>Default branch</dt>");
+    expect(html).not.toContain("<dt>Snapshot run</dt>");
   });
 
   it("emits graph elements with node metadata and every directed edge", async () => {
