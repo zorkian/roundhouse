@@ -424,22 +424,46 @@ function planComment(run: RunSnapshot, attempt: Attempt): string {
   ].join("\n");
 }
 
+function visualFeedbackRequest(run: RunSnapshot) {
+  const node =
+    run.currentNodeId && run.profile?.workflow
+      ? run.profile.workflow.nodes[run.currentNodeId]
+      : undefined;
+  if (
+    run.status !== "waiting" ||
+    run.waitingReason !== "visual_feedback" ||
+    node?.executor !== "human"
+  )
+    return undefined;
+  return {
+    nodeId: run.currentNodeId!,
+    prompt:
+      node.human?.prompt?.content ??
+      "Please review the screenshots and reply with any design changes you want. If the result looks right, say so and Roundhouse will continue.",
+  };
+}
+
 function implementationComment(
+  run: RunSnapshot,
   attempt: Attempt,
   pullRequest: { readonly number: number; readonly html_url: string },
   created: boolean,
 ): string {
   const implementation = attempt.result?.implementation as
     Record<string, unknown> | undefined;
+  const visualFeedback = visualFeedbackRequest(run);
   const summary = String(
     implementation?.summary ?? "The requested change is ready for review.",
   );
   return [
     `<!-- roundhouse:v2:implementation:${attempt.id} -->`,
-    `## I ${created ? "opened" : "updated"} the draft pull request`,
+    visualFeedback
+      ? "## Please review the visual change"
+      : `## I ${created ? "opened" : "updated"} the draft pull request`,
     "",
     summary,
     ...screenshotLines(implementation?.screenshots),
+    ...(visualFeedback ? ["", visualFeedback.prompt.trim()] : []),
     "",
     `[View draft pull request #${pullRequest.number}](${pullRequest.html_url})`,
   ].join("\n");
@@ -634,6 +658,12 @@ export class GitHubStageReporter implements AttemptReporter {
   }
 
   async report(run: RunSnapshot, attempt: Attempt): Promise<void> {
+    if (
+      attempt.executor === "human" ||
+      attempt.executor === "external.wait" ||
+      attempt.executor === "external.check"
+    )
+      return;
     if (attempt.stage === "implement" && run.status === "failed") return;
     if (attempt.stage === "ci") {
       if (run.status !== "waiting" || run.waitingReason !== "maintainer_merge")
@@ -777,15 +807,41 @@ export class GitHubStageReporter implements AttemptReporter {
           },
         );
       }
+      const visualFeedback = visualFeedbackRequest(run);
+      const feedbackStartedAt = Date.now();
+      if (visualFeedback)
+        console.log(
+          JSON.stringify({
+            message: "visual_feedback_request_post_started",
+            runId: run.id,
+            revision: run.revision,
+            attemptId: attempt.id,
+            nodeId: visualFeedback.nodeId,
+            screenshotCount: Array.isArray(implementation?.screenshots)
+              ? implementation.screenshots.length
+              : 0,
+          }),
+        );
       await this.github.post(
         `/repos/${run.repository}/issues/${run.issueNumber}/comments`,
         {
           body: this.withDetails(
             run,
-            implementationComment(attempt, pullRequest, created),
+            implementationComment(run, attempt, pullRequest, created),
           ),
         },
       );
+      if (visualFeedback)
+        console.log(
+          JSON.stringify({
+            message: "visual_feedback_request_post_completed",
+            runId: run.id,
+            revision: run.revision,
+            attemptId: attempt.id,
+            nodeId: visualFeedback.nodeId,
+            durationMs: Date.now() - feedbackStartedAt,
+          }),
+        );
       return;
     }
     if (attempt.stage === "reproduce") {
@@ -1081,11 +1137,32 @@ export async function acceptGitHubComment(
       run.currentNodeId && run.profile?.workflow
         ? run.profile.workflow.nodes[run.currentNodeId]
         : undefined;
+    const waitingOnHuman =
+      run.status === "waiting" && currentNode?.executor === "human";
+    const humanWaitingReason = waitingOnHuman ? run.waitingReason : undefined;
+    const humanCommentAuthorized = waitingOnHuman
+      ? currentNode.human?.audience === "participant"
+        ? true
+        : await operatorAuthorized(api, repositoryName, actor, run.profile)
+      : false;
+    if (waitingOnHuman)
+      console.log(
+        JSON.stringify({
+          message: "workflow_human_comment_evaluated",
+          runId: run.id,
+          revision: run.revision,
+          nodeId: run.currentNodeId ?? null,
+          waitingReason: run.waitingReason ?? null,
+          audience: currentNode.human?.audience ?? null,
+          actor,
+          authorized: humanCommentAuthorized,
+        }),
+      );
     const resumable =
+      humanCommentAuthorized ||
       (run.status === "waiting" &&
         run.waitingReason === "clarification" &&
-        (currentNode?.executor !== "human" ||
-          currentNode.human?.audience === "participant")) ||
+        currentNode?.executor !== "human") ||
       (await concludedNoChangeQualification(repository, run)) ||
       (run.status === "succeeded" &&
         (run.stage === "merge" || run.stage === "implement") &&
@@ -1171,11 +1248,14 @@ export async function acceptGitHubComment(
     );
     if (!run) return "ignored";
     await enqueue({ runId: id, expectedRevision: run.revision });
+    const visualFeedback = humanWaitingReason === "visual_feedback";
     await postRunCommentOnce(
       api,
       run,
-      `clarification:${id}:${run.revision}`,
-      "Thanks — I’ve added this information and I’m taking another look.",
+      `${visualFeedback ? "visual-feedback" : "clarification"}:${id}:${run.revision}`,
+      visualFeedback
+        ? "Thanks — I’ve added your visual feedback. I’ll update the change, or continue if no visual changes are needed."
+        : "Thanks — I’ve added this information and I’m taking another look.",
       controlPlaneOrigin,
     );
     return "accepted";

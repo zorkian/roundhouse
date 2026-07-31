@@ -5,7 +5,7 @@
 
 - Status: Ideas to revisit; none are approved to start
 - Audience: Maintainers and future implementers
-- Last updated: 2026-07-25
+- Last updated: 2026-07-30
 
 This document preserves promising improvements that arose while operating the
 V2 prototype. It is not a roadmap, acceptance plan, or implementation queue.
@@ -18,37 +18,6 @@ do not add adjacent hardening or generalized machinery without evidence.
 The repository-defined workflow graph in Phase 7 is approved architecture and
 therefore is not tracked here. Its extension points do not approve any of the
 integrations that may eventually use them.
-
-## Asset-capable visual previews and human feedback
-
-### Current capability
-
-Reproduction and implementation agents can run an application in their
-isolated Cloudflare Sandbox, request a viewport screenshot from Cloudflare
-Browser Rendering, store the image and source provenance, and include it in
-GitHub evidence. Implementation workspaces can be backed up, destroyed, and
-restored for a later revision.
-
-The current capability-protected preview origin forwards the active run's
-same-origin and localhost browser requests through the control plane to its
-private Sandbox port. Stylesheets, JavaScript, images, fonts, and same-origin
-API responses therefore render normally, while requests to unrelated origins
-are aborted. Screenshots are evidence; there is no explicit pre-merge state in
-which Roundhouse waits for a maintainer to approve or request another visual
-revision.
-
-### Improvement to revisit
-
-After the graph migration, consider composing a deliberate `human`
-visual-feedback node before merge. A maintainer could inspect a screenshot,
-respond in ordinary GitHub prose, and receive a new screenshot from the
-restored implementation workspace. This should use the generic wait/resume
-contract rather than create another global lifecycle state.
-
-Do not start by building WebSocket support, multi-service routing, generic
-public previews, scripted login flows, device farms, or a general reverse
-proxy. Add only behavior required by the first real application used to
-validate this slice.
 
 ## Operational metrics and possible warm Sandbox reuse
 

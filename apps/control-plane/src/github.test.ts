@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import {
+  compileWorkflow,
   createRun,
   MemoryRunRepository,
   type Attempt,
@@ -81,6 +82,45 @@ function reportRun(
       profileVersion: "v2",
     }),
     ...overrides,
+  };
+}
+
+async function visualFeedbackProfile() {
+  const sourceCommit = "a".repeat(40);
+  const workflow = await compileWorkflow(
+    `version: 1
+triggers:
+  github.issue.started: approval
+nodes:
+  approval:
+    executor: human
+    role: approval
+    human:
+      reason: visual_feedback
+      audience: operator
+      prompt: prompts/visual-feedback.md
+    outputs: [human.status]
+    transitions:
+      - terminal: succeeded
+`,
+    sourceCommit,
+    async () =>
+      "Compare the before-and-after screenshots. Reply with changes or say the result looks right.",
+  );
+  return {
+    sourcePath: ".roundhouse/profile.yaml" as const,
+    sourceCommit,
+    version: 2 as const,
+    hash: "b".repeat(64),
+    workflow,
+    paths: { allowed: ["**"], protected: [".roundhouse/**"] },
+    permissions: {
+      operators: {
+        repositoryPermissions: ["write" as const],
+        users: [],
+        teams: [],
+      },
+    },
   };
 }
 
@@ -1300,6 +1340,108 @@ describe("GitHub intake", () => {
     ]);
   });
 
+  it("accepts ordinary visual feedback only from a repository operator", async () => {
+    const repository = new IntakeRepository();
+    const profile = await visualFeedbackProfile();
+    const id = "run_123_issue_42";
+    await repository.create(
+      createRun({
+        id,
+        repository: "zorkian/roundhouse",
+        githubRepositoryId: 123,
+        githubInstallationId: 456,
+        githubDefaultBranch: "main",
+        issueNumber: 42,
+        baseCommit: "a".repeat(40),
+        profileVersion: profile.hash,
+        profile,
+        issue: {
+          title: "Adjust the mobile design",
+          body: "Show before and after screenshots.",
+          url: "https://github.com/zorkian/roundhouse/issues/42",
+          actor: "maintainer",
+        },
+      }),
+    );
+    await repository.transition(id, 1, {
+      status: "waiting",
+      stage: "review",
+      currentNodeId: "approval",
+      waitingReason: "visual_feedback",
+      acceptedHead: "b".repeat(40),
+    });
+    const comments: { body: string }[] = [];
+    const api: GitHubApi = {
+      get: vi.fn(async (path: string) => {
+        if (path.includes("/collaborators/random-citizen/permission"))
+          return { permission: "read" };
+        if (path.includes("/collaborators/maintainer/permission"))
+          return { permission: "write" };
+        if (path.includes("/comments?")) return comments;
+        return { default_branch: "main" };
+      }) as GitHubApi["get"],
+      post: vi.fn(async (_path: string, body: unknown) => {
+        comments.push({
+          body: String((body as { body?: unknown }).body ?? ""),
+        });
+        return {};
+      }) as GitHubApi["post"],
+    };
+    const enqueue = vi.fn(async (_wakeup: Wakeup) => undefined);
+
+    await expect(
+      acceptGitHubComment(
+        await delivery(
+          "visual-feedback-citizen",
+          "Move the action closer to the heading.",
+          "random-citizen",
+        ),
+        env,
+        repository,
+        enqueue,
+        api,
+      ),
+    ).resolves.toBe("ignored");
+    expect(enqueue).not.toHaveBeenCalled();
+
+    await expect(
+      acceptGitHubComment(
+        await delivery(
+          "visual-feedback-operator",
+          "Move the action closer to the heading.",
+          "maintainer",
+        ),
+        env,
+        repository,
+        enqueue,
+        api,
+      ),
+    ).resolves.toBe("accepted");
+    await expect(repository.get(id)).resolves.toMatchObject({
+      status: "active",
+      stage: "review",
+      currentNodeId: "approval",
+      resumeSignal: {
+        kind: "human",
+        reason: "visual_feedback",
+        actor: "maintainer",
+        body: "Move the action closer to the heading.",
+      },
+      issue: {
+        clarifications: [
+          {
+            actor: "maintainer",
+            body: "Move the action closer to the heading.",
+          },
+        ],
+      },
+    });
+    expect(comments.at(-1)?.body).toContain(
+      "Thanks — I’ve added your visual feedback.",
+    );
+    expect(enqueue).toHaveBeenCalledTimes(1);
+  });
+
   it("reloads a missing profile before resuming from ordinary prose", async () => {
     const repository = new IntakeRepository();
     const wakeups: Wakeup[] = [];
@@ -2181,6 +2323,73 @@ describe("GitHub intake", () => {
     expect(JSON.stringify(post.mock.calls)).not.toContain("passed");
     expect(JSON.stringify(post.mock.calls)).toContain(
       "![Empty  state  view](https://roundhouse-dev.rm-rf.rip/screenshots/example)",
+    );
+  });
+
+  it("shows screenshot evidence and repository instructions at the visual gate", async () => {
+    const post = vi.fn(async (path: string, _body: unknown) =>
+      path.endsWith("/pulls")
+        ? {
+            number: 73,
+            html_url: "https://github.com/zorkian/roundhouse/pull/73",
+          }
+        : {},
+    );
+    const reporter = new GitHubStageReporter({
+      get: async <T>(path: string) =>
+        (path.includes("/comments")
+          ? []
+          : path.includes("/pulls?state=open")
+            ? []
+            : { default_branch: "main" }) as T,
+      post: post as GitHubApi["post"],
+    });
+    const run = reportRun("run_visual_feedback", {
+      status: "waiting",
+      stage: "review",
+      revision: 5,
+      currentNodeId: "approval",
+      waitingReason: "visual_feedback",
+      currentHead: "b".repeat(40),
+      candidateHead: "b".repeat(40),
+      profile: await visualFeedbackProfile(),
+    });
+    await reporter.report(
+      run,
+      reportAttempt(run, {
+        executor: "agent.write",
+        stage: "implement",
+        role: "implement",
+        expectedHead: "a".repeat(40),
+        acceptedHead: "b".repeat(40),
+        result: {
+          implementation: {
+            summary: "Adjusted the mobile layout.",
+            pullRequestTitle: "Adjust mobile layout",
+            pullRequestBody: "Improves the mobile layout.",
+            validation: [],
+            screenshots: [
+              {
+                url: "https://roundhouse-dev.rm-rf.rip/screenshots/before",
+                description: "Before",
+              },
+              {
+                url: "https://roundhouse-dev.rm-rf.rip/screenshots/after",
+                description: "After",
+              },
+            ],
+          },
+        },
+      }),
+    );
+    const comment = String(
+      (post.mock.calls.at(-1)?.[1] as { body?: unknown })?.body ?? "",
+    );
+    expect(comment).toContain("## Please review the visual change");
+    expect(comment).toContain("![Before]");
+    expect(comment).toContain("![After]");
+    expect(comment).toContain(
+      "Compare the before-and-after screenshots. Reply with changes or say the result looks right.",
     );
   });
 
