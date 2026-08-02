@@ -69,6 +69,10 @@ async function sha256Hex(value: string): Promise<string> {
     .join("");
 }
 
+export function uiSessionHash(session: ValidatedUiSession): Promise<string> {
+  return sha256Hex(session.sessionToken);
+}
+
 function base64UrlEncode(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
@@ -658,6 +662,49 @@ export async function uiGitHubPost<T>(
       body: JSON.stringify(body),
     }),
     { api: "github", operation: `ui POST ${path}` },
+  );
+  if (!response.ok) throw new Error(`ui_github_http_${response.status}`);
+  return (await response.json()) as T;
+}
+
+// Durable promotion jobs store only the one-way session hash. Trusted code can
+// use that reference to decrypt the associated GitHub user token in memory for
+// the same two allowlisted issue mutations used by the synchronous UI helper.
+export async function uiGitHubPostForSessionHash<T>(
+  sessionHash: string,
+  githubUserId: number,
+  env: UiAuthEnv,
+  path: string,
+  body: Readonly<Record<string, unknown>>,
+): Promise<T> {
+  if (!/^[a-f0-9]{64}$/.test(sessionHash))
+    throw new Error("ui_session_hash_invalid");
+  if (!/^\/repos\/[^/]+\/[^/]+\/issues(?:\/\d+\/comments)?$/.test(path))
+    throw new Error("ui_github_mutation_not_allowed");
+  const row = await env.DB.prepare(
+    "SELECT github_access_token,expires_at FROM ui_sessions WHERE session_hash=?1 AND github_user_id=?2",
+  )
+    .bind(sessionHash, githubUserId)
+    .first<{ github_access_token: string | null; expires_at: number }>();
+  if (!row?.github_access_token || row.expires_at <= Date.now())
+    throw new Error("ui_github_token_unavailable");
+  const accessToken = await decryptUiAccessToken(
+    row.github_access_token,
+    env.ROUNDHOUSE_GITHUB_CLIENT_SECRET,
+  );
+  const response = await observeResponse(
+    await fetch(`https://api.github.com${path}`, {
+      method: "POST",
+      headers: {
+        accept: "application/vnd.github+json",
+        authorization: `Bearer ${accessToken}`,
+        "content-type": "application/json",
+        "user-agent": "roundhouse-control-plane",
+        "x-github-api-version": "2026-03-10",
+      },
+      body: JSON.stringify(body),
+    }),
+    { api: "github", operation: `durable ui POST ${path}` },
   );
   if (!response.ok) throw new Error(`ui_github_http_${response.status}`);
   return (await response.json()) as T;

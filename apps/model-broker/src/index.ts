@@ -22,8 +22,12 @@ const routeHeaders = {
   thinkingLevel: "x-roundhouse-routing-thinking-level",
   rule: "x-roundhouse-routing-rule",
 } as const;
-export type BrokerEnv = Omit<Cloudflare.Env, "ROUTING_ROUTES"> & {
+export type BrokerEnv = Omit<
+  Cloudflare.Env,
+  "ROUTING_ROUTES" | "ROUTING_MODELS"
+> & {
   readonly ROUTING_ROUTES?: string;
+  readonly ROUTING_MODELS?: string;
   readonly AI_GATEWAY_TOKEN?: string;
 };
 
@@ -146,6 +150,24 @@ function configuredRoutes(env: BrokerEnv) {
   }
 }
 
+function configuredModels(env: BrokerEnv) {
+  const fromRoutes = Object.fromEntries(
+    Object.values(configuredRoutes(env)).map((route) => [route.model, route]),
+  ) as Record<
+    string,
+    Pick<ModelRoute, "provider" | "model" | "protocol" | "transport">
+  >;
+  if (!env.ROUTING_MODELS) return fromRoutes;
+  try {
+    return {
+      ...fromRoutes,
+      ...(JSON.parse(env.ROUTING_MODELS) as typeof fromRoutes),
+    };
+  } catch {
+    throw new Error("invalid_routing_configuration");
+  }
+}
+
 function defaultProtocol(provider: string): ModelProtocol {
   if (provider === "anthropic") return "anthropic-messages";
   if (provider === "moonshotai") return "openai-completions";
@@ -190,18 +212,19 @@ export function resolveRoute(
   env: BrokerEnv,
 ): ModelRoute {
   const configured = configuredRoutes(env)[envelope.role];
+  const approved = envelope.requestedModel
+    ? configuredModels(env)[envelope.requestedModel]
+    : undefined;
+  if (envelope.requestedModel && !approved)
+    throw new Error("model_not_approved");
   const model =
     envelope.requestedModel ?? configured?.model ?? env.ROUTING_MODEL;
   const provider =
-    (envelope.requestedModel ? undefined : configured?.provider) ??
-    model.split("/", 1)[0] ??
-    "";
-  const protocol = envelope.requestedModel
-    ? defaultProtocol(provider)
-    : (configured?.protocol ?? defaultProtocol(provider));
+    approved?.provider ?? configured?.provider ?? model.split("/", 1)[0] ?? "";
+  const protocol =
+    approved?.protocol ?? configured?.protocol ?? defaultProtocol(provider);
   const transport =
-    (envelope.requestedModel ? undefined : configured?.transport) ??
-    defaultTransport(provider);
+    approved?.transport ?? configured?.transport ?? defaultTransport(provider);
   const thinkingLevel =
     envelope.requestedReasoning ??
     configured?.thinkingLevel ??
@@ -628,7 +651,7 @@ export async function brokerRequest(
   }
   const attemptId = request.headers.get("x-roundhouse-attempt-id");
   const stopReason = await cloudflareStopReason(response);
-  const captured = await observeResponse(response, {
+  const responseDetails = {
     api:
       route.transport === "cloudflare-provider-native"
         ? "ai_gateway_provider_native"
@@ -636,7 +659,22 @@ export async function brokerRequest(
     operation: "run_model",
     ...(attemptId ? { attemptId } : {}),
     model: route.model,
-  });
+  };
+  const conversationWorkload =
+    request.headers.get("x-roundhouse-workload") === "conversation";
+  const captured = conversationWorkload
+    ? response
+    : await observeResponse(response, responseDetails);
+  if (conversationWorkload)
+    console.log(
+      JSON.stringify({
+        message: "model_response_received",
+        ...responseDetails,
+        workload: "conversation",
+        status: response.status,
+        body: "[REDACTED]",
+      }),
+    );
   const headers = responseHeaders(captured, route);
   if (stopReason) headers.set(modelStopReasonHeader, stopReason);
   return new Response(captured.body, {

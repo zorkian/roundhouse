@@ -170,14 +170,13 @@ describe("repository profile parsing", () => {
     ).rejects.toThrow("profile_conversation_invalid");
   });
 
-  it("rejects a conversation model unsupported by the v0 engine", async () => {
-    await expect(
-      parseProfile(
-        validV2.replace("openai/gpt-5.6-sol", "moonshotai/kimi-k3"),
-        commit,
-        async (path) => (path.endsWith("workflow.yaml") ? validWorkflow : path),
-      ),
-    ).rejects.toThrow("profile_conversation_invalid");
+  it("accepts provider-neutral conversation model identities", async () => {
+    const profile = await parseProfile(
+      validV2.replace("openai/gpt-5.6-sol", "moonshotai/kimi-k3"),
+      commit,
+      async (path) => (path.endsWith("workflow.yaml") ? validWorkflow : path),
+    );
+    expect(profile.conversation?.model.id).toBe("moonshotai/kimi-k3");
   });
 
   it("matches globstars across zero or more path segments", async () => {

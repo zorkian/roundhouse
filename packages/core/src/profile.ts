@@ -212,10 +212,7 @@ function model(value: unknown, error: string): ProfileModel {
 }
 
 function parseConversationModel(value: unknown): ProfileModel {
-  const configured = model(value, "profile_conversation_invalid");
-  if (!configured.id.startsWith("openai/"))
-    throw new Error("profile_conversation_invalid");
-  return configured;
+  return model(value, "profile_conversation_invalid");
 }
 
 function instructionSource(value: unknown, error: string): string | undefined {

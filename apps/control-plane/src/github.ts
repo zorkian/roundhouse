@@ -38,6 +38,15 @@ export interface GitHubIntakeRepository {
     deliveryId: string,
     payload: Readonly<Record<string, unknown>>,
   ): Promise<boolean>;
+  recordConversationPromotionIntake?(input: {
+    readonly conversationId: string;
+    readonly briefId: string;
+    readonly issueNumber: number;
+    readonly accepted: boolean;
+    readonly runId?: string;
+    readonly runUrl?: string;
+    readonly errorCode?: string;
+  }): Promise<boolean>;
 }
 
 export interface GitHubCancellationRepository {
@@ -100,6 +109,15 @@ interface IssuePayload {
   readonly issue?: { readonly number?: number };
 }
 
+function conversationPromotionMarker(
+  text: string | null | undefined,
+): { readonly conversationId: string; readonly briefId: string } | undefined {
+  const match = text?.match(
+    /<!-- roundhouse:conversation-start:([0-9a-f-]{36}):brief:([0-9a-f-]{36}) -->/,
+  );
+  return match ? { conversationId: match[1]!, briefId: match[2]! } : undefined;
+}
+
 function bytesToBase64Url(bytes: ArrayBuffer | Uint8Array): string {
   const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   let binary = "";
@@ -154,6 +172,7 @@ export class GitHubClient {
     private readonly installationId: number,
     private readonly send: typeof fetch = (input, init) =>
       globalThis.fetch(input, init),
+    private readonly observeBodies = true,
   ) {
     if (!Number.isSafeInteger(installationId) || installationId < 1)
       throw new Error("github_installation_id_missing");
@@ -264,23 +283,32 @@ export class GitHubClient {
     method: string,
     body?: unknown,
   ): Promise<T> {
-    const response = await observeResponse(
-      await this.send(`https://api.github.com${path}`, {
-        method,
-        headers: {
-          accept: "application/vnd.github+json",
-          authorization: `Bearer ${await this.installationToken()}`,
-          ...(body === undefined ? {} : { "content-type": "application/json" }),
-          "user-agent": "roundhouse-v2",
-          "x-github-api-version": "2026-03-10",
-        },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      }),
-      {
-        api: "github",
-        operation: `${method} ${path}`,
+    const received = await this.send(`https://api.github.com${path}`, {
+      method,
+      headers: {
+        accept: "application/vnd.github+json",
+        authorization: `Bearer ${await this.installationToken()}`,
+        ...(body === undefined ? {} : { "content-type": "application/json" }),
+        "user-agent": "roundhouse-v2",
+        "x-github-api-version": "2026-03-10",
       },
-    );
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    const response = this.observeBodies
+      ? await observeResponse(received, {
+          api: "github",
+          operation: `${method} ${path}`,
+        })
+      : received;
+    if (!this.observeBodies)
+      console.log(
+        JSON.stringify({
+          message: "github_response_received",
+          operation: method,
+          status: response.status,
+          body: "[REDACTED]",
+        }),
+      );
     if (!response.ok)
       throw new Error(`github_${method.toLowerCase()}_${response.status}`);
     return response.json<T>();
@@ -1144,9 +1172,14 @@ export async function acceptGitHubComment(
     "/roundhouse start": "/rh start",
     "/roundhouse-dev start": "/rhd start",
   };
+  const promotionMarker = conversationPromotionMarker(comment);
+  const firstLine = trimmedComment.split(/\r?\n/, 1)[0]?.trim();
   const isStartCommand =
     trimmedComment === env.GITHUB_START_COMMAND ||
-    trimmedComment === shortCommands[env.GITHUB_START_COMMAND];
+    trimmedComment === shortCommands[env.GITHUB_START_COMMAND] ||
+    (Boolean(promotionMarker) &&
+      (firstLine === env.GITHUB_START_COMMAND ||
+        firstLine === shortCommands[env.GITHUB_START_COMMAND]));
   if (!isStartCommand) {
     if (
       payload.sender?.type === "Bot" ||
@@ -1306,8 +1339,18 @@ export async function acceptGitHubComment(
       }),
     );
   }
-  if (!(await operatorAuthorized(api, repositoryName, actor, requestedProfile)))
+  if (
+    !(await operatorAuthorized(api, repositoryName, actor, requestedProfile))
+  ) {
+    if (promotionMarker)
+      await repository.recordConversationPromotionIntake?.({
+        ...promotionMarker,
+        issueNumber,
+        accepted: false,
+        errorCode: "operator_unauthorized",
+      });
     return "unauthorized";
+  }
   const existing = Boolean(run);
   if (!run) {
     const created = createRun({
@@ -1334,6 +1377,24 @@ export async function acceptGitHubComment(
       : { ...created, status: "waiting", waitingReason: "profile_error" };
     await repository.create(run);
   }
+  if (promotionMarker)
+    await repository.recordConversationPromotionIntake?.({
+      ...promotionMarker,
+      issueNumber,
+      accepted: true,
+      runId: run.id,
+      ...(controlPlaneOrigin
+        ? {
+            runUrl: new URL(
+              `/repositories/${repositoryName
+                .split("/")
+                .map(encodeURIComponent)
+                .join("/")}/issues/${issueNumber}`,
+              controlPlaneOrigin,
+            ).toString(),
+          }
+        : {}),
+    });
   const fresh = await repository.recordGitHubDelivery(id, deliveryId, {
     event,
     actor,

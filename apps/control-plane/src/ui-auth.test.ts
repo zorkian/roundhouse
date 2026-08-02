@@ -14,6 +14,8 @@ import {
   uiSessionLifetimeMs,
   uiStateCookie,
   uiGitHubPost,
+  uiGitHubPostForSessionHash,
+  uiSessionHash,
   validateUiSession,
 } from "./ui-auth.js";
 
@@ -205,6 +207,43 @@ describe("trusted UI GitHub mutations", () => {
     ).resolves.toEqual({ number: 42 });
     await expect(
       uiGitHubPost(session, env(db), "/repos/octo/project/pulls", {}),
+    ).rejects.toThrow("ui_github_mutation_not_allowed");
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets durable promotion use only a one-way session reference for issue writes", async () => {
+    const token = "durable-session-token";
+    const hash = await sha256Hex(token);
+    const { db } = authDb({
+      sessions: [{ hash, expiresAt: Date.now() + 60_000 }],
+    });
+    const send = vi.fn(async () => Response.json({ id: 1 }));
+    vi.stubGlobal("fetch", send);
+    const session = {
+      githubUserId: 7,
+      githubLogin: "octocat",
+      repositoryIds: ["1297678423"],
+      expiresAt: Date.now() + 60_000,
+      sessionToken: token,
+    };
+    await expect(uiSessionHash(session)).resolves.toBe(hash);
+    await expect(
+      uiGitHubPostForSessionHash(
+        hash,
+        7,
+        env(db),
+        "/repos/octo/project/issues/42/comments",
+        { body: "/roundhouse-dev start" },
+      ),
+    ).resolves.toEqual({ id: 1 });
+    await expect(
+      uiGitHubPostForSessionHash(
+        hash,
+        7,
+        env(db),
+        "/repos/octo/project/git/refs",
+        {},
+      ),
     ).rejects.toThrow("ui_github_mutation_not_allowed");
     expect(send).toHaveBeenCalledTimes(1);
   });

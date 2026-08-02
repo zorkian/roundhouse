@@ -68,6 +68,38 @@ describe("summarizeModelUsage", () => {
     ]);
   });
 
+  it("separates conversation cost from delivery-run cost", () => {
+    const summary = summarizeModelUsage(
+      [
+        {
+          ...call("gpt-5", endAt - day, { totalTokens: 100, costUsd: 1 }),
+          source: "conversation" as const,
+        },
+        {
+          ...call("gpt-5", endAt - day, { totalTokens: 50, costUsd: 0.5 }),
+          source: "delivery" as const,
+        },
+      ],
+      endAt,
+    );
+    expect(summary.sources).toEqual([
+      {
+        source: "conversation",
+        calls: 1,
+        total: expect.objectContaining({ totalTokens: 100, costUsd: 1 }),
+      },
+      {
+        source: "delivery",
+        calls: 1,
+        total: expect.objectContaining({ totalTokens: 50, costUsd: 0.5 }),
+      },
+    ]);
+    const html = renderModelUsage(summary, { githubLogin: "octocat" });
+    expect(html).toContain("Conversation and delivery usage");
+    expect(html).toContain("Conversations");
+    expect(html).toContain("Delivery runs");
+  });
+
   it("keeps totals unavailable when any call lacks the value", () => {
     const summary = summarizeModelUsage(
       [

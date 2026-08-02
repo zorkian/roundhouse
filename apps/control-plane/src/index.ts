@@ -29,7 +29,7 @@ import {
   renderSignInPage,
   sessionCookieHeader,
   signOut,
-  uiGitHubPost,
+  uiSessionHash,
   validateUiSession,
   type ValidatedUiSession,
 } from "./ui-auth.js";
@@ -46,12 +46,20 @@ import {
   GitHubClient,
   loadDefaultBranchProfile,
 } from "./github.js";
-import { D1ConversationRepository } from "./conversation-store.js";
 import {
-  executeConversationTurn,
-  renderDeliveryBrief,
-  synthesizeDeliveryBrief,
-} from "./conversation-engine.js";
+  D1ConversationRepository,
+  type ConversationWakeup,
+} from "./conversation-store.js";
+import {
+  webConversationAdapter,
+  webInboundMessage,
+} from "./conversation-adapter.js";
+import { ConversationService } from "./conversation-service.js";
+import {
+  deliverPendingConversationReplies,
+  publishPendingConversationWakeups,
+} from "./conversation-liveness.js";
+import { processConversationWakeup } from "./conversation-worker.js";
 import {
   renderConversation,
   renderConversationIndex,
@@ -407,6 +415,7 @@ export function validAttemptProgress(
 }
 type RuntimeEnv = Cloudflare.Env & {
   DB: D1Like;
+  CONVERSATION_TURNS: Queue<ConversationWakeup>;
   ATTEMPT_SANDBOXES: SandboxNamespace;
   BROWSER: Fetcher;
   BACKUP_BUCKET: R2Bucket;
@@ -418,9 +427,22 @@ type RuntimeEnv = Cloudflare.Env & {
   ROUNDHOUSE_GITHUB_WEBHOOK_SECRET: string;
 };
 
+function isConversationWakeup(
+  value: Wakeup | ConversationWakeup,
+): value is ConversationWakeup {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "kind" in value &&
+    (value.kind === "turn" || value.kind === "promotion") &&
+    "id" in value &&
+    typeof value.id === "string"
+  );
+}
+
 export { destroyAttemptSandbox, githubBranch };
 
-const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
+const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
   async fetch(request, env, context) {
     const url = new URL(request.url);
     const isPublicUiRequest = () =>
@@ -491,7 +513,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       url.pathname === "/runs" ||
       url.pathname === "/usage" ||
       url.pathname === "/conversations" ||
-      /^\/conversations\/[0-9a-f-]{36}(?:\/(?:messages|promote))?$/.test(
+      /^\/conversations\/[0-9a-f-]{36}(?:\/(?:messages|brief|promote))?$/.test(
         url.pathname,
       ) ||
       /^\/repositories\/[^/]+\/[^/]+\/(workflow|issues\/\d+(?:\/workflow)?)$/.test(
@@ -558,11 +580,38 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       request.headers.get("origin") === new URL(env.PUBLIC_ORIGIN).origin;
     if (url.pathname === "/conversations" && isPublicUiRequest()) {
       const conversations = new D1ConversationRepository(env.DB);
+      const service = new ConversationService(
+        conversations,
+        env.CONVERSATION_TURNS,
+      );
       if (request.method === "GET") {
-        const [repositories, recent] = await Promise.all([
+        const [candidates, recent] = await Promise.all([
           conversations.listRepositories(uiSession!.repositoryIds),
           conversations.list(uiSession!.githubUserId, uiSession!.repositoryIds),
         ]);
+        const repositories = (
+          await Promise.all(
+            candidates.map(async (repository) => {
+              try {
+                const metadata = await new GitHubClient(
+                  env,
+                  repository.installationId,
+                ).get<{ private?: boolean }>(`/repos/${repository.name}`);
+                return metadata.private === false ? repository : undefined;
+              } catch (error) {
+                console.error(
+                  JSON.stringify({
+                    message: "conversation_repository_visibility_failed",
+                    repository: repository.name,
+                    error:
+                      error instanceof Error ? error.message : String(error),
+                  }),
+                );
+                return undefined;
+              }
+            }),
+          )
+        ).filter((item): item is NonNullable<typeof item> => Boolean(item));
         return uiConversationHtml(
           renderConversationIndex(
             repositories,
@@ -580,9 +629,12 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       const form = await request.formData();
       const repositoryId = form.get("repository");
       const body = form.get("message");
+      const externalMessageId = form.get("message_id");
       if (
         typeof repositoryId !== "string" ||
         typeof body !== "string" ||
+        typeof externalMessageId !== "string" ||
+        !/^[0-9a-f-]{36}$/.test(externalMessageId) ||
         !body.trim() ||
         body.length > 12_000
       )
@@ -592,12 +644,15 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
         uiSession!.repositoryIds,
       );
       if (!selected) return uiJson({ error: "not_found" }, 404);
+      const github = new GitHubClient(env, selected.installationId);
       let snapshot: Awaited<ReturnType<typeof loadDefaultBranchProfile>>;
       try {
-        snapshot = await loadDefaultBranchProfile(
-          new GitHubClient(env, selected.installationId),
-          selected.name,
+        const metadata = await github.get<{ private?: boolean }>(
+          `/repos/${selected.name}`,
         );
+        if (metadata.private !== false)
+          return uiJson({ error: "public_repository_required" }, 422);
+        snapshot = await loadDefaultBranchProfile(github, selected.name);
       } catch (error) {
         console.error(
           JSON.stringify({
@@ -612,9 +667,11 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       }
       const conversationId = crypto.randomUUID();
       const turnId = crypto.randomUUID();
-      await conversations.create({
-        id: conversationId,
-        repositoryId: selected.id,
+      const started = await service.start({
+        conversationId,
+        turnId,
+        messageId: crypto.randomUUID(),
+        repository: selected,
         creatorGithubUserId: uiSession!.githubUserId,
         creatorGithubLogin: uiSession!.githubLogin,
         sourceCommit: snapshot.commit,
@@ -632,51 +689,30 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
               }
             : {}),
         },
-        turnId,
-        messageId: crypto.randomUUID(),
-        body: body.trim(),
-      });
-      const conversation = await conversations.get(
-        conversationId,
-        uiSession!.githubUserId,
-        uiSession!.repositoryIds,
-      );
-      if (!conversation) throw new Error("conversation_create_failed");
-      try {
-        const reply = await executeConversationTurn(
-          env.MODEL_BROKER,
-          new GitHubClient(env, selected.installationId),
-          conversation,
-        );
-        await conversations.finishTurn(
+        message: webInboundMessage({
+          actor: {
+            id: String(uiSession!.githubUserId),
+            login: uiSession!.githubLogin,
+          },
           conversationId,
-          turnId,
-          crypto.randomUUID(),
-          reply,
-        );
-        return uiRedirect(`/conversations/${conversationId}`);
-      } catch (error) {
-        await conversations.failTurn(conversationId, turnId);
-        console.error(
-          JSON.stringify({
-            message: "conversation_turn_failed",
-            conversationId,
-            error: error instanceof Error ? error.message : String(error),
-          }),
-        );
-        return uiRedirect(
-          `/conversations/${conversationId}?notice=Roundhouse%20could%20not%20answer%20that%20turn.%20You%20can%20try%20again.`,
-        );
-      }
+          messageId: externalMessageId,
+          body: body.trim(),
+        }),
+      });
+      return uiRedirect(`/conversations/${started.conversationId}`);
     }
     const conversationMatch = url.pathname.match(
-      /^\/conversations\/([0-9a-f-]{36})(?:\/(messages|promote))?$/,
+      /^\/conversations\/([0-9a-f-]{36})(?:\/(messages|brief|promote))?$/,
     );
     if (conversationMatch && isPublicUiRequest()) {
       const conversationId = conversationMatch[1]!;
       const action = conversationMatch[2];
       const conversations = new D1ConversationRepository(env.DB);
-      let conversation = await conversations.get(
+      const service = new ConversationService(
+        conversations,
+        env.CONVERSATION_TURNS,
+      );
+      const conversation = await conversations.get(
         conversationId,
         uiSession!.githubUserId,
         uiSession!.repositoryIds,
@@ -699,146 +735,97 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       if (action === "messages") {
         const form = await request.formData();
         const body = form.get("message");
-        if (typeof body !== "string" || !body.trim() || body.length > 12_000)
+        const externalMessageId = form.get("message_id");
+        if (
+          typeof body !== "string" ||
+          typeof externalMessageId !== "string" ||
+          !/^[0-9a-f-]{36}$/.test(externalMessageId) ||
+          !body.trim() ||
+          body.length > 12_000
+        )
           return uiJson({ error: "invalid_request" }, 400);
         const turnId = crypto.randomUUID();
-        const claimed = await conversations.appendUserTurn({
+        const accepted = await service.acceptMessage({
           conversationId,
           creatorGithubUserId: uiSession!.githubUserId,
           turnId,
           messageId: crypto.randomUUID(),
-          body: body.trim(),
-        });
-        if (!claimed) return uiJson({ error: "conversation_not_open" }, 409);
-        conversation = await conversations.get(
-          conversationId,
-          uiSession!.githubUserId,
-          uiSession!.repositoryIds,
-        );
-        if (!conversation) throw new Error("conversation_turn_missing");
-        try {
-          const reply = await executeConversationTurn(
-            env.MODEL_BROKER,
-            new GitHubClient(env, conversation.repository.installationId),
-            conversation,
-          );
-          await conversations.finishTurn(
-            conversationId,
-            turnId,
-            crypto.randomUUID(),
-            reply,
-          );
-          return uiRedirect(`/conversations/${conversationId}`);
-        } catch (error) {
-          await conversations.failTurn(conversationId, turnId);
-          console.error(
-            JSON.stringify({
-              message: "conversation_turn_failed",
-              conversationId,
-              error: error instanceof Error ? error.message : String(error),
-            }),
-          );
-          return uiRedirect(
-            `/conversations/${conversationId}?notice=Roundhouse%20could%20not%20answer%20that%20turn.%20You%20can%20try%20again.`,
-          );
-        }
-      }
-      let promotionOwned = false;
-      try {
-        if (conversation.status === "open") {
-          const brief = await synthesizeDeliveryBrief(
-            env.MODEL_BROKER,
-            conversation,
-          );
-          const prepared = await conversations.preparePromotion(
-            conversationId,
-            uiSession!.githubUserId,
-            brief,
-          );
-          if (!prepared)
-            return uiJson({ error: "conversation_not_promotable" }, 409);
-          return uiRedirect(`/conversations/${conversationId}`);
-        }
-        if (conversation.status === "ready") {
-          const began = await conversations.beginPromotion(
-            conversationId,
-            uiSession!.githubUserId,
-          );
-          if (!began)
-            return uiJson({ error: "conversation_not_promotable" }, 409);
-          promotionOwned = true;
-          conversation = (await conversations.get(
-            conversationId,
-            uiSession!.githubUserId,
-            uiSession!.repositoryIds,
-          ))!;
-        }
-        if (conversation.status === "promoted")
-          return uiRedirect(`/conversations/${conversationId}`);
-        if (conversation.status === "promoting" && !promotionOwned) {
-          promotionOwned = await conversations.claimPromotionRetry(
-            conversationId,
-            uiSession!.githubUserId,
-          );
-          if (!promotionOwned)
-            return uiJson({ error: "promotion_in_progress" }, 409);
-        }
-        if (!conversation.deliveryBrief)
-          throw new Error("delivery_brief_missing");
-        const [owner, name] = conversation.repository.name.split("/", 2);
-        if (!owner || !name) throw new Error("repository_name_invalid");
-        let issueNumber = conversation.promotedIssueNumber;
-        if (!issueNumber) {
-          const issue = await uiGitHubPost<{
-            number: number;
-            html_url: string;
-          }>(
-            uiSession!,
-            env,
-            `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/issues`,
-            {
-              title: conversation.deliveryBrief.title,
-              body: renderDeliveryBrief(
-                conversation.deliveryBrief,
-                new URL(
-                  `/conversations/${conversationId}`,
-                  env.PUBLIC_ORIGIN,
-                ).toString(),
-              ),
+          message: webInboundMessage({
+            actor: {
+              id: String(uiSession!.githubUserId),
+              login: uiSession!.githubLogin,
             },
-          );
-          issueNumber = issue.number;
-          await conversations.recordPromotionIssue(
             conversationId,
-            issue.number,
-            issue.html_url,
-          );
-        }
-        await uiGitHubPost(
-          uiSession!,
-          env,
-          `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/issues/${issueNumber}/comments`,
-          { body: env.GITHUB_START_COMMAND },
-        );
-        await conversations.completePromotion(conversationId);
-        return uiRedirect(`/conversations/${conversationId}`);
-      } catch (error) {
-        if (promotionOwned)
-          await conversations.releasePromotion(
-            conversationId,
-            uiSession!.githubUserId,
-          );
-        console.error(
-          JSON.stringify({
-            message: "conversation_promotion_failed",
-            conversationId,
-            error: error instanceof Error ? error.message : String(error),
+            messageId: externalMessageId,
+            body: body.trim(),
           }),
-        );
-        return uiRedirect(
-          `/conversations/${conversationId}?notice=Delivery%20could%20not%20start.%20A%20retry%20will%20continue%20an%20issue%20that%20Roundhouse%20already%20recorded.`,
-        );
+        });
+        if (accepted === "unavailable")
+          return uiJson({ error: "conversation_not_open" }, 409);
+        return uiRedirect(`/conversations/${conversationId}`);
       }
+      if (action === "brief") {
+        const prepared = await service.prepareBrief({
+          conversationId,
+          creatorGithubUserId: uiSession!.githubUserId,
+          turnId: crypto.randomUUID(),
+        });
+        if (!prepared) return uiJson({ error: "conversation_not_ready" }, 409);
+        return uiRedirect(`/conversations/${conversationId}`);
+      }
+      const form = await request.formData();
+      const briefId = form.get("brief_id");
+      const title = form.get("title");
+      const outcome = form.get("outcome");
+      const list = (name: string): string[] | undefined => {
+        const value = form.get(name);
+        if (typeof value !== "string" || value.length > 20_000)
+          return undefined;
+        const items = value
+          .split(/\r?\n/)
+          .map((item) => item.trim())
+          .filter(Boolean);
+        return items.length <= 100 &&
+          items.every((item) => item.length <= 1_000)
+          ? items
+          : undefined;
+      };
+      const acceptanceCriteria = list("acceptance_criteria");
+      const constraints = list("constraints");
+      const evidence = list("evidence");
+      const uncertainties = list("uncertainties");
+      if (
+        typeof briefId !== "string" ||
+        !/^[0-9a-f-]{36}$/.test(briefId) ||
+        typeof title !== "string" ||
+        !title.trim() ||
+        title.length > 100 ||
+        typeof outcome !== "string" ||
+        !outcome.trim() ||
+        outcome.length > 20_000 ||
+        !acceptanceCriteria ||
+        !constraints ||
+        !evidence ||
+        !uncertainties
+      )
+        return uiJson({ error: "invalid_delivery_brief" }, 400);
+      const requested = await service.approveBrief({
+        conversationId,
+        creatorGithubUserId: uiSession!.githubUserId,
+        creatorGithubLogin: uiSession!.githubLogin,
+        briefId,
+        title: title.trim(),
+        outcome: outcome.trim(),
+        acceptanceCriteria,
+        constraints,
+        evidence,
+        uncertainties,
+        promotionId: crypto.randomUUID(),
+        uiSessionHash: await uiSessionHash(uiSession!),
+      });
+      if (!requested)
+        return uiJson({ error: "conversation_not_promotable" }, 409);
+      return uiRedirect(`/conversations/${conversationId}`);
     }
     if (
       (url.pathname === "/" || url.pathname === "/runs") &&
@@ -1683,12 +1670,46 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
     return handleRequest(request);
   },
   async queue(batch, env) {
+    const conversationRepository = new D1ConversationRepository(env.DB);
+    const conversationAdapters = new Map([
+      [webConversationAdapter.name, webConversationAdapter],
+    ]);
+    const conversationMessages = batch.messages.filter((message) =>
+      isConversationWakeup(message.body),
+    );
+    if (conversationMessages.length) {
+      for (const message of conversationMessages) {
+        const wakeup = message.body as ConversationWakeup;
+        try {
+          const outcome = await processConversationWakeup(
+            conversationRepository,
+            env,
+            wakeup,
+            message.attempts,
+            conversationAdapters,
+          );
+          if (outcome === "retry") message.retry();
+          else message.ack();
+        } catch (error) {
+          console.error(
+            JSON.stringify({
+              message: "conversation_wakeup_failed",
+              kind: wakeup.kind,
+              id: wakeup.id,
+              error: error instanceof Error ? error.message : String(error),
+            }),
+          );
+          message.retry();
+        }
+      }
+    }
     const repository = new D1RunRepository(env.DB);
     const dispatcher = new DurableAttemptDispatcher(
       env.ATTEMPT_EXECUTIONS,
       repository,
     );
     for (const message of batch.messages) {
+      if (isConversationWakeup(message.body)) continue;
       try {
         const run = await repository.get(message.body.runId);
         if (!run) {
@@ -2014,6 +2035,16 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       }),
     );
     await publishPendingWakeups(repository, env.RUN_WAKEUPS, Date.now());
+    const conversationRepository = new D1ConversationRepository(env.DB);
+    await publishPendingConversationWakeups(
+      conversationRepository,
+      env.CONVERSATION_TURNS,
+      Date.now(),
+    );
+    await deliverPendingConversationReplies(
+      conversationRepository,
+      new Map([[webConversationAdapter.name, webConversationAdapter]]),
+    );
   },
 };
 

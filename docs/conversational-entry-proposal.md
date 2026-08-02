@@ -258,7 +258,8 @@ V0 includes:
 - exact-commit repository reading and optional hosted public research;
 - source-aware answers and a visible read-only authority indicator;
 - generation and user editing of one delivery brief;
-- one repository-configured conversation model with per-turn usage reporting;
+- one repository-configured conversation model with per-call usage and
+  available cost included in the existing usage dashboard;
 - explicit operator confirmation;
 - idempotent GitHub issue creation and handoff to the existing run workflow;
 - conversation-to-brief-to-issue-to-run links; and
@@ -276,8 +277,9 @@ V0 intentionally excludes:
 - persistent memory across conversations;
 - live steering of an active run;
 - reopening a promoted conversation or creating multiple briefs from it;
-- token streaming and rich provider-specific interaction; and
+- token streaming and rich provider-specific interaction;
 - user selection of a raw provider, model, or reasoning level;
+- Roundhouse quotas, rate limits, or repository budgets; and
 - automatic promotion based on model intent classification.
 
 The internal adapter seam is part of v0 because it prevents the web transport
@@ -330,3 +332,6 @@ V0 is successful when:
 6. **Model policy:** use one repository-configured conversation model in v0,
    defaulting to `openai/gpt-5.6-sol` with high reasoning. Defer optional
    repository-defined user-selectable modes.
+7. **Cost controls:** record conversation tokens, route, latency, and available
+   cost in the usage dashboard, but do not add application quotas or limits in
+   v0. The deployment-level Cloudflare budget is the initial hard backstop.

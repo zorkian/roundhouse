@@ -8,7 +8,9 @@ import {
 } from "@roundhouse/core";
 import type {
   Conversation,
+  ConversationCallUsage,
   ConversationMessage,
+  ConversationTurn,
   DeliveryBrief,
 } from "./conversation-store.js";
 import type { GitHubApi } from "./github.js";
@@ -30,13 +32,17 @@ const routeHeaders = {
   rule: "x-roundhouse-routing-rule",
 } as const;
 
-const repositoryTools = [
+interface ToolDefinition {
+  readonly name: string;
+  readonly description: string;
+  readonly parameters: Readonly<Record<string, unknown>>;
+}
+
+const repositoryTools: readonly ToolDefinition[] = [
   {
-    type: "function",
     name: "list_repository_files",
     description:
       "List file paths from the repository commit snapshotted for this conversation.",
-    strict: true,
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -45,11 +51,9 @@ const repositoryTools = [
     },
   },
   {
-    type: "function",
     name: "read_repository_file",
     description:
       "Read one UTF-8 text file from the repository commit snapshotted for this conversation.",
-    strict: true,
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -59,12 +63,50 @@ const repositoryTools = [
       },
     },
   },
-] as const;
+];
+
+interface FunctionCall {
+  readonly id: string;
+  readonly name: string;
+  readonly arguments: string;
+}
+
+interface ParsedModelResponse {
+  readonly text?: string;
+  readonly calls: readonly FunctionCall[];
+  readonly nativeAssistant: unknown;
+}
+
+interface ModelRequest {
+  readonly endpoint: string;
+  readonly body: Record<string, unknown>;
+}
+
+interface ProtocolAdapter {
+  readonly initial: (input: {
+    readonly route: ModelRoute;
+    readonly instructions: string;
+    readonly messages: readonly ConversationMessage[];
+    readonly tools: readonly ToolDefinition[];
+    readonly outputSchema?: Readonly<Record<string, unknown>>;
+    readonly maxOutputTokens: number;
+  }) => ModelRequest;
+  readonly parse: (value: Record<string, unknown>) => ParsedModelResponse;
+  readonly continue: (
+    request: ModelRequest,
+    response: ParsedModelResponse,
+    results: readonly {
+      readonly call: FunctionCall;
+      readonly output: string;
+    }[],
+  ) => ModelRequest;
+}
 
 function brokerHeaders(route: ModelRoute, research: boolean): Headers {
   const headers = new Headers({
     "content-type": "application/json",
     "x-roundhouse-research": research ? "enabled" : "disabled",
+    "x-roundhouse-workload": "conversation",
   });
   headers.set(routeHeaders.provider, route.provider);
   headers.set(routeHeaders.model, route.model);
@@ -96,61 +138,431 @@ export async function resolveConversationRoute(
   if (!response.ok)
     throw new Error(`conversation_route_http_${response.status}`);
   const route: unknown = await response.json();
-  if (!isModelRoute(route) || route.protocol !== "openai-responses")
-    throw new Error("conversation_route_unsupported");
+  if (!isModelRoute(route)) throw new Error("conversation_route_unsupported");
   return route;
 }
 
-function responseText(value: Record<string, unknown>): string | undefined {
-  if (typeof value.output_text === "string" && value.output_text.trim())
-    return value.output_text.trim();
-  if (!Array.isArray(value.output)) return undefined;
-  const text = value.output.flatMap((item) => {
-    if (!item || typeof item !== "object" || !("content" in item)) return [];
-    const content = Array.isArray(item.content) ? item.content : [];
-    return content.flatMap((part: unknown) =>
-      part &&
-      typeof part === "object" &&
-      "type" in part &&
-      part.type === "output_text" &&
-      "text" in part &&
-      typeof part.text === "string"
-        ? [part.text]
-        : [],
-    );
-  });
-  return text.join("\n").trim() || undefined;
+function selectedTranscript(messages: readonly ConversationMessage[]) {
+  let remaining = maxTranscriptCharacters;
+  const selected: ConversationMessage[] = [];
+  for (const message of [...messages].reverse()) {
+    if (remaining <= 0) break;
+    const body = message.body.slice(-remaining);
+    selected.push({ ...message, body });
+    remaining -= body.length;
+  }
+  return selected.reverse();
 }
 
-type FunctionCall = {
-  readonly type: "function_call";
-  readonly name: string;
-  readonly arguments: string;
-  readonly call_id: string;
+function textFromUnknown(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (!Array.isArray(value)) return undefined;
+  const text = value
+    .flatMap((part) => {
+      if (typeof part === "string") return [part];
+      if (!part || typeof part !== "object") return [];
+      const record = part as Record<string, unknown>;
+      return typeof record.text === "string" ? [record.text] : [];
+    })
+    .join("\n")
+    .trim();
+  return text || undefined;
+}
+
+const openAiResponsesAdapter: ProtocolAdapter = {
+  initial(input) {
+    return {
+      endpoint: "/v1/responses",
+      body: {
+        instructions: input.instructions,
+        input: selectedTranscript(input.messages).map((message) => ({
+          role: message.role,
+          content: message.body,
+        })),
+        ...(input.tools.length
+          ? {
+              tools: input.tools.map((tool) => ({
+                type: "function",
+                name: tool.name,
+                description: tool.description,
+                strict: true,
+                parameters: tool.parameters,
+              })),
+              tool_choice: "auto",
+            }
+          : {}),
+        store: false,
+        include: ["reasoning.encrypted_content"],
+        max_output_tokens: input.maxOutputTokens,
+        ...(input.route.thinkingLevel === "off"
+          ? {}
+          : { reasoning: { effort: input.route.thinkingLevel } }),
+        ...(input.outputSchema
+          ? {
+              text: {
+                format: {
+                  type: "json_schema",
+                  name: "delivery_brief",
+                  strict: true,
+                  schema: input.outputSchema,
+                },
+              },
+            }
+          : {}),
+      },
+    };
+  },
+  parse(value) {
+    const output = Array.isArray(value.output) ? value.output : [];
+    const calls = output.flatMap((item) => {
+      if (!item || typeof item !== "object") return [];
+      const call = item as Record<string, unknown>;
+      return call.type === "function_call" &&
+        typeof call.call_id === "string" &&
+        typeof call.name === "string" &&
+        typeof call.arguments === "string"
+        ? [
+            {
+              id: call.call_id,
+              name: call.name,
+              arguments: call.arguments,
+            },
+          ]
+        : [];
+    });
+    const outputText =
+      typeof value.output_text === "string"
+        ? value.output_text.trim()
+        : output
+            .flatMap((item) => {
+              if (!item || typeof item !== "object") return [];
+              return (
+                textFromUnknown(
+                  (item as Record<string, unknown>).content,
+                )?.split("\n") ?? []
+              );
+            })
+            .join("\n")
+            .trim();
+    return {
+      ...(outputText ? { text: outputText } : {}),
+      calls,
+      nativeAssistant: output,
+    };
+  },
+  continue(request, response, results) {
+    const input = Array.isArray(request.body.input) ? request.body.input : [];
+    return {
+      ...request,
+      body: {
+        ...request.body,
+        input: [
+          ...input,
+          ...(Array.isArray(response.nativeAssistant)
+            ? response.nativeAssistant
+            : []),
+          ...results.map(({ call, output }) => ({
+            type: "function_call_output",
+            call_id: call.id,
+            output,
+          })),
+        ],
+      },
+    };
+  },
 };
 
-function functionCalls(
-  value: Record<string, unknown>,
-): readonly FunctionCall[] {
-  if (!Array.isArray(value.output)) return [];
-  return value.output.filter((item): item is FunctionCall => {
-    if (!item || typeof item !== "object") return false;
-    const call = item as Record<string, unknown>;
-    return (
-      call.type === "function_call" &&
-      typeof call.name === "string" &&
-      typeof call.arguments === "string" &&
-      typeof call.call_id === "string"
-    );
-  });
+const openAiCompletionsAdapter: ProtocolAdapter = {
+  initial(input) {
+    return {
+      endpoint: "/v1/chat/completions",
+      body: {
+        messages: [
+          { role: "system", content: input.instructions },
+          ...selectedTranscript(input.messages).map((message) => ({
+            role: message.role,
+            content: message.body,
+          })),
+        ],
+        ...(input.tools.length
+          ? {
+              tools: input.tools.map((tool) => ({
+                type: "function",
+                function: {
+                  name: tool.name,
+                  description: tool.description,
+                  strict: true,
+                  parameters: tool.parameters,
+                },
+              })),
+              tool_choice: "auto",
+            }
+          : {}),
+        max_tokens: input.maxOutputTokens,
+        ...(input.outputSchema
+          ? {
+              response_format: {
+                type: "json_schema",
+                json_schema: {
+                  name: "delivery_brief",
+                  strict: true,
+                  schema: input.outputSchema,
+                },
+              },
+            }
+          : {}),
+      },
+    };
+  },
+  parse(value) {
+    const choices = Array.isArray(value.choices) ? value.choices : [];
+    const message =
+      choices[0] && typeof choices[0] === "object"
+        ? ((choices[0] as Record<string, unknown>).message as
+            Record<string, unknown> | undefined)
+        : undefined;
+    const toolCalls = Array.isArray(message?.tool_calls)
+      ? message.tool_calls
+      : [];
+    const calls = toolCalls.flatMap((item) => {
+      if (!item || typeof item !== "object") return [];
+      const call = item as Record<string, unknown>;
+      const fn = call.function as Record<string, unknown> | undefined;
+      return typeof call.id === "string" &&
+        typeof fn?.name === "string" &&
+        typeof fn.arguments === "string"
+        ? [{ id: call.id, name: fn.name, arguments: fn.arguments }]
+        : [];
+    });
+    const text = textFromUnknown(message?.content);
+    return {
+      ...(text ? { text } : {}),
+      calls,
+      nativeAssistant: message ?? {},
+    };
+  },
+  continue(request, response, results) {
+    const messages = Array.isArray(request.body.messages)
+      ? request.body.messages
+      : [];
+    return {
+      ...request,
+      body: {
+        ...request.body,
+        messages: [
+          ...messages,
+          response.nativeAssistant,
+          ...results.map(({ call, output }) => ({
+            role: "tool",
+            tool_call_id: call.id,
+            content: output,
+          })),
+        ],
+      },
+    };
+  },
+};
+
+const anthropicMessagesAdapter: ProtocolAdapter = {
+  initial(input) {
+    const schemaInstruction = input.outputSchema
+      ? `\n\nReturn only JSON matching this schema:\n${JSON.stringify(input.outputSchema)}`
+      : "";
+    return {
+      endpoint: "/v1/messages",
+      body: {
+        system: `${input.instructions}${schemaInstruction}`,
+        messages: selectedTranscript(input.messages).map((message) => ({
+          role: message.role,
+          content: message.body,
+        })),
+        ...(input.tools.length
+          ? {
+              tools: input.tools.map((tool) => ({
+                name: tool.name,
+                description: tool.description,
+                input_schema: tool.parameters,
+              })),
+            }
+          : {}),
+        max_tokens: input.maxOutputTokens,
+      },
+    };
+  },
+  parse(value) {
+    const content = Array.isArray(value.content) ? value.content : [];
+    const calls = content.flatMap((item) => {
+      if (!item || typeof item !== "object") return [];
+      const call = item as Record<string, unknown>;
+      return call.type === "tool_use" &&
+        typeof call.id === "string" &&
+        typeof call.name === "string"
+        ? [
+            {
+              id: call.id,
+              name: call.name,
+              arguments: JSON.stringify(call.input ?? {}),
+            },
+          ]
+        : [];
+    });
+    const text = content
+      .flatMap((item) => {
+        if (!item || typeof item !== "object") return [];
+        const part = item as Record<string, unknown>;
+        return part.type === "text" && typeof part.text === "string"
+          ? [part.text]
+          : [];
+      })
+      .join("\n")
+      .trim();
+    return {
+      ...(text ? { text } : {}),
+      calls,
+      nativeAssistant: content,
+    };
+  },
+  continue(request, response, results) {
+    const messages = Array.isArray(request.body.messages)
+      ? request.body.messages
+      : [];
+    return {
+      ...request,
+      body: {
+        ...request.body,
+        messages: [
+          ...messages,
+          { role: "assistant", content: response.nativeAssistant },
+          {
+            role: "user",
+            content: results.map(({ call, output }) => ({
+              type: "tool_result",
+              tool_use_id: call.id,
+              content: output,
+            })),
+          },
+        ],
+      },
+    };
+  },
+};
+
+const googleGenerativeAiAdapter: ProtocolAdapter = {
+  initial(input) {
+    return {
+      endpoint: `/v1beta/models/${encodeURIComponent(input.route.model)}:generateContent`,
+      body: {
+        systemInstruction: { parts: [{ text: input.instructions }] },
+        contents: selectedTranscript(input.messages).map((message) => ({
+          role: message.role === "assistant" ? "model" : "user",
+          parts: [{ text: message.body }],
+        })),
+        ...(input.tools.length
+          ? {
+              tools: [
+                {
+                  functionDeclarations: input.tools.map((tool) => ({
+                    name: tool.name,
+                    description: tool.description,
+                    parameters: tool.parameters,
+                  })),
+                },
+              ],
+            }
+          : {}),
+        generationConfig: {
+          maxOutputTokens: input.maxOutputTokens,
+          ...(input.outputSchema
+            ? {
+                responseMimeType: "application/json",
+                responseSchema: input.outputSchema,
+              }
+            : {}),
+        },
+      },
+    };
+  },
+  parse(value) {
+    const candidates = Array.isArray(value.candidates) ? value.candidates : [];
+    const content =
+      candidates[0] && typeof candidates[0] === "object"
+        ? ((candidates[0] as Record<string, unknown>).content as
+            Record<string, unknown> | undefined)
+        : undefined;
+    const parts = Array.isArray(content?.parts) ? content.parts : [];
+    const calls = parts.flatMap((item, index) => {
+      if (!item || typeof item !== "object") return [];
+      const functionCall = (item as Record<string, unknown>).functionCall as
+        Record<string, unknown> | undefined;
+      return typeof functionCall?.name === "string"
+        ? [
+            {
+              id: `google-${index}-${crypto.randomUUID()}`,
+              name: functionCall.name,
+              arguments: JSON.stringify(functionCall.args ?? {}),
+            },
+          ]
+        : [];
+    });
+    const text = parts
+      .flatMap((item) => {
+        if (!item || typeof item !== "object") return [];
+        const part = item as Record<string, unknown>;
+        return typeof part.text === "string" ? [part.text] : [];
+      })
+      .join("\n")
+      .trim();
+    return {
+      ...(text ? { text } : {}),
+      calls,
+      nativeAssistant: content ?? { role: "model", parts: [] },
+    };
+  },
+  continue(request, response, results) {
+    const contents = Array.isArray(request.body.contents)
+      ? request.body.contents
+      : [];
+    return {
+      ...request,
+      body: {
+        ...request.body,
+        contents: [
+          ...contents,
+          response.nativeAssistant,
+          {
+            role: "user",
+            parts: results.map(({ call, output }) => ({
+              functionResponse: {
+                name: call.name,
+                response: { output },
+              },
+            })),
+          },
+        ],
+      },
+    };
+  },
+};
+
+function adapterFor(route: ModelRoute): ProtocolAdapter {
+  if (route.protocol === "openai-responses") return openAiResponsesAdapter;
+  if (route.protocol === "openai-completions") return openAiCompletionsAdapter;
+  if (route.protocol === "anthropic-messages") return anthropicMessagesAdapter;
+  if (route.protocol === "google-generative-ai")
+    return googleGenerativeAiAdapter;
+  throw new Error("conversation_route_unsupported");
 }
 
-function decodeBase64(value: string): string {
-  return new TextDecoder().decode(
-    Uint8Array.from(atob(value.replaceAll("\n", "")), (character) =>
-      character.charCodeAt(0),
-    ),
-  );
+function decodeBase64Utf8(value: string): string | undefined {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(
+      Uint8Array.from(atob(value.replaceAll("\n", "")), (character) =>
+        character.charCodeAt(0),
+      ),
+    );
+  } catch {
+    return undefined;
+  }
 }
 
 export async function executeRepositoryTool(
@@ -202,13 +614,14 @@ export async function executeRepositoryTool(
     } catch {
       return JSON.stringify({ error: "invalid_path" });
     }
+    const encodedPath = path.split("/").map(encodeURIComponent).join("/");
     const file = await github.get<{
       type?: string;
       encoding?: string;
       content?: string;
       size?: number;
     }>(
-      `/repos/${conversation.repository.name}/contents/${path}?ref=${encodeURIComponent(conversation.sourceCommit)}`,
+      `/repos/${conversation.repository.name}/contents/${encodedPath}?ref=${encodeURIComponent(conversation.sourceCommit)}`,
     );
     if (
       file.type !== "file" ||
@@ -218,7 +631,9 @@ export async function executeRepositoryTool(
       return JSON.stringify({ error: "file_unavailable" });
     if ((file.size ?? 0) > maxFileBytes)
       return JSON.stringify({ error: "file_too_large" });
-    const content = decodeBase64(file.content);
+    const content = decodeBase64Utf8(file.content);
+    if (content === undefined || content.includes("\0"))
+      return JSON.stringify({ error: "file_not_utf8_text" });
     if (new TextEncoder().encode(content).byteLength > maxFileBytes)
       return JSON.stringify({ error: "file_too_large" });
     return JSON.stringify({ path, content });
@@ -242,84 +657,201 @@ function conversationInstructions(conversation: Conversation): string {
   ].join("\n\n");
 }
 
-function transcript(messages: readonly ConversationMessage[]) {
-  let remaining = maxTranscriptCharacters;
-  const selected: ConversationMessage[] = [];
-  for (const message of [...messages].reverse()) {
-    if (remaining <= 0) break;
-    const body = message.body.slice(-remaining);
-    selected.push({ ...message, body });
-    remaining -= body.length;
-  }
-  return selected.reverse().map((message) => ({
-    role: message.role,
-    content: message.body,
-  }));
+const prices: Record<string, readonly [number, number, number, number?]> = {
+  "anthropic/claude-opus-4.8": [15, 1.5, 75, 18.75],
+  "anthropic/claude-fable-5": [3, 0.3, 15, 3.75],
+  "moonshotai/kimi-k3": [0.6, 0.15, 2.5],
+  "openai/gpt-5": [1.25, 0.125, 10],
+  "openai/gpt-5.2": [1.75, 0.175, 14],
+  "openai/gpt-5.6-sol": [1.75, 0.175, 14],
+};
+
+function number(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }
 
-async function responsesCall(
-  broker: Broker,
-  route: ModelRoute,
-  body: Record<string, unknown>,
-  research: boolean,
-): Promise<Record<string, unknown>> {
-  const response = await broker.fetch(
-    new Request("https://broker.roundhouse.internal/v1/responses", {
+function usageForResponse(input: {
+  readonly value: Record<string, unknown>;
+  readonly route: ModelRoute;
+  readonly conversation: Conversation;
+  readonly turn: ConversationTurn;
+  readonly callKind: ConversationCallUsage["callKind"];
+  readonly latencyMs: number;
+  readonly outcome: ConversationCallUsage["outcome"];
+}): ConversationCallUsage {
+  const value = input.value;
+  const usage = (value.usage ?? value.usageMetadata ?? {}) as Record<
+    string,
+    unknown
+  >;
+  const inputDetails = (usage.input_tokens_details ??
+    usage.prompt_tokens_details ??
+    {}) as Record<string, unknown>;
+  const outputDetails = (usage.output_tokens_details ??
+    usage.completion_tokens_details ??
+    {}) as Record<string, unknown>;
+  const inputTokens = number(
+    usage.input_tokens ?? usage.prompt_tokens ?? usage.promptTokenCount,
+  );
+  const cachedInputTokens = number(
+    inputDetails.cached_tokens ??
+      usage.cache_read_input_tokens ??
+      usage.prompt_cache_hit_tokens ??
+      usage.cachedContentTokenCount,
+  );
+  const cacheCreationInputTokens = number(
+    inputDetails.cache_creation_tokens ??
+      inputDetails.cache_write_tokens ??
+      usage.cache_creation_input_tokens,
+  );
+  const outputTokens = number(
+    usage.output_tokens ??
+      usage.completion_tokens ??
+      usage.candidatesTokenCount,
+  );
+  const reasoningTokens = number(
+    outputDetails.reasoning_tokens ?? usage.thoughtsTokenCount,
+  );
+  const totalTokens =
+    number(usage.total_tokens ?? usage.totalTokenCount) ??
+    (inputTokens !== undefined && outputTokens !== undefined
+      ? inputTokens + outputTokens
+      : undefined);
+  const model =
+    typeof value.model === "string"
+      ? value.model
+      : typeof value.modelVersion === "string"
+        ? value.modelVersion
+        : input.route.model;
+  const directCost = number(usage.cost_usd ?? usage.cost ?? value.cost_usd);
+  const rate = prices[model] ?? prices[input.route.model];
+  const costUsd =
+    directCost ??
+    (rate && inputTokens !== undefined && outputTokens !== undefined
+      ? ((input.route.provider === "anthropic"
+          ? inputTokens * rate[0]
+          : (inputTokens - (cachedInputTokens ?? 0)) * rate[0]) +
+          (cachedInputTokens ?? 0) * rate[1] +
+          (cacheCreationInputTokens ?? 0) * (rate[3] ?? rate[0]) +
+          outputTokens * rate[2]) /
+        1_000_000
+      : undefined);
+  const callId =
+    typeof value.id === "string"
+      ? value.id
+      : typeof value.responseId === "string"
+        ? value.responseId
+        : crypto.randomUUID();
+  return {
+    callId,
+    provider: input.route.provider,
+    conversationId: input.conversation.id,
+    turnId: input.turn.id,
+    callKind: input.callKind,
+    model,
+    configuredModel: input.turn.configuredModel,
+    protocol: input.route.protocol,
+    reasoningLevel: input.route.thinkingLevel,
+    routingRule: input.route.rule,
+    ...(inputTokens === undefined ? {} : { inputTokens }),
+    ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+    ...(cacheCreationInputTokens === undefined
+      ? {}
+      : { cacheCreationInputTokens }),
+    ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
+    ...(outputTokens === undefined ? {} : { outputTokens }),
+    ...(totalTokens === undefined ? {} : { totalTokens }),
+    ...(costUsd === undefined ? {} : { costUsd }),
+    latencyMs: input.latencyMs,
+    outcome: input.outcome,
+    createdAt: Date.now(),
+  };
+}
+
+export class ConversationModelCallError extends Error {
+  constructor(
+    message: string,
+    readonly usage: ConversationCallUsage,
+  ) {
+    super(message);
+  }
+}
+
+async function callModel(input: {
+  readonly broker: Broker;
+  readonly route: ModelRoute;
+  readonly request: ModelRequest;
+  readonly research: boolean;
+  readonly conversation: Conversation;
+  readonly turn: ConversationTurn;
+  readonly callKind: ConversationCallUsage["callKind"];
+}): Promise<{
+  readonly value: Record<string, unknown>;
+  readonly usage: ConversationCallUsage;
+}> {
+  const startedAt = Date.now();
+  const response = await input.broker.fetch(
+    new Request(`https://broker.roundhouse.internal${input.request.endpoint}`, {
       method: "POST",
-      headers: brokerHeaders(route, research),
-      body: JSON.stringify(body),
+      headers: brokerHeaders(input.route, input.research),
+      body: JSON.stringify(input.request.body),
     }),
   );
+  let value: Record<string, unknown> = {};
+  try {
+    value = (await response.json()) as Record<string, unknown>;
+  } catch {
+    value = {};
+  }
+  const usage = usageForResponse({
+    value,
+    route: input.route,
+    conversation: input.conversation,
+    turn: input.turn,
+    callKind: input.callKind,
+    latencyMs: Date.now() - startedAt,
+    outcome: response.ok ? "succeeded" : "failed",
+  });
   if (!response.ok)
-    throw new Error(`conversation_model_http_${response.status}`);
-  return (await response.json()) as Record<string, unknown>;
+    throw new ConversationModelCallError(
+      `conversation_model_http_${response.status}`,
+      usage,
+    );
+  return { value, usage };
 }
 
-export async function executeConversationTurn(
-  broker: Broker,
-  github: GitHubApi,
-  conversation: Conversation,
-): Promise<string> {
-  const route = await resolveConversationRoute(broker, conversation);
-  let input: unknown[] = transcript(conversation.messages);
-  for (let round = 0; round <= maxToolRounds; round += 1) {
-    const value = await responsesCall(
-      broker,
-      route,
-      {
-        instructions: conversationInstructions(conversation),
-        input,
-        tools: repositoryTools,
-        tool_choice: "auto",
-        store: false,
-        include: ["reasoning.encrypted_content"],
-        max_output_tokens: 8_000,
-        ...(route.thinkingLevel === "off"
-          ? {}
-          : { reasoning: { effort: route.thinkingLevel } }),
-      },
-      true,
-    );
-    const calls = functionCalls(value);
-    if (!calls.length) {
-      const text = responseText(value);
-      if (!text) throw new Error("conversation_model_output_missing");
-      return text;
-    }
-    if (round === maxToolRounds)
-      throw new Error("conversation_tool_round_limit");
-    const output = Array.isArray(value.output) ? value.output : [];
-    const results = await Promise.all(
-      calls.map(async (call) => ({
-        type: "function_call_output",
-        call_id: call.call_id,
-        output: await executeRepositoryTool(github, conversation, call),
-      })),
-    );
-    input = [...input, ...output, ...results];
-  }
-  throw new Error("conversation_model_output_missing");
+export interface ConversationExecutionResult {
+  readonly route: ModelRoute;
+  readonly text?: string;
+  readonly brief?: Omit<
+    DeliveryBrief,
+    "id" | "revision" | "state" | "sourceCommit" | "createdAt" | "updatedAt"
+  >;
+  readonly usage: readonly ConversationCallUsage[];
 }
+
+const briefSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "title",
+    "outcome",
+    "acceptanceCriteria",
+    "constraints",
+    "evidence",
+    "uncertainties",
+  ],
+  properties: {
+    title: { type: "string" },
+    outcome: { type: "string" },
+    acceptanceCriteria: { type: "array", items: { type: "string" } },
+    constraints: { type: "array", items: { type: "string" } },
+    evidence: { type: "array", items: { type: "string" } },
+    uncertainties: { type: "array", items: { type: "string" } },
+  },
+} as const;
 
 function stringArray(value: unknown): string[] | undefined {
   return Array.isArray(value) && value.every((item) => typeof item === "string")
@@ -327,60 +859,7 @@ function stringArray(value: unknown): string[] | undefined {
     : undefined;
 }
 
-export async function synthesizeDeliveryBrief(
-  broker: Broker,
-  conversation: Conversation,
-): Promise<DeliveryBrief> {
-  const route = await resolveConversationRoute(broker, conversation);
-  const value = await responsesCall(
-    broker,
-    route,
-    {
-      instructions: [
-        "Convert the conversation into a concise implementation brief.",
-        "Record only decisions supported by the transcript. Put unresolved limitations in constraints or context; do not invent requirements.",
-        "The title must be an imperative GitHub issue title no longer than 100 characters.",
-      ].join("\n"),
-      input: transcript(conversation.messages),
-      store: false,
-      include: ["reasoning.encrypted_content"],
-      max_output_tokens: 4_000,
-      ...(route.thinkingLevel === "off"
-        ? {}
-        : { reasoning: { effort: route.thinkingLevel } }),
-      text: {
-        format: {
-          type: "json_schema",
-          name: "delivery_brief",
-          strict: true,
-          schema: {
-            type: "object",
-            additionalProperties: false,
-            required: [
-              "title",
-              "outcome",
-              "acceptanceCriteria",
-              "constraints",
-              "context",
-            ],
-            properties: {
-              title: { type: "string" },
-              outcome: { type: "string" },
-              acceptanceCriteria: {
-                type: "array",
-                items: { type: "string" },
-              },
-              constraints: { type: "array", items: { type: "string" } },
-              context: { type: "array", items: { type: "string" } },
-            },
-          },
-        },
-      },
-    },
-    false,
-  );
-  const text = responseText(value);
-  if (!text) throw new Error("delivery_brief_missing");
+function parseBrief(text: string): ConversationExecutionResult["brief"] {
   let parsed: Record<string, unknown>;
   try {
     parsed = JSON.parse(text) as Record<string, unknown>;
@@ -389,7 +868,8 @@ export async function synthesizeDeliveryBrief(
   }
   const acceptanceCriteria = stringArray(parsed.acceptanceCriteria);
   const constraints = stringArray(parsed.constraints);
-  const context = stringArray(parsed.context);
+  const evidence = stringArray(parsed.evidence);
+  const uncertainties = stringArray(parsed.uncertainties);
   if (
     typeof parsed.title !== "string" ||
     !parsed.title.trim() ||
@@ -398,7 +878,8 @@ export async function synthesizeDeliveryBrief(
     !parsed.outcome.trim() ||
     !acceptanceCriteria ||
     !constraints ||
-    !context
+    !evidence ||
+    !uncertainties
   )
     throw new Error("delivery_brief_invalid");
   return {
@@ -406,12 +887,119 @@ export async function synthesizeDeliveryBrief(
     outcome: parsed.outcome.trim(),
     acceptanceCriteria,
     constraints,
-    context,
+    evidence,
+    uncertainties,
   };
 }
 
+export async function executeConversationTurn(
+  broker: Broker,
+  github: GitHubApi,
+  conversation: Conversation,
+  turn: ConversationTurn,
+  renew?: () => Promise<unknown>,
+): Promise<ConversationExecutionResult> {
+  const route = await resolveConversationRoute(broker, conversation);
+  const adapter = adapterFor(route);
+  const callKind = turn.kind === "brief" ? "delivery_brief" : "conversation";
+  let request = adapter.initial({
+    route,
+    instructions:
+      turn.kind === "brief"
+        ? [
+            "Convert the conversation into a concise implementation brief.",
+            "Record only decisions supported by the transcript. Do not invent requirements.",
+            "Put unresolved questions in uncertainties.",
+            "The title must be an imperative GitHub issue title no longer than 100 characters.",
+            "Evidence should identify the decisions or repository facts supporting the brief.",
+          ].join("\n")
+        : conversationInstructions(conversation),
+    messages: conversation.messages,
+    tools: turn.kind === "message" ? repositoryTools : [],
+    ...(turn.kind === "brief" ? { outputSchema: briefSchema } : {}),
+    maxOutputTokens: turn.kind === "brief" ? 4_000 : 8_000,
+  });
+  const usage: ConversationCallUsage[] = [];
+  try {
+    for (let round = 0; round <= maxToolRounds; round += 1) {
+      await renew?.();
+      const called = await callModel({
+        broker,
+        route,
+        request,
+        research: turn.kind === "message",
+        conversation,
+        turn,
+        callKind,
+      });
+      usage.push(called.usage);
+      const parsed = adapter.parse(called.value);
+      if (!parsed.calls.length) {
+        if (!parsed.text) throw new Error("conversation_model_output_missing");
+        return turn.kind === "brief"
+          ? { route, brief: parseBrief(parsed.text), usage }
+          : { route, text: parsed.text, usage };
+      }
+      if (turn.kind !== "message" || round === maxToolRounds)
+        throw new Error("conversation_tool_round_limit");
+      const results = await Promise.all(
+        parsed.calls.map(async (call) => ({
+          call,
+          output: await executeRepositoryTool(github, conversation, call),
+        })),
+      );
+      request = adapter.continue(request, parsed, results);
+    }
+    throw new Error("conversation_model_output_missing");
+  } catch (error) {
+    if (error instanceof ConversationModelCallError) usage.push(error.usage);
+    const enriched = (
+      error instanceof Error ? error : new Error("conversation_model_failed")
+    ) as Error & {
+      usage?: readonly ConversationCallUsage[];
+      route?: ModelRoute;
+    };
+    enriched.usage = usage;
+    enriched.route = route;
+    throw enriched;
+  }
+}
+
+export function promotionIssueMarker(
+  conversationId: string,
+  briefId: string,
+): string {
+  return `<!-- roundhouse:conversation:${conversationId}:brief:${briefId} -->`;
+}
+
+export function promotionStartMarker(
+  conversationId: string,
+  briefId: string,
+): string {
+  return `<!-- roundhouse:conversation-start:${conversationId}:brief:${briefId} -->`;
+}
+
+export function parsePromotionMarker(
+  text: string | null | undefined,
+): { readonly conversationId: string; readonly briefId: string } | undefined {
+  const match = text?.match(
+    /<!-- roundhouse:conversation(?:-start)?:([0-9a-f-]{36}):brief:([0-9a-f-]{36}) -->/,
+  );
+  return match ? { conversationId: match[1]!, briefId: match[2]! } : undefined;
+}
+
 export function renderDeliveryBrief(
-  brief: DeliveryBrief,
+  brief: Pick<
+    DeliveryBrief,
+    | "id"
+    | "title"
+    | "outcome"
+    | "acceptanceCriteria"
+    | "constraints"
+    | "evidence"
+    | "uncertainties"
+  >,
+  conversationId: string,
   conversationUrl?: string,
 ): string {
   const section = (heading: string, items: readonly string[]) =>
@@ -419,14 +1007,15 @@ export function renderDeliveryBrief(
       ? [`## ${heading}`, "", ...items.map((item) => `- ${item}`), ""]
       : [];
   return [
-    "<!-- roundhouse:conversation-promotion:v0 -->",
+    promotionIssueMarker(conversationId, brief.id),
     "## Outcome",
     "",
     brief.outcome,
     "",
     ...section("Acceptance criteria", brief.acceptanceCriteria),
     ...section("Constraints", brief.constraints),
-    ...section("Context", brief.context),
+    ...section("Evidence and decisions", brief.evidence),
+    ...section("Remaining uncertainties", brief.uncertainties),
     conversationUrl
       ? `_Promoted from a [private Roundhouse conversation](${conversationUrl})._`
       : "_Promoted from a private Roundhouse conversation._",

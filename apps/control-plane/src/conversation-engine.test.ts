@@ -2,14 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it, vi } from "vitest";
+import { runtimeCapabilitiesForModel } from "@roundhouse/core";
 import {
   executeConversationTurn,
   executeRepositoryTool,
+  promotionIssueMarker,
+  promotionStartMarker,
   renderDeliveryBrief,
   resolveConversationRoute,
-  synthesizeDeliveryBrief,
 } from "./conversation-engine.js";
-import type { Conversation } from "./conversation-store.js";
+import type { Conversation, ConversationTurn } from "./conversation-store.js";
 import type { GitHubApi } from "./github.js";
 
 const conversation: Conversation = {
@@ -29,26 +31,48 @@ const conversation: Conversation = {
     model: { id: "openai/gpt-5.6-sol", reasoning: "high" },
     defaultBranch: "main",
   },
+  links: [],
   createdAt: 1,
   updatedAt: 1,
   messages: [
     {
       id: "message-1",
       turnId: "turn-1",
+      direction: "inbound",
       role: "user",
+      actorId: "7",
+      actorLogin: "octocat",
       adapter: "web",
+      adapterInstallation: "roundhouse-ui",
+      externalConversationId: "b1f486ff-7744-49f9-ab78-f74e8409fc2b",
+      externalMessageId: "external-1",
       body: "Where is the dashboard rendered?",
       createdAt: 1,
     },
   ],
 };
 
-const route = {
+const turn: ConversationTurn = {
+  id: "turn-1",
+  conversationId: conversation.id,
+  triggeringMessageId: "message-1",
+  kind: "message",
+  state: "running",
+  sourceCommit: conversation.sourceCommit,
+  configuredModel: "openai/gpt-5.6-sol",
+  configuredReasoning: "high",
+  attempts: 1,
+  createdAt: 1,
+  updatedAt: 1,
+};
+
+const responsesRoute = {
   provider: "openai",
   model: "openai/gpt-5.6-sol",
   protocol: "openai-responses" as const,
   transport: "cloudflare-provider-native" as const,
   thinkingLevel: "high" as const,
+  runtime: runtimeCapabilitiesForModel("openai/gpt-5.6-sol")!,
   rule: "profile-conversation-v2",
 };
 
@@ -60,8 +84,17 @@ function broker(responses: readonly Response[]) {
   };
 }
 
+const github = { get: vi.fn() } as unknown as GitHubApi;
+
 describe("conversation engine", () => {
-  it("resolves the repository-configured route", async () => {
+  it("resolves the repository-configured route without a provider restriction", async () => {
+    const route = {
+      ...responsesRoute,
+      provider: "anthropic",
+      model: "anthropic/claude-opus-5",
+      protocol: "anthropic-messages" as const,
+      runtime: runtimeCapabilitiesForModel("anthropic/claude-opus-5")!,
+    };
     const modelBroker = broker([Response.json(route)]);
     await expect(
       resolveConversationRoute(modelBroker, conversation),
@@ -75,31 +108,24 @@ describe("conversation engine", () => {
     });
   });
 
-  it("allows only bounded snapshot repository reads", async () => {
+  it("allows only bounded, exact-snapshot UTF-8 repository reads", async () => {
     const get = vi.fn(async (path: string) => {
-      expect(path).toContain(
-        `/contents/src/dashboard.ts?ref=${"a".repeat(40)}`,
-      );
+      expect(path).toContain(`/contents/src/a%23b.ts?ref=${"a".repeat(40)}`);
       return {
         type: "file",
         encoding: "base64",
-        size: 13,
+        size: 15,
         content: btoa("renderDashboard"),
       };
     });
-    const output = await executeRepositoryTool(
-      { get } as unknown as GitHubApi,
-      conversation,
-      {
+    await expect(
+      executeRepositoryTool({ get } as unknown as GitHubApi, conversation, {
         name: "read_repository_file",
-        arguments: JSON.stringify({ path: "src/dashboard.ts" }),
-      },
+        arguments: JSON.stringify({ path: "src/a#b.ts" }),
+      }),
+    ).resolves.toBe(
+      JSON.stringify({ path: "src/a#b.ts", content: "renderDashboard" }),
     );
-    expect(JSON.parse(output)).toEqual({
-      path: "src/dashboard.ts",
-      content: "renderDashboard",
-    });
-
     await expect(
       executeRepositoryTool({ get } as unknown as GitHubApi, conversation, {
         name: "read_repository_file",
@@ -115,10 +141,11 @@ describe("conversation engine", () => {
     expect(get).toHaveBeenCalledTimes(1);
   });
 
-  it("executes a repository tool loop without exposing credentials", async () => {
+  it("executes a Responses tool loop and records every model call", async () => {
     const modelBroker = broker([
-      Response.json(route),
+      Response.json(responsesRoute),
       Response.json({
+        id: "response-1",
         output: [
           {
             type: "function_call",
@@ -127,10 +154,15 @@ describe("conversation engine", () => {
             call_id: "call-1",
           },
         ],
+        usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
       }),
-      Response.json({ output_text: "The dashboard is rendered there." }),
+      Response.json({
+        id: "response-2",
+        output_text: "The dashboard is rendered there.",
+        usage: { input_tokens: 12, output_tokens: 8, total_tokens: 20 },
+      }),
     ]);
-    const github = {
+    const repositoryApi = {
       get: vi.fn(async () => ({
         type: "file",
         encoding: "base64",
@@ -139,18 +171,22 @@ describe("conversation engine", () => {
       })),
     } as unknown as GitHubApi;
     await expect(
-      executeConversationTurn(modelBroker, github, conversation),
-    ).resolves.toBe("The dashboard is rendered there.");
-    const modelRequest = modelBroker.fetch.mock.calls[1]![0] as Request;
-    expect(modelRequest.headers.get("authorization")).toBeNull();
-    expect(modelRequest.headers.get("x-roundhouse-research")).toBe("enabled");
-    await expect(modelRequest.clone().json()).resolves.toMatchObject({
-      reasoning: { effort: "high" },
-      store: false,
+      executeConversationTurn(modelBroker, repositoryApi, conversation, turn),
+    ).resolves.toMatchObject({
+      text: "The dashboard is rendered there.",
+      usage: [{ totalTokens: 12 }, { totalTokens: 20 }],
     });
-    const continued = modelBroker.fetch.mock.calls[2]![0] as Request;
-    const continuedBody = (await continued.clone().json()) as {
-      input: readonly { type?: string; call_id?: string; output?: string }[];
+    const firstModelRequest = modelBroker.fetch.mock.calls[1]![0] as Request;
+    expect(firstModelRequest.headers.get("authorization")).toBeNull();
+    expect(firstModelRequest.headers.get("x-roundhouse-research")).toBe(
+      "enabled",
+    );
+    const continuedBody = (await (
+      modelBroker.fetch.mock.calls[2]![0] as Request
+    )
+      .clone()
+      .json()) as {
+      input: readonly { type?: string; call_id?: string }[];
     };
     expect(continuedBody.input).toContainEqual(
       expect.objectContaining({
@@ -160,28 +196,108 @@ describe("conversation engine", () => {
     );
   });
 
-  it("produces and renders a validated delivery brief", async () => {
+  it.each([
+    [
+      "openai-completions",
+      {
+        choices: [{ message: { role: "assistant", content: "Chat answer" } }],
+        usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5 },
+      },
+      "Chat answer",
+    ],
+    [
+      "anthropic-messages",
+      {
+        content: [{ type: "text", text: "Anthropic answer" }],
+        usage: { input_tokens: 3, output_tokens: 4 },
+      },
+      "Anthropic answer",
+    ],
+    [
+      "google-generative-ai",
+      {
+        candidates: [
+          { content: { role: "model", parts: [{ text: "Google answer" }] } },
+        ],
+        usageMetadata: {
+          promptTokenCount: 4,
+          candidatesTokenCount: 5,
+          totalTokenCount: 9,
+        },
+      },
+      "Google answer",
+    ],
+  ] as const)(
+    "supports the %s protocol adapter",
+    async (protocol, response, expected) => {
+      const route = { ...responsesRoute, protocol, model: `${protocol}/model` };
+      const modelBroker = broker([
+        Response.json(route),
+        Response.json(response),
+      ]);
+      await expect(
+        executeConversationTurn(modelBroker, github, conversation, turn),
+      ).resolves.toMatchObject({
+        text: expected,
+        route: { protocol },
+      });
+    },
+  );
+
+  it("creates a validated editable brief and deterministic promotion markers", async () => {
     const brief = {
       title: "Add conversational entry",
       outcome: "Let users clarify work before delivery.",
       acceptanceCriteria: ["Questions remain read-only"],
       constraints: ["No shell access"],
-      context: ["The web UI is the first adapter"],
+      evidence: ["The web UI is the first adapter"],
+      uncertainties: [],
     };
     const modelBroker = broker([
-      Response.json(route),
-      Response.json({ output_text: JSON.stringify(brief) }),
+      Response.json(responsesRoute),
+      Response.json({
+        output_text: JSON.stringify(brief),
+        usage: { total_tokens: 10 },
+      }),
     ]);
-    await expect(
-      synthesizeDeliveryBrief(modelBroker, conversation),
-    ).resolves.toEqual(brief);
-    expect(renderDeliveryBrief(brief)).toContain(
-      "<!-- roundhouse:conversation-promotion:v0 -->",
+    const result = await executeConversationTurn(
+      modelBroker,
+      github,
+      conversation,
+      {
+        ...turn,
+        id: "turn-brief",
+        kind: "brief",
+        triggeringMessageId: undefined,
+      },
     );
-    expect(renderDeliveryBrief(brief)).toContain(
-      "- Questions remain read-only",
+    expect(result.brief).toEqual(brief);
+    const identified = { id: "47cff616-eaaa-46fd-870f-dd5cf3c674d8", ...brief };
+    const rendered = renderDeliveryBrief(identified, conversation.id);
+    expect(rendered).toContain(
+      promotionIssueMarker(conversation.id, identified.id),
     );
+    expect(promotionStartMarker(conversation.id, identified.id)).toContain(
+      "conversation-start",
+    );
+    expect(rendered).toContain("- Questions remain read-only");
     const request = modelBroker.fetch.mock.calls[1]![0] as Request;
     expect(request.headers.get("x-roundhouse-research")).toBe("disabled");
+  });
+
+  it("attaches successful-call usage when later output validation fails", async () => {
+    const modelBroker = broker([
+      Response.json(responsesRoute),
+      Response.json({ output_text: "not-json", usage: { total_tokens: 7 } }),
+    ]);
+    await expect(
+      executeConversationTurn(modelBroker, github, conversation, {
+        ...turn,
+        kind: "brief",
+      }),
+    ).rejects.toMatchObject({
+      message: "delivery_brief_invalid",
+      usage: [{ totalTokens: 7 }],
+    });
   });
 });

@@ -34,6 +34,15 @@ const env = {
 class IntakeRepository extends MemoryRunRepository {
   readonly deliveries = new Set<string>();
   readonly issueStates = new Map<string, "open" | "closed">();
+  readonly promotionIntakes: Array<{
+    conversationId: string;
+    briefId: string;
+    issueNumber: number;
+    accepted: boolean;
+    runId?: string;
+    runUrl?: string;
+    errorCode?: string;
+  }> = [];
 
   async setGitHubIssueState(runId: string, state: "open" | "closed") {
     this.issueStates.set(runId, state);
@@ -46,6 +55,13 @@ class IntakeRepository extends MemoryRunRepository {
   ): Promise<boolean> {
     if (this.deliveries.has(deliveryId)) return false;
     this.deliveries.add(deliveryId);
+    return true;
+  }
+
+  async recordConversationPromotionIntake(
+    input: (typeof this.promotionIntakes)[number],
+  ): Promise<boolean> {
+    this.promotionIntakes.push(input);
     return true;
   }
 }
@@ -612,6 +628,63 @@ describe("GitHub intake", () => {
     });
     expect(wakeups).toEqual([
       { runId: "run_123_issue_42", expectedRevision: 1 },
+    ]);
+  });
+
+  it("accepts a marked promotion through normal intake and links the created run", async () => {
+    const repository = new IntakeRepository();
+    const conversationId = "b1f486ff-7744-49f9-ab78-f74e8409fc2b";
+    const briefId = "47cff616-eaaa-46fd-870f-dd5cf3c674d8";
+    await expect(
+      acceptGitHubComment(
+        await delivery(
+          "promotion-delivery",
+          `${env.GITHUB_START_COMMAND}\n\n<!-- roundhouse:conversation-start:${conversationId}:brief:${briefId} -->`,
+        ),
+        env,
+        repository,
+        async () => undefined,
+        github(),
+        "https://roundhouse.example",
+      ),
+    ).resolves.toBe("accepted");
+    expect(repository.promotionIntakes).toEqual([
+      {
+        conversationId,
+        briefId,
+        issueNumber: 42,
+        accepted: true,
+        runId: "run_123_issue_42",
+        runUrl:
+          "https://roundhouse.example/repositories/zorkian/roundhouse/issues/42",
+      },
+    ]);
+  });
+
+  it("records a marked promotion rejection when normal operator authorization fails", async () => {
+    const repository = new IntakeRepository();
+    const conversationId = "b1f486ff-7744-49f9-ab78-f74e8409fc2b";
+    const briefId = "47cff616-eaaa-46fd-870f-dd5cf3c674d8";
+    await expect(
+      acceptGitHubComment(
+        await delivery(
+          "promotion-unauthorized",
+          `${env.GITHUB_START_COMMAND}\n\n<!-- roundhouse:conversation-start:${conversationId}:brief:${briefId} -->`,
+        ),
+        env,
+        repository,
+        async () => undefined,
+        github("read"),
+      ),
+    ).resolves.toBe("unauthorized");
+    expect(repository.promotionIntakes).toEqual([
+      {
+        conversationId,
+        briefId,
+        issueNumber: 42,
+        accepted: false,
+        errorCode: "operator_unauthorized",
+      },
     ]);
   });
 
