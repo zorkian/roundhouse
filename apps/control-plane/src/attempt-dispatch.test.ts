@@ -34,6 +34,11 @@ const run = {
   baseCommit: "a".repeat(40),
   currentHead: "a".repeat(40),
 } as RunSnapshot;
+const runtime = {
+  contextWindow: 1_000_000,
+  maxOutputTokens: 128_000,
+  thinkingLevelMap: { low: "low", high: "high" },
+} as const;
 
 describe("durable attempt dispatch", () => {
   afterEach(() => {
@@ -130,6 +135,7 @@ describe("durable attempt dispatch", () => {
         model: `openai/gpt-${candidateId}`,
         protocol: "openai-responses",
         thinkingLevel: "low",
+        runtime,
         rule: `rule-${candidateId}`,
       },
       competition: { purpose: "candidate", candidateId },

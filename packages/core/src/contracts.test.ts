@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import { isModelRoute, parseModelRoute } from "./contracts.js";
+import { runtimeCapabilitiesForModel } from "./model-catalog.js";
 
 describe("model route contract", () => {
   it("accepts a complete native route", () => {
@@ -13,6 +14,7 @@ describe("model route contract", () => {
         protocol: "openai-responses",
         transport: "cloudflare-provider-native",
         thinkingLevel: "max",
+        runtime: runtimeCapabilitiesForModel("openai/gpt-5.6-sol"),
         rule: "planning-default-v1",
       }),
     ).toBe(true);
@@ -36,6 +38,50 @@ describe("model route contract", () => {
 
   it("treats malformed persisted JSON as no route", () => {
     expect(parseModelRoute("not-json")).toBeUndefined();
+  });
+
+  it("accepts xhigh and max without truncating model-native capacity", () => {
+    const runtime = runtimeCapabilitiesForModel("openai/gpt-5.6-sol");
+    expect(runtime).toMatchObject({
+      contextWindow: 1_050_000,
+      maxOutputTokens: 128_000,
+    });
+    expect(
+      isModelRoute({
+        provider: "openai",
+        model: "openai/gpt-5.6-sol",
+        protocol: "openai-responses",
+        thinkingLevel: "max",
+        runtime,
+        rule: "planning-default-v1",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects an effort that the selected model maps to unsupported", () => {
+    expect(
+      isModelRoute({
+        provider: "moonshotai",
+        model: "moonshotai/kimi-k3",
+        protocol: "openai-completions",
+        thinkingLevel: "xhigh",
+        runtime: runtimeCapabilitiesForModel("moonshotai/kimi-k3"),
+        rule: "profile-review-security-v2",
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects an effort omitted from a model's native capability map", () => {
+    expect(
+      isModelRoute({
+        provider: "anthropic",
+        model: "anthropic/claude-opus-5",
+        protocol: "anthropic-messages",
+        thinkingLevel: "off",
+        runtime: runtimeCapabilitiesForModel("anthropic/claude-opus-5"),
+        rule: "profile-review-holistic-v2",
+      }),
+    ).toBe(false);
   });
 });
 

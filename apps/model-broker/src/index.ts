@@ -3,9 +3,11 @@
 
 import {
   modelStopReasonHeader,
+  modelSupportsThinkingLevel,
   modelThinkingLevels,
   modelProtocols,
   modelTransports,
+  runtimeCapabilitiesForModel,
   type ModelProtocol,
   type ModelRoute,
   type ModelTransport,
@@ -56,33 +58,53 @@ interface RoutingEnvelope {
 const defaultRoutes: Readonly<
   Record<
     string,
-    Pick<ModelRoute, "provider" | "model" | "protocol" | "transport">
+    Pick<
+      ModelRoute,
+      "provider" | "model" | "protocol" | "transport" | "thinkingLevel"
+    >
   >
 > = {
+  qualify: {
+    provider: "openai",
+    model: "openai/gpt-5.6-luna",
+    protocol: "openai-responses",
+    thinkingLevel: "high",
+  },
+  investigate: {
+    provider: "openai",
+    model: "openai/gpt-5.6-terra",
+    protocol: "openai-responses",
+    thinkingLevel: "high",
+  },
   plan: {
     provider: "openai",
     model: "openai/gpt-5.6-sol",
     protocol: "openai-responses",
+    thinkingLevel: "max",
   },
   implement: {
+    provider: "openai",
+    model: "openai/gpt-5.6-terra",
+    protocol: "openai-responses",
+    thinkingLevel: "max",
+  },
+  "review-holistic": {
+    provider: "anthropic",
+    model: "anthropic/claude-opus-5",
+    protocol: "anthropic-messages",
+    thinkingLevel: "max",
+  },
+  "review-security": {
     provider: "moonshotai",
     model: "moonshotai/kimi-k3",
     protocol: "openai-completions",
-  },
-  "review-holistic": {
-    provider: "openai",
-    model: "openai/gpt-5.6-sol",
-    protocol: "openai-responses",
-  },
-  "review-security": {
-    provider: "openai",
-    model: "openai/gpt-5.6-sol",
-    protocol: "openai-responses",
+    thinkingLevel: "max",
   },
   "review-data": {
     provider: "openai",
     model: "openai/gpt-5.6-sol",
     protocol: "openai-responses",
+    thinkingLevel: "max",
   },
 };
 
@@ -171,7 +193,10 @@ export function resolveRoute(
     (envelope.requestedModel ? undefined : configured?.transport) ??
     defaultTransport(provider);
   const thinkingLevel =
-    envelope.requestedReasoning ?? env.ROUTING_REASONING_EFFORT;
+    envelope.requestedReasoning ??
+    configured?.thinkingLevel ??
+    env.ROUTING_REASONING_EFFORT;
+  const runtime = runtimeCapabilitiesForModel(model);
   if (
     !provider ||
     !model ||
@@ -179,7 +204,14 @@ export function resolveRoute(
     !modelTransports.includes(transport) ||
     (transport === "cloudflare-provider-native" &&
       !validProviderNativeProtocol(provider, protocol)) ||
-    !modelThinkingLevels.includes(thinkingLevel as ModelRoute["thinkingLevel"])
+    !modelThinkingLevels.includes(
+      thinkingLevel as ModelRoute["thinkingLevel"],
+    ) ||
+    !runtime ||
+    !modelSupportsThinkingLevel(
+      runtime,
+      thinkingLevel as ModelRoute["thinkingLevel"],
+    )
   )
     throw new Error("invalid_routing_configuration");
   return {
@@ -188,6 +220,7 @@ export function resolveRoute(
     protocol,
     transport,
     thinkingLevel: thinkingLevel as ModelRoute["thinkingLevel"],
+    runtime,
     rule: envelope.requestedModel
       ? `profile-${envelope.role}-v2`
       : routingRule(envelope.role),
@@ -230,12 +263,22 @@ function routeFromHeaders(request: Request): ModelRoute {
     )
   )
     throw new Error("invalid_route_thinking_level");
+  const runtime = runtimeCapabilitiesForModel(values.model!);
+  if (
+    !runtime ||
+    !modelSupportsThinkingLevel(
+      runtime,
+      values.thinkingLevel as ModelRoute["thinkingLevel"],
+    )
+  )
+    throw new Error("invalid_route_model_capabilities");
   return {
     provider: values.provider!,
     model: values.model!,
     protocol: values.protocol as ModelProtocol,
     transport: transport as ModelTransport,
     thinkingLevel: values.thinkingLevel as ModelRoute["thinkingLevel"],
+    runtime,
     rule: values.rule!,
   };
 }

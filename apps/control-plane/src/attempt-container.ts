@@ -375,13 +375,47 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
   });
 }
 
-const prices: Record<string, readonly [number, number, number, number?]> = {
-  "anthropic/claude-opus-4.8": [15, 1.5, 75, 18.75],
-  "anthropic/claude-fable-5": [3, 0.3, 15, 3.75],
-  "moonshotai/kimi-k3": [0.6, 0.15, 2.5],
-  "openai/gpt-5": [1.25, 0.125, 10],
-  "openai/gpt-5.2": [1.75, 0.175, 14],
-  "openai/gpt-5.6-sol": [1.75, 0.175, 14],
+type ModelRates = readonly [
+  input: number,
+  cacheRead: number,
+  output: number,
+  cacheWrite?: number,
+];
+interface ModelPrice {
+  readonly standard: ModelRates;
+  readonly longContext?: {
+    readonly inputTokensAbove: number;
+    readonly rates: ModelRates;
+  };
+}
+const prices: Record<string, ModelPrice> = {
+  "anthropic/claude-opus-4.8": { standard: [5, 0.5, 25, 6.25] },
+  "anthropic/claude-fable-5": { standard: [10, 1, 50, 12.5] },
+  "anthropic/claude-opus-5": { standard: [5, 0.5, 25, 6.25] },
+  "moonshotai/kimi-k3": { standard: [3, 0.3, 15] },
+  "openai/gpt-5": { standard: [1.25, 0.125, 10] },
+  "openai/gpt-5.2": { standard: [1.75, 0.175, 14] },
+  "openai/gpt-5.6-sol": {
+    standard: [5, 0.5, 30, 6.25],
+    longContext: {
+      inputTokensAbove: 272_000,
+      rates: [10, 1, 45, 12.5],
+    },
+  },
+  "openai/gpt-5.6-terra": {
+    standard: [2, 0.2, 12, 2.5],
+    longContext: {
+      inputTokensAbove: 272_000,
+      rates: [4, 0.4, 18, 5],
+    },
+  },
+  "openai/gpt-5.6-luna": {
+    standard: [0.2, 0.02, 1.2, 0.25],
+    longContext: {
+      inputTokensAbove: 272_000,
+      rates: [0.4, 0.04, 1.8, 0.5],
+    },
+  },
 };
 export function extractModelUsage(
   text: string,
@@ -470,13 +504,36 @@ export function extractModelUsage(
     (inputTokens !== undefined && outputTokens !== undefined
       ? inputTokens + outputTokens
       : undefined);
-  const rate = prices[model] ?? prices[routedModel];
+  const price = prices[model] ?? prices[routedModel];
+  const totalInputTokens =
+    inputTokens === undefined
+      ? undefined
+      : routing.provider === "anthropic"
+        ? inputTokens +
+          (cachedInputTokens ?? 0) +
+          (cacheCreationInputTokens ?? 0)
+        : inputTokens;
+  const rate =
+    price?.longContext &&
+    totalInputTokens !== undefined &&
+    totalInputTokens > price.longContext.inputTokensAbove
+      ? price.longContext.rates
+      : price?.standard;
+  const uncachedInputTokens =
+    inputTokens === undefined
+      ? undefined
+      : routing.provider === "anthropic"
+        ? inputTokens
+        : Math.max(
+            0,
+            inputTokens -
+              (cachedInputTokens ?? 0) -
+              (cacheCreationInputTokens ?? 0),
+          );
   const costUsd =
     directCost ??
-    (rate && inputTokens !== undefined && outputTokens !== undefined
-      ? ((routing.provider === "anthropic"
-          ? inputTokens * rate[0]
-          : (inputTokens - (cachedInputTokens ?? 0)) * rate[0]) +
+    (rate && uncachedInputTokens !== undefined && outputTokens !== undefined
+      ? (uncachedInputTokens * rate[0] +
           (cachedInputTokens ?? 0) * rate[1] +
           (cacheCreationInputTokens ?? 0) * (rate[3] ?? rate[0]) +
           outputTokens * rate[2]) /

@@ -1236,6 +1236,8 @@ export const planSchema = Object.freeze({
 });
 
 export function validModelRoute(route) {
+  const runtime = route?.runtime;
+  const thinkingLevelMap = runtime?.thinkingLevelMap;
   return Boolean(
     route &&
     typeof route.provider === "string" &&
@@ -1251,6 +1253,23 @@ export function validModelRoute(route) {
     ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(
       route.thinkingLevel,
     ) &&
+    runtime &&
+    Number.isInteger(runtime.contextWindow) &&
+    runtime.contextWindow > 0 &&
+    Number.isInteger(runtime.maxOutputTokens) &&
+    runtime.maxOutputTokens > 0 &&
+    runtime.maxOutputTokens <= runtime.contextWindow &&
+    thinkingLevelMap &&
+    Object.keys(thinkingLevelMap).every((level) =>
+      ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(
+        level,
+      ),
+    ) &&
+    Object.values(thinkingLevelMap).every(
+      (level) => level === null || (typeof level === "string" && level.length),
+    ) &&
+    thinkingLevelMap[route.thinkingLevel] !== undefined &&
+    thinkingLevelMap[route.thinkingLevel] !== null &&
     typeof route.rule === "string" &&
     route.rule.length > 0,
   );
@@ -1297,33 +1316,10 @@ export function piModelConfiguration(assignment, attemptSecret) {
             id: route.model,
             name: route.model,
             reasoning: route.thinkingLevel !== "off",
-            ...(route.provider === "openai" ||
-            route.provider === "anthropic" ||
-            route.provider === "google"
-              ? {
-                  thinkingLevelMap: {
-                    xhigh: "xhigh",
-                    max: "max",
-                  },
-                }
-              : {}),
-            ...(route.model === "moonshotai/kimi-k3"
-              ? {
-                  thinkingLevelMap: {
-                    off: null,
-                    minimal: null,
-                    low: "low",
-                    medium: null,
-                    high: "high",
-                    xhigh: null,
-                    max: "max",
-                  },
-                }
-              : {}),
+            thinkingLevelMap: route.runtime.thinkingLevelMap,
             input: ["text"],
-            contextWindow:
-              route.model === "moonshotai/kimi-k3" ? 1_048_576 : 200_000,
-            maxTokens: route.model === "moonshotai/kimi-k3" ? 131_072 : 64_000,
+            contextWindow: route.runtime.contextWindow,
+            maxTokens: route.runtime.maxOutputTokens,
             cost: {
               input: 0,
               output: 0,

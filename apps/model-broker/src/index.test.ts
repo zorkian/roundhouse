@@ -8,8 +8,8 @@ const env = {
   AI: {} as Ai,
   AI_GATEWAY_ID: "roundhouse-v2-development",
   AI_GATEWAY_TOKEN: "gateway-token",
-  ROUTING_MODEL: "openai/gpt-5.6-sol",
-  ROUTING_REASONING_EFFORT: "low",
+  ROUTING_MODEL: "openai/gpt-5.6-luna",
+  ROUTING_REASONING_EFFORT: "high",
 } satisfies BrokerEnv;
 
 afterEach(() => vi.restoreAllMocks());
@@ -96,9 +96,10 @@ describe("model broker", () => {
       ),
     ).toMatchObject({
       provider: "openai",
-      model: "openai/gpt-5.6-sol",
+      model: "openai/gpt-5.6-luna",
       protocol: "openai-responses",
       transport: "cloudflare-provider-native",
+      thinkingLevel: "high",
     });
     expect(
       resolveRoute(
@@ -110,33 +111,78 @@ describe("model broker", () => {
         env,
       ),
     ).toMatchObject({
-      provider: "moonshotai",
-      model: "moonshotai/kimi-k3",
-      protocol: "openai-completions",
-      transport: "cloudflare-unified",
+      provider: "openai",
+      model: "openai/gpt-5.6-terra",
+      protocol: "openai-responses",
+      transport: "cloudflare-provider-native",
+      thinkingLevel: "max",
     });
   });
 
   it("honors a model and reasoning level selected by a repository profile", () => {
-    expect(
+    const route = resolveRoute(
+      {
+        role: "implement",
+        taskType: "implementation",
+        complexity: "unknown",
+        requestedModel: "anthropic/claude-opus-5",
+        requestedReasoning: "max",
+        profileHash: "a".repeat(64),
+      },
+      env,
+    );
+    expect(route).toMatchObject({
+      provider: "anthropic",
+      model: "anthropic/claude-opus-5",
+      protocol: "anthropic-messages",
+      thinkingLevel: "max",
+      rule: "profile-implement-v2",
+    });
+    expect(route.runtime).toEqual({
+      contextWindow: 1_000_000,
+      maxOutputTokens: 128_000,
+      thinkingLevelMap: {
+        low: "low",
+        medium: "medium",
+        high: "high",
+        xhigh: "xhigh",
+        max: "max",
+      },
+    });
+  });
+
+  it("rejects unsupported effort instead of silently downgrading it", () => {
+    expect(() =>
       resolveRoute(
         {
-          role: "implement",
-          taskType: "implementation",
+          role: "review-security",
+          taskType: "review",
           complexity: "unknown",
-          requestedModel: "google/gemini-3.0-pro",
-          requestedReasoning: "medium",
+          requestedModel: "moonshotai/kimi-k3",
+          requestedReasoning: "xhigh",
           profileHash: "a".repeat(64),
         },
         env,
       ),
-    ).toEqual({
-      provider: "google",
-      model: "google/gemini-3.0-pro",
-      protocol: "google-generative-ai",
-      transport: "cloudflare-provider-native",
-      thinkingLevel: "medium",
-      rule: "profile-implement-v2",
+    ).toThrow("invalid_routing_configuration");
+    expect(
+      resolveRoute(
+        {
+          role: "review-security",
+          taskType: "review",
+          complexity: "unknown",
+          requestedModel: "moonshotai/kimi-k3",
+          requestedReasoning: "max",
+          profileHash: "a".repeat(64),
+        },
+        env,
+      ),
+    ).toMatchObject({
+      thinkingLevel: "max",
+      runtime: {
+        contextWindow: 1_048_576,
+        maxOutputTokens: 131_072,
+      },
     });
   });
 
@@ -185,7 +231,7 @@ describe("model broker", () => {
     );
     const body = { model: "untrusted", input: "Research this", stream: true };
     const response = await brokerRequest(
-      modelRequest("openai-responses", "review-holistic", body, env, true),
+      modelRequest("openai-responses", "review-data", body, env, true),
       env,
       upstream.ai,
       upstream.outboundFetch as unknown as typeof fetch,
@@ -215,8 +261,9 @@ describe("model broker", () => {
       ROUTING_ROUTES: JSON.stringify({
         plan: {
           provider: "anthropic",
-          model: "anthropic/claude-opus-4.8",
+          model: "anthropic/claude-opus-5",
           protocol: "anthropic-messages",
+          thinkingLevel: "max",
         },
       }),
     };
@@ -244,7 +291,7 @@ describe("model broker", () => {
     expect(outboundBody(upstream.outboundFetch)).toEqual({
       ...body,
       system: "Review the change",
-      model: "claude-opus-4.8",
+      model: "claude-opus-5",
       tools: [{ type: "web_search_20250305", name: "web_search" }],
     });
   });
@@ -254,7 +301,7 @@ describe("model broker", () => {
       async () => new Response("event: done\n\n"),
     );
     await brokerRequest(
-      modelRequest("openai-responses", "review-holistic", {
+      modelRequest("openai-responses", "review-data", {
         input: "Implement it",
         tools: [
           { type: "function", name: "submit_result" },
@@ -278,6 +325,7 @@ describe("model broker", () => {
           provider: "anthropic",
           model: "anthropic/claude-fable-5",
           protocol: "anthropic-messages",
+          thinkingLevel: "max",
         },
       }),
     };
@@ -308,6 +356,7 @@ describe("model broker", () => {
           provider: "moonshotai",
           model: "moonshotai/kimi-k3",
           protocol: "openai-completions",
+          thinkingLevel: "max",
         },
       }),
     };
@@ -348,8 +397,9 @@ describe("model broker", () => {
       ROUTING_ROUTES: JSON.stringify({
         plan: {
           provider: "google",
-          model: "google/gemini-3.0-pro",
+          model: "google/gemini-3.5-flash",
           protocol: "google-generative-ai",
+          thinkingLevel: "high",
         },
       }),
     };
@@ -369,7 +419,7 @@ describe("model broker", () => {
     );
     expect(upstream.getUrl).toHaveBeenCalledWith("google-ai-studio");
     expect(upstream.outboundFetch.mock.calls[0]?.[0]).toBe(
-      "https://gateway.ai.cloudflare.com/v1/account/gateway/google-ai-studio/v1beta/models/gemini-3.0-pro:streamGenerateContent?alt=sse",
+      "https://gateway.ai.cloudflare.com/v1/account/gateway/google-ai-studio/v1beta/models/gemini-3.5-flash:streamGenerateContent?alt=sse",
     );
     expect(outboundBody(upstream.outboundFetch)).not.toHaveProperty("model");
   });
@@ -435,7 +485,7 @@ describe("model broker", () => {
 
   it("marks an exhausted Workers AI account as a budget stop", async () => {
     const response = await brokerRequest(
-      modelRequest("openai-completions", "implement", { messages: [] }),
+      modelRequest("openai-completions", "review-security", { messages: [] }),
       env,
       {
         run: vi.fn(async () =>
@@ -457,7 +507,7 @@ describe("model broker", () => {
 
   it("marks an exhausted AI Gateway spend limit as a budget stop", async () => {
     const response = await brokerRequest(
-      modelRequest("openai-completions", "implement", { messages: [] }),
+      modelRequest("openai-completions", "review-security", { messages: [] }),
       env,
       {
         run: vi.fn(async () =>
@@ -480,7 +530,7 @@ describe("model broker", () => {
 
   it("accepts a single AI Gateway error object", async () => {
     const response = await brokerRequest(
-      modelRequest("openai-completions", "implement", { messages: [] }),
+      modelRequest("openai-completions", "review-security", { messages: [] }),
       env,
       {
         run: vi.fn(async () =>
@@ -501,7 +551,7 @@ describe("model broker", () => {
 
   it("leaves transient Workers AI capacity errors retryable", async () => {
     const response = await brokerRequest(
-      modelRequest("openai-completions", "implement", { messages: [] }),
+      modelRequest("openai-completions", "review-security", { messages: [] }),
       env,
       {
         run: vi.fn(async () =>
