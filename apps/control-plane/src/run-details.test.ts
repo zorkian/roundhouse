@@ -211,36 +211,46 @@ describe("run details", () => {
     expect(html).toContain("branch_superseded");
   });
 
-  it("uses human stage labels and renders explicit path policy", () => {
-    const html = renderRunDetails(
-      detailsFixture({
-        run: {
-          stage: "reproduce",
-          profile: {
-            sourcePath: ".roundhouse/profile.yaml",
-            sourceCommit: "c".repeat(40),
-            version: 1,
-            hash: "e".repeat(64),
-            paths: { allowed: ["**"], protected: [".github/workflows/**"] },
-          },
-        },
-        attempts: [
-          attemptFixture({
+  it("uses the investigate label across classifications and locations", () => {
+    for (const requestClassification of ["feature", "maintenance", "bug"]) {
+      const html = renderRunDetails(
+        detailsFixture({
+          run: {
             stage: "reproduce",
-            result: {
-              requestClassification: "feature",
-              reproduction: { status: "confirmed" },
+            profile: {
+              sourcePath: ".roundhouse/profile.yaml",
+              sourceCommit: "c".repeat(40),
+              version: 1,
+              hash: "e".repeat(64),
+              paths: {
+                allowed: ["**"],
+                protected: [".github/workflows/**"],
+              },
             },
-          }),
-        ],
-      }),
-    );
+          },
+          attempts: [
+            attemptFixture({
+              stage: "reproduce",
+              result: {
+                requestClassification,
+                reproduction: { status: "confirmed" },
+              },
+            }),
+          ],
+        }),
+      );
 
-    expect(html).toContain('<span class="phase">Current behavior</span>');
-    expect(html).toContain("<dt>Current stage</dt><dd>Current behavior</dd>");
-    expect(html).toContain("<dt>Allowed paths</dt>");
-    expect(html).toContain("<dt>Protected paths</dt>");
-    expect(html).toContain(".github/workflows/**");
+      expect(html).toContain("<dt>Current stage</dt><dd>investigate</dd>");
+      expect(html).toContain('<span class="phase">investigate</span>');
+      expect(html).toContain(
+        "<h3>Latest attempt · investigate · completed</h3>",
+      );
+      expect(html).not.toContain("Current behavior");
+      expect(html).not.toContain("Reproduction");
+      expect(html).toContain("<dt>Allowed paths</dt>");
+      expect(html).toContain("<dt>Protected paths</dt>");
+      expect(html).toContain(".github/workflows/**");
+    }
   });
 
   it("links to the immutable workflow used by this run", () => {

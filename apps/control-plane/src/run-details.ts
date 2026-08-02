@@ -112,6 +112,10 @@ const statusLabels: Record<RunStatus, string> = {
   cancelled: "Cancelled",
 };
 
+export function stageLabel(stage: Attempt["stage"]): string {
+  return stage === "reproduce" ? "investigate" : stage;
+}
+
 function usageDisplay(items: RunDetails["usage"]): string {
   const usage = items ?? [];
   if (!usage.length) return escapeHtml(formatUsage(usage));
@@ -331,19 +335,6 @@ function competitionPanels(details: RunDetails): string {
 export function renderRunDetails(details: RunDetails): string {
   const { run, attempts } = details;
   const issueTitle = run.issue?.title?.trim() || `Issue #${run.issueNumber}`;
-  const qualification = resultFor(attempts, "qualification") as
-    { classification?: unknown } | undefined;
-  const requestClassification = [...attempts]
-    .reverse()
-    .find((attempt) => attempt.result?.requestClassification !== undefined)
-    ?.result?.requestClassification;
-  const investigationHeading = ["feature", "maintenance"].includes(
-    String(requestClassification ?? qualification?.classification),
-  )
-    ? "Current behavior"
-    : "Reproduction";
-  const stageLabel = (stage: Attempt["stage"]) =>
-    stage === "reproduce" ? investigationHeading : stage;
   const currentStage = stageLabel(run.stage);
   const usage = details.usage ?? [];
   const pullRequest = resultFor(attempts, "merge") as

@@ -133,6 +133,26 @@ describe("dashboard", () => {
     expect(html).not.toContain("<script>alert(1)</script>");
   });
 
+  it("uses investigate for active and waiting investigation runs", () => {
+    const active = summary("active", 4, "Investigating");
+    const waiting = summary("waiting", 5, "Needs clarification");
+    const html = renderDashboard([
+      { ...active, run: { ...active.run, stage: "reproduce" } },
+      {
+        ...waiting,
+        run: {
+          ...waiting.run,
+          stage: "reproduce",
+          waitingReason: "clarification",
+        },
+      },
+    ]);
+
+    expect(html).toContain("<p>investigate</p>");
+    expect(html).toContain("<p>investigate · clarification</p>");
+    expect(html).not.toContain("reproduce");
+  });
+
   it("shows issue usage totals", () => {
     const run: RunSummary = {
       ...summary("active", 6, "Measured"),
