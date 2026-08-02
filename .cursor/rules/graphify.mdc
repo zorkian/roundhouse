@@ -22,7 +22,10 @@ grep for cross-file dependency questions when it is available.
 - Read `graphify-out/GRAPH_REPORT.md` only for broad architecture review when
   query/path/explain do not surface enough context
 - After modifying code files, run `graphify update .` (AST-only, no API cost),
-  then **stage and commit the `graphify-out/` changes with the same change set**
-  (or a follow-up commit on the same branch). The graph is tracked in git;
-  leaving it dirty after an env-style refresh is incorrect. Do not rely on
-  Cursor Cloud environment install to regenerate it.
+  then **stage and commit the live `graphify-out/` artifacts with the same
+  change set** (or a follow-up commit on the same branch). Commit
+  `graph.json` / `GRAPH_REPORT.md` / labels / manifest and related sidecars;
+  do not commit `graphify-out/cache/` or dated `graphify-out/YYYY-MM-DD/`
+  safety snapshots (both are gitignored). The graph is tracked in git;
+  leaving tracked graph files dirty after an env-style refresh is incorrect.
+  Do not rely on Cursor Cloud environment install to regenerate it.
