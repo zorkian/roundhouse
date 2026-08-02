@@ -37,10 +37,13 @@ interface RawAiBinding {
     options: {
       readonly gateway: {
         readonly id: string;
-        readonly collectLog: false;
+        readonly collectLog: true;
         readonly skipCache: true;
       };
-      readonly extraHeaders: { readonly "cf-aig-zdr": "true" };
+      readonly extraHeaders: {
+        readonly "cf-aig-collect-log-payload": "false";
+        readonly "cf-aig-zdr": "true";
+      };
       readonly returnRawResponse: true;
     },
   ): Promise<Response>;
@@ -329,7 +332,8 @@ function nativeHeaders(
   const headers = new Headers({
     "content-type": request.headers.get("content-type") ?? "application/json",
     "cf-aig-authorization": `Bearer ${env.AI_GATEWAY_TOKEN}`,
-    "cf-aig-collect-log": "false",
+    "cf-aig-collect-log": "true",
+    "cf-aig-collect-log-payload": "false",
     "cf-aig-skip-cache": "true",
     "cf-aig-zdr": "true",
   });
@@ -384,10 +388,13 @@ function runUnified(
   return ai.run(route.model, body, {
     gateway: {
       id: env.AI_GATEWAY_ID,
-      collectLog: false,
+      collectLog: true,
       skipCache: true,
     },
-    extraHeaders: { "cf-aig-zdr": "true" },
+    extraHeaders: {
+      "cf-aig-collect-log-payload": "false",
+      "cf-aig-zdr": "true",
+    },
     returnRawResponse: true,
   });
 }
