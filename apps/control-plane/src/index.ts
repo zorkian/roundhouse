@@ -910,31 +910,74 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
           installationId: snapshotRun.githubInstallationId,
         }),
       );
-      let current: Awaited<ReturnType<typeof loadDefaultBranchProfile>>;
+      let current:
+        Awaited<ReturnType<typeof loadDefaultBranchProfile>> | undefined;
+      let profileLoadError: string | undefined;
       try {
         current = await loadDefaultBranchProfile(
           githubClientForRun(env, snapshotRun),
           repositoryName,
         );
       } catch (error) {
+        profileLoadError =
+          error instanceof Error ? error.message : String(error);
+      }
+      const currentWorkflow = current?.profile.workflow;
+      if (!current || !currentWorkflow) {
+        // Live default-branch loads can fail during deploy skew (profile schema
+        // ahead of the Worker) or transient GitHub errors. For GET, fall back to
+        // the latest stored run snapshot so the repository workflow page remains
+        // readable. POST still requires the live profile for validation.
+        if (request.method === "GET" && snapshotRun.profile?.workflow) {
+          console.warn(
+            JSON.stringify({
+              message: "workflow_graph_profile_fallback_snapshot",
+              repository: repositoryName,
+              installationId: snapshotRun.githubInstallationId,
+              runId: snapshotRun.id,
+              runRevision: snapshotRun.revision,
+              workflowHash: snapshotRun.profile.workflow.hash,
+              error: profileLoadError,
+              durationMs: Date.now() - profileStartedAt,
+            }),
+          );
+          console.log(
+            JSON.stringify({
+              message: "workflow_graph_rendered",
+              repository: repositoryName,
+              source: "snapshot_fallback",
+              runId: snapshotRun.id,
+              runRevision: snapshotRun.revision,
+              sourceCommit: snapshotRun.profile.workflow.sourceCommit,
+              workflowHash: snapshotRun.profile.workflow.hash,
+              nodes: Object.keys(snapshotRun.profile.workflow.nodes).length,
+            }),
+          );
+          return uiHtml(
+            renderWorkflowView(snapshotRun, {
+              source: "snapshot",
+              notice:
+                "The current default-branch profile could not be loaded, so this page is showing the latest stored run snapshot instead.",
+            }),
+          );
+        }
         console.error(
           JSON.stringify({
             message: "workflow_graph_profile_load_failed",
             repository: repositoryName,
             installationId: snapshotRun.githubInstallationId,
             durationMs: Date.now() - profileStartedAt,
-            error: error instanceof Error ? error.message : String(error),
+            error: profileLoadError,
           }),
         );
         return uiJson({ error: "workflow_profile_unavailable" }, 502);
       }
-      const currentWorkflow = current.profile.workflow;
-      if (!currentWorkflow) return uiHtml(renderNotFoundPage(), 404);
+      const live = current;
       const run: RunSnapshot = {
         ...snapshotRun,
-        githubDefaultBranch: current.defaultBranch,
-        profileVersion: current.profile.hash,
-        profile: current.profile,
+        githubDefaultBranch: live.defaultBranch,
+        profileVersion: live.profile.hash,
+        profile: live.profile,
         workflowHash: currentWorkflow.hash,
       };
       console.log(
@@ -942,8 +985,8 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
           message: "workflow_graph_profile_load_completed",
           repository: repositoryName,
           installationId: snapshotRun.githubInstallationId,
-          defaultBranch: current.defaultBranch,
-          sourceCommit: current.commit,
+          defaultBranch: live.defaultBranch,
+          sourceCommit: live.commit,
           workflowHash: currentWorkflow.hash,
           nodes: Object.keys(currentWorkflow.nodes).length,
           durationMs: Date.now() - profileStartedAt,
@@ -955,7 +998,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
             message: "workflow_graph_rendered",
             repository: repositoryName,
             source: "default_branch",
-            defaultBranch: current.defaultBranch,
+            defaultBranch: live.defaultBranch,
             sourceCommit: currentWorkflow.sourceCommit,
             workflowHash: currentWorkflow.hash,
             nodes: Object.keys(currentWorkflow.nodes).length,

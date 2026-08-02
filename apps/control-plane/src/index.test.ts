@@ -831,8 +831,10 @@ describe("V2 control plane", () => {
       .mockImplementation(async (path: string) => {
         if (path === "/repos/zorkian/roundhouse")
           return { default_branch: "main" } as never;
-        if (path.endsWith("/commits/main"))
-          return { sha: currentCommit } as never;
+        if (path.endsWith("/git/ref/heads/main"))
+          return {
+            object: { type: "commit", sha: currentCommit },
+          } as never;
         if (path.includes("/contents/.roundhouse/profile.yaml?ref="))
           return {
             name: "profile.yaml",
@@ -867,6 +869,42 @@ describe("V2 control plane", () => {
       expect(body).toContain(currentCommit);
       expect(body).toContain('data-stage="approval"');
       expect(body).not.toContain('data-stage="legacy"');
+    } finally {
+      get.mockRestore();
+    }
+  });
+
+  it("falls back to the stored run workflow when the live profile cannot be loaded", async () => {
+    const get = vi
+      .spyOn(GitHubClient.prototype, "get")
+      .mockImplementation(async () => {
+        throw new Error("profile_schema_invalid");
+      });
+    try {
+      const fetch = worker.fetch as unknown as (
+        request: Request,
+        env: unknown,
+        context: unknown,
+      ) => Promise<Response>;
+      const response = await fetch(
+        new Request(
+          "https://v2.invalid/repositories/zorkian/roundhouse/workflow",
+          { headers: { cookie: authedUiCookie } },
+        ),
+        uiEnv(withUiSession(workflowPageDb())) as never,
+        {} as never,
+      );
+
+      expect(response.status).toBe(200);
+      const body = await response.text();
+      expect(body).toContain(
+        "current default-branch profile could not be loaded",
+      );
+      expect(body).toContain(
+        "immutable workflow snapshot attached to this run",
+      );
+      expect(body).toContain('data-stage="legacy"');
+      expect(body).toContain("run_stale_workflow revision 1");
     } finally {
       get.mockRestore();
     }
