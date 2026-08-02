@@ -3,10 +3,14 @@
 
 # Conversational entry v0 implementation plan
 
-This plan implements the approved conversational-entry proposal without
-weakening its v0 boundaries. The proposal is the product source of truth. This
-document maps those requirements to concrete persistence, service, adapter,
-execution, and test contracts.
+- Status: Implemented (v0)
+- Audience: Maintainers and implementers
+- Last updated: 2026-08-02
+
+This plan maps the accepted conversational-entry proposal to the concrete
+persistence, service, adapter, execution, and test contracts that shipped in
+v0. The proposal remains the product source of truth for deferred follow-ons.
+Do not weaken the v0 boundaries below without an explicit product decision.
 
 ## V0 architecture
 
