@@ -3,32 +3,32 @@
 
 # Conversational entry for Roundhouse
 
-- Status: Draft proposal for review
+- Status: Accepted and implemented (v0)
 - Audience: Product and engineering
 - Last updated: 2026-08-02
 
 ## Summary
 
-Roundhouse should let a person begin with a conversation rather than requiring
-them to begin with a build-ready GitHub issue. A person may have a question,
+Roundhouse lets a person begin with a conversation rather than requiring them
+to begin with a build-ready GitHub issue. A person may have a question,
 want a current-behavior investigation, or need help deciding whether any code
 change is appropriate. Only after the desired outcome is sufficiently clear
 should an authorized operator promote the conversation into Roundhouse's
 existing issue-to-merge workflow.
 
-The first product surface will be the Roundhouse web UI. The backend will use a
+The first product surface is the Roundhouse web UI. The backend uses a
 channel-neutral conversation and message model so later clients such as a
 mobile app, Slack bot, Discord bot, or another authenticated application can
 participate without acquiring their own agent runtime or delivery workflow.
 Adapters authenticate and normalize messages; Roundhouse owns conversation
 state, agent execution, authorization, and promotion.
 
-The v0 goal is deliberately narrow: ask a useful read-only question about one
-enrolled public repository, refine it over several turns, review a proposed
-delivery brief, and explicitly promote that brief into exactly one GitHub issue
-and normal Roundhouse run. The conversational agent cannot write repository
-content, create issues, start runs, obtain provider credentials, or invoke
-external mutations.
+V0 is deliberately narrow and is implemented in development: ask a useful
+read-only question about one enrolled public repository, refine it over several
+turns, review a proposed delivery brief, and explicitly promote that brief into
+exactly one GitHub issue and normal Roundhouse run. The conversational agent
+cannot write repository content, create issues, start runs, obtain provider
+credentials, or invoke external mutations.
 
 ## Problem and product boundary
 
@@ -47,7 +47,7 @@ would blur the boundary between understanding a request and authorizing a
 change. Conversely, turning the current qualification node into an indefinite
 chat would mix two different durability and authority models inside one run.
 
-Roundhouse will therefore distinguish:
+Roundhouse therefore distinguishes:
 
 1. A **conversation**, which helps a person understand and refine a possible
    change using read-only authority.
@@ -74,7 +74,7 @@ start command and skip the conversational journey entirely.
 5. The user can ask follow-up questions or refine the desired behavior. Each
    turn sees the canonical conversation history and the repository identity.
 
-The UI must always show that the conversation is **Read only** and identify the
+The UI shows that the conversation is **Read only** and identifies the
 repository and source commit used for the latest answer. Responses should cite
 repository paths or approved public sources when those sources materially
 support the answer. V0 does not run project commands or start a Dev Container;
@@ -87,7 +87,7 @@ V0 uses one conversation model configured by the repository, not selected by
 the user. The default is `openai/gpt-5.6-sol` with high reasoning. Conversation
 volume should initially be low, and correctly understanding repository behavior
 and producing a strong delivery brief matter more than minimizing turn latency.
-Profile V2 gains a conversation setting equivalent to:
+Profile V2 includes a conversation setting equivalent to:
 
 ```yaml
 conversation:
@@ -117,8 +117,8 @@ demonstrated need.
 
 ### Prepare a delivery brief
 
-When the user asks to build the change, or Roundhouse believes the request may
-be ready, Roundhouse may propose a delivery brief containing:
+When the user asks Roundhouse to prepare a delivery brief, Roundhouse proposes
+a brief containing:
 
 - a concise title;
 - the problem or desired outcome;

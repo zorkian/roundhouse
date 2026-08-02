@@ -5,7 +5,7 @@
 
 - Status: Active
 - Audience: Maintainers and implementers
-- Last updated: 2026-07-30
+- Last updated: 2026-08-02
 
 This is the current product, architecture, and implementation plan for
 Roundhouse V2. Git history and the `v1-poc-final` tag preserve earlier designs
@@ -13,9 +13,16 @@ and completed migration work; this document intentionally does not.
 
 ## 1. Product and development rule
 
-Roundhouse turns an issue in an explicitly enrolled public GitHub repository
-into a validated change. An authorized maintainer starts it once. Roundhouse
-then:
+Roundhouse turns a sufficiently clear request about an explicitly enrolled
+public GitHub repository into a validated change. Delivery still runs against a
+GitHub issue. A person may begin either by:
+
+- posting the configured start command on an issue as an authorized operator; or
+- exploring in a Roundhouse UI conversation, reviewing a delivery brief, and
+  having an authorized operator promote that brief into a new issue and the
+  same start command.
+
+Once a delivery run starts, Roundhouse then:
 
 1. qualifies the request and asks only material questions;
 2. investigates current behavior and reproduces bugs when possible;
@@ -28,10 +35,11 @@ then:
 9. merges automatically or leaves the pull request for a maintainer, according
    to repository policy.
 
-Clarification happens as ordinary issue conversation. It has no special answer
-command and no arbitrary round limit. Any participant may supply facts; only a
-configured operator may start or resume a run or authorize a consequential
-decision.
+A conversation may also end with an answer and no delivery brief. Clarification
+during an active run happens as ordinary issue conversation. It has no special
+answer command and no arbitrary round limit. Any participant may supply facts;
+only a configured operator may start or resume a run or authorize a
+consequential decision.
 
 Roundhouse is a functional prototype. We build the smallest complete journey,
 observe it, and then address demonstrated failures. We do not pre-build retry
@@ -51,8 +59,12 @@ The development deployment currently supports:
 - public repositories enrolled through the Roundhouse GitHub App and a
   repository-owned Profile V2;
 - bugs, maintenance tasks, and small features;
+- a read-only conversational entry surface in the Roundhouse UI that can
+  explore one enrolled public repository, prepare a delivery brief, and
+  promote that brief into a GitHub issue and normal delivery run;
 - natural-language clarification and resumption from every waiting state;
-- hosted public research for qualification, investigation, and planning;
+- hosted public research for conversations, qualification, investigation, and
+  planning;
 - durable Git workspaces and implementation checkpoints;
 - repository Dev Containers inside isolated Cloudflare Sandboxes;
 - repository validation commands and screenshot evidence;
@@ -84,7 +96,9 @@ Current intentional limitations:
   capability-gated broker-mediated hosted research;
 - risk and approval types exist in old core/schema work but are not active
   product behavior;
-- Roundhouse currently begins with an issue start and finishes at merge; and
+- delivery runs begin at an authorized GitHub issue start and finish at merge
+  or a maintainer-merge wait; conversations may precede that handoff or end
+  without creating a run; and
 - deployment observation, production monitoring, organizational knowledge,
   SIEM export, repository-defined triggers, and repository-supplied executors
   are not implemented.
@@ -241,10 +255,11 @@ the workflow.
 Resumption follows the workflow edge recorded for that node and never attempts
 to reconstruct a stage from current source configuration or comment wording.
 
-The interpreter replaces the compiled lifecycle switch. Development may reset
-D1 for the migration, and all enrolled development repositories will migrate
-together. Roundhouse will not operate old and new workflow runtimes in
-parallel.
+The repository workflow graph is the sole delivery-run lifecycle. The earlier
+compiled stage switch is gone; Roundhouse does not operate a parallel workflow
+runtime. Conversational entry uses separate D1 conversation records and Queue
+wakeups, then hands off through ordinary GitHub issue intake rather than
+adding conversation nodes to the delivery graph.
 
 ## 4. Security kernel
 
@@ -362,6 +377,7 @@ The deployed Profile V2 defines:
 - automatic or maintainer merge and merge method;
 - an optional Dev Container configuration;
 - repository-wide instructions;
+- the conversation model used by the read-only conversational entry surface;
 - workflow agent prompts, models, typed inputs, and result schemas;
 - workflow reviewer prompts, models, activation, operating modes, and blocking
   severities; and
@@ -544,12 +560,13 @@ neither interface can expand authority.
 Add a dashboard graph view and editor using the same schema and compiler. Show
 node authority and routes and propose changes through a GitHub pull request.
 
-Implemented: each enrolled repository has a graph page sourced from its latest
-immutable run snapshot. It shows executors, capabilities, routes, workflow hash,
+Implemented: each enrolled repository has a graph page sourced from its current
+default-branch profile. It shows executors, capabilities, routes, workflow hash,
 and source commit; serializes the compiled graph back into repository YAML; and
-validates edits through the production compiler. Proposal creation is handed
-to GitHub's authenticated editor and pull-request flow, so the public dashboard
-does not gain repository mutation authority and D1 remains evidence only.
+validates edits through the production compiler. Existing runs keep their
+original immutable snapshots. Proposal creation is handed to GitHub's
+authenticated editor and pull-request flow, so the public dashboard does not
+gain repository mutation authority and D1 remains evidence only.
 
 Exit gate: a maintainer can round-trip the active workflow without D1 becoming
 configuration authority or a protected change silently altering an active run.
@@ -573,9 +590,38 @@ Exit gate: a visual candidate cannot reach review or merge until an operator
 responds; requested changes return with updated evidence; an accepted unchanged
 candidate proceeds; and non-visual candidates do not wait at the gate.
 
-After this slice, choose organizational context, scanners, staging DAST, alert
-triage, or governance export as separate vertical journeys. Their order is not
-approved by this plan.
+### Slice 9.0 — Conversational entry
+
+Add a channel-neutral conversation surface that lets a signed-in user explore
+one enrolled public repository with fixed read-only authority, refine a
+delivery brief, and promote that brief into exactly one GitHub issue and the
+existing issue-to-merge workflow. Keep conversations outside the delivery
+workflow graph: adapters authenticate and normalize messages; Roundhouse owns
+conversation state, agent execution, authorization, and promotion; ordinary
+GitHub intake remains the sole trusted run-start path.
+
+Implemented: the Roundhouse UI hosts creator-private conversations backed by
+D1 conversation, turn, brief, promotion, link, usage, and outbox records. Turns
+run serially through a dedicated Queue with scheduled redelivery. Each turn is
+pinned to an exact public default-branch commit and may use bounded repository
+file tools plus broker-mediated hosted research. Profile V2 configures one
+conversation model; the private broker authorizes the route. An operator's
+explicit Start delivery action freezes the brief, creates the issue and start
+comment with the signed-in user's GitHub credential, and closes the
+conversation only after accepted GitHub intake links the resulting run.
+Conversation model usage appears beside delivery-run usage. External chat
+adapters, shared visibility, private repositories, project commands, streaming,
+quotas, and automatic promotion remain deferred.
+
+Exit gate: a user can ask and refine a repository question without creating
+delivery artifacts; prompt injection cannot expand tools or invoke promotion;
+promotion creates exactly one issue and one normal run despite retries; and
+rejected intake remains visible without claiming delivery started.
+
+After Slice 8.0 and Slice 9.0, choose organizational context, scanners,
+staging DAST, alert triage, or governance export as separate vertical journeys.
+Their order is not approved by this plan. Conversational follow-ons live in the
+conversational-entry docs rather than in `docs/future-improvements.md`.
 
 ## 10. Acceptance and observability
 
@@ -603,6 +649,14 @@ The graph migration additionally demonstrates:
 - replay from an exact workflow/profile snapshot after configuration changes;
 - durable wait/resume from a typed external event; and
 - repository-file round-trip through the dashboard editor.
+
+Conversational entry additionally demonstrates:
+
+- a useful read-only answer pinned to an exact repository commit;
+- an editable delivery brief that cannot start itself;
+- idempotent promotion into exactly one issue and one normal run; and
+- creator-private conversation visibility until the approved brief is published
+  through GitHub.
 
 Every new boundary and step must log enough structured information to diagnose
 it on its first real run. At minimum, events identify the run, attempt,
@@ -634,9 +688,16 @@ The implementation retains:
 The maintained documentation is:
 
 - `README.md` for the product, current status, and development entry points;
-- this document for current architecture, approved work, and acceptance; and
+- this document for current architecture, approved work, and acceptance;
+- `docs/conversational-entry-proposal.md` for the conversational-entry product
+  contract and accepted v0 decisions;
+- `docs/conversational-entry-implementation-plan.md` for the conversational
+  v0 persistence, adapter, and test contracts; and
 - `docs/future-improvements.md` for explicitly deferred ideas with no authority
   to start work.
+
+`AGENTS.md` holds Cursor Cloud agent operating notes for this repository. It is
+not a product contract.
 
 Git history, issues, pull requests, telemetry, and the `v1-poc-final` tag hold
 historical decisions, experiments, evidence, and completed migration detail.

@@ -37,18 +37,21 @@ repo's own `.roundhouse/profile.yaml` + `workflow.yaml`.
 
 ### Graphify knowledge graph
 
-The repo commits a Graphify code knowledge graph under `graphify-out/` (only
-`graphify-out/cache/` is gitignored). Agents should prefer `graphify query` /
-`path` / `explain` for codebase exploration when the CLI is available — see
-`.cursor/rules/graphify.mdc`.
+The repo commits a Graphify code knowledge graph under `graphify-out/`.
+`graphify-out/cache/` and dated `graphify-out/YYYY-MM-DD/` pre-overwrite
+safety snapshots are gitignored; commit the live artifacts (`graph.json`,
+`GRAPH_REPORT.md`, labels, manifest, and related sidecar files). Agents should
+prefer `graphify query` / `path` / `explain` for codebase exploration when the
+CLI is available — see `.cursor/rules/graphify.mdc`.
 
 **Keep the graph in sync with code changes.** After modifying source files (and
 before you finish the turn / open or update a PR):
 
 1. Run `graphify update .` (AST-only, no API key).
-2. Stage and **commit the resulting `graphify-out/` changes with the same
-   change set** (or a follow-up commit on the same branch) — do not leave a
-   dirty `graphify-out/` working tree.
+2. Stage and **commit the resulting live `graphify-out/` artifacts with the
+   same change set** (or a follow-up commit on the same branch) — do not leave
+   a dirty tracked graph working tree. Leave ignored cache/backup folders
+   untracked.
 
 Do **not** regenerate the graph during Cursor Cloud environment install. The
 install script should only ensure the CLI is present; regenerating on every

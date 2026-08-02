@@ -5,137 +5,128 @@
 
 ![Roundhouse orchestration hub: coding-agent engines routed through a human-controlled software delivery workflow](docs/assets/roundhouse-banner.png)
 
-Roundhouse is an open-source bug-fixing agent for GitHub repositories. Its job
-is to turn an issue into a validated change while involving a maintainer only
-when information or judgment is genuinely required.
+Roundhouse is an open-source agent that helps turn a software request into a
+validated GitHub change. It investigates the request, proposes a plan,
+implements a fix in an isolated environment, reviews the candidate, waits for
+repository CI, and merges only when the repository's policy allows it.
+
+Maintainers stay in the loop for real questions and judgments. They should not
+need to babysit every step.
 
 > [!CAUTION]
-> Roundhouse is experimental, pre-release software intended for explicitly
-> enrolled public repositories. Generated code and automated reviews can be
-> wrong. Do not use it with private data or credentials that cannot be revoked.
+> Roundhouse is experimental, pre-release software. Use it only with
+> explicitly enrolled public repositories. Generated code and automated reviews
+> can be wrong. Do not give it private data or credentials that cannot be
+> revoked.
 
-## How it works
+## Should you keep reading?
 
-1. An authorized maintainer starts Roundhouse on a GitHub issue.
-2. It qualifies the report, asks focused questions when needed, and attempts to
-   reproduce bugs before planning a fix.
-3. An agent implements the accepted plan inside the repository's supported Dev
-   Container, nested within an isolated Cloudflare Sandbox, and runs the
-   repository's validation commands.
-4. Roundhouse validates and promotes the resulting Git checkpoint, then opens
-   a draft pull request.
-5. When the implementation includes visual evidence, a repository operator
-   reviews its before-and-after screenshots. Feedback returns to the same
-   durable implementation workspace; acceptance continues the workflow.
-6. Independent reviewers inspect the exact candidate commit. Actionable
-   findings send the change back through implementation and validation.
-7. Repository CI must pass for that same commit before Roundhouse can merge it
-   automatically or leave it ready for a maintainer, according to the
-   repository profile.
+Roundhouse may be interesting if you:
+
+- maintain a public GitHub repository and want help moving from issue to pull
+  request without giving an agent broad production access;
+- want a workflow you can inspect and configure in the repository, rather than
+  a black-box coding bot; or
+- care about clear authority boundaries: agents propose and implement;
+  Roundhouse publishes and merges only after deterministic checks.
+
+It is probably not what you want yet if you need a polished production product,
+private-repository support, or a one-click install for arbitrary repos. Today
+it is a working prototype for enrolled public repositories.
+
+## What it does
+
+You can start in two ways:
+
+1. **Ask first.** In the Roundhouse UI, start a read-only conversation about one
+   enrolled repository. Refine the request, review a delivery brief, and only
+   then promote it into a GitHub issue and a delivery run. Some conversations
+   end with an answer and no code change.
+2. **Start from an issue.** An authorized operator starts Roundhouse on a
+   GitHub issue that is already clear enough to work.
+
+A delivery run then roughly follows this path:
+
+1. Qualify the request and ask only material questions.
+2. Investigate and reproduce the problem when possible.
+3. Plan the change.
+4. Implement it in the repository's development environment, inside an isolated
+   sandbox.
+5. Validate the candidate and open a draft pull request.
+6. If there are screenshots, ask an operator to review the visual evidence.
+7. Run independent reviewers on the exact candidate commit.
+8. Integrate with the current target branch, wait for CI on that same commit,
+   and merge automatically or leave the pull request for a maintainer.
 
 GitHub remains the source of truth for issues, pull requests, CI, and merged
-code. A Cloudflare control-plane Worker coordinates each run, D1 stores
-workflow state, and Cloudflare Artifacts carries Git checkpoints between
-isolated containers. A separately deployed runtime-host Worker owns the
-Sandbox Durable Objects and container image, so ordinary control-plane deploys
-do not replace active coding environments. A private model broker selects
-models without exposing provider credentials to the agent container.
+code. Roundhouse coordinates the work; it does not replace GitHub.
 
-D1 also records every active revision's wakeup before Queue delivery and binds
-each attempt lease to its current Cloudflare Workflow instance. Queue messages
-are therefore notifications rather than workflow state. A scheduled reconciler
-redelivers pending wakeups, observes terminal or inactive Workflow instances,
-and resumes recorded settlement work without invoking the model again.
+## How a repository opts in
 
-The credential boundary is central to the design: implementation agents do not
-receive GitHub App, Cloudflare administration, deployment, or model-provider
-credentials. Promotion happens separately, with a short-lived GitHub token,
-only after the candidate checkpoint has been validated from a clean clone.
+An enrolled repository configures Roundhouse with files under `.roundhouse/`:
 
-The outer Cloudflare Sandbox VM is the security boundary. The nested Dev
-Container provides the repository's development environment but is not a
-second isolation boundary: repository lifecycle commands and the agent share
-the outer Sandbox's filesystem and project network access. Investigation and
-implementation may reach project-selected package, image, and public research
-hosts when their snapshotted node capabilities allow it; qualification,
-planning, and review remain allowlisted. The current prototype is therefore
-limited to explicitly enrolled public repositories.
+- `profile.yaml` — who may operate it, merge policy, validation commands,
+  protected paths, and conversation settings
+- `workflow.yaml` — the delivery lifecycle: nodes, models, prompts, reviews,
+  and transitions
+- `prompts/` — longer instructions referenced by that workflow
 
-## Repository configuration
+Roundhouse loads those files from one exact commit and snapshots them onto each
+run, so an active run does not silently change when repository config changes
+later. Repositories shape the workflow; they do not supply Roundhouse's
+credentials or expand what agents are allowed to do.
 
-An enrolled repository owns its reviewed configuration in
-`.roundhouse/profile.yaml`. Profile V2 defines allowed and protected paths,
-operators, merge mode and method, the development container, canonical
-validation commands, and repository-wide instructions. The
-repository-owned `.roundhouse/workflow.yaml` defines the lifecycle graph and
-each agent node's typed inputs, result schema, model, prompt, capabilities, and
-transitions. Review nodes define any number of always-on or conditionally
-selected reviewers, their blocking/advisory/shadow mode, model, prompt, and
-severity policy. Long instructions live in explicitly referenced files under
-`.roundhouse/prompts/`.
+## Trust boundaries, briefly
 
-Roundhouse loads the profile and every referenced instruction from one exact
-default-branch commit, hashes their normalized contents, and snapshots them
-onto the run. Roundhouse cannot modify `.roundhouse/**` or the selected Dev
-Container configuration. Fixed Roundhouse isolation, tool, read-only, and
-result-submission rules take precedence over repository instructions.
+Coding agents do not receive GitHub App, cloud-admin, deployment, or
+model-provider credentials. They work in isolated sandboxes. Publishing a pull
+request and merging it happen in the trusted control plane, only after the
+candidate has been validated.
 
-The lifecycle now runs through that declarative graph rather than a compiled
-stage switch. Agent and review fan-out/join nodes are repository-composable.
-Human nodes wait for participant prose or an operator decision, including
-repository-configured visual feedback before review and merge. Named
-external adapters resume typed external nodes without gaining agent or GitHub
-authority. Boundary events carry a common workflow, node, actor, source, and
-exact-head audit envelope.
-Repositories do not supply executable control-plane code or expand
-Roundhouse's credential and capability boundaries.
-
-Every attempt stores the effective capability set minted from its immutable
-workflow node. The Sandbox network policy, runner tools, hosted research,
-Artifact access, and screenshot route enforce that same set. Execution
-interruptions, invalid checkpoints, and superseded pull-request branches are
-typed executor outcomes that return to the coordinator automatically; they are
-not presented as questions for a maintainer.
-
-The development dashboard links each enrolled repository to a workflow page
-that visualizes nodes, routes, and authority from an immutable run snapshot.
-It serializes that snapshot back to repository YAML, validates edits with the
-same compiler, and uses GitHub's authenticated editor to create the proposed
-branch and pull request. D1 never becomes workflow configuration authority.
+That boundary is a core product claim, not an implementation footnote. The
+architecture document explains how it is enforced.
 
 ## Project status
 
-Roundhouse is an active V2 prototype. The end-to-end development workflow can
-qualify and investigate an issue, plan and implement a change, validate and
-review the exact commit, run repository CI, and merge it. It is not ready for
-general production use.
+Roundhouse is an active V2 prototype. In development it can:
 
-The Phase 7 workflow-graph foundation and the first post-Phase-7 journey,
-operator visual feedback, are deployed in development. The foundation can
-accept future typed adapters for organizational context, scanners, deployment
-observation, alert triage, and audit export; those integrations are not
-implemented or approved merely because the extension points exist.
+- explore a repository question in a read-only conversation and promote a brief
+  into delivery;
+- take an issue through investigation, planning, implementation, review, CI,
+  and merge; and
+- let repositories customize that journey through `.roundhouse/` configuration.
 
-V1 is preserved at the `v1-poc-final` tag. The [V2 plan](docs/v2-plan.md) is
-the normative product and architecture document.
+It is not ready for general production use.
+
+V1 is preserved at the `v1-poc-final` tag.
+
+## Go deeper
+
+| Document                                                                               | Read it when you want…                                                  |
+| -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| [V2 plan](docs/v2-plan.md)                                                             | the product contract, architecture, security kernel, and acceptance bar |
+| [Conversational entry](docs/conversational-entry-proposal.md)                          | how the ask-first conversation surface works                            |
+| [Conversational implementation plan](docs/conversational-entry-implementation-plan.md) | the v0 persistence, adapter, and test contracts                         |
+| [Future improvements](docs/future-improvements.md)                                     | deferred ideas that are explicitly not approved work                    |
+| [AGENTS.md](AGENTS.md)                                                                 | notes for automated agents working in this repository                   |
 
 ## Repository layout
 
-| Path                          | Purpose                                                           |
-| ----------------------------- | ----------------------------------------------------------------- |
-| `apps/control-plane`          | Cloudflare Worker that handles GitHub intake and coordinates runs |
-| `apps/runtime-host`           | Independently deployed Sandbox and Container host                 |
-| `apps/model-broker`           | Private model routing and credential boundary                     |
-| `containers/agent-runner`     | Isolated coding-agent runtime                                     |
-| `packages/core`               | Shared workflow state, contracts, and repository profiles         |
-| `packages/response-observer`  | Streaming model-response observation                              |
-| `docs/v2-plan.md`             | Product contract, architecture, and acceptance criteria           |
-| `docs/future-improvements.md` | Deferred ideas that are not approved implementation work          |
+| Path                      | Purpose                                                   |
+| ------------------------- | --------------------------------------------------------- |
+| `apps/control-plane`      | GitHub intake, conversations, coordination, and dashboard |
+| `apps/runtime-host`       | Isolated sandbox and container host                       |
+| `apps/model-broker`       | Private model routing and credential boundary             |
+| `containers/agent-runner` | Coding-agent runtime                                      |
+| `packages/core`           | Shared profiles, workflow compiler, and contracts         |
+| `docs/`                   | Product and architecture documentation                    |
 
 ## Development
 
-You need Git, Node.js 24 (the exact version is in `.node-version`), Corepack,
-and pnpm 10.13.1.
+Roundhouse is a pnpm monorepo of Cloudflare Workers. There is no local product
+dev server; the usual local path is install and check.
+
+You need Git, Node.js 24 (see `.node-version`), Corepack, and pnpm 10.13.1.
 
 ```sh
 corepack enable
@@ -144,39 +135,13 @@ pnpm install --frozen-lockfile
 pnpm check
 ```
 
-`pnpm check` verifies formatting and Apache-2.0 headers, typechecks the
-workspace, and runs the test suite.
+`pnpm check` formats/license-checks, typechecks, syntax-checks the agent
+runner, and runs tests. Individual commands: `pnpm test`, `pnpm typecheck`,
+`pnpm format:check`.
 
-Tests should protect a user-visible outcome, an external or persisted
-contract, an authority boundary, a concurrency guarantee, or a failure we
-have actually observed. Keep exhaustive cases at the narrowest layer and use
-representative equivalence classes at adapter and end-to-end boundaries. Do
-not test TypeScript guarantees, constants, library behavior, or incidental
-wording and markup. Roundhouse intentionally has no coverage or test-count
-target; each test must justify the maintenance it adds.
-
-Useful individual commands are:
-
-```sh
-pnpm test
-pnpm typecheck
-pnpm format:check
-```
-
-`pnpm deploy:development` deploys the runtime host and control plane together.
-The merged-PR workflow deploys the runtime host only when its image, host code,
-or direct shared dependencies changed; every merge can deploy the model
-broker, D1 migrations, and control plane without replacing active Sandboxes.
-The deployment requires an authenticated Cloudflare development environment
-and is not needed for local checks.
-
-The model broker's provider-native OpenAI, Anthropic, and Google routes require
-an account-scoped AI Gateway token with `AI Gateway Run` permission. Store it as
-the `AI_GATEWAY_TOKEN` Worker secret before deploying the broker:
-
-```sh
-wrangler secret put AI_GATEWAY_TOKEN --config apps/model-broker/wrangler.jsonc
-```
+Deploying to the Cloudflare development environment is separate and requires
+authenticated Cloudflare, GitHub App, and AI Gateway credentials. See the
+[V2 plan](docs/v2-plan.md) and `package.json` scripts if you need that path.
 
 ## License
 
