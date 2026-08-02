@@ -64,6 +64,11 @@ export interface AppliedProfile {
   // Optional only so historical/profile-error snapshots remain readable.
   // Every successfully parsed profile includes a compiled workflow.
   readonly workflow?: CompiledWorkflow;
+  // Optional so historical snapshots remain readable. Parsed profiles always
+  // include the default when the source predates this setting.
+  readonly conversation?: {
+    readonly model: ProfileModel;
+  };
   readonly paths: {
     readonly allowed: readonly string[];
     readonly protected: readonly string[];
@@ -130,6 +135,10 @@ const defaultReviewerModels: Readonly<
     id: "openai/gpt-5.6-sol",
     reasoning: "max",
   },
+};
+const defaultConversationModel: ProfileModel = {
+  id: "openai/gpt-5.6-sol",
+  reasoning: "high",
 };
 const defaultBlockingSeverities: readonly FindingSeverity[] = [
   "critical",
@@ -200,6 +209,13 @@ function model(value: unknown, error: string): ProfileModel {
     id: value.id,
     reasoning: value.reasoning as ProfileReasoningLevel,
   };
+}
+
+function parseConversationModel(value: unknown): ProfileModel {
+  const configured = model(value, "profile_conversation_invalid");
+  if (!configured.id.startsWith("openai/"))
+    throw new Error("profile_conversation_invalid");
+  return configured;
 }
 
 function instructionSource(value: unknown, error: string): string | undefined {
@@ -291,6 +307,7 @@ async function v1Profile(
   return {
     version: 1,
     workflow: await compileWorkflow(defaultIssueWorkflowSource, sourceCommit),
+    conversation: { model: defaultConversationModel },
     paths: { allowed, protected: protectedPaths },
     merge: { mode: "automatic", method: "merge" },
     permissions: {
@@ -341,7 +358,17 @@ async function v2Profile(
     "version",
     "workflow",
   ];
-  if (!hasOnlyKeys(value, topLevel)) throw new Error("profile_schema_invalid");
+  if (!hasOnlyKeys(value, topLevel, ["conversation"]))
+    throw new Error("profile_schema_invalid");
+  let conversationModel = defaultConversationModel;
+  if (value.conversation !== undefined) {
+    if (
+      !isRecord(value.conversation) ||
+      !hasOnlyKeys(value.conversation, ["model"])
+    )
+      throw new Error("profile_conversation_invalid");
+    conversationModel = parseConversationModel(value.conversation.model);
+  }
   if (
     !isRecord(value.paths) ||
     !hasOnlyKeys(value.paths, ["allowed", "protected"])
@@ -459,6 +486,7 @@ async function v2Profile(
   return {
     version: 2,
     workflow,
+    conversation: { model: conversationModel },
     paths: { allowed, protected: protectedPaths },
     merge: {
       mode: value.merge.mode as MergeMode,

@@ -29,6 +29,7 @@ import {
   renderSignInPage,
   sessionCookieHeader,
   signOut,
+  uiGitHubPost,
   validateUiSession,
   type ValidatedUiSession,
 } from "./ui-auth.js";
@@ -42,8 +43,19 @@ import {
   acceptGitHubIssueClosed,
   githubClientForRun,
   GitHubStageReporter,
+  GitHubClient,
   loadDefaultBranchProfile,
 } from "./github.js";
+import { D1ConversationRepository } from "./conversation-store.js";
+import {
+  executeConversationTurn,
+  renderDeliveryBrief,
+  synthesizeDeliveryBrief,
+} from "./conversation-engine.js";
+import {
+  renderConversation,
+  renderConversationIndex,
+} from "./conversation-ui.js";
 import { launch } from "@cloudflare/playwright";
 import { DurableAttemptDispatcher } from "./attempt-dispatch.js";
 import { recordAttemptCompletion } from "./attempt-settlement.js";
@@ -83,13 +95,12 @@ function json(value: unknown, status = 200, headers?: HeadersInit): Response {
   });
 }
 
-function html(value: string, status = 200): Response {
+function html(value: string, status = 200, forms = false): Response {
   return new Response(value, {
     status,
     headers: {
       "cache-control": "no-store",
-      "content-security-policy":
-        "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      "content-security-policy": `default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action ${forms ? "'self'" : "'none'"}; frame-ancestors 'none'`,
       "content-type": "text/html; charset=utf-8",
       "referrer-policy": "no-referrer",
       "x-content-type-options": "nosniff",
@@ -479,6 +490,10 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       url.pathname === "/" ||
       url.pathname === "/runs" ||
       url.pathname === "/usage" ||
+      url.pathname === "/conversations" ||
+      /^\/conversations\/[0-9a-f-]{36}(?:\/(?:messages|promote))?$/.test(
+        url.pathname,
+      ) ||
       /^\/repositories\/[^/]+\/[^/]+\/(workflow|issues\/\d+(?:\/workflow)?)$/.test(
         url.pathname,
       );
@@ -525,11 +540,306 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
     };
     const uiHtml = (value: string, status = 200): Response =>
       withUiSession(html(value, status));
+    const uiConversationHtml = (value: string, status = 200): Response =>
+      withUiSession(html(value, status, true));
     const uiJson = (
       value: unknown,
       status = 200,
       headers?: HeadersInit,
     ): Response => withUiSession(json(value, status, headers));
+    const uiRedirect = (location: string): Response =>
+      withUiSession(
+        new Response(null, {
+          status: 303,
+          headers: { location, "cache-control": "no-store" },
+        }),
+      );
+    const validUiMutation = (): boolean =>
+      request.headers.get("origin") === new URL(env.PUBLIC_ORIGIN).origin;
+    if (url.pathname === "/conversations" && isPublicUiRequest()) {
+      const conversations = new D1ConversationRepository(env.DB);
+      if (request.method === "GET") {
+        const [repositories, recent] = await Promise.all([
+          conversations.listRepositories(uiSession!.repositoryIds),
+          conversations.list(uiSession!.githubUserId, uiSession!.repositoryIds),
+        ]);
+        return uiConversationHtml(
+          renderConversationIndex(
+            repositories,
+            recent,
+            uiSession!.githubLogin,
+            url.searchParams.get("error") ?? undefined,
+          ),
+        );
+      }
+      if (request.method !== "POST")
+        return uiJson({ error: "method_not_allowed" }, 405, {
+          allow: "GET, POST",
+        });
+      if (!validUiMutation()) return uiJson({ error: "forbidden" }, 403);
+      const form = await request.formData();
+      const repositoryId = form.get("repository");
+      const body = form.get("message");
+      if (
+        typeof repositoryId !== "string" ||
+        typeof body !== "string" ||
+        !body.trim() ||
+        body.length > 12_000
+      )
+        return uiJson({ error: "invalid_request" }, 400);
+      const selected = await conversations.repository(
+        repositoryId,
+        uiSession!.repositoryIds,
+      );
+      if (!selected) return uiJson({ error: "not_found" }, 404);
+      let snapshot: Awaited<ReturnType<typeof loadDefaultBranchProfile>>;
+      try {
+        snapshot = await loadDefaultBranchProfile(
+          new GitHubClient(env, selected.installationId),
+          selected.name,
+        );
+      } catch (error) {
+        console.error(
+          JSON.stringify({
+            message: "conversation_profile_load_failed",
+            repository: selected.name,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+        return uiRedirect(
+          "/conversations?error=Repository%20profile%20is%20unavailable",
+        );
+      }
+      const conversationId = crypto.randomUUID();
+      const turnId = crypto.randomUUID();
+      await conversations.create({
+        id: conversationId,
+        repositoryId: selected.id,
+        creatorGithubUserId: uiSession!.githubUserId,
+        creatorGithubLogin: uiSession!.githubLogin,
+        sourceCommit: snapshot.commit,
+        profileHash: snapshot.profile.hash,
+        context: {
+          model: snapshot.profile.conversation?.model ?? {
+            id: "openai/gpt-5.6-sol",
+            reasoning: "high",
+          },
+          defaultBranch: snapshot.defaultBranch,
+          ...(snapshot.profile.instructions?.project
+            ? {
+                projectInstructions:
+                  snapshot.profile.instructions.project.content,
+              }
+            : {}),
+        },
+        turnId,
+        messageId: crypto.randomUUID(),
+        body: body.trim(),
+      });
+      const conversation = await conversations.get(
+        conversationId,
+        uiSession!.githubUserId,
+        uiSession!.repositoryIds,
+      );
+      if (!conversation) throw new Error("conversation_create_failed");
+      try {
+        const reply = await executeConversationTurn(
+          env.MODEL_BROKER,
+          new GitHubClient(env, selected.installationId),
+          conversation,
+        );
+        await conversations.finishTurn(
+          conversationId,
+          turnId,
+          crypto.randomUUID(),
+          reply,
+        );
+        return uiRedirect(`/conversations/${conversationId}`);
+      } catch (error) {
+        await conversations.failTurn(conversationId, turnId);
+        console.error(
+          JSON.stringify({
+            message: "conversation_turn_failed",
+            conversationId,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+        return uiRedirect(
+          `/conversations/${conversationId}?notice=Roundhouse%20could%20not%20answer%20that%20turn.%20You%20can%20try%20again.`,
+        );
+      }
+    }
+    const conversationMatch = url.pathname.match(
+      /^\/conversations\/([0-9a-f-]{36})(?:\/(messages|promote))?$/,
+    );
+    if (conversationMatch && isPublicUiRequest()) {
+      const conversationId = conversationMatch[1]!;
+      const action = conversationMatch[2];
+      const conversations = new D1ConversationRepository(env.DB);
+      let conversation = await conversations.get(
+        conversationId,
+        uiSession!.githubUserId,
+        uiSession!.repositoryIds,
+      );
+      if (!conversation) return uiConversationHtml(renderNotFoundPage(), 404);
+      if (!action && request.method === "GET")
+        return uiConversationHtml(
+          renderConversation(
+            conversation,
+            uiSession!.githubLogin,
+            url.searchParams.get("notice") ?? undefined,
+          ),
+        );
+      if (request.method !== "POST")
+        return uiJson({ error: "method_not_allowed" }, 405, {
+          allow: action ? "POST" : "GET",
+        });
+      if (!action) return uiJson({ error: "method_not_allowed" }, 405);
+      if (!validUiMutation()) return uiJson({ error: "forbidden" }, 403);
+      if (action === "messages") {
+        const form = await request.formData();
+        const body = form.get("message");
+        if (typeof body !== "string" || !body.trim() || body.length > 12_000)
+          return uiJson({ error: "invalid_request" }, 400);
+        const turnId = crypto.randomUUID();
+        const claimed = await conversations.appendUserTurn({
+          conversationId,
+          creatorGithubUserId: uiSession!.githubUserId,
+          turnId,
+          messageId: crypto.randomUUID(),
+          body: body.trim(),
+        });
+        if (!claimed) return uiJson({ error: "conversation_not_open" }, 409);
+        conversation = await conversations.get(
+          conversationId,
+          uiSession!.githubUserId,
+          uiSession!.repositoryIds,
+        );
+        if (!conversation) throw new Error("conversation_turn_missing");
+        try {
+          const reply = await executeConversationTurn(
+            env.MODEL_BROKER,
+            new GitHubClient(env, conversation.repository.installationId),
+            conversation,
+          );
+          await conversations.finishTurn(
+            conversationId,
+            turnId,
+            crypto.randomUUID(),
+            reply,
+          );
+          return uiRedirect(`/conversations/${conversationId}`);
+        } catch (error) {
+          await conversations.failTurn(conversationId, turnId);
+          console.error(
+            JSON.stringify({
+              message: "conversation_turn_failed",
+              conversationId,
+              error: error instanceof Error ? error.message : String(error),
+            }),
+          );
+          return uiRedirect(
+            `/conversations/${conversationId}?notice=Roundhouse%20could%20not%20answer%20that%20turn.%20You%20can%20try%20again.`,
+          );
+        }
+      }
+      let promotionOwned = false;
+      try {
+        if (conversation.status === "open") {
+          const brief = await synthesizeDeliveryBrief(
+            env.MODEL_BROKER,
+            conversation,
+          );
+          const prepared = await conversations.preparePromotion(
+            conversationId,
+            uiSession!.githubUserId,
+            brief,
+          );
+          if (!prepared)
+            return uiJson({ error: "conversation_not_promotable" }, 409);
+          return uiRedirect(`/conversations/${conversationId}`);
+        }
+        if (conversation.status === "ready") {
+          const began = await conversations.beginPromotion(
+            conversationId,
+            uiSession!.githubUserId,
+          );
+          if (!began)
+            return uiJson({ error: "conversation_not_promotable" }, 409);
+          promotionOwned = true;
+          conversation = (await conversations.get(
+            conversationId,
+            uiSession!.githubUserId,
+            uiSession!.repositoryIds,
+          ))!;
+        }
+        if (conversation.status === "promoted")
+          return uiRedirect(`/conversations/${conversationId}`);
+        if (conversation.status === "promoting" && !promotionOwned) {
+          promotionOwned = await conversations.claimPromotionRetry(
+            conversationId,
+            uiSession!.githubUserId,
+          );
+          if (!promotionOwned)
+            return uiJson({ error: "promotion_in_progress" }, 409);
+        }
+        if (!conversation.deliveryBrief)
+          throw new Error("delivery_brief_missing");
+        const [owner, name] = conversation.repository.name.split("/", 2);
+        if (!owner || !name) throw new Error("repository_name_invalid");
+        let issueNumber = conversation.promotedIssueNumber;
+        if (!issueNumber) {
+          const issue = await uiGitHubPost<{
+            number: number;
+            html_url: string;
+          }>(
+            uiSession!,
+            env,
+            `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/issues`,
+            {
+              title: conversation.deliveryBrief.title,
+              body: renderDeliveryBrief(
+                conversation.deliveryBrief,
+                new URL(
+                  `/conversations/${conversationId}`,
+                  env.PUBLIC_ORIGIN,
+                ).toString(),
+              ),
+            },
+          );
+          issueNumber = issue.number;
+          await conversations.recordPromotionIssue(
+            conversationId,
+            issue.number,
+            issue.html_url,
+          );
+        }
+        await uiGitHubPost(
+          uiSession!,
+          env,
+          `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/issues/${issueNumber}/comments`,
+          { body: env.GITHUB_START_COMMAND },
+        );
+        await conversations.completePromotion(conversationId);
+        return uiRedirect(`/conversations/${conversationId}`);
+      } catch (error) {
+        if (promotionOwned)
+          await conversations.releasePromotion(
+            conversationId,
+            uiSession!.githubUserId,
+          );
+        console.error(
+          JSON.stringify({
+            message: "conversation_promotion_failed",
+            conversationId,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+        return uiRedirect(
+          `/conversations/${conversationId}?notice=Delivery%20could%20not%20start.%20A%20retry%20will%20continue%20an%20issue%20that%20Roundhouse%20already%20recorded.`,
+        );
+      }
+    }
     if (
       (url.pathname === "/" || url.pathname === "/runs") &&
       isPublicUiRequest()

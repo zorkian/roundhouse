@@ -91,6 +91,22 @@ describe("model broker", () => {
   it("resolves the distinct default routing classes", () => {
     expect(
       resolveRoute(
+        {
+          role: "conversation",
+          taskType: "conversation",
+          complexity: "unknown",
+        },
+        env,
+      ),
+    ).toMatchObject({
+      provider: "openai",
+      model: "openai/gpt-5.6-sol",
+      protocol: "openai-responses",
+      thinkingLevel: "low",
+      rule: "conversation-default-v1",
+    });
+    expect(
+      resolveRoute(
         { role: "qualify", taskType: "qualification", complexity: "unknown" },
         env,
       ),

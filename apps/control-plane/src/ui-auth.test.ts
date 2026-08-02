@@ -13,6 +13,7 @@ import {
   uiSessionCookie,
   uiSessionLifetimeMs,
   uiStateCookie,
+  uiGitHubPost,
   validateUiSession,
 } from "./ui-auth.js";
 
@@ -168,6 +169,45 @@ const env = (db: D1Like) => ({
   PUBLIC_ORIGIN: "https://v2.invalid",
   GITHUB_CLIENT_ID: "client-id",
   ROUNDHOUSE_GITHUB_CLIENT_SECRET: "client-secret",
+});
+
+describe("trusted UI GitHub mutations", () => {
+  it("uses the encrypted session token only for allowlisted issue writes", async () => {
+    const token = "session-token";
+    const { db } = authDb({
+      sessions: [
+        {
+          hash: await sha256Hex(token),
+          expiresAt: Date.now() + 60_000,
+        },
+      ],
+    });
+    const send = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        expect(new Headers(init?.headers).get("authorization")).toBe(
+          "Bearer user-token",
+        );
+        return Response.json({ number: 42 });
+      },
+    );
+    vi.stubGlobal("fetch", send);
+    const session = {
+      githubUserId: 7,
+      githubLogin: "octocat",
+      repositoryIds: ["1297678423"],
+      expiresAt: Date.now() + 60_000,
+      sessionToken: token,
+    };
+    await expect(
+      uiGitHubPost(session, env(db), "/repos/octo/project/issues", {
+        title: "Build it",
+      }),
+    ).resolves.toEqual({ number: 42 });
+    await expect(
+      uiGitHubPost(session, env(db), "/repos/octo/project/pulls", {}),
+    ).rejects.toThrow("ui_github_mutation_not_allowed");
+    expect(send).toHaveBeenCalledTimes(1);
+  });
 });
 
 async function sha256Hex(value: string): Promise<string> {

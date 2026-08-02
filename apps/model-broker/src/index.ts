@@ -67,6 +67,12 @@ const defaultRoutes: Readonly<
     >
   >
 > = {
+  conversation: {
+    provider: "openai",
+    model: "openai/gpt-5.6-sol",
+    protocol: "openai-responses",
+    thinkingLevel: "high",
+  },
   qualify: {
     provider: "openai",
     model: "openai/gpt-5.6-luna",
@@ -148,6 +154,7 @@ function defaultProtocol(provider: string): ModelProtocol {
 }
 
 function routingRule(role: string): string {
+  if (role === "conversation") return "conversation-default-v1";
   if (role === "review-holistic") return "review-holistic-v1";
   if (role === "review-security") return "review-security-v1";
   if (role === "review-data") return "review-data-v1";
