@@ -717,8 +717,8 @@ describe("V2 control plane", () => {
     expect(page.headers.get("content-security-policy")).toContain(
       "form-action 'self'",
     );
-    // Form POSTs are non-cors; referrer-policy: no-referrer would null the
-    // Origin header and make every logged-in conversation start return 403.
+    // Form POSTs are non-cors; referrer-policy: no-referrer can cause browsers
+    // to send Origin: null and make every logged-in conversation start 403.
     expect(page.headers.get("referrer-policy")).toBe("same-origin");
     await expect(page.text()).resolves.toContain("Start with a conversation");
 

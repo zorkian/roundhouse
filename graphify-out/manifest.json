@@ -225,13 +225,13 @@
     "semantic_hash": ""
   },
   "apps/control-plane/src/index.test.ts": {
-    "mtime": 1785702500.654444,
-    "ast_hash": "f9a2588af8f1d3060acc87c8dab5abd6",
+    "mtime": 1785702580.8304718,
+    "ast_hash": "b82f05d394b72c647a9d83485aa537f7",
     "semantic_hash": ""
   },
   "apps/control-plane/src/index.ts": {
-    "mtime": 1785702500.654444,
-    "ast_hash": "9a8789bb0b53c241f6ace0c8ee4eeffb",
+    "mtime": 1785702580.838472,
+    "ast_hash": "2b588d3e17721be698a6c8c549c8554b",
     "semantic_hash": ""
   },
   "apps/control-plane/src/liveness.test.ts": {
