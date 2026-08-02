@@ -579,11 +579,16 @@ export async function executeRepositoryTool(
   if (call.name === "list_repository_files") {
     if (!input || typeof input !== "object" || Object.keys(input).length)
       return JSON.stringify({ error: "invalid_arguments" });
+    const commit = await github.get<{ tree?: { sha?: string } }>(
+      `/repos/${conversation.repository.name}/git/commits/${encodeURIComponent(conversation.sourceCommit)}`,
+    );
+    if (typeof commit.tree?.sha !== "string")
+      return JSON.stringify({ error: "tree_unavailable" });
     const tree = await github.get<{
       truncated?: boolean;
       tree?: readonly { path?: string; type?: string }[];
     }>(
-      `/repos/${conversation.repository.name}/git/trees/${encodeURIComponent(conversation.sourceCommit)}?recursive=1`,
+      `/repos/${conversation.repository.name}/git/trees/${encodeURIComponent(commit.tree.sha)}?recursive=1`,
     );
     const paths = (tree.tree ?? [])
       .filter(

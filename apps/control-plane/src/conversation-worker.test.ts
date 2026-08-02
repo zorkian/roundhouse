@@ -9,6 +9,7 @@ import { webConversationAdapter } from "./conversation-adapter.js";
 import { D1ConversationRepository } from "./conversation-store.js";
 import { processConversationWakeup } from "./conversation-worker.js";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
+import type { GitHubApi } from "./github.js";
 
 function sqliteD1(database: DatabaseSync): D1Like {
   return {
@@ -65,6 +66,42 @@ describe("conversation Queue worker", () => {
       ),
     ).resolves.toBe("ignored");
     expect(repository.completeWakeup).not.toHaveBeenCalled();
+  });
+
+  it("fails closed before model access when a repository becomes private", async () => {
+    const repository = {
+      turn: vi.fn(async () => ({ state: "pending" })),
+      claimTurn: vi.fn(async () => ({ id: "turn-1" })),
+      getForTurn: vi.fn(async () => ({
+        repository: {
+          name: "octo/project",
+          installationId: 99,
+        },
+      })),
+      failTurn: vi.fn(async () => undefined),
+      completeWakeup: vi.fn(async () => undefined),
+    } as unknown as D1ConversationRepository;
+    const broker = { fetch: vi.fn() };
+    await expect(
+      processConversationWakeup(
+        repository,
+        { MODEL_BROKER: broker } as never,
+        { kind: "turn", id: "turn-1" },
+        1,
+        new Map(),
+        {
+          github: {
+            get: vi.fn(async () => ({ private: true })),
+          } as unknown as GitHubApi,
+        },
+      ),
+    ).resolves.toBe("completed");
+    expect(repository.failTurn).toHaveBeenCalledWith(
+      "turn-1",
+      "conversation_repository_not_public",
+    );
+    expect(repository.completeWakeup).toHaveBeenCalledOnce();
+    expect(broker.fetch).not.toHaveBeenCalled();
   });
 
   it("turns at-least-once wakeups into one persisted reply and one usage call", async () => {
@@ -154,6 +191,9 @@ describe("conversation Queue worker", () => {
     const adapters = new Map([
       [webConversationAdapter.name, webConversationAdapter],
     ]);
+    const github = {
+      get: vi.fn(async () => ({ private: false })),
+    } as unknown as GitHubApi;
     await expect(
       processConversationWakeup(
         repository,
@@ -161,6 +201,7 @@ describe("conversation Queue worker", () => {
         { kind: "turn", id: "turn-1" },
         1,
         adapters,
+        { github },
       ),
     ).resolves.toBe("completed");
     await expect(
@@ -170,6 +211,7 @@ describe("conversation Queue worker", () => {
         { kind: "turn", id: "turn-1" },
         2,
         adapters,
+        { github },
       ),
     ).resolves.toBe("completed");
     const completed = await repository.get(conversationId, 7, ["123"]);

@@ -108,6 +108,32 @@ describe("conversation engine", () => {
     });
   });
 
+  it("resolves the snapshotted commit to its tree before listing files", async () => {
+    const treeSha = "c".repeat(40);
+    const get = vi.fn(async (path: string) => {
+      if (path.includes("/git/commits/")) return { tree: { sha: treeSha } };
+      expect(path).toContain(`/git/trees/${treeSha}?recursive=1`);
+      return {
+        tree: [
+          { path: "src/index.ts", type: "blob" },
+          { path: "src", type: "tree" },
+        ],
+      };
+    });
+    await expect(
+      executeRepositoryTool({ get } as unknown as GitHubApi, conversation, {
+        name: "list_repository_files",
+        arguments: "{}",
+      }),
+    ).resolves.toBe(
+      JSON.stringify({ paths: ["src/index.ts"], truncated: false }),
+    );
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(get.mock.calls[0]![0]).toContain(
+      `/git/commits/${conversation.sourceCommit}`,
+    );
+  });
+
   it("allows only bounded, exact-snapshot UTF-8 repository reads", async () => {
     const get = vi.fn(async (path: string) => {
       expect(path).toContain(`/contents/src/a%23b.ts?ref=${"a".repeat(40)}`);

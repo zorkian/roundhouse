@@ -10,12 +10,16 @@ import {
   type ConversationCallUsage,
   type ConversationWakeup,
 } from "./conversation-store.js";
-import { GitHubClient, type GitHubEnv } from "./github.js";
+import { GitHubClient, type GitHubApi, type GitHubEnv } from "./github.js";
 import type { UiAuthEnv } from "./ui-auth.js";
 
 interface ConversationWorkerEnv extends GitHubEnv, UiAuthEnv {
   readonly MODEL_BROKER: Fetcher;
   readonly PUBLIC_ORIGIN: string;
+}
+
+interface ConversationWorkerDependencies {
+  readonly github?: GitHubApi;
 }
 
 function executionMetadata(error: unknown): {
@@ -44,6 +48,7 @@ export async function processConversationWakeup(
   wakeup: ConversationWakeup,
   deliveryAttempts: number,
   adapters: ReadonlyMap<string, ConversationAdapter>,
+  dependencies: ConversationWorkerDependencies = {},
 ): Promise<"completed" | "retry" | "ignored"> {
   if (wakeup.kind === "promotion") {
     const work = await repository.promotionForWork(wakeup.id);
@@ -88,15 +93,26 @@ export async function processConversationWakeup(
     await repository.completeWakeup(wakeup);
     return "completed";
   }
+  const github =
+    dependencies.github ??
+    new GitHubClient(
+      env,
+      conversation.repository.installationId,
+      undefined,
+      false,
+    );
   try {
+    const metadata = await github.get<{ private?: boolean }>(
+      `/repos/${conversation.repository.name}`,
+    );
+    if (metadata.private !== false) {
+      await repository.failTurn(turn.id, "conversation_repository_not_public");
+      await repository.completeWakeup(wakeup);
+      return "completed";
+    }
     const result = await executeConversationTurn(
       env.MODEL_BROKER,
-      new GitHubClient(
-        env,
-        conversation.repository.installationId,
-        undefined,
-        false,
-      ),
+      github,
       conversation,
       turn,
       () => repository.renewTurn(turn.id),
