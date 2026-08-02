@@ -35,24 +35,6 @@ deploys fine to Cloudflare. Validate Worker logic through the test suite, not
 `@roundhouse/core` (`parseProfile` / `compileWorkflow`) can be run against the
 repo's own `.roundhouse/profile.yaml` + `workflow.yaml`.
 
-### Tests: two slow git tests need a raised timeout in this VM
-
-`pnpm test` / `pnpm check` runs Vitest with a 15s `testTimeout`
-(`vitest.config.ts`). In this VM two git-heavy tests in
-`containers/agent-runner/runner.test.mjs` ("derives literal changed paths
-without Git quoting" and "reports textual conflicts without producing an
-integration head") take ~20-30s each due to slower disk I/O and therefore time
-out, so a plain run reports 2 failures. They are not flaky and not a code bug —
-they pass with a larger timeout. To get a fully green run use:
-
-```sh
-pnpm vitest run --testTimeout=120000
-```
-
-The rest of `pnpm check` (Prettier, license headers, `tsc -b`, `node --check`)
-runs fast and reliably. Run `pnpm check` for the canonical validation (accepting
-the 2 timeouts) or the command above for an all-green suite (459 tests).
-
 ### Other notes
 
 - The runner test suite creates `.runner-test-workspaces/` at the repo root. If a
