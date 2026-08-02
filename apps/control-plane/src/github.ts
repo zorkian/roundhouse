@@ -994,8 +994,10 @@ export async function resolveDefaultBranchCommit(
   );
   let commit = ref.object?.sha;
   if (ref.object?.type === "tag") {
+    if (!commit || !/^[0-9a-f]{40}$/.test(commit))
+      throw new Error("default_branch_commit_missing");
     const tag = await api.get<{ object?: { sha?: string } }>(
-      `/repos/${repository}/git/tags/${encodeURIComponent(ref.object.sha!)}`,
+      `/repos/${repository}/git/tags/${encodeURIComponent(commit)}`,
     );
     commit = tag.object?.sha;
   }

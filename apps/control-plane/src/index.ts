@@ -918,15 +918,6 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
       } catch (error) {
         profileLoadError =
           error instanceof Error ? error.message : String(error);
-        console.error(
-          JSON.stringify({
-            message: "workflow_graph_profile_load_failed",
-            repository: repositoryName,
-            installationId: snapshotRun.githubInstallationId,
-            durationMs: Date.now() - profileStartedAt,
-            error: profileLoadError,
-          }),
-        );
       }
       const currentWorkflow = current?.profile.workflow;
       if (!current || !currentWorkflow) {
@@ -967,13 +958,16 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
             }),
           );
         }
-        return uiJson(
-          {
-            error: "workflow_profile_unavailable",
-            ...(profileLoadError ? { detail: profileLoadError } : {}),
-          },
-          502,
+        console.error(
+          JSON.stringify({
+            message: "workflow_graph_profile_load_failed",
+            repository: repositoryName,
+            installationId: snapshotRun.githubInstallationId,
+            durationMs: Date.now() - profileStartedAt,
+            error: profileLoadError,
+          }),
         );
+        return uiJson({ error: "workflow_profile_unavailable" }, 502);
       }
       const live = current;
       const run: RunSnapshot = {
