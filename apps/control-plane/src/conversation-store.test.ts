@@ -276,13 +276,13 @@ describe("D1 conversation repository", () => {
         runId: "run-42",
         runUrl: "https://roundhouse.test/repositories/octo/project/issues/42",
       }),
-    ).resolves.toBe(true);
+    ).resolves.toBe(false);
     await expect(
       repository.recordPromotionIntake({
         conversationId: ids.conversation,
         briefId: ids.brief,
         issueNumber: 42,
-        actorGithubLogin: "maintainer",
+        actorGithubLogin: "OCTOCAT",
         accepted: true,
         runId: "run-42",
         runUrl: "https://roundhouse.test/repositories/octo/project/issues/42",
