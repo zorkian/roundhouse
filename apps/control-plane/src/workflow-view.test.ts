@@ -55,6 +55,19 @@ describe("workflow graph view", () => {
     ).toContain('data-select="qualify"');
   });
 
+  it("renders an escaped fallback notice when the live profile is unavailable", async () => {
+    const run = await runFixture();
+    const html = renderWorkflowView(run, {
+      source: "snapshot",
+      notice: "Live profile failed <script>alert(1)</script>",
+    });
+    expect(html).toContain('class="notice"');
+    expect(html).toContain(
+      "Live profile failed &lt;script&gt;alert(1)&lt;/script&gt;",
+    );
+    expect(html).not.toContain("<script>alert(1)</script>");
+  });
+
   it("emits the trigger-derived entry stage as graph metadata", async () => {
     const run = await runFixture();
     const workflow = run.profile!.workflow!;
