@@ -595,23 +595,23 @@
     "semantic_hash": ""
   },
   "AGENTS.md": {
-    "mtime": 1785699811.0,
-    "ast_hash": "2dff5873bfa1f4d46a84a8ad9da07de7",
+    "mtime": 1785702139.2408884,
+    "ast_hash": "290cea543161db180c6ecb61bb5ec1f0",
     "semantic_hash": ""
   },
   "README.md": {
-    "mtime": 1785699811.0,
-    "ast_hash": "41a3d81ed39e83fc1b83344d8be83984",
+    "mtime": 1785702139.2408884,
+    "ast_hash": "1c223cd10b9823e7698951abf8950603",
     "semantic_hash": ""
   },
   "docs/future-improvements.md": {
-    "mtime": 1785699811.0,
-    "ast_hash": "b386e3b17149c14318986966735e2638",
+    "mtime": 1785702139.2408884,
+    "ast_hash": "cf0b76d51592e003b061ff74d74023ce",
     "semantic_hash": ""
   },
   "docs/v2-plan.md": {
-    "mtime": 1785699811.0,
-    "ast_hash": "636fff9dc461d280fa838b6c7b4eae9a",
+    "mtime": 1785702139.2408884,
+    "ast_hash": "3eb5f5e1a84ea0ce7ec32f378b90344a",
     "semantic_hash": ""
   },
   "pnpm-workspace.yaml": {
@@ -700,13 +700,13 @@
     "semantic_hash": ""
   },
   "docs/conversational-entry-implementation-plan.md": {
-    "mtime": 1785700705.6895752,
-    "ast_hash": "0b37791ac553e1d0862c2bd905dd7223",
+    "mtime": 1785702139.2408884,
+    "ast_hash": "2c428606ce5cc3081adc148e7dbf58b4",
     "semantic_hash": ""
   },
   "docs/conversational-entry-proposal.md": {
-    "mtime": 1785700705.6895752,
-    "ast_hash": "0cb3368a5c0e6b569e2fa4d8da6ead14",
+    "mtime": 1785702139.2408884,
+    "ast_hash": "164a8d4110603eec53c29f7283f522bb",
     "semantic_hash": ""
   }
 }

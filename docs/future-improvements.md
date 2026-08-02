@@ -5,7 +5,7 @@
 
 - Status: Ideas to revisit; none are approved to start
 - Audience: Maintainers and future implementers
-- Last updated: 2026-07-30
+- Last updated: 2026-08-02
 
 This document preserves promising improvements that arose while operating the
 V2 prototype. It is not a roadmap, acceptance plan, or implementation queue.
@@ -15,9 +15,12 @@ return to an item only when a maintainer explicitly chooses it as a slice.
 The prototype-first rule in the [V2 plan](v2-plan.md) still applies. When an
 item is selected, use the smallest design supported by observed behavior and
 do not add adjacent hardening or generalized machinery without evidence.
-The repository-defined workflow graph in Phase 7 is approved architecture and
-therefore is not tracked here. Its extension points do not approve any of the
-integrations that may eventually use them.
+The repository-defined workflow graph in Phase 7 and conversational entry v0
+are approved architecture and therefore are not tracked here. Their extension
+points do not approve any of the integrations that may eventually use them.
+Deferred conversational follow-ons such as external adapters, shared
+visibility, quotas, and deeper read tools live in the conversational-entry
+docs.
 
 ## Operational metrics and possible warm Sandbox reuse
 
