@@ -975,6 +975,37 @@ export async function loadRepositoryProfile(
   return profile;
 }
 
+export async function resolveDefaultBranchCommit(
+  api: GitHubApi,
+  repository: string,
+): Promise<{ readonly defaultBranch: string; readonly commit: string }> {
+  const repo = await api.get<{ default_branch: string }>(
+    `/repos/${repository}`,
+  );
+  // Prefer the lightweight git ref. The commits/{branch} endpoint embeds every
+  // changed-file patch for HEAD, which is hundreds of KB after large merges and
+  // is unnecessary when we only need the tip SHA before loading profile files.
+  const refPath = repo.default_branch
+    .split("/")
+    .map(encodeURIComponent)
+    .join("/");
+  const ref = await api.get<{ object?: { sha?: string; type?: string } }>(
+    `/repos/${repository}/git/ref/heads/${refPath}`,
+  );
+  let commit = ref.object?.sha;
+  if (ref.object?.type === "tag") {
+    if (!commit || !/^[0-9a-f]{40}$/.test(commit))
+      throw new Error("default_branch_commit_missing");
+    const tag = await api.get<{ object?: { sha?: string } }>(
+      `/repos/${repository}/git/tags/${encodeURIComponent(commit)}`,
+    );
+    commit = tag.object?.sha;
+  }
+  if (!commit || !/^[0-9a-f]{40}$/.test(commit))
+    throw new Error("default_branch_commit_missing");
+  return { defaultBranch: repo.default_branch, commit };
+}
+
 export async function loadDefaultBranchProfile(
   api: GitHubApi,
   repository: string,
@@ -983,16 +1014,14 @@ export async function loadDefaultBranchProfile(
   readonly commit: string;
   readonly profile: AppliedProfile;
 }> {
-  const repo = await api.get<{ default_branch: string }>(
-    `/repos/${repository}`,
-  );
-  const commit = await api.get<{ sha: string }>(
-    `/repos/${repository}/commits/${encodeURIComponent(repo.default_branch)}`,
+  const { defaultBranch, commit } = await resolveDefaultBranchCommit(
+    api,
+    repository,
   );
   return {
-    defaultBranch: repo.default_branch,
-    commit: commit.sha,
-    profile: await loadRepositoryProfile(api, repository, commit.sha),
+    defaultBranch,
+    commit,
+    profile: await loadRepositoryProfile(api, repository, commit),
   };
 }
 

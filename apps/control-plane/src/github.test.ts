@@ -19,6 +19,7 @@ import {
   GitHubStageReporter,
   loadDefaultBranchProfile,
   operatorAuthorized,
+  resolveDefaultBranchCommit,
   verifyGitHubWebhook,
   type GitHubApi,
   type GitHubEnv,
@@ -71,6 +72,8 @@ function github(permission = "write"): GitHubApi {
   return {
     get: vi.fn(async (path: string) => {
       if (path.includes("/collaborators/")) return { permission };
+      if (path.endsWith("/git/ref/heads/main"))
+        return { object: { type: "commit", sha: "a".repeat(40) } };
       if (path.endsWith("/commits/main")) return { sha: "a".repeat(40) };
       if (path.includes("/contents/.roundhouse/profile.yaml?ref="))
         return {
@@ -292,6 +295,22 @@ async function concludeQualification(
 }
 
 describe("GitHub intake", () => {
+  it("resolves the default-branch tip through the lightweight git ref", async () => {
+    const api = github();
+    const current = await resolveDefaultBranchCommit(api, "zorkian/roundhouse");
+
+    expect(current).toEqual({
+      defaultBranch: "main",
+      commit: "a".repeat(40),
+    });
+    expect(api.get).toHaveBeenCalledWith(
+      "/repos/zorkian/roundhouse/git/ref/heads/main",
+    );
+    expect(api.get).not.toHaveBeenCalledWith(
+      "/repos/zorkian/roundhouse/commits/main",
+    );
+  });
+
   it("loads a repository profile from the current default-branch commit", async () => {
     const current = await loadDefaultBranchProfile(
       github(),
