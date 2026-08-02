@@ -1,16 +1,16 @@
 # Graph Report - workspace  (2026-08-02)
 
 ## Corpus Check
-- 137 files · ~234,869 words
+- 137 files · ~235,005 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 1578 nodes · 3746 edges · 81 communities (67 shown, 14 thin omitted)
+- 1578 nodes · 3746 edges · 82 communities (68 shown, 14 thin omitted)
 - Extraction: 99% EXTRACTED · 1% INFERRED · 0% AMBIGUOUS · INFERRED: 23 edges (avg confidence: 0.63)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `f59d470b`
+- Built from commit: `9a9409dc`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -29,7 +29,7 @@
 - CloudflareArtifactsNamespace
 - contracts.ts
 - attempt-dispatch.ts
-- .getAttempt
+- attempt-settlement.ts
 - attempt-runtime.ts
 - workflow.ts
 - Attempt
@@ -63,14 +63,14 @@
 - check-license-headers.mjs
 - conversation-store.ts
 - runtime-host/package.json
-- compileWorkflow
+- workflow.test.ts
 - model-broker/package.json
 - model-broker/worker-configuration.d.ts
 - index.d.mts
 - cloudflare-workers.ts
 - tsconfig.json
 - text-modules.d.ts
-- attempt-settlement.ts
+- callback.ts
 - conversation-worker.ts
 - conversation-liveness.ts
 - Cursor Cloud specific instructions
@@ -84,12 +84,13 @@
 - review-holistic.md
 - review-security.md
 - conversation-ui.ts
-- ArtifactsNamespace
+- compileWorkflow
 - README.md
 - 9. Workflow implementation plan
 - Conversational entry v0 implementation plan
 - Conversational entry for Roundhouse
 - Roundhouse
+- ArtifactsNamespace
 - 3. Target workflow architecture
 - workflow-coordinator.test.ts
 - D1Like
@@ -121,7 +122,7 @@
 ## Import Cycles
 - 3-file cycle: `packages/core/src/profile.ts -> packages/core/src/workflow.ts -> packages/core/src/run.ts -> packages/core/src/profile.ts`
 
-## Communities (81 total, 14 thin omitted)
+## Communities (82 total, 14 thin omitted)
 
 ### Community 0 - "runner.mjs"
 Cohesion: 0.06
@@ -173,19 +174,19 @@ Nodes (27): Approval, ApprovalPurpose, approvalPurposes, AttemptCompetition, Att
 
 ### Community 13 - "attempt-dispatch.ts"
 Cohesion: 0.11
-Nodes (28): aggregateImplementationAttempts(), attemptContext(), AttemptEventRepository, AttemptWorkflowBinding, canonicalAttempts(), competitionAttemptBaseRole(), competitionForAttempt(), DurableAttemptDispatcher (+20 more)
+Nodes (27): aggregateImplementationAttempts(), attemptContext(), AttemptEventRepository, AttemptWorkflowBinding, canonicalAttempts(), competitionAttemptBaseRole(), competitionForAttempt(), DurableAttemptDispatcher (+19 more)
 
-### Community 14 - ".getAttempt"
-Cohesion: 0.31
-Nodes (15): modelEgress(), recordModelEvent(), artifactsNamespace(), sandboxName(), acceptRecordedAttemptCompletion(), backupRecordedAttemptWorkspace(), enqueueAttemptWakeup(), publishRecordedAttemptCompletion() (+7 more)
+### Community 14 - "attempt-settlement.ts"
+Cohesion: 0.21
+Nodes (22): modelEgress(), recordModelEvent(), artifactsNamespace(), attemptWorkspaceBackupKey(), sandboxName(), saveWorkspaceBackup(), acceptRecordedAttemptCompletion(), AttemptBackupResult (+14 more)
 
 ### Community 15 - "attempt-runtime.ts"
 Cohesion: 0.13
 Nodes (18): judgementCandidateEvidence(), artifactRepositoryName(), AttemptNamespace, AttemptRuntimeEnv, attemptSandbox(), AttemptStub, attemptWorkspaceRef(), checkpointIdentityExpectation() (+10 more)
 
 ### Community 16 - "workflow.ts"
-Cohesion: 0.07
-Nodes (31): ModelThinkingLevel, WaitingReason, executorCapabilities, outputPaths(), taskContracts, validateGraph(), WorkflowAdvance, WorkflowAgentSchema (+23 more)
+Cohesion: 0.08
+Nodes (29): ModelThinkingLevel, WaitingReason, executorCapabilities, taskContracts, WorkflowAdvance, WorkflowAgentSchema, workflowAgentSchemas, WorkflowAgentTask (+21 more)
 
 ### Community 17 - "Attempt"
 Cohesion: 0.11
@@ -204,8 +205,8 @@ Cohesion: 0.22
 Nodes (11): ArtifactAccess, artifactAdvertisementHasMain(), artifactAdvertisementMainHead(), artifactIdentity(), ArtifactLocation, artifactsErrorDetails(), ArtifactToken, validateCheckpointIdentity() (+3 more)
 
 ### Community 21 - "attempt-workflow.ts"
-Cohesion: 0.16
-Nodes (13): AttemptPreparationEnv, AttemptWorkflowParams, SandboxNamespace, AttemptSettlementEnv, AttemptSettlementResult, loadRecordedAttemptCompletion(), AttemptExecutionWorkflow, AttemptWorkflowEnv (+5 more)
+Cohesion: 0.15
+Nodes (15): AttemptPreparationEnv, AttemptWorkflowParams, destroyAttemptSandboxWithTrace(), SandboxNamespace, AttemptSettlementEnv, AttemptSettlementResult, AttemptExecutionWorkflow, AttemptWorkflowEnv (+7 more)
 
 ### Community 22 - "compilerOptions"
 Cohesion: 0.11
@@ -257,7 +258,7 @@ Nodes (13): 10. Acceptance and observability, 11. Complexity and documentation, 
 
 ### Community 34 - "control-plane/src/index.ts"
 Cohesion: 0.06
-Nodes (24): artifactNeedsSync(), attemptArtifactAccess(), destroyAttemptSandboxWithTrace(), SandboxDestructionTrace, AttemptTransportStatus, controlPlaneService, ExpiredAttemptRecoveryAction, ExpiredAttemptRecoveryHandlers (+16 more)
+Nodes (23): artifactNeedsSync(), attemptArtifactAccess(), SandboxDestructionTrace, competitionPromoter(), AttemptTransportStatus, controlPlaneService, ExpiredAttemptRecoveryAction, ExpiredAttemptRecoveryHandlers (+15 more)
 
 ### Community 35 - "v2Profile"
 Cohesion: 0.31
@@ -307,9 +308,9 @@ Nodes (14): ConversationQueue, ConversationService, BriefRow, CanonicalInboundMe
 Cohesion: 0.15
 Nodes (12): dependencies, @cloudflare/sandbox, @roundhouse/core, @roundhouse/response-observer, @cloudflare/sandbox, @roundhouse/core, @roundhouse/response-observer, license (+4 more)
 
-### Community 48 - "compileWorkflow"
-Cohesion: 0.28
-Nodes (7): runFixture(), advanceWorkflow(), compileWorkflow(), evaluateWorkflowCondition(), selectWorkflowTransition(), commit, validateCompetitionRoles()
+### Community 48 - "workflow.test.ts"
+Cohesion: 0.60
+Nodes (4): advanceWorkflow(), evaluateWorkflowCondition(), selectWorkflowTransition(), commit
 
 ### Community 49 - "model-broker/package.json"
 Cohesion: 0.18
@@ -327,9 +328,9 @@ Nodes (4): ApiResponseDetails, ApiResponseLogEntry, ApiResponseLogWriter, ApiRes
 Cohesion: 0.40
 Nodes (3): DurableObject, RpcTarget, WorkerEntrypoint
 
-### Community 57 - "attempt-settlement.ts"
-Cohesion: 0.15
-Nodes (20): Checkpoint, saveWorkspaceBackup(), AttemptBackupResult, AttemptPublicationResult, AttemptSettlementOutcome, AttemptValidationResult, callbackForCompletion(), competitionPromoter() (+12 more)
+### Community 57 - "callback.ts"
+Cohesion: 0.21
+Nodes (13): Checkpoint, callbackForCompletion(), settleAttempt(), AttemptCallback, BranchChangedError, bytesToHex(), callbackPayload(), CheckpointRejectedError (+5 more)
 
 ### Community 58 - "conversation-worker.ts"
 Cohesion: 0.19
@@ -346,6 +347,10 @@ Nodes (6): AGENTS, Cursor Cloud specific instructions, Graphify knowledge graph,
 ### Community 71 - "conversation-ui.ts"
 Cohesion: 0.33
 Nodes (11): Conversation, ConversationSummary, briefEditor(), escapeHtml(), lines(), openControls(), page(), promotionControls() (+3 more)
+
+### Community 72 - "compileWorkflow"
+Cohesion: 0.33
+Nodes (5): runFixture(), compileWorkflow(), outputPaths(), validateCompetitionRoles(), validateGraph()
 
 ### Community 73 - "README.md"
 Cohesion: 0.25
@@ -387,11 +392,11 @@ Nodes (3): AttemptContainerEnv, ids, D1Like
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `observeResponse()` connect `ui-auth.ts` to `runner.mjs`, `attempt-container.ts`, `model-broker/src/index.ts`, `github.ts`, `CloudflareArtifactsNamespace`, `attempt-dispatch.ts`, `.getAttempt`, `artifacts.ts`?**
+- **Why does `observeResponse()` connect `ui-auth.ts` to `runner.mjs`, `attempt-container.ts`, `model-broker/src/index.ts`, `github.ts`, `CloudflareArtifactsNamespace`, `attempt-dispatch.ts`, `attempt-settlement.ts`, `artifacts.ts`?**
   _High betweenness centrality (0.058) - this node is a cross-community bridge._
-- **Why does `D1RunRepository` connect `D1RunRepository` to `coordinator.ts`, `control-plane/src/index.ts`, `attempt-container.ts`, `run-details.ts`, `CloudflareArtifactsNamespace`, `createRun`, `attempt-dispatch.ts`, `.getAttempt`, `attempt-runtime.ts`, `attempt-workflow.ts`, `d1-store.ts`, `attempt-settlement.ts`, `conversation-liveness.ts`?**
+- **Why does `D1RunRepository` connect `D1RunRepository` to `coordinator.ts`, `control-plane/src/index.ts`, `attempt-container.ts`, `run-details.ts`, `CloudflareArtifactsNamespace`, `createRun`, `attempt-dispatch.ts`, `attempt-settlement.ts`, `attempt-runtime.ts`, `attempt-workflow.ts`, `d1-store.ts`, `conversation-liveness.ts`?**
   _High betweenness centrality (0.045) - this node is a cross-community bridge._
-- **Why does `Attempt` connect `Attempt` to `aggregated-review.ts`, `D1RunRepository`, `coordinator.ts`, `control-plane/src/index.ts`, `attempt-container.ts`, `run-details.ts`, `github.ts`, `contracts.ts`, `attempt-dispatch.ts`, `.getAttempt`, `attempt-runtime.ts`, `workflow-coordinator.test.ts`, `RunSnapshot`, `github-ci.ts`, `core/src/index.ts`, `d1-store.ts`, `attempt-settlement.ts`?**
+- **Why does `Attempt` connect `Attempt` to `aggregated-review.ts`, `D1RunRepository`, `coordinator.ts`, `control-plane/src/index.ts`, `attempt-container.ts`, `run-details.ts`, `github.ts`, `contracts.ts`, `attempt-dispatch.ts`, `attempt-settlement.ts`, `attempt-runtime.ts`, `workflow-coordinator.test.ts`, `RunSnapshot`, `github-ci.ts`, `core/src/index.ts`, `d1-store.ts`?**
   _High betweenness centrality (0.034) - this node is a cross-community bridge._
 - **What connects `name`, `version`, `license` to the rest of the system?**
   _407 weakly-connected nodes found - possible documentation gaps or missing edges._

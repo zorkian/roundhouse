@@ -717,6 +717,9 @@ describe("V2 control plane", () => {
     expect(page.headers.get("content-security-policy")).toContain(
       "form-action 'self'",
     );
+    // Form POSTs are non-cors; referrer-policy: no-referrer can cause browsers
+    // to send Origin: null and make every logged-in conversation start 403.
+    expect(page.headers.get("referrer-policy")).toBe("same-origin");
     await expect(page.text()).resolves.toContain("Start with a conversation");
 
     const crossOrigin = await fetch(
@@ -735,6 +738,41 @@ describe("V2 control plane", () => {
     expect(crossOrigin.status).toBe(403);
     await expect(crossOrigin.json()).resolves.toEqual({ error: "forbidden" });
 
+    const nullOrigin = await fetch(
+      new Request("https://v2.invalid/conversations", {
+        method: "POST",
+        headers: {
+          cookie: authedUiCookie,
+          origin: "null",
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body: "repository=repo_1&message=build+it&message_id=00000000-0000-4000-8000-000000000001",
+      }),
+      authorizedEnv as never,
+      {} as never,
+    );
+    expect(nullOrigin.status).toBe(403);
+    await expect(nullOrigin.json()).resolves.toEqual({ error: "forbidden" });
+
+    const sameOrigin = await fetch(
+      new Request("https://v2.invalid/conversations", {
+        method: "POST",
+        headers: {
+          cookie: authedUiCookie,
+          origin: "https://v2.invalid",
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body: "repository=repo_1&message=build+it",
+      }),
+      authorizedEnv as never,
+      {} as never,
+    );
+    // Same-origin clears the CSRF gate; missing message_id fails validation.
+    expect(sameOrigin.status).toBe(400);
+    await expect(sameOrigin.json()).resolves.toEqual({
+      error: "invalid_request",
+    });
+
     const dashboard = await fetch(
       new Request("https://v2.invalid/", {
         headers: { cookie: authedUiCookie },
@@ -745,6 +783,7 @@ describe("V2 control plane", () => {
     expect(dashboard.headers.get("content-security-policy")).toContain(
       "form-action 'none'",
     );
+    expect(dashboard.headers.get("referrer-policy")).toBe("same-origin");
   });
 
   it("serves the workflow graph asset from the public UI origin", async () => {

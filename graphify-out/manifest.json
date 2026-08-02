@@ -190,7 +190,7 @@
     "semantic_hash": "4f18ba8f6e0c7c7b12d0e2b0acb23ae6"
   },
   "apps/control-plane/src/d1-store.ts": {
-    "mtime": 1785700705.6855752,
+    "mtime": 1785700660.5116007,
     "ast_hash": "a31c7b1aed6b62c424879300f4011110",
     "semantic_hash": ""
   },
@@ -200,7 +200,7 @@
     "semantic_hash": "2172472c72c240c7aa8a8765b80a8957"
   },
   "apps/control-plane/src/dashboard.ts": {
-    "mtime": 1785700705.6855752,
+    "mtime": 1785700660.5156007,
     "ast_hash": "a2f5e57df4ee44561fc9ce3d5a1bc21d",
     "semantic_hash": ""
   },
@@ -215,23 +215,23 @@
     "semantic_hash": "43ed9486a5c53128b27b2c67654de6e8"
   },
   "apps/control-plane/src/github.test.ts": {
-    "mtime": 1785701095.502078,
+    "mtime": 1785702500.654444,
     "ast_hash": "5955cbce83138fd5e8551942a327e5f3",
     "semantic_hash": ""
   },
   "apps/control-plane/src/github.ts": {
-    "mtime": 1785701571.9292262,
+    "mtime": 1785702500.654444,
     "ast_hash": "5ff34dcfc3468f7806858e8a130f13ef",
     "semantic_hash": ""
   },
   "apps/control-plane/src/index.test.ts": {
-    "mtime": 1785701130.2061574,
-    "ast_hash": "d79ff5de9345676d96273cf154fb9940",
+    "mtime": 1785702580.8304718,
+    "ast_hash": "b82f05d394b72c647a9d83485aa537f7",
     "semantic_hash": ""
   },
   "apps/control-plane/src/index.ts": {
-    "mtime": 1785701571.9092262,
-    "ast_hash": "3a595ab0d5d54c42c6d2639a8d3f4f61",
+    "mtime": 1785702580.838472,
+    "ast_hash": "2b588d3e17721be698a6c8c549c8554b",
     "semantic_hash": ""
   },
   "apps/control-plane/src/liveness.test.ts": {
@@ -245,12 +245,12 @@
     "semantic_hash": "229ff914fe14bcff417caff18b57160b"
   },
   "apps/control-plane/src/model-usage.test.ts": {
-    "mtime": 1785700705.6855752,
+    "mtime": 1785700660.5156007,
     "ast_hash": "1aa63dd2f23f480620ecd69c31fac1f7",
     "semantic_hash": ""
   },
   "apps/control-plane/src/model-usage.ts": {
-    "mtime": 1785700705.6855752,
+    "mtime": 1785700660.5156007,
     "ast_hash": "03fe27152858a199c0a0b727393d5169",
     "semantic_hash": ""
   },
@@ -295,12 +295,12 @@
     "semantic_hash": "0f67a942045f3eb5e35c165e36820686"
   },
   "apps/control-plane/src/ui-auth.test.ts": {
-    "mtime": 1785700705.6855752,
+    "mtime": 1785700660.5156007,
     "ast_hash": "a929d2509774354c7c0f8f07b9890a1d",
     "semantic_hash": ""
   },
   "apps/control-plane/src/ui-auth.ts": {
-    "mtime": 1785700705.6855752,
+    "mtime": 1785700660.5156007,
     "ast_hash": "b52f8efcb0007c85e3d7b81f70a1be68",
     "semantic_hash": ""
   },
@@ -310,7 +310,7 @@
     "semantic_hash": "8fd945a15d24789ce77455eb316cb803"
   },
   "apps/control-plane/src/usage.ts": {
-    "mtime": 1785700705.6855752,
+    "mtime": 1785700660.5156007,
     "ast_hash": "2fde53d574bd76afb85a6aeb67918082",
     "semantic_hash": ""
   },
@@ -335,12 +335,12 @@
     "semantic_hash": "7abde6b044f4cc6c2f59f928d843c0e9"
   },
   "apps/control-plane/src/workflow-view.test.ts": {
-    "mtime": 1785701130.2901578,
+    "mtime": 1785702500.654444,
     "ast_hash": "afb779d989ebce6c1f33ec39e13a69ee",
     "semantic_hash": ""
   },
   "apps/control-plane/src/workflow-view.ts": {
-    "mtime": 1785701054.6859925,
+    "mtime": 1785702500.654444,
     "ast_hash": "0952008e9d7338ee70f61ce50772d3a1",
     "semantic_hash": ""
   },
@@ -365,12 +365,12 @@
     "semantic_hash": "2a08b61d23bf01fde95da1c816889018"
   },
   "apps/model-broker/src/index.test.ts": {
-    "mtime": 1785700705.6895752,
+    "mtime": 1785700660.5156007,
     "ast_hash": "fd8e5caa49902b6ebe75471aa1ea14b8",
     "semantic_hash": ""
   },
   "apps/model-broker/src/index.ts": {
-    "mtime": 1785700705.6895752,
+    "mtime": 1785700660.5156007,
     "ast_hash": "b23b95fc99e15eeecba12ef5dc59bd3e",
     "semantic_hash": ""
   },
@@ -440,12 +440,12 @@
     "semantic_hash": "41ad8b7b83fc2fa5a6781494f196a8a6"
   },
   "packages/core/src/profile.test.ts": {
-    "mtime": 1785700705.6895752,
+    "mtime": 1785700660.5156007,
     "ast_hash": "d8f438b1942abe4ab621e911d95c90ae",
     "semantic_hash": ""
   },
   "packages/core/src/profile.ts": {
-    "mtime": 1785700705.6895752,
+    "mtime": 1785700660.5156007,
     "ast_hash": "8d34a7acdf8c1ccadeb80385bac8bd8d",
     "semantic_hash": ""
   },
@@ -540,7 +540,7 @@
     "semantic_hash": ""
   },
   ".roundhouse/profile.yaml": {
-    "mtime": 1785700705.6855752,
+    "mtime": 1785700660.5116007,
     "ast_hash": "9a7388957ccd20cada4e6c3cbc71c24b",
     "semantic_hash": ""
   },
@@ -595,22 +595,22 @@
     "semantic_hash": ""
   },
   "AGENTS.md": {
-    "mtime": 1785702139.2408884,
+    "mtime": 1785701116.974673,
     "ast_hash": "290cea543161db180c6ecb61bb5ec1f0",
     "semantic_hash": ""
   },
   "README.md": {
-    "mtime": 1785702139.2408884,
+    "mtime": 1785701116.974673,
     "ast_hash": "1c223cd10b9823e7698951abf8950603",
     "semantic_hash": ""
   },
   "docs/future-improvements.md": {
-    "mtime": 1785702139.2408884,
+    "mtime": 1785701116.974673,
     "ast_hash": "cf0b76d51592e003b061ff74d74023ce",
     "semantic_hash": ""
   },
   "docs/v2-plan.md": {
-    "mtime": 1785702139.2408884,
+    "mtime": 1785701116.974673,
     "ast_hash": "3eb5f5e1a84ea0ce7ec32f378b90344a",
     "semantic_hash": ""
   },
@@ -625,87 +625,87 @@
     "semantic_hash": ""
   },
   "apps/control-plane/migrations/0017_conversations.sql": {
-    "mtime": 1785700705.6855752,
+    "mtime": 1785700660.5116007,
     "ast_hash": "f33a8b7c66fd72e9897d826a5f962f8d",
     "semantic_hash": ""
   },
   "apps/control-plane/src/conversation-adapter.ts": {
-    "mtime": 1785700705.6855752,
+    "mtime": 1785700660.5116007,
     "ast_hash": "60b5a3278d78e01ec59f2b6b423e87b2",
     "semantic_hash": ""
   },
   "apps/control-plane/src/conversation-engine.test.ts": {
-    "mtime": 1785700705.6855752,
+    "mtime": 1785700660.5116007,
     "ast_hash": "97ddca8b5c92ac15192b83cc1f133a5c",
     "semantic_hash": ""
   },
   "apps/control-plane/src/conversation-engine.ts": {
-    "mtime": 1785700705.6855752,
+    "mtime": 1785700660.5116007,
     "ast_hash": "c894f01e1126387d859038111ec4eb2f",
     "semantic_hash": ""
   },
   "apps/control-plane/src/conversation-liveness.test.ts": {
-    "mtime": 1785700705.6855752,
+    "mtime": 1785700660.5116007,
     "ast_hash": "ec2f275e2ab519def0087dcb254d95b4",
     "semantic_hash": ""
   },
   "apps/control-plane/src/conversation-liveness.ts": {
-    "mtime": 1785700705.6855752,
+    "mtime": 1785700660.5116007,
     "ast_hash": "020dde4c5cfde5f7248f98fdb2728c18",
     "semantic_hash": ""
   },
   "apps/control-plane/src/conversation-promotion.test.ts": {
-    "mtime": 1785700705.6855752,
+    "mtime": 1785700660.5116007,
     "ast_hash": "aea0a5abb58111d476cc262eaa3c923f",
     "semantic_hash": ""
   },
   "apps/control-plane/src/conversation-promotion.ts": {
-    "mtime": 1785700705.6855752,
+    "mtime": 1785700660.5116007,
     "ast_hash": "026b13a11dda62bd72deb14386c6a93e",
     "semantic_hash": ""
   },
   "apps/control-plane/src/conversation-service.ts": {
-    "mtime": 1785700705.6855752,
+    "mtime": 1785700660.5116007,
     "ast_hash": "8bb38ad008d8098aea4e024dc69fc04c",
     "semantic_hash": ""
   },
   "apps/control-plane/src/conversation-store.test.ts": {
-    "mtime": 1785700705.6855752,
+    "mtime": 1785700660.5116007,
     "ast_hash": "10eb965cac269a2fcab52da448e7e94e",
     "semantic_hash": ""
   },
   "apps/control-plane/src/conversation-store.ts": {
-    "mtime": 1785700705.6855752,
+    "mtime": 1785700660.5116007,
     "ast_hash": "d4071ccc7d9c0a93702ea98769c765c0",
     "semantic_hash": ""
   },
   "apps/control-plane/src/conversation-ui.test.ts": {
-    "mtime": 1785700705.6855752,
+    "mtime": 1785700660.5116007,
     "ast_hash": "4b8f43e5b45604e166ffdb04b8e252f7",
     "semantic_hash": ""
   },
   "apps/control-plane/src/conversation-ui.ts": {
-    "mtime": 1785700705.6855752,
+    "mtime": 1785700660.5116007,
     "ast_hash": "4e73aae9d40209927d93ba7cf07546e5",
     "semantic_hash": ""
   },
   "apps/control-plane/src/conversation-worker.test.ts": {
-    "mtime": 1785700705.6855752,
+    "mtime": 1785700660.5116007,
     "ast_hash": "00519bb0e3e4c0218057cff047ce8a08",
     "semantic_hash": ""
   },
   "apps/control-plane/src/conversation-worker.ts": {
-    "mtime": 1785700705.6855752,
+    "mtime": 1785700660.5116007,
     "ast_hash": "b1642e1b5064ce5f5e19c138894288bb",
     "semantic_hash": ""
   },
   "docs/conversational-entry-implementation-plan.md": {
-    "mtime": 1785702139.2408884,
+    "mtime": 1785701116.974673,
     "ast_hash": "2c428606ce5cc3081adc148e7dbf58b4",
     "semantic_hash": ""
   },
   "docs/conversational-entry-proposal.md": {
-    "mtime": 1785702139.2408884,
+    "mtime": 1785701116.974673,
     "ast_hash": "164a8d4110603eec53c29f7283f522bb",
     "semantic_hash": ""
   }
