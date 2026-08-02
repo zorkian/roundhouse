@@ -32,6 +32,10 @@ import { publishWakeup } from "./liveness.js";
 type AttemptWorkflowEnv = AttemptSettlementEnv &
   AttemptPreparationEnv & {
     readonly ATTEMPT_SANDBOXES: SandboxNamespace;
+    readonly ATTEMPT_EXECUTIONS: Pick<
+      Workflow<AttemptWorkflowParams>,
+      "create" | "get"
+    >;
   };
 
 const noExecutionRetry = {
@@ -117,7 +121,8 @@ async function recordTerminalWorkflowFailure(
     runId: attempt.runId,
     expectedRevision: attempt.runRevision,
   };
-  let settlement: "completed" | "failed" | "duplicate" | "stale" | "deferred";
+  let settlement:
+    "completed" | "failed" | "duplicate" | "stale" | "deferred" | "resumed";
   if (attempt.state === "created" || attempt.state === "dispatched") {
     settlement = await repository.settleAttemptOutcome(
       attempt.id,
@@ -130,6 +135,62 @@ async function recordTerminalWorkflowFailure(
     );
   } else {
     settlement = "deferred";
+    if (attempt.state === "executed") {
+      const settlementWorkflowInstanceId = `${event.instanceId}-settlement`;
+      try {
+        let created = true;
+        let status: string;
+        try {
+          const instance = await env.ATTEMPT_EXECUTIONS.create({
+            id: settlementWorkflowInstanceId,
+            params: {
+              attemptId: attempt.id,
+              sandboxName,
+              mode: "settle",
+            },
+          });
+          status = (await instance.status()).status;
+        } catch (createError) {
+          const instance = await env.ATTEMPT_EXECUTIONS.get(
+            settlementWorkflowInstanceId,
+          );
+          const existing = await instance.status();
+          if (existing.status === "unknown") throw createError;
+          created = false;
+          status = existing.status;
+        }
+        settlement = "resumed";
+        await repository.recordAttemptEvent(
+          attempt.id,
+          "attempt_settlement_resumed",
+          {
+            phase: "settlement_resumed_after_workflow_failure",
+            failedWorkflowInstanceId: event.instanceId,
+            workflowInstanceId: settlementWorkflowInstanceId,
+            created,
+            status,
+          },
+        );
+      } catch (resumeError) {
+        console.error(
+          JSON.stringify({
+            message: "attempt_workflow_terminal_failure_resume_failed",
+            attemptId,
+            runId: attempt.runId,
+            failedWorkflowInstanceId: event.instanceId,
+            settlementWorkflowInstanceId,
+            errorType:
+              resumeError instanceof Error
+                ? resumeError.constructor.name
+                : typeof resumeError,
+            error:
+              resumeError instanceof Error
+                ? resumeError.message
+                : String(resumeError),
+          }),
+        );
+      }
+    }
     await repository.requestWakeup(wakeup);
   }
   console.log(

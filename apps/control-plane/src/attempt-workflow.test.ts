@@ -14,6 +14,9 @@ const {
   publishRecordedAttemptCompletion,
   recordAttemptEvent,
   requestWakeup,
+  settlementWorkflowCreate,
+  settlementWorkflowGet,
+  settlementWorkflowStatus,
   sandbox,
   settleAttemptOutcome,
   validateRecordedAttemptCompletion,
@@ -32,6 +35,9 @@ const {
   publishRecordedAttemptCompletion: vi.fn(),
   recordAttemptEvent: vi.fn(),
   requestWakeup: vi.fn(),
+  settlementWorkflowCreate: vi.fn(),
+  settlementWorkflowGet: vi.fn(),
+  settlementWorkflowStatus: vi.fn(),
   settleAttemptOutcome: vi.fn(),
   validateRecordedAttemptCompletion: vi.fn(),
 }));
@@ -97,6 +103,10 @@ function workflow() {
         get: () => ({ destroy }),
       },
       RUN_WAKEUPS: { send: vi.fn() },
+      ATTEMPT_EXECUTIONS: {
+        create: settlementWorkflowCreate,
+        get: settlementWorkflowGet,
+      },
     },
   });
   return { destroy, instance };
@@ -175,6 +185,13 @@ describe("attempt execution Workflow", () => {
     recordAttemptEvent.mockResolvedValue(undefined);
     settleAttemptOutcome.mockResolvedValue("failed");
     publishWakeup.mockResolvedValue(undefined);
+    settlementWorkflowStatus.mockResolvedValue({ status: "queued" });
+    settlementWorkflowCreate.mockResolvedValue({
+      status: settlementWorkflowStatus,
+    });
+    settlementWorkflowGet.mockResolvedValue({
+      status: settlementWorkflowStatus,
+    });
   });
 
   it("attaches restore, execution, settlement, and cleanup in durable steps", async () => {
@@ -300,7 +317,7 @@ describe("attempt execution Workflow", () => {
     expect(publishWakeup).toHaveBeenCalledOnce();
   });
 
-  it("preserves a runner-recorded completion when the Sandbox RPC is lost", async () => {
+  it("immediately resumes a runner-recorded completion when its workflow is interrupted", async () => {
     getAttempt.mockResolvedValue({
       id: completion.attemptId,
       runId: "run_1",
@@ -319,6 +336,25 @@ describe("attempt execution Workflow", () => {
     );
 
     expect(settleAttemptOutcome).not.toHaveBeenCalled();
+    expect(settlementWorkflowCreate).toHaveBeenCalledWith({
+      id: "workflow_1-settlement",
+      params: {
+        attemptId: completion.attemptId,
+        sandboxName: "sandbox_1",
+        mode: "settle",
+      },
+    });
+    expect(recordAttemptEvent).toHaveBeenCalledWith(
+      completion.attemptId,
+      "attempt_settlement_resumed",
+      expect.objectContaining({
+        phase: "settlement_resumed_after_workflow_failure",
+        failedWorkflowInstanceId: "workflow_1",
+        workflowInstanceId: "workflow_1-settlement",
+        created: true,
+        status: "queued",
+      }),
+    );
     expect(requestWakeup).toHaveBeenCalledWith({
       runId: "run_1",
       expectedRevision: completion.expectedRevision,
@@ -330,6 +366,36 @@ describe("attempt execution Workflow", () => {
         runId: "run_1",
         expectedRevision: completion.expectedRevision,
       },
+    );
+  });
+
+  it("does not duplicate an already-created settlement recovery workflow", async () => {
+    getAttempt.mockResolvedValue({
+      id: completion.attemptId,
+      runId: "run_1",
+      runRevision: completion.expectedRevision,
+      state: "executed",
+    });
+    sandbox.restorePreparedAttempt.mockResolvedValue(undefined);
+    sandbox.executePreparedAttempt.mockRejectedValue(
+      new Error("durable_object_reset"),
+    );
+    settlementWorkflowCreate.mockRejectedValue(
+      new Error("workflow_instance_already_exists"),
+    );
+    settlementWorkflowStatus.mockResolvedValue({ status: "running" });
+    const { instance } = workflow();
+    const { step } = steps();
+
+    await expect(instance.run(event(), step as never)).rejects.toThrow(
+      "durable_object_reset",
+    );
+
+    expect(settlementWorkflowGet).toHaveBeenCalledWith("workflow_1-settlement");
+    expect(recordAttemptEvent).toHaveBeenCalledWith(
+      completion.attemptId,
+      "attempt_settlement_resumed",
+      expect.objectContaining({ created: false, status: "running" }),
     );
   });
 
