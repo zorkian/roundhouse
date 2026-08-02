@@ -35,6 +35,40 @@ deploys fine to Cloudflare. Validate Worker logic through the test suite, not
 `@roundhouse/core` (`parseProfile` / `compileWorkflow`) can be run against the
 repo's own `.roundhouse/profile.yaml` + `workflow.yaml`.
 
+### Graphify knowledge graph
+
+The repo commits a Graphify code knowledge graph under `graphify-out/` (only
+`graphify-out/cache/` is gitignored). Agents should prefer `graphify query` /
+`path` / `explain` for codebase exploration when the CLI is available — see
+`.cursor/rules/graphify.mdc`.
+
+**Keep the graph in sync with code changes.** After modifying source files (and
+before you finish the turn / open or update a PR):
+
+1. Run `graphify update .` (AST-only, no API key).
+2. Stage and **commit the resulting `graphify-out/` changes with the same
+   change set** (or a follow-up commit on the same branch) — do not leave a
+   dirty `graphify-out/` working tree.
+
+Do **not** regenerate the graph during Cursor Cloud environment install. The
+install script should only ensure the CLI is present; regenerating on every
+build dirties the reused git checkout. Recommended install snippet:
+
+```bash
+bash -lc "corepack enable"
+bash -lc "pnpm install --frozen-lockfile"
+
+# Graphify CLI only — graph artifacts are committed in-repo
+if ! command -v uv >/dev/null 2>&1; then
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+fi
+export PATH="$HOME/.local/bin:$PATH"
+uv tool install "graphifyy[mcp]"
+```
+
+If the Cloud environment install still runs `graphify update` / `graphify
+extract`, update it in the Cursor dashboard to match the snippet above.
+
 ### Other notes
 
 - The runner test suite creates `.runner-test-workspaces/` at the repo root. If a
