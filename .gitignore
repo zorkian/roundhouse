@@ -10,3 +10,4 @@ coverage/
 .runner-test-workspaces/
 .runtime/
 *.tsbuildinfo
+graphify-out/cache/

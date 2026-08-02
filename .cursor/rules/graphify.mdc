@@ -1,0 +1,25 @@
+---
+description: graphify knowledge graph context
+alwaysApply: true
+---
+
+This project has a graphify knowledge graph at `graphify-out/`.
+
+**Prefer graphify for codebase exploration** when the `graphify` CLI is on `PATH`
+(typically via `~/.local/bin` after `uv tool install graphifyy`) and
+`graphify-out/graph.json` exists. Before broad Read/Grep/Glob exploration, run:
+- `graphify query "<question>"` — scoped subgraph for architecture questions
+- `graphify path "<A>" "<B>"` — dependency path between two symbols
+- `graphify explain "<concept>"` — neighbors of a concept
+
+If `graphify` is missing from `PATH`, or `graphify-out/graph.json` is absent, fall
+back to normal Read/Grep/Glob — do not block on graphify.
+
+Include this guidance in subagent prompts that explore code. Prefer graphify over
+grep for cross-file dependency questions when it is available.
+
+- If `graphify-out/wiki/index.md` exists, navigate it instead of reading raw files
+- Read `graphify-out/GRAPH_REPORT.md` only for broad architecture review when
+  query/path/explain do not surface enough context
+- After modifying code files, run `graphify update .` to keep the graph current
+  (AST-only, no API cost)
