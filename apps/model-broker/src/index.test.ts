@@ -249,6 +249,9 @@ describe("model broker", () => {
       upstream.outboundFetch.mock.calls[0]?.[1]?.headers,
     );
     expect(headers.get("cf-aig-authorization")).toBe("Bearer gateway-token");
+    expect(headers.get("cf-aig-collect-log")).toBe("true");
+    expect(headers.get("cf-aig-collect-log-payload")).toBe("false");
+    expect(headers.get("cf-aig-skip-cache")).toBe("true");
     expect(headers.get("cf-aig-zdr")).toBe("true");
     expect(response.headers.get("x-roundhouse-routing-protocol")).toBe(
       "openai-responses",
@@ -383,7 +386,18 @@ describe("model broker", () => {
     expect(run).toHaveBeenCalledWith(
       "moonshotai/kimi-k3",
       { ...body, model: "moonshotai/kimi-k3" },
-      expect.anything(),
+      {
+        gateway: {
+          id: "roundhouse-v2-development",
+          collectLog: true,
+          skipCache: true,
+        },
+        extraHeaders: {
+          "cf-aig-collect-log-payload": "false",
+          "cf-aig-zdr": "true",
+        },
+        returnRawResponse: true,
+      },
     );
     expect(sent?.messages).not.toContainEqual({
       role: "developer",
