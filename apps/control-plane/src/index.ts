@@ -110,7 +110,10 @@ function html(value: string, status = 200, forms = false): Response {
       "cache-control": "no-store",
       "content-security-policy": `default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action ${forms ? "'self'" : "'none'"}; frame-ancestors 'none'`,
       "content-type": "text/html; charset=utf-8",
-      "referrer-policy": "no-referrer",
+      // same-origin keeps referrers on our own navigations while omitting them
+      // cross-origin. no-referrer would force browsers to send Origin: null on
+      // non-cors form POSTs, which breaks the conversation CSRF check below.
+      "referrer-policy": "same-origin",
       "x-content-type-options": "nosniff",
     },
   });
