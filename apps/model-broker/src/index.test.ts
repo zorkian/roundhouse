@@ -91,6 +91,22 @@ describe("model broker", () => {
   it("resolves the distinct default routing classes", () => {
     expect(
       resolveRoute(
+        {
+          role: "conversation",
+          taskType: "conversation",
+          complexity: "unknown",
+        },
+        env,
+      ),
+    ).toMatchObject({
+      provider: "openai",
+      model: "openai/gpt-5.6-sol",
+      protocol: "openai-responses",
+      thinkingLevel: "high",
+      rule: "conversation-default-v1",
+    });
+    expect(
+      resolveRoute(
         { role: "qualify", taskType: "qualification", complexity: "unknown" },
         env,
       ),
@@ -184,6 +200,76 @@ describe("model broker", () => {
         maxOutputTokens: 131_072,
       },
     });
+  });
+
+  it("derives routing defaults from a partially allowlisted profile model", () => {
+    const approvedEnv = {
+      ...env,
+      ROUTING_MODELS: JSON.stringify({
+        "google/gemini-3.5-flash": {
+          provider: "google",
+        },
+      }),
+    };
+    expect(
+      resolveRoute(
+        {
+          role: "implement",
+          taskType: "implementation",
+          complexity: "unknown",
+          requestedModel: "google/gemini-3.5-flash",
+          requestedReasoning: "medium",
+          profileHash: "a".repeat(64),
+        },
+        approvedEnv,
+      ),
+    ).toMatchObject({
+      provider: "google",
+      model: "google/gemini-3.5-flash",
+      protocol: "google-generative-ai",
+      transport: "cloudflare-provider-native",
+      thinkingLevel: "medium",
+      rule: "profile-implement-v2",
+    });
+  });
+
+  it("rejects a profile model outside the deployment allowlist", () => {
+    expect(() =>
+      resolveRoute(
+        {
+          role: "conversation",
+          taskType: "conversation",
+          complexity: "unknown",
+          requestedModel: "google/unapproved-model",
+        },
+        env,
+      ),
+    ).toThrow("model_not_approved");
+  });
+
+  it.each([
+    { provider: 42 },
+    { provider: "bogus" },
+    { provider: "google", protocol: "bogus-protocol" },
+    { provider: "google", transport: "direct" },
+  ])("rejects a malformed deployment model override %#", (override) => {
+    expect(() =>
+      resolveRoute(
+        {
+          role: "conversation",
+          taskType: "conversation",
+          complexity: "unknown",
+          requestedModel: "google/gemini-3.5-flash",
+          requestedReasoning: "medium",
+        },
+        {
+          ...env,
+          ROUTING_MODELS: JSON.stringify({
+            "google/gemini-3.5-flash": override,
+          }),
+        },
+      ),
+    ).toThrow("invalid_routing_configuration");
   });
 
   it("serves route resolution before a container is dispatched", async () => {
@@ -495,6 +581,31 @@ describe("model broker", () => {
     expect(response.headers.get("x-roundhouse-routing-transport")).toBe(
       "cloudflare-provider-native",
     );
+  });
+
+  it("does not write conversation model output into general logs", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const upstream = nativeUpstream(async () =>
+      Response.json({
+        id: "response_1",
+        output_text: "private transcript answer",
+      }),
+    );
+    const request = modelRequest("openai-responses", "conversation", {
+      input: [{ role: "user", content: "private transcript question" }],
+    });
+    request.headers.set("x-roundhouse-workload", "conversation");
+    const response = await brokerRequest(
+      request,
+      env,
+      upstream.ai,
+      upstream.outboundFetch as unknown as typeof fetch,
+    );
+    await expect(response.json()).resolves.toMatchObject({ id: "response_1" });
+    const entries = log.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(entries).toContain("model_response_received");
+    expect(entries).not.toContain("private transcript answer");
+    expect(entries).not.toContain("private transcript question");
   });
 
   it("marks an exhausted Workers AI account as a budget stop", async () => {

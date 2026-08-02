@@ -19,6 +19,7 @@ import {
   type Wakeup,
 } from "@roundhouse/core";
 import type { AttemptCompletion } from "./callback.js";
+import { D1ConversationRepository } from "./conversation-store.js";
 
 interface Result<T> {
   results?: T[];
@@ -120,10 +121,14 @@ type UsageRow = {
   total_tokens: number | null;
   cost_usd: number | null;
   created_at?: number;
+  source?: "delivery" | "conversation";
 };
 const usageFromRow = (
   row: UsageRow,
-): ModelUsage & { readonly createdAt?: number } => ({
+): ModelUsage & {
+  readonly createdAt?: number;
+  readonly source?: "delivery" | "conversation";
+} => ({
   callId: row.call_id,
   attemptId: row.attempt_id,
   model: row.model,
@@ -146,6 +151,7 @@ const usageFromRow = (
   ...(row.total_tokens === null ? {} : { totalTokens: row.total_tokens }),
   ...(row.cost_usd === null ? {} : { costUsd: row.cost_usd }),
   ...(row.created_at === undefined ? {} : { createdAt: row.created_at }),
+  ...(row.source === undefined ? {} : { source: row.source }),
 });
 
 function attemptFromRow(row: AttemptRow): Attempt {
@@ -232,7 +238,12 @@ export class D1RunRepository implements RunRepository {
     const statements = [
       this.db
         .prepare(
-          "INSERT OR IGNORE INTO repositories (id, github_id, profile_version, profile_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+          `INSERT INTO repositories (id, github_id, profile_version, profile_json, created_at)
+           VALUES (?1, ?2, ?3, ?4, ?5)
+           ON CONFLICT(id) DO UPDATE SET
+             github_id=excluded.github_id,
+             profile_version=excluded.profile_version,
+             profile_json=excluded.profile_json`,
         )
         .bind(
           repositoryId,
@@ -448,14 +459,41 @@ export class D1RunRepository implements RunRepository {
     githubRepositoryIds: readonly string[],
     startAt: number,
     endAt: number,
-  ): Promise<readonly (ModelUsage & { readonly createdAt?: number })[]> {
+  ): Promise<
+    readonly (ModelUsage & {
+      readonly createdAt?: number;
+      readonly source?: "delivery" | "conversation";
+    })[]
+  > {
     if (!githubRepositoryIds.length) return [];
     const placeholders = githubRepositoryIds
       .map((_, index) => `?${index + 3}`)
       .join(",");
     const result = await this.db
       .prepare(
-        `SELECT u.call_id,u.attempt_id,u.model,u.provider,u.configured_model,u.routing_rule,u.input_tokens,u.cached_input_tokens,u.cache_creation_input_tokens,u.reasoning_tokens,u.output_tokens,u.total_tokens,u.cost_usd,u.created_at FROM model_usage u JOIN attempts a ON a.id=u.attempt_id JOIN runs r ON r.id=a.run_id JOIN work_items w ON w.id=r.work_item_id JOIN repositories p ON p.id=w.repository_id WHERE u.created_at>=?1 AND u.created_at<=?2 AND p.github_id IN (${placeholders}) ORDER BY u.created_at,u.call_id`,
+        `SELECT * FROM (
+           SELECT u.call_id,u.attempt_id,u.model,u.provider,u.configured_model,u.routing_rule,
+                  u.input_tokens,u.cached_input_tokens,u.cache_creation_input_tokens,
+                  u.reasoning_tokens,u.output_tokens,u.total_tokens,u.cost_usd,u.created_at,
+                  'delivery' AS source
+           FROM model_usage u
+           JOIN attempts a ON a.id=u.attempt_id
+           JOIN runs r ON r.id=a.run_id
+           JOIN work_items w ON w.id=r.work_item_id
+           JOIN repositories p ON p.id=w.repository_id
+           WHERE u.created_at>=?1 AND u.created_at<=?2
+             AND p.github_id IN (${placeholders})
+           UNION ALL
+           SELECT u.call_id,u.turn_id AS attempt_id,u.model,u.provider,u.configured_model,
+                  u.routing_rule,u.input_tokens,u.cached_input_tokens,
+                  u.cache_creation_input_tokens,u.reasoning_tokens,u.output_tokens,
+                  u.total_tokens,u.cost_usd,u.created_at,'conversation' AS source
+           FROM conversation_model_usage u
+           JOIN conversations c ON c.id=u.conversation_id
+           JOIN repositories p ON p.id=c.repository_id
+           WHERE u.created_at>=?1 AND u.created_at<=?2
+             AND p.github_id IN (${placeholders})
+         ) ORDER BY created_at,call_id`,
       )
       .bind(startAt, endAt, ...githubRepositoryIds)
       .all<UsageRow>();
@@ -496,6 +534,22 @@ export class D1RunRepository implements RunRepository {
         },
       );
     return outcome;
+  }
+
+  async recordConversationPromotionIntake(input: {
+    readonly conversationId: string;
+    readonly briefId: string;
+    readonly issueNumber: number;
+    readonly actorGithubLogin: string;
+    readonly accepted: boolean;
+    readonly runId?: string;
+    readonly runUrl?: string;
+    readonly errorCode?: string;
+  }): Promise<boolean> {
+    return new D1ConversationRepository(
+      this.db,
+      this.now,
+    ).recordPromotionIntake(input);
   }
 
   async transition(

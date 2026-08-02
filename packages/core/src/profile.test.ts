@@ -25,6 +25,10 @@ nodes:
 `;
 const validV2 = `version: 2
 workflow: workflow.yaml
+conversation:
+  model:
+    id: openai/gpt-5.6-sol
+    reasoning: high
 paths:
   allowed: ["**"]
   protected: [".github/workflows/**"]
@@ -77,6 +81,9 @@ describe("repository profile parsing", () => {
       workflow: {
         sourcePath: ".roundhouse/workflow.yaml",
         sourceCommit: commit,
+      },
+      conversation: {
+        model: { id: "openai/gpt-5.6-sol", reasoning: "high" },
       },
       merge: { mode: "maintainer", method: "squash" },
       permissions: {
@@ -143,6 +150,33 @@ describe("repository profile parsing", () => {
     const first = await parseProfile(validV2, commit, load("First"));
     const second = await parseProfile(validV2, commit, load("Second"));
     expect(first.hash).not.toBe(second.hash);
+  });
+
+  it("defaults the conversation route for profiles that predate conversations", async () => {
+    const profile = await parseProfile(valid, commit);
+    expect(profile.conversation?.model).toEqual({
+      id: "openai/gpt-5.6-sol",
+      reasoning: "high",
+    });
+  });
+
+  it("rejects an invalid conversation route", async () => {
+    await expect(
+      parseProfile(
+        validV2.replace("reasoning: high", "reasoning: enormous"),
+        commit,
+        async (path) => (path.endsWith("workflow.yaml") ? validWorkflow : path),
+      ),
+    ).rejects.toThrow("profile_conversation_invalid");
+  });
+
+  it("accepts provider-neutral conversation model identities", async () => {
+    const profile = await parseProfile(
+      validV2.replace("openai/gpt-5.6-sol", "moonshotai/kimi-k3"),
+      commit,
+      async (path) => (path.endsWith("workflow.yaml") ? validWorkflow : path),
+    );
+    expect(profile.conversation?.model.id).toBe("moonshotai/kimi-k3");
   });
 
   it("matches globstars across zero or more path segments", async () => {

@@ -29,6 +29,7 @@ import {
   renderSignInPage,
   sessionCookieHeader,
   signOut,
+  uiSessionHash,
   validateUiSession,
   type ValidatedUiSession,
 } from "./ui-auth.js";
@@ -42,8 +43,27 @@ import {
   acceptGitHubIssueClosed,
   githubClientForRun,
   GitHubStageReporter,
+  GitHubClient,
   loadDefaultBranchProfile,
 } from "./github.js";
+import {
+  D1ConversationRepository,
+  type ConversationWakeup,
+} from "./conversation-store.js";
+import {
+  webConversationAdapter,
+  webInboundMessage,
+} from "./conversation-adapter.js";
+import { ConversationService } from "./conversation-service.js";
+import {
+  deliverPendingConversationReplies,
+  publishPendingConversationWakeups,
+} from "./conversation-liveness.js";
+import { processConversationWakeup } from "./conversation-worker.js";
+import {
+  renderConversation,
+  renderConversationIndex,
+} from "./conversation-ui.js";
 import { launch } from "@cloudflare/playwright";
 import { DurableAttemptDispatcher } from "./attempt-dispatch.js";
 import { recordAttemptCompletion } from "./attempt-settlement.js";
@@ -83,13 +103,12 @@ function json(value: unknown, status = 200, headers?: HeadersInit): Response {
   });
 }
 
-function html(value: string, status = 200): Response {
+function html(value: string, status = 200, forms = false): Response {
   return new Response(value, {
     status,
     headers: {
       "cache-control": "no-store",
-      "content-security-policy":
-        "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      "content-security-policy": `default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action ${forms ? "'self'" : "'none'"}; frame-ancestors 'none'`,
       "content-type": "text/html; charset=utf-8",
       "referrer-policy": "no-referrer",
       "x-content-type-options": "nosniff",
@@ -396,6 +415,7 @@ export function validAttemptProgress(
 }
 type RuntimeEnv = Cloudflare.Env & {
   DB: D1Like;
+  CONVERSATION_TURNS: Queue<ConversationWakeup>;
   ATTEMPT_SANDBOXES: SandboxNamespace;
   BROWSER: Fetcher;
   BACKUP_BUCKET: R2Bucket;
@@ -407,9 +427,22 @@ type RuntimeEnv = Cloudflare.Env & {
   ROUNDHOUSE_GITHUB_WEBHOOK_SECRET: string;
 };
 
+function isConversationWakeup(
+  value: Wakeup | ConversationWakeup,
+): value is ConversationWakeup {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "kind" in value &&
+    (value.kind === "turn" || value.kind === "promotion") &&
+    "id" in value &&
+    typeof value.id === "string"
+  );
+}
+
 export { destroyAttemptSandbox, githubBranch };
 
-const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
+const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
   async fetch(request, env, context) {
     const url = new URL(request.url);
     const isPublicUiRequest = () =>
@@ -479,6 +512,10 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       url.pathname === "/" ||
       url.pathname === "/runs" ||
       url.pathname === "/usage" ||
+      url.pathname === "/conversations" ||
+      /^\/conversations\/[0-9a-f-]{36}(?:\/(?:messages|brief|promote))?$/.test(
+        url.pathname,
+      ) ||
       /^\/repositories\/[^/]+\/[^/]+\/(workflow|issues\/\d+(?:\/workflow)?)$/.test(
         url.pathname,
       );
@@ -525,11 +562,271 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
     };
     const uiHtml = (value: string, status = 200): Response =>
       withUiSession(html(value, status));
+    const uiConversationHtml = (value: string, status = 200): Response =>
+      withUiSession(html(value, status, true));
     const uiJson = (
       value: unknown,
       status = 200,
       headers?: HeadersInit,
     ): Response => withUiSession(json(value, status, headers));
+    const uiRedirect = (location: string): Response =>
+      withUiSession(
+        new Response(null, {
+          status: 303,
+          headers: { location, "cache-control": "no-store" },
+        }),
+      );
+    const validUiMutation = (): boolean =>
+      request.headers.get("origin") === new URL(env.PUBLIC_ORIGIN).origin;
+    if (url.pathname === "/conversations" && isPublicUiRequest()) {
+      const conversations = new D1ConversationRepository(env.DB);
+      const service = new ConversationService(
+        conversations,
+        env.CONVERSATION_TURNS,
+      );
+      if (request.method === "GET") {
+        const [candidates, recent] = await Promise.all([
+          conversations.listRepositories(uiSession!.repositoryIds),
+          conversations.list(uiSession!.githubUserId, uiSession!.repositoryIds),
+        ]);
+        const repositories = (
+          await Promise.all(
+            candidates.map(async (repository) => {
+              try {
+                const metadata = await new GitHubClient(
+                  env,
+                  repository.installationId,
+                ).get<{ private?: boolean }>(`/repos/${repository.name}`);
+                return metadata.private === false ? repository : undefined;
+              } catch (error) {
+                console.error(
+                  JSON.stringify({
+                    message: "conversation_repository_visibility_failed",
+                    repository: repository.name,
+                    error:
+                      error instanceof Error ? error.message : String(error),
+                  }),
+                );
+                return undefined;
+              }
+            }),
+          )
+        ).filter((item): item is NonNullable<typeof item> => Boolean(item));
+        return uiConversationHtml(
+          renderConversationIndex(
+            repositories,
+            recent,
+            uiSession!.githubLogin,
+            url.searchParams.get("error") ?? undefined,
+          ),
+        );
+      }
+      if (request.method !== "POST")
+        return uiJson({ error: "method_not_allowed" }, 405, {
+          allow: "GET, POST",
+        });
+      if (!validUiMutation()) return uiJson({ error: "forbidden" }, 403);
+      const form = await request.formData();
+      const repositoryId = form.get("repository");
+      const body = form.get("message");
+      const externalMessageId = form.get("message_id");
+      if (
+        typeof repositoryId !== "string" ||
+        typeof body !== "string" ||
+        typeof externalMessageId !== "string" ||
+        !/^[0-9a-f-]{36}$/.test(externalMessageId) ||
+        !body.trim() ||
+        body.length > 12_000
+      )
+        return uiJson({ error: "invalid_request" }, 400);
+      const selected = await conversations.repository(
+        repositoryId,
+        uiSession!.repositoryIds,
+      );
+      if (!selected) return uiJson({ error: "not_found" }, 404);
+      const github = new GitHubClient(env, selected.installationId);
+      let snapshot: Awaited<ReturnType<typeof loadDefaultBranchProfile>>;
+      try {
+        const metadata = await github.get<{ private?: boolean }>(
+          `/repos/${selected.name}`,
+        );
+        if (metadata.private !== false)
+          return uiJson({ error: "public_repository_required" }, 422);
+        snapshot = await loadDefaultBranchProfile(github, selected.name);
+      } catch (error) {
+        console.error(
+          JSON.stringify({
+            message: "conversation_profile_load_failed",
+            repository: selected.name,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+        return uiRedirect(
+          "/conversations?error=Repository%20profile%20is%20unavailable",
+        );
+      }
+      const conversationId = crypto.randomUUID();
+      const turnId = crypto.randomUUID();
+      const started = await service.start({
+        conversationId,
+        turnId,
+        messageId: crypto.randomUUID(),
+        repository: selected,
+        creatorGithubUserId: uiSession!.githubUserId,
+        creatorGithubLogin: uiSession!.githubLogin,
+        sourceCommit: snapshot.commit,
+        profileHash: snapshot.profile.hash,
+        context: {
+          model: snapshot.profile.conversation?.model ?? {
+            id: "openai/gpt-5.6-sol",
+            reasoning: "high",
+          },
+          defaultBranch: snapshot.defaultBranch,
+          ...(snapshot.profile.instructions?.project
+            ? {
+                projectInstructions:
+                  snapshot.profile.instructions.project.content,
+              }
+            : {}),
+        },
+        message: webInboundMessage({
+          actor: {
+            id: String(uiSession!.githubUserId),
+            login: uiSession!.githubLogin,
+          },
+          conversationId,
+          messageId: externalMessageId,
+          body: body.trim(),
+        }),
+      });
+      return uiRedirect(`/conversations/${started.conversationId}`);
+    }
+    const conversationMatch = url.pathname.match(
+      /^\/conversations\/([0-9a-f-]{36})(?:\/(messages|brief|promote))?$/,
+    );
+    if (conversationMatch && isPublicUiRequest()) {
+      const conversationId = conversationMatch[1]!;
+      const action = conversationMatch[2];
+      const conversations = new D1ConversationRepository(env.DB);
+      const service = new ConversationService(
+        conversations,
+        env.CONVERSATION_TURNS,
+      );
+      const conversation = await conversations.get(
+        conversationId,
+        uiSession!.githubUserId,
+        uiSession!.repositoryIds,
+      );
+      if (!conversation) return uiConversationHtml(renderNotFoundPage(), 404);
+      if (!action && request.method === "GET")
+        return uiConversationHtml(
+          renderConversation(
+            conversation,
+            uiSession!.githubLogin,
+            url.searchParams.get("notice") ?? undefined,
+          ),
+        );
+      if (request.method !== "POST")
+        return uiJson({ error: "method_not_allowed" }, 405, {
+          allow: action ? "POST" : "GET",
+        });
+      if (!action) return uiJson({ error: "method_not_allowed" }, 405);
+      if (!validUiMutation()) return uiJson({ error: "forbidden" }, 403);
+      if (action === "messages") {
+        const form = await request.formData();
+        const body = form.get("message");
+        const externalMessageId = form.get("message_id");
+        if (
+          typeof body !== "string" ||
+          typeof externalMessageId !== "string" ||
+          !/^[0-9a-f-]{36}$/.test(externalMessageId) ||
+          !body.trim() ||
+          body.length > 12_000
+        )
+          return uiJson({ error: "invalid_request" }, 400);
+        const turnId = crypto.randomUUID();
+        const accepted = await service.acceptMessage({
+          conversationId,
+          creatorGithubUserId: uiSession!.githubUserId,
+          turnId,
+          messageId: crypto.randomUUID(),
+          message: webInboundMessage({
+            actor: {
+              id: String(uiSession!.githubUserId),
+              login: uiSession!.githubLogin,
+            },
+            conversationId,
+            messageId: externalMessageId,
+            body: body.trim(),
+          }),
+        });
+        if (accepted === "unavailable")
+          return uiJson({ error: "conversation_not_open" }, 409);
+        return uiRedirect(`/conversations/${conversationId}`);
+      }
+      if (action === "brief") {
+        const prepared = await service.prepareBrief({
+          conversationId,
+          creatorGithubUserId: uiSession!.githubUserId,
+          turnId: crypto.randomUUID(),
+        });
+        if (!prepared) return uiJson({ error: "conversation_not_ready" }, 409);
+        return uiRedirect(`/conversations/${conversationId}`);
+      }
+      const form = await request.formData();
+      const briefId = form.get("brief_id");
+      const title = form.get("title");
+      const outcome = form.get("outcome");
+      const list = (name: string): string[] | undefined => {
+        const value = form.get(name);
+        if (typeof value !== "string" || value.length > 20_000)
+          return undefined;
+        const items = value
+          .split(/\r?\n/)
+          .map((item) => item.trim())
+          .filter(Boolean);
+        return items.length <= 100 &&
+          items.every((item) => item.length <= 1_000)
+          ? items
+          : undefined;
+      };
+      const acceptanceCriteria = list("acceptance_criteria");
+      const constraints = list("constraints");
+      const evidence = list("evidence");
+      const uncertainties = list("uncertainties");
+      if (
+        typeof briefId !== "string" ||
+        !/^[0-9a-f-]{36}$/.test(briefId) ||
+        typeof title !== "string" ||
+        !title.trim() ||
+        title.length > 100 ||
+        typeof outcome !== "string" ||
+        !outcome.trim() ||
+        outcome.length > 20_000 ||
+        !acceptanceCriteria ||
+        !constraints ||
+        !evidence ||
+        !uncertainties
+      )
+        return uiJson({ error: "invalid_delivery_brief" }, 400);
+      const requested = await service.approveBrief({
+        conversationId,
+        creatorGithubUserId: uiSession!.githubUserId,
+        creatorGithubLogin: uiSession!.githubLogin,
+        briefId,
+        title: title.trim(),
+        outcome: outcome.trim(),
+        acceptanceCriteria,
+        constraints,
+        evidence,
+        uncertainties,
+        promotionId: crypto.randomUUID(),
+        uiSessionHash: await uiSessionHash(uiSession!),
+      });
+      if (!requested)
+        return uiJson({ error: "conversation_not_promotable" }, 409);
+      return uiRedirect(`/conversations/${conversationId}`);
+    }
     if (
       (url.pathname === "/" || url.pathname === "/runs") &&
       isPublicUiRequest()
@@ -1373,12 +1670,46 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
     return handleRequest(request);
   },
   async queue(batch, env) {
+    const conversationRepository = new D1ConversationRepository(env.DB);
+    const conversationAdapters = new Map([
+      [webConversationAdapter.name, webConversationAdapter],
+    ]);
+    const conversationMessages = batch.messages.filter((message) =>
+      isConversationWakeup(message.body),
+    );
+    if (conversationMessages.length) {
+      for (const message of conversationMessages) {
+        const wakeup = message.body as ConversationWakeup;
+        try {
+          const outcome = await processConversationWakeup(
+            conversationRepository,
+            env,
+            wakeup,
+            message.attempts,
+            conversationAdapters,
+          );
+          if (outcome === "retry") message.retry();
+          else message.ack();
+        } catch (error) {
+          console.error(
+            JSON.stringify({
+              message: "conversation_wakeup_failed",
+              kind: wakeup.kind,
+              id: wakeup.id,
+              error: error instanceof Error ? error.message : String(error),
+            }),
+          );
+          message.retry();
+        }
+      }
+    }
     const repository = new D1RunRepository(env.DB);
     const dispatcher = new DurableAttemptDispatcher(
       env.ATTEMPT_EXECUTIONS,
       repository,
     );
     for (const message of batch.messages) {
+      if (isConversationWakeup(message.body)) continue;
       try {
         const run = await repository.get(message.body.runId);
         if (!run) {
@@ -1704,6 +2035,16 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup> = {
       }),
     );
     await publishPendingWakeups(repository, env.RUN_WAKEUPS, Date.now());
+    const conversationRepository = new D1ConversationRepository(env.DB);
+    await publishPendingConversationWakeups(
+      conversationRepository,
+      env.CONVERSATION_TURNS,
+      Date.now(),
+    );
+    await deliverPendingConversationReplies(
+      conversationRepository,
+      new Map([[webConversationAdapter.name, webConversationAdapter]]),
+    );
   },
 };
 

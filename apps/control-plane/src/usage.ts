@@ -49,6 +49,12 @@ export interface ModelUsageModelTotal {
   readonly total: UsageTotal;
 }
 
+export interface ModelUsageSourceTotal {
+  readonly source: "delivery" | "conversation";
+  readonly calls: number;
+  readonly total: UsageTotal;
+}
+
 export interface ModelUsageDay {
   readonly day: string;
   readonly startedAt: number;
@@ -65,6 +71,7 @@ export interface ModelUsageSummary {
   readonly calls: number;
   readonly overall: UsageTotal;
   readonly models: readonly ModelUsageModelTotal[];
+  readonly sources: readonly ModelUsageSourceTotal[];
   readonly days: readonly ModelUsageDay[];
   readonly callsWithoutTokens: number;
   readonly callsWithoutCost: number;
@@ -77,7 +84,10 @@ const dayMilliseconds = 24 * 60 * 60_000;
 // by UTC day. Missing token or cost values stay missing in the totals rather
 // than being treated as zero.
 export function summarizeModelUsage(
-  calls: readonly (ModelUsage & { readonly createdAt?: number })[],
+  calls: readonly (ModelUsage & {
+    readonly createdAt?: number;
+    readonly source?: "delivery" | "conversation";
+  })[],
   endAt: number,
   days = 30,
 ): ModelUsageSummary {
@@ -89,10 +99,15 @@ export function summarizeModelUsage(
       call.createdAt <= endAt,
   );
   const byModel = new Map<string, ModelUsage[]>();
+  const bySource = new Map<"delivery" | "conversation", ModelUsage[]>();
   for (const call of inWindow) {
     const group = byModel.get(call.model) ?? [];
     group.push(call);
     byModel.set(call.model, group);
+    const source = call.source ?? "delivery";
+    const sourceGroup = bySource.get(source) ?? [];
+    sourceGroup.push(call);
+    bySource.set(source, sourceGroup);
   }
   // Bucket by UTC calendar date so each bar matches its visible date label.
   // The exact rolling window can touch up to `days + 1` partial edge dates.
@@ -129,6 +144,13 @@ export function summarizeModelUsage(
         total: totalUsage(items),
       }))
       .sort((a, b) => a.model.localeCompare(b.model)),
+    sources: (["conversation", "delivery"] as const)
+      .filter((source) => bySource.has(source))
+      .map((source) => ({
+        source,
+        calls: bySource.get(source)!.length,
+        total: totalUsage(bySource.get(source)!),
+      })),
     days: buckets.map((bucket) => ({
       day: new Date(bucket.startedAt).toISOString().slice(0, 10),
       startedAt: bucket.startedAt,

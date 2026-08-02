@@ -29,6 +29,10 @@
         "binding": "RUN_WAKEUPS",
         "queue": "roundhouse-v2-development-wakeups",
       },
+      {
+        "binding": "CONVERSATION_TURNS",
+        "queue": "roundhouse-v2-development-conversation-turns",
+      },
     ],
     "consumers": [
       {
@@ -36,6 +40,13 @@
         "dead_letter_queue": "roundhouse-v2-development-wakeups-dlq",
         "max_batch_size": 10,
         "max_batch_timeout": 5,
+        "max_retries": 5,
+      },
+      {
+        "queue": "roundhouse-v2-development-conversation-turns",
+        "dead_letter_queue": "roundhouse-v2-development-conversation-turns-dlq",
+        "max_batch_size": 5,
+        "max_batch_timeout": 1,
         "max_retries": 5,
       },
     ],

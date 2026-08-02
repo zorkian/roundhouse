@@ -114,6 +114,12 @@ export function renderModelUsage(
         `<tr><th scope="row">${escapeHtml(model.model)}</th><td>${model.calls.toLocaleString("en-US")}</td><td>${tokens(model.total.totalTokens)}${model.total.totalTokens === undefined ? " (partial data)" : ""}</td><td>${cost(model.total.costUsd)}${model.total.costUsd === undefined ? " (partial data)" : ""}</td></tr>`,
     )
     .join("");
+  const sourceRows = summary.sources
+    .map(
+      (source) =>
+        `<tr><th scope="row">${source.source === "conversation" ? "Conversations" : "Delivery runs"}</th><td>${source.calls.toLocaleString("en-US")}</td><td>${tokens(source.total.totalTokens)}${source.total.totalTokens === undefined ? " (partial data)" : ""}</td><td>${cost(source.total.costUsd)}${source.total.costUsd === undefined ? " (partial data)" : ""}</td></tr>`,
+    )
+    .join("");
   const table = summary.calls
     ? `<table><caption>Usage by model for the past 30 days</caption><thead><tr><th scope="col">Model</th><th scope="col">Calls</th><th scope="col">Tokens</th><th scope="col">Estimated cost</th></tr></thead><tbody>${modelRows}</tbody></table>`
     : '<p class="empty">No model usage was recorded in this 30-day window.</p>';
@@ -129,6 +135,7 @@ export function renderModelUsage(
 <div class="summary"><span><strong>${summary.calls.toLocaleString("en-US")}</strong> model calls</span><span><strong>${tokens(summary.overall.totalTokens)}</strong> tokens</span><span><strong>${cost(summary.overall.costUsd)}</strong> estimated cost</span></div>
 ${partial.length ? `<p class="partial">Note: ${escapeHtml(partial.join("; "))}.</p>` : ""}
 ${summary.calls ? `<section><h2>Daily usage</h2>${renderChart(summary)}</section>` : ""}
+${summary.calls ? `<section><h2>By workload</h2><table><caption>Conversation and delivery usage</caption><thead><tr><th scope="col">Workload</th><th scope="col">Calls</th><th scope="col">Tokens</th><th scope="col">Estimated cost</th></tr></thead><tbody>${sourceRows}</tbody></table></section>` : ""}
 <section><h2>By model</h2>${table}</section>
 </main></body></html>`;
 }

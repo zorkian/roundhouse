@@ -692,6 +692,61 @@ describe("V2 control plane", () => {
     expect(directOrigin.status).toBe(404);
   });
 
+  it("protects the conversation UI and requires same-origin mutations", async () => {
+    const fetch = worker.fetch as unknown as (
+      request: Request,
+      env: unknown,
+      context: unknown,
+    ) => Promise<Response>;
+    const signedOut = await fetch(
+      new Request("https://v2.invalid/conversations"),
+      uiEnv(dashboardDb()) as never,
+      {} as never,
+    );
+    await expect(signedOut.text()).resolves.toContain("Sign in with GitHub");
+
+    const authorizedEnv = uiEnv(withUiSession(dashboardDb()));
+    const page = await fetch(
+      new Request("https://v2.invalid/conversations", {
+        headers: { cookie: authedUiCookie },
+      }),
+      authorizedEnv as never,
+      {} as never,
+    );
+    expect(page.status).toBe(200);
+    expect(page.headers.get("content-security-policy")).toContain(
+      "form-action 'self'",
+    );
+    await expect(page.text()).resolves.toContain("Start with a conversation");
+
+    const crossOrigin = await fetch(
+      new Request("https://v2.invalid/conversations", {
+        method: "POST",
+        headers: {
+          cookie: authedUiCookie,
+          origin: "https://attacker.invalid",
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body: "repository=repo_1&message=build+it",
+      }),
+      authorizedEnv as never,
+      {} as never,
+    );
+    expect(crossOrigin.status).toBe(403);
+    await expect(crossOrigin.json()).resolves.toEqual({ error: "forbidden" });
+
+    const dashboard = await fetch(
+      new Request("https://v2.invalid/", {
+        headers: { cookie: authedUiCookie },
+      }),
+      authorizedEnv as never,
+      {} as never,
+    );
+    expect(dashboard.headers.get("content-security-policy")).toContain(
+      "form-action 'none'",
+    );
+  });
+
   it("serves the workflow graph asset from the public UI origin", async () => {
     const fetch = worker.fetch as unknown as (
       request: Request,
