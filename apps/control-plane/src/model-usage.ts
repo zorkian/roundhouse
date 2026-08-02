@@ -117,7 +117,7 @@ export function renderModelUsage(
   const sourceRows = summary.sources
     .map(
       (source) =>
-        `<tr><th scope="row">${source.source === "conversation" ? "Conversations" : "Delivery runs"}</th><td>${source.calls.toLocaleString("en-US")}</td><td>${tokens(source.total.totalTokens)}</td><td>${cost(source.total.costUsd)}</td></tr>`,
+        `<tr><th scope="row">${source.source === "conversation" ? "Conversations" : "Delivery runs"}</th><td>${source.calls.toLocaleString("en-US")}</td><td>${tokens(source.total.totalTokens)}${source.total.totalTokens === undefined ? " (partial data)" : ""}</td><td>${cost(source.total.costUsd)}${source.total.costUsd === undefined ? " (partial data)" : ""}</td></tr>`,
     )
     .join("");
   const table = summary.calls

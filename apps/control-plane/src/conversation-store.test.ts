@@ -251,6 +251,15 @@ describe("D1 conversation repository", () => {
         conversationId: ids.conversation,
         briefId: ids.brief,
         issueNumber: 42,
+        accepted: false,
+        errorCode: "operator_unauthorized",
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      repository.recordPromotionIntake({
+        conversationId: ids.conversation,
+        briefId: ids.brief,
+        issueNumber: 42,
         accepted: true,
         runId: "run-42",
         runUrl: "https://roundhouse.test/repositories/octo/project/issues/42",
@@ -266,6 +275,15 @@ describe("D1 conversation repository", () => {
         runUrl: "https://roundhouse.test/repositories/octo/project/issues/42",
       }),
     ).resolves.toBe(true);
+    await expect(
+      repository.recordPromotionIntake({
+        conversationId: ids.conversation,
+        briefId: ids.brief,
+        issueNumber: 42,
+        accepted: false,
+        errorCode: "operator_unauthorized",
+      }),
+    ).resolves.toBe(false);
 
     await expect(
       repository.get(ids.conversation, 7, ["123"]),

@@ -191,6 +191,9 @@ describe("renderModelUsage", () => {
     expect(html).toContain("token totals are partial");
     expect(html).toContain("cost totals are partial");
     expect(html).toContain("not shown in the chart");
+    expect(html).toContain(
+      '<th scope="row">Delivery runs</th><td>2</td><td>unavailable (partial data)</td><td>unavailable (partial data)</td>',
+    );
   });
 
   it("renders a clear empty state with the covered range", () => {

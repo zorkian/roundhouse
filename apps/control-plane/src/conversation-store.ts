@@ -1424,6 +1424,7 @@ export class D1ConversationRepository {
            WHERE conversation_id=?5 AND brief_id=?6 AND issue_number=?7
              AND (
                state IN ('requested','issue_created','awaiting_intake')
+               OR (?8=1 AND state='rejected')
                OR (state=?1 AND COALESCE(run_id,'')=COALESCE(?2,''))
              )`,
         )
@@ -1435,6 +1436,7 @@ export class D1ConversationRepository {
           input.conversationId,
           input.briefId,
           input.issueNumber,
+          input.accepted ? 1 : 0,
         ),
     ];
     if (input.accepted && input.runId && input.runUrl)
