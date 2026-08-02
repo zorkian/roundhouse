@@ -1268,6 +1268,7 @@ export function validModelRoute(route) {
     Object.values(thinkingLevelMap).every(
       (level) => level === null || (typeof level === "string" && level.length),
     ) &&
+    thinkingLevelMap[route.thinkingLevel] !== undefined &&
     thinkingLevelMap[route.thinkingLevel] !== null &&
     typeof route.rule === "string" &&
     route.rule.length > 0,

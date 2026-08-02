@@ -269,6 +269,8 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
   headers.set("x-roundhouse-routing-provider", route.provider);
   headers.set("x-roundhouse-routing-model", route.model);
   headers.set("x-roundhouse-routing-protocol", route.protocol);
+  if (route.transport)
+    headers.set("x-roundhouse-routing-transport", route.transport);
   headers.set("x-roundhouse-routing-thinking-level", route.thinkingLevel);
   headers.set("x-roundhouse-routing-rule", route.rule);
   const requestedUrl = new URL(request.url);

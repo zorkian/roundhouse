@@ -55,6 +55,19 @@ export const modelRuntimeCatalog = {
   "anthropic/claude-fable-5": claude5Capabilities,
   "anthropic/claude-opus-5": claude5Capabilities,
   "anthropic/claude-sonnet-5": claude5Capabilities,
+  "google/gemini-3.5-flash": {
+    contextWindow: 1_048_576,
+    maxOutputTokens: 65_536,
+    thinkingLevelMap: {
+      off: null,
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: null,
+      max: null,
+    },
+  },
   "moonshotai/kimi-k3": {
     contextWindow: 1_048_576,
     maxOutputTokens: 131_072,
@@ -82,5 +95,6 @@ export function modelSupportsThinkingLevel(
   capabilities: ModelRuntimeCapabilities,
   level: ModelThinkingLevel,
 ): boolean {
-  return capabilities.thinkingLevelMap[level] !== null;
+  const nativeLevel = capabilities.thinkingLevelMap[level];
+  return nativeLevel !== undefined && nativeLevel !== null;
 }

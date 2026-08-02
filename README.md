@@ -170,6 +170,14 @@ broker, D1 migrations, and control plane without replacing active Sandboxes.
 The deployment requires an authenticated Cloudflare development environment
 and is not needed for local checks.
 
+The model broker's provider-native OpenAI, Anthropic, and Google routes require
+an account-scoped AI Gateway token with `AI Gateway Run` permission. Store it as
+the `AI_GATEWAY_TOKEN` Worker secret before deploying the broker:
+
+```sh
+wrangler secret put AI_GATEWAY_TOKEN --config apps/model-broker/wrangler.jsonc
+```
+
 ## License
 
 Roundhouse is licensed under the [Apache License 2.0](LICENSE). See
