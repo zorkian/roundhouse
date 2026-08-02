@@ -727,13 +727,17 @@ function usageForResponse(input: {
         : input.route.model;
   const directCost = number(usage.cost_usd ?? usage.cost ?? value.cost_usd);
   const rate = prices[model] ?? prices[input.route.model];
+  const pricedCachedInputTokens = Math.min(
+    Math.max(cachedInputTokens ?? 0, 0),
+    Math.max(inputTokens ?? 0, 0),
+  );
   const costUsd =
     directCost ??
     (rate && inputTokens !== undefined && outputTokens !== undefined
       ? ((input.route.provider === "anthropic"
           ? inputTokens * rate[0]
-          : (inputTokens - (cachedInputTokens ?? 0)) * rate[0]) +
-          (cachedInputTokens ?? 0) * rate[1] +
+          : (inputTokens - pricedCachedInputTokens) * rate[0]) +
+          pricedCachedInputTokens * rate[1] +
           (cacheCreationInputTokens ?? 0) * (rate[3] ?? rate[0]) +
           outputTokens * rate[2]) /
         1_000_000

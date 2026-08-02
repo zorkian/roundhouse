@@ -202,15 +202,12 @@ describe("model broker", () => {
     });
   });
 
-  it("honors an allowlisted model selected by a repository profile", () => {
+  it("derives routing defaults from a partially allowlisted profile model", () => {
     const approvedEnv = {
       ...env,
       ROUTING_MODELS: JSON.stringify({
         "google/gemini-3.5-flash": {
           provider: "google",
-          model: "google/gemini-3.5-flash",
-          protocol: "google-generative-ai",
-          transport: "cloudflare-provider-native",
         },
       }),
     };

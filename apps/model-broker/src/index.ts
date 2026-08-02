@@ -155,7 +155,7 @@ function configuredModels(env: BrokerEnv) {
     Object.values(configuredRoutes(env)).map((route) => [route.model, route]),
   ) as Record<
     string,
-    Pick<ModelRoute, "provider" | "model" | "protocol" | "transport">
+    Partial<Pick<ModelRoute, "provider" | "protocol" | "transport">>
   >;
   if (!env.ROUTING_MODELS) return fromRoutes;
   try {
@@ -220,11 +220,18 @@ export function resolveRoute(
   const model =
     envelope.requestedModel ?? configured?.model ?? env.ROUTING_MODEL;
   const provider =
-    approved?.provider ?? configured?.provider ?? model.split("/", 1)[0] ?? "";
+    approved?.provider ??
+    (envelope.requestedModel ? undefined : configured?.provider) ??
+    model.split("/", 1)[0] ??
+    "";
   const protocol =
-    approved?.protocol ?? configured?.protocol ?? defaultProtocol(provider);
+    approved?.protocol ??
+    (envelope.requestedModel ? undefined : configured?.protocol) ??
+    defaultProtocol(provider);
   const transport =
-    approved?.transport ?? configured?.transport ?? defaultTransport(provider);
+    approved?.transport ??
+    (envelope.requestedModel ? undefined : configured?.transport) ??
+    defaultTransport(provider);
   const thinkingLevel =
     envelope.requestedReasoning ??
     configured?.thinkingLevel ??

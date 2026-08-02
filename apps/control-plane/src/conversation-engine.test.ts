@@ -300,4 +300,31 @@ describe("conversation engine", () => {
       usage: [{ totalTokens: 7 }],
     });
   });
+
+  it("clamps cached tokens when estimating cost from malformed usage", async () => {
+    const modelBroker = broker([
+      Response.json(responsesRoute),
+      Response.json({
+        id: "response-malformed-cache",
+        output_text: "Cached answer",
+        usage: {
+          input_tokens: 1,
+          input_tokens_details: { cached_tokens: 1_000 },
+          output_tokens: 0,
+          total_tokens: 1,
+        },
+      }),
+    ]);
+    const result = await executeConversationTurn(
+      modelBroker,
+      github,
+      conversation,
+      turn,
+    );
+    expect(result.usage[0]).toMatchObject({
+      inputTokens: 1,
+      cachedInputTokens: 1_000,
+    });
+    expect(result.usage[0]!.costUsd).toBeCloseTo(0.000000175, 12);
+  });
 });
