@@ -81,7 +81,7 @@ export async function processConversationWakeup(
     return "completed";
   }
   const turn = await repository.claimTurn(wakeup.id);
-  if (!turn) return "retry";
+  if (!turn) return existing.state === "running" ? "ignored" : "retry";
   const conversation = await repository.getForTurn(turn.id);
   if (!conversation) {
     await repository.failTurn(turn.id, "conversation_missing");

@@ -100,7 +100,16 @@ describe("conversation promotion", () => {
     const github = {
       get: vi.fn(async (path: string) => {
         if (path.includes("/issues?state=all"))
-          return persistedIssue ? [persistedIssue] : [];
+          return [
+            {
+              number: 41,
+              html_url: "https://github.test/octo/project/pull/41",
+              body: promotionIssueMarker(conversationId, briefId),
+              created_at: new Date(100).toISOString(),
+              pull_request: {},
+            },
+            ...(persistedIssue ? [persistedIssue] : []),
+          ];
         if (path.includes("/comments?")) return [];
         throw new Error(`unexpected_get:${path}`);
       }),

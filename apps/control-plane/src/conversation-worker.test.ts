@@ -49,6 +49,24 @@ function sqliteD1(database: DatabaseSync): D1Like {
 }
 
 describe("conversation Queue worker", () => {
+  it("acknowledges a duplicate wakeup while another worker holds the turn lease", async () => {
+    const repository = {
+      turn: vi.fn(async () => ({ state: "running" })),
+      claimTurn: vi.fn(async () => undefined),
+      completeWakeup: vi.fn(async () => undefined),
+    } as unknown as D1ConversationRepository;
+    await expect(
+      processConversationWakeup(
+        repository,
+        {} as never,
+        { kind: "turn", id: "turn-1" },
+        2,
+        new Map(),
+      ),
+    ).resolves.toBe("ignored");
+    expect(repository.completeWakeup).not.toHaveBeenCalled();
+  });
+
   it("turns at-least-once wakeups into one persisted reply and one usage call", async () => {
     const sqlite = new DatabaseSync(":memory:");
     sqlite.exec("PRAGMA foreign_keys=ON");

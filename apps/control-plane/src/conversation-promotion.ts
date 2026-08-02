@@ -20,6 +20,7 @@ interface GitHubIssue {
   readonly html_url?: string;
   readonly body?: string | null;
   readonly created_at?: string;
+  readonly pull_request?: unknown;
 }
 
 interface GitHubComment {
@@ -50,6 +51,7 @@ async function findIssue(
     );
     for (const issue of issues) {
       if (
+        issue.pull_request === undefined &&
         issue.body?.includes(marker) &&
         typeof issue.number === "number" &&
         typeof issue.html_url === "string"
