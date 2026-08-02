@@ -540,6 +540,7 @@ export class D1RunRepository implements RunRepository {
     readonly conversationId: string;
     readonly briefId: string;
     readonly issueNumber: number;
+    readonly actorGithubLogin: string;
     readonly accepted: boolean;
     readonly runId?: string;
     readonly runUrl?: string;

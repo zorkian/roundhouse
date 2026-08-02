@@ -42,6 +42,7 @@ export interface GitHubIntakeRepository {
     readonly conversationId: string;
     readonly briefId: string;
     readonly issueNumber: number;
+    readonly actorGithubLogin: string;
     readonly accepted: boolean;
     readonly runId?: string;
     readonly runUrl?: string;
@@ -1346,6 +1347,7 @@ export async function acceptGitHubComment(
       await repository.recordConversationPromotionIntake?.({
         ...promotionMarker,
         issueNumber,
+        actorGithubLogin: actor,
         accepted: false,
         errorCode: "operator_unauthorized",
       });
@@ -1381,6 +1383,7 @@ export async function acceptGitHubComment(
     await repository.recordConversationPromotionIntake?.({
       ...promotionMarker,
       issueNumber,
+      actorGithubLogin: actor,
       accepted: true,
       runId: run.id,
       ...(controlPlaneOrigin

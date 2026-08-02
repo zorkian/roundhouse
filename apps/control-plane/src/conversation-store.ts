@@ -1408,6 +1408,7 @@ export class D1ConversationRepository {
     readonly conversationId: string;
     readonly briefId: string;
     readonly issueNumber: number;
+    readonly actorGithubLogin: string;
     readonly accepted: boolean;
     readonly runId?: string;
     readonly runUrl?: string;
@@ -1422,6 +1423,7 @@ export class D1ConversationRepository {
            SET state=?1,run_id=?2,error_code=?3,lease_expires_at=NULL,
                updated_at=?4,completed_at=?4
            WHERE conversation_id=?5 AND brief_id=?6 AND issue_number=?7
+             AND (?8=1 OR actor_github_login=?9 COLLATE NOCASE)
              AND (
                state IN ('requested','issue_created','awaiting_intake')
                OR (?8=1 AND state='rejected')
@@ -1437,6 +1439,7 @@ export class D1ConversationRepository {
           input.briefId,
           input.issueNumber,
           input.accepted ? 1 : 0,
+          input.actorGithubLogin,
         ),
     ];
     if (input.accepted && input.runId && input.runUrl)

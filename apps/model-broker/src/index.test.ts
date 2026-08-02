@@ -247,6 +247,31 @@ describe("model broker", () => {
     ).toThrow("model_not_approved");
   });
 
+  it.each([
+    { provider: 42 },
+    { provider: "bogus" },
+    { provider: "google", protocol: "bogus-protocol" },
+    { provider: "google", transport: "direct" },
+  ])("rejects a malformed deployment model override %#", (override) => {
+    expect(() =>
+      resolveRoute(
+        {
+          role: "conversation",
+          taskType: "conversation",
+          complexity: "unknown",
+          requestedModel: "google/gemini-3.5-flash",
+          requestedReasoning: "medium",
+        },
+        {
+          ...env,
+          ROUTING_MODELS: JSON.stringify({
+            "google/gemini-3.5-flash": override,
+          }),
+        },
+      ),
+    ).toThrow("invalid_routing_configuration");
+  });
+
   it("serves route resolution before a container is dispatched", async () => {
     const response = await brokerRequest(
       new Request("https://broker.invalid/route", {

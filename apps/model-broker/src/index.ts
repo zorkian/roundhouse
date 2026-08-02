@@ -159,9 +159,39 @@ function configuredModels(env: BrokerEnv) {
   >;
   if (!env.ROUTING_MODELS) return fromRoutes;
   try {
+    const parsed: unknown = JSON.parse(env.ROUTING_MODELS);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+      throw new Error("invalid_routing_configuration");
+    const overrides: typeof fromRoutes = {};
+    for (const [model, value] of Object.entries(parsed)) {
+      if (
+        !/^[a-z0-9._-]+\/[A-Za-z0-9._/-]+$/.test(model) ||
+        !value ||
+        typeof value !== "object" ||
+        Array.isArray(value)
+      )
+        throw new Error("invalid_routing_configuration");
+      const entry = value as Record<string, unknown>;
+      if (
+        Object.keys(entry).some(
+          (key) =>
+            !["model", "provider", "protocol", "transport"].includes(key),
+        ) ||
+        (entry.model !== undefined && entry.model !== model) ||
+        (entry.provider !== undefined &&
+          (typeof entry.provider !== "string" ||
+            entry.provider !== model.slice(0, model.indexOf("/")))) ||
+        (entry.protocol !== undefined &&
+          !modelProtocols.includes(entry.protocol as ModelProtocol)) ||
+        (entry.transport !== undefined &&
+          !modelTransports.includes(entry.transport as ModelTransport))
+      )
+        throw new Error("invalid_routing_configuration");
+      overrides[model] = entry as (typeof fromRoutes)[string];
+    }
     return {
       ...fromRoutes,
-      ...(JSON.parse(env.ROUTING_MODELS) as typeof fromRoutes),
+      ...overrides,
     };
   } catch {
     throw new Error("invalid_routing_configuration");

@@ -38,6 +38,7 @@ class IntakeRepository extends MemoryRunRepository {
     conversationId: string;
     briefId: string;
     issueNumber: number;
+    actorGithubLogin: string;
     accepted: boolean;
     runId?: string;
     runUrl?: string;
@@ -653,6 +654,7 @@ describe("GitHub intake", () => {
         conversationId,
         briefId,
         issueNumber: 42,
+        actorGithubLogin: "maintainer",
         accepted: true,
         runId: "run_123_issue_42",
         runUrl:
@@ -682,6 +684,7 @@ describe("GitHub intake", () => {
         conversationId,
         briefId,
         issueNumber: 42,
+        actorGithubLogin: "maintainer",
         accepted: false,
         errorCode: "operator_unauthorized",
       },
