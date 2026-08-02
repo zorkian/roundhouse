@@ -340,7 +340,10 @@ preview route and stores screenshots as run evidence.
 ### 5.3 Models
 
 A private model broker authorizes each snapshotted route and invokes AI Gateway
-Unified Billing. The runner uses Pi as a provider-neutral harness with native
+Unified Billing. OpenAI, Anthropic, and Google use provider-native AI Gateway
+transports; catalog-only and Workers AI models use Cloudflare's unified model
+binding. The selected transport is part of the immutable route snapshot. The
+runner uses Pi as a provider-neutral harness with native
 OpenAI Responses, OpenAI Chat Completions, Anthropic Messages, or Google
 Generative AI protocols. The broker does not translate conversation history.
 

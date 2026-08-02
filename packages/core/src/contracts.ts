@@ -110,9 +110,14 @@ export const modelProtocols = [
   "anthropic-messages",
   "google-generative-ai",
 ] as const;
+export const modelTransports = [
+  "cloudflare-unified",
+  "cloudflare-provider-native",
+] as const;
 export const modelStopReasonHeader = "x-roundhouse-model-stop-reason";
 
 export type ModelProtocol = (typeof modelProtocols)[number];
+export type ModelTransport = (typeof modelTransports)[number];
 
 export const modelThinkingLevels = [
   "off",
@@ -120,12 +125,17 @@ export const modelThinkingLevels = [
   "low",
   "medium",
   "high",
+  "xhigh",
+  "max",
 ] as const;
 
 export interface ModelRoute {
   readonly provider: string;
   readonly model: string;
   readonly protocol: ModelProtocol;
+  // Optional so attempts snapshotted before transport-aware routing remain
+  // readable. The broker applies the current provider policy to those routes.
+  readonly transport?: ModelTransport;
   readonly thinkingLevel: (typeof modelThinkingLevels)[number];
   readonly rule: string;
 }
@@ -139,6 +149,8 @@ export function isModelRoute(value: unknown): value is ModelRoute {
     typeof route.model === "string" &&
     route.model.length > 0 &&
     modelProtocols.includes(route.protocol as ModelProtocol) &&
+    (route.transport === undefined ||
+      modelTransports.includes(route.transport as ModelTransport)) &&
     modelThinkingLevels.includes(
       route.thinkingLevel as ModelRoute["thinkingLevel"],
     ) &&

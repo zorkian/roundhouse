@@ -352,11 +352,43 @@ describe("V2 agent runner", () => {
             low: "low",
             medium: null,
             high: "high",
+            xhigh: null,
+            max: "max",
           },
           contextWindow: 1_048_576,
           maxTokens: 131_072,
         },
       ],
+    });
+  });
+
+  it("passes opt-in max reasoning through Pi model metadata", () => {
+    const configuration = piModelConfiguration(
+      {
+        id: "attempt_max",
+        routing: {
+          provider: "openai",
+          model: "openai/gpt-5.6-sol",
+          protocol: "openai-responses",
+          transport: "cloudflare-provider-native",
+          thinkingLevel: "max",
+          rule: "planning-default-v1",
+        },
+      },
+      "attempt-capability",
+    );
+    expect(
+      validModelRoute({
+        provider: "openai",
+        model: "openai/gpt-5.6-sol",
+        protocol: "openai-responses",
+        transport: "cloudflare-provider-native",
+        thinkingLevel: "max",
+        rule: "planning-default-v1",
+      }),
+    ).toBe(true);
+    expect(configuration.providers.openai.models[0]).toMatchObject({
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
     });
   });
 

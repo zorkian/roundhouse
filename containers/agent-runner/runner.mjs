@@ -1248,7 +1248,9 @@ export function validModelRoute(route) {
       "anthropic-messages",
       "google-generative-ai",
     ].includes(route.protocol) &&
-    ["off", "minimal", "low", "medium", "high"].includes(route.thinkingLevel) &&
+    ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(
+      route.thinkingLevel,
+    ) &&
     typeof route.rule === "string" &&
     route.rule.length > 0,
   );
@@ -1295,6 +1297,16 @@ export function piModelConfiguration(assignment, attemptSecret) {
             id: route.model,
             name: route.model,
             reasoning: route.thinkingLevel !== "off",
+            ...(route.provider === "openai" ||
+            route.provider === "anthropic" ||
+            route.provider === "google"
+              ? {
+                  thinkingLevelMap: {
+                    xhigh: "xhigh",
+                    max: "max",
+                  },
+                }
+              : {}),
             ...(route.model === "moonshotai/kimi-k3"
               ? {
                   thinkingLevelMap: {
@@ -1303,6 +1315,8 @@ export function piModelConfiguration(assignment, attemptSecret) {
                     low: "low",
                     medium: null,
                     high: "high",
+                    xhigh: null,
+                    max: "max",
                   },
                 }
               : {}),

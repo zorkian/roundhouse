@@ -76,6 +76,17 @@ nodes:
 `;
 
 describe("workflow compiler", () => {
+  it("accepts opt-in xhigh and max reasoning levels", async () => {
+    const workflow = await compileWorkflow(
+      source
+        .replace("reasoning: low", "reasoning: max")
+        .replace("reasoning: low", "reasoning: xhigh"),
+      commit,
+    );
+    expect(workflow.nodes.qualify?.agent?.model?.reasoning).toBe("max");
+    expect(workflow.nodes.implement?.agent?.model?.reasoning).toBe("xhigh");
+  });
+
   it("adds arbitrary repository-defined reviewers without source changes", async () => {
     const reviewSource = `
 version: 1

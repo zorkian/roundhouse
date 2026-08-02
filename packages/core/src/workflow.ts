@@ -354,7 +354,8 @@ export interface WorkflowTransition {
 
 export interface WorkflowModel {
   readonly id: string;
-  readonly reasoning: "off" | "minimal" | "low" | "medium" | "high";
+  readonly reasoning:
+    "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 }
 
 export interface WorkflowCompetitionCandidate {
@@ -793,7 +794,7 @@ function model(value: unknown, error: string): WorkflowModel {
     !hasOnlyKeys(value, ["id", "reasoning"]) ||
     typeof value.id !== "string" ||
     !/^[a-z0-9._-]+\/[A-Za-z0-9._/-]+$/.test(value.id) ||
-    !["off", "minimal", "low", "medium", "high"].includes(
+    !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(
       String(value.reasoning),
     )
   )

@@ -7,6 +7,7 @@ import { brokerRequest, resolveRoute, type BrokerEnv } from "./index.js";
 const env = {
   AI: {} as Ai,
   AI_GATEWAY_ID: "roundhouse-v2-development",
+  AI_GATEWAY_TOKEN: "gateway-token",
   ROUTING_MODEL: "openai/gpt-5.6-sol",
   ROUTING_REASONING_EFFORT: "low",
 } satisfies BrokerEnv;
@@ -14,7 +15,11 @@ const env = {
 afterEach(() => vi.restoreAllMocks());
 
 function modelRequest(
-  protocol: "openai-responses" | "openai-completions" | "anthropic-messages",
+  protocol:
+    | "openai-responses"
+    | "openai-completions"
+    | "anthropic-messages"
+    | "google-generative-ai",
   role: string,
   body: Record<string, unknown>,
   routingEnv: BrokerEnv = env,
@@ -32,6 +37,7 @@ function modelRequest(
     "openai-responses": "/v1/responses",
     "openai-completions": "/v1/chat/completions",
     "anthropic-messages": "/v1/messages",
+    "google-generative-ai": `/v1beta/models/${route.model}:streamGenerateContent?alt=sse`,
   }[protocol];
   return new Request(`https://broker.invalid${path}`, {
     method: "POST",
@@ -43,11 +49,42 @@ function modelRequest(
       "x-roundhouse-routing-provider": route.provider,
       "x-roundhouse-routing-model": route.model,
       "x-roundhouse-routing-protocol": route.protocol,
+      ...(route.transport
+        ? { "x-roundhouse-routing-transport": route.transport }
+        : {}),
       "x-roundhouse-routing-thinking-level": route.thinkingLevel,
       "x-roundhouse-routing-rule": route.rule,
     },
     body: JSON.stringify(body),
   });
+}
+
+function nativeUpstream(
+  implementation: (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ) => Promise<Response> = async () => Response.json({ id: "response_1" }),
+) {
+  const getUrl = vi.fn(
+    async (provider?: string) =>
+      `https://gateway.ai.cloudflare.com/v1/account/gateway/${provider}`,
+  );
+  return {
+    ai: {
+      gateway: vi.fn(() => ({ getUrl })),
+      run: vi.fn(async () => {
+        throw new Error("unified_transport_not_expected");
+      }),
+    },
+    getUrl,
+    outboundFetch: vi.fn(implementation),
+  };
+}
+
+function outboundBody(outboundFetch: ReturnType<typeof vi.fn>) {
+  return JSON.parse(
+    String((outboundFetch.mock.calls[0]?.[1] as RequestInit | undefined)?.body),
+  ) as Record<string, unknown>;
 }
 
 describe("model broker", () => {
@@ -61,6 +98,7 @@ describe("model broker", () => {
       provider: "openai",
       model: "openai/gpt-5.6-sol",
       protocol: "openai-responses",
+      transport: "cloudflare-provider-native",
     });
     expect(
       resolveRoute(
@@ -75,6 +113,7 @@ describe("model broker", () => {
       provider: "moonshotai",
       model: "moonshotai/kimi-k3",
       protocol: "openai-completions",
+      transport: "cloudflare-unified",
     });
   });
 
@@ -95,6 +134,7 @@ describe("model broker", () => {
       provider: "google",
       model: "google/gemini-3.0-pro",
       protocol: "google-generative-ai",
+      transport: "cloudflare-provider-native",
       thinkingLevel: "medium",
       rule: "profile-implement-v2",
     });
@@ -117,26 +157,53 @@ describe("model broker", () => {
     await expect(response.json()).resolves.toMatchObject({
       provider: "openai",
       protocol: "openai-responses",
+      transport: "cloudflare-provider-native",
+    });
+  });
+
+  it("carries max reasoning through route resolution", () => {
+    expect(
+      resolveRoute(
+        {
+          role: "plan",
+          taskType: "planning",
+          complexity: "unknown",
+          requestedModel: "openai/gpt-5.6-sol",
+          requestedReasoning: "max",
+        },
+        env,
+      ),
+    ).toMatchObject({
+      transport: "cloudflare-provider-native",
+      thinkingLevel: "max",
     });
   });
 
   it("adds hosted research from attempt authority rather than the role name", async () => {
-    const run = vi.fn(async () => new Response("event: done\n\n"));
+    const upstream = nativeUpstream(
+      async () => new Response("event: done\n\n"),
+    );
     const body = { model: "untrusted", input: "Research this", stream: true };
     const response = await brokerRequest(
       modelRequest("openai-responses", "review-holistic", body, env, true),
       env,
-      { run },
+      upstream.ai,
+      upstream.outboundFetch as unknown as typeof fetch,
     );
-    expect(run).toHaveBeenCalledWith(
-      "openai/gpt-5.6-sol",
-      {
-        ...body,
-        model: "openai/gpt-5.6-sol",
-        tools: [{ type: "web_search_preview" }],
-      },
-      expect.objectContaining({ returnRawResponse: true }),
+    expect(upstream.outboundFetch).toHaveBeenCalledWith(
+      "https://gateway.ai.cloudflare.com/v1/account/gateway/openai/responses",
+      expect.objectContaining({ method: "POST", redirect: "manual" }),
     );
+    expect(outboundBody(upstream.outboundFetch)).toEqual({
+      ...body,
+      model: "gpt-5.6-sol",
+      tools: [{ type: "web_search_preview" }],
+    });
+    const headers = new Headers(
+      upstream.outboundFetch.mock.calls[0]?.[1]?.headers,
+    );
+    expect(headers.get("cf-aig-authorization")).toBe("Bearer gateway-token");
+    expect(headers.get("cf-aig-zdr")).toBe("true");
     expect(response.headers.get("x-roundhouse-routing-protocol")).toBe(
       "openai-responses",
     );
@@ -153,7 +220,7 @@ describe("model broker", () => {
         },
       }),
     };
-    const run = vi.fn(async () => Response.json({ id: "msg_1" }));
+    const upstream = nativeUpstream(async () => Response.json({ id: "msg_1" }));
     const body = {
       system: [
         {
@@ -168,22 +235,24 @@ describe("model broker", () => {
     await brokerRequest(
       modelRequest("anthropic-messages", "plan", body, anthropicEnv, true),
       anthropicEnv,
-      { run },
+      upstream.ai,
+      upstream.outboundFetch as unknown as typeof fetch,
     );
-    expect(run).toHaveBeenCalledWith(
-      "anthropic/claude-opus-4.8",
-      {
-        ...body,
-        system: "Review the change",
-        model: "anthropic/claude-opus-4.8",
-        tools: [{ type: "web_search_20250305", name: "web_search" }],
-      },
-      expect.anything(),
+    expect(upstream.outboundFetch.mock.calls[0]?.[0]).toBe(
+      "https://gateway.ai.cloudflare.com/v1/account/gateway/anthropic/v1/messages",
     );
+    expect(outboundBody(upstream.outboundFetch)).toEqual({
+      ...body,
+      system: "Review the change",
+      model: "claude-opus-4.8",
+      tools: [{ type: "web_search_20250305", name: "web_search" }],
+    });
   });
 
   it("removes caller-supplied OpenAI hosted search without research authority", async () => {
-    const run = vi.fn(async () => new Response("event: done\n\n"));
+    const upstream = nativeUpstream(
+      async () => new Response("event: done\n\n"),
+    );
     await brokerRequest(
       modelRequest("openai-responses", "review-holistic", {
         input: "Implement it",
@@ -193,15 +262,12 @@ describe("model broker", () => {
         ],
       }),
       env,
-      { run },
+      upstream.ai,
+      upstream.outboundFetch as unknown as typeof fetch,
     );
-    expect(run).toHaveBeenCalledWith(
-      "openai/gpt-5.6-sol",
-      expect.objectContaining({
-        tools: [{ type: "function", name: "submit_result" }],
-      }),
-      expect.anything(),
-    );
+    expect(outboundBody(upstream.outboundFetch)).toMatchObject({
+      tools: [{ type: "function", name: "submit_result" }],
+    });
   });
 
   it("removes caller-supplied Anthropic hosted search without research authority", async () => {
@@ -215,7 +281,7 @@ describe("model broker", () => {
         },
       }),
     };
-    const run = vi.fn(async () => Response.json({ id: "msg_1" }));
+    const upstream = nativeUpstream(async () => Response.json({ id: "msg_1" }));
     await brokerRequest(
       modelRequest(
         "anthropic-messages",
@@ -228,13 +294,10 @@ describe("model broker", () => {
         anthropicEnv,
       ),
       anthropicEnv,
-      { run },
+      upstream.ai,
+      upstream.outboundFetch as unknown as typeof fetch,
     );
-    expect(run).toHaveBeenCalledWith(
-      "anthropic/claude-fable-5",
-      expect.not.objectContaining({ tools: expect.anything() }),
-      expect.anything(),
-    );
+    expect(outboundBody(upstream.outboundFetch)).not.toHaveProperty("tools");
   });
 
   it("passes Pi's Moonshot chat payload without synthesizing messages", async () => {
@@ -279,6 +342,58 @@ describe("model broker", () => {
     });
   });
 
+  it("rewrites Google model paths for the provider-native gateway", async () => {
+    const googleEnv = {
+      ...env,
+      ROUTING_ROUTES: JSON.stringify({
+        plan: {
+          provider: "google",
+          model: "google/gemini-3.0-pro",
+          protocol: "google-generative-ai",
+        },
+      }),
+    };
+    const upstream = nativeUpstream(
+      async () => new Response("data: response\n\n"),
+    );
+    await brokerRequest(
+      modelRequest(
+        "google-generative-ai",
+        "plan",
+        { contents: [{ role: "user", parts: [{ text: "Plan it" }] }] },
+        googleEnv,
+      ),
+      googleEnv,
+      upstream.ai,
+      upstream.outboundFetch as unknown as typeof fetch,
+    );
+    expect(upstream.getUrl).toHaveBeenCalledWith("google-ai-studio");
+    expect(upstream.outboundFetch.mock.calls[0]?.[0]).toBe(
+      "https://gateway.ai.cloudflare.com/v1/account/gateway/google-ai-studio/v1beta/models/gemini-3.0-pro:streamGenerateContent?alt=sse",
+    );
+    expect(outboundBody(upstream.outboundFetch)).not.toHaveProperty("model");
+  });
+
+  it("applies provider policy to routes snapshotted before transport existed", async () => {
+    const request = modelRequest("openai-responses", "plan", {
+      input: "Plan it",
+    });
+    request.headers.delete("x-roundhouse-routing-transport");
+    const upstream = nativeUpstream(async () =>
+      Response.json({ id: "legacy_response" }),
+    );
+    const response = await brokerRequest(
+      request,
+      env,
+      upstream.ai,
+      upstream.outboundFetch as unknown as typeof fetch,
+    );
+    expect(upstream.outboundFetch).toHaveBeenCalledOnce();
+    expect(response.headers.get("x-roundhouse-routing-transport")).toBe(
+      "cloudflare-provider-native",
+    );
+  });
+
   it("rejects a model request whose endpoint does not match its stored route", async () => {
     const request = modelRequest("anthropic-messages", "plan", {
       messages: [],
@@ -296,18 +411,25 @@ describe("model broker", () => {
   });
 
   it("returns the native upstream response and routing headers", async () => {
+    const upstream = nativeUpstream(async () =>
+      Response.json({ id: "response_1", output: [] }),
+    );
     const response = await brokerRequest(
       modelRequest("openai-responses", "review-data", { input: [] }),
       env,
-      { run: vi.fn(async () => Response.json({ id: "chat_1", choices: [] })) },
+      upstream.ai,
+      upstream.outboundFetch as unknown as typeof fetch,
     );
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
-      id: "chat_1",
-      choices: [],
+      id: "response_1",
+      output: [],
     });
     expect(response.headers.get("x-roundhouse-routing-model")).toBe(
       "openai/gpt-5.6-sol",
+    );
+    expect(response.headers.get("x-roundhouse-routing-transport")).toBe(
+      "cloudflare-provider-native",
     );
   });
 
@@ -397,13 +519,15 @@ describe("model broker", () => {
     expect(response.headers.get("x-roundhouse-model-stop-reason")).toBeNull();
   });
 
-  it("does not leak binding failures", async () => {
+  it("does not leak provider-native failures", async () => {
+    const upstream = nativeUpstream(async () =>
+      Promise.reject(new Error("credential detail")),
+    );
     const response = await brokerRequest(
       modelRequest("openai-responses", "qualify", { input: "hello" }),
       env,
-      {
-        run: vi.fn(async () => Promise.reject(new Error("credential detail"))),
-      },
+      upstream.ai,
+      upstream.outboundFetch as unknown as typeof fetch,
     );
     expect(response.status).toBe(502);
     await expect(response.json()).resolves.toEqual({

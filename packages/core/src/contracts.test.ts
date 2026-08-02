@@ -8,11 +8,12 @@ describe("model route contract", () => {
   it("accepts a complete native route", () => {
     expect(
       isModelRoute({
-        provider: "moonshotai",
-        model: "moonshotai/kimi-k3",
-        protocol: "openai-completions",
-        thinkingLevel: "low",
-        rule: "review-data-v1",
+        provider: "openai",
+        model: "openai/gpt-5.6-sol",
+        protocol: "openai-responses",
+        transport: "cloudflare-provider-native",
+        thinkingLevel: "max",
+        rule: "planning-default-v1",
       }),
     ).toBe(true);
   });

@@ -26,6 +26,8 @@ export const profileReasoningLevels = [
   "low",
   "medium",
   "high",
+  "xhigh",
+  "max",
 ] as const;
 export const findingSeverities = ["critical", "high", "medium", "low"] as const;
 
