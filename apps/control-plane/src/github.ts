@@ -811,6 +811,33 @@ export class GitHubStageReporter implements AttemptReporter {
       );
       return;
     }
+    if (attempt.stage === "adjudicate") {
+      const adjudication = attempt.result?.adjudication as
+        Record<string, unknown> | undefined;
+      if (adjudication?.decision !== "unclear") return;
+      const marker = `<!-- roundhouse:v2:adjudication:${attempt.id} -->`;
+      const comments = await listComments(
+        this.github,
+        `/repos/${run.repository}/issues/${run.issueNumber}/comments`,
+      );
+      if (comments.some((comment) => comment.body?.includes(marker))) return;
+      await this.github.post(
+        `/repos/${run.repository}/issues/${run.issueNumber}/comments`,
+        {
+          body: this.withDetails(
+            run,
+            [
+              marker,
+              "## I need a clearer reply",
+              "",
+              "I could not tell whether you are approving the visual change or asking for edits.",
+              "Please reply with a clear acceptance (for example `LGTM` or a thumbs-up), or describe the design changes you want.",
+            ].join("\n"),
+          ),
+        },
+      );
+      return;
+    }
     if (attempt.stage === "review") {
       const pullRequest = await findOpenPullRequest(this.github, run);
       if (!pullRequest) throw new Error("review_pull_request_missing");
@@ -1392,7 +1419,7 @@ export async function acceptGitHubComment(
       run,
       `${visualFeedback ? "visual-feedback" : "clarification"}:${id}:${run.revision}`,
       visualFeedback
-        ? "Thanks — I’ve added your visual feedback. I’ll update the change, or continue if no visual changes are needed."
+        ? "Thanks — I’ve added your visual feedback. I’ll interpret it and continue."
         : "Thanks — I’ve added this information and I’m taking another look.",
       controlPlaneOrigin,
     );
@@ -1692,9 +1719,14 @@ export async function acceptGitHubIssueClosed(
     return { outcome: "closed" };
   const attemptId =
     run.status === "active" &&
-    new Set(["qualify", "reproduce", "plan", "implement", "review"]).has(
-      run.stage,
-    )
+    new Set([
+      "qualify",
+      "reproduce",
+      "plan",
+      "implement",
+      "adjudicate",
+      "review",
+    ]).has(run.stage)
       ? immutableAttemptId(run.id, run.revision)
       : undefined;
   const cancelled = await repository.transition(run.id, run.revision, {

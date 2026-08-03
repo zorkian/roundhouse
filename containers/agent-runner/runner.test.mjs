@@ -25,6 +25,8 @@ import {
   devContainerConfigIdentity,
   fetchJudgementCandidateChanges,
   judgementPromptCandidates,
+  adjudicationPrompt,
+  adjudicationSchema,
   implementationPrompt,
   implementationResultSchema,
   implementationSchema,
@@ -654,17 +656,32 @@ describe("V2 agent runner", () => {
     expect(prompt).toContain("Latest maintainer visual feedback:");
     expect(prompt).toContain("Move the action closer to the heading.");
     expect(prompt).toContain(
-      "If the maintainer accepts the design or asks to continue without a visual change, do not modify the candidate and set visualImpact to no",
-    );
-    expect(prompt).toContain(
-      "If the maintainer requests a change, implement only that feedback",
+      "Implement only the requested visual changes and make a new visual-impact assessment for this pass",
     );
     expect(prompt).toContain(
       "Later review findings or CI diagnostics remain mandatory",
     );
-    expect(prompt).toContain(
-      "make a new visual-impact assessment for this pass",
-    );
+  });
+
+  it("classifies visual feedback into accept, change, or unclear decisions", () => {
+    const prompt = adjudicationPrompt({
+      inputs: {
+        visualFeedback: {
+          status: "answered",
+          actor: "maintainer",
+          body: "LGTM 👍",
+        },
+      },
+    });
+    expect(prompt).toContain("LGTM 👍");
+    expect(prompt).toContain("thumbs-up");
+    expect(prompt).toContain("changes_requested");
+    expect(prompt).toContain("unclear");
+    expect(adjudicationSchema.properties.decision.enum).toEqual([
+      "accepted",
+      "changes_requested",
+      "unclear",
+    ]);
   });
 
   it("labels retrieved CI failure diagnostics as untrusted evidence", () => {

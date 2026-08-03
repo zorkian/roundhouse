@@ -151,7 +151,35 @@ nodes:
       - when:
           path: output.human.status
           equals: answered
+        to: adjudicate
+      - terminal: failed
+
+  adjudicate:
+    executor: agent.read
+    role: adjudicate
+    agent:
+      task: adjudication
+      inputs:
+        visualFeedback: nodes.approval.human
+      result:
+        key: adjudication
+        schema: roundhouse.adjudication.v1
+      model: { id: openai/gpt-5.6-luna, reasoning: low }
+    capabilities: [context.read]
+    outputs: [adjudication.decision]
+    transitions:
+      - when:
+          path: output.adjudication.decision
+          equals: accepted
+        to: review
+      - when:
+          path: output.adjudication.decision
+          equals: changes_requested
         to: implement
+      - when:
+          path: output.adjudication.decision
+          equals: unclear
+        to: approval
       - terminal: failed
 
   review:
@@ -294,12 +322,14 @@ export const workflowAgentTasks = [
   "investigation",
   "planning",
   "implementation",
+  "adjudication",
 ] as const;
 export const workflowAgentSchemas = [
   "roundhouse.qualification.v1",
   "roundhouse.investigation.v1",
   "roundhouse.plan.v1",
   "roundhouse.implementation.v1",
+  "roundhouse.adjudication.v1",
 ] as const;
 export const workflowReviewModes = ["blocking", "advisory", "shadow"] as const;
 export const workflowReviewActivations = ["always", "selected"] as const;
@@ -767,6 +797,12 @@ const taskContracts: Readonly<
     requiredInputs: ["issue", "qualification", "reproduction", "plan"],
     resultKey: "implementation",
     schema: "roundhouse.implementation.v1",
+  },
+  adjudication: {
+    executor: "agent.read",
+    requiredInputs: ["visualFeedback"],
+    resultKey: "adjudication",
+    schema: "roundhouse.adjudication.v1",
   },
 };
 

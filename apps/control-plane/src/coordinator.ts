@@ -566,6 +566,7 @@ function stageForWorkflowNode(nodeId: string, node: WorkflowNode): RunStage {
   if (node.agent?.task === "investigation") return "reproduce";
   if (node.agent?.task === "planning") return "plan";
   if (node.agent?.task === "implementation") return "implement";
+  if (node.agent?.task === "adjudication") return "adjudicate";
   if (node.executor === "review") return "review";
   if (node.executor === "human" && node.role === "approval") return "review";
   if (node.executor === "github.publish") return "publish";
@@ -579,6 +580,7 @@ function stageForWorkflowNode(nodeId: string, node: WorkflowNode): RunStage {
       "reproduce",
       "plan",
       "implement",
+      "adjudicate",
       "validate",
       "review",
       "integrate",

@@ -18,6 +18,7 @@ export const runStages = [
   "reproduce",
   "plan",
   "implement",
+  "adjudicate",
   "validate",
   "review",
   "integrate",
