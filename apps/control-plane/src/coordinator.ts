@@ -686,8 +686,7 @@ export function graphCompletedTransition(run: RunSnapshot, attempt: Attempt) {
         acceptedHead: attempt.acceptedHead,
         protectedPaths: (
           attempt.result?.protectedPathProposal as
-            | { readonly paths?: readonly string[] }
-            | undefined
+            { readonly paths?: readonly string[] } | undefined
         )?.paths,
       }),
     );

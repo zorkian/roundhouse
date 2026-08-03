@@ -822,9 +822,7 @@ export class GitHubStageReporter implements AttemptReporter {
       }
       let pullRequest = await findOpenPullRequest(this.github, run);
       const created = !pullRequest;
-      const protectedProposal = attemptHasProtectedPathProposal(
-        attempt.result,
-      );
+      const protectedProposal = attemptHasProtectedPathProposal(attempt.result);
       if (!pullRequest) {
         const repository = await this.github.get<{ default_branch?: string }>(
           `/repos/${run.repository}`,

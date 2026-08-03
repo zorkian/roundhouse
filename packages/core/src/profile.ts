@@ -617,8 +617,7 @@ export function attemptHasProtectedPathProposal(
   result: Readonly<Record<string, unknown>> | undefined,
 ): boolean {
   const proposal = result?.protectedPathProposal as
-    | { readonly paths?: unknown }
-    | undefined;
+    { readonly paths?: unknown } | undefined;
   return Array.isArray(proposal?.paths) && proposal.paths.length > 0;
 }
 
