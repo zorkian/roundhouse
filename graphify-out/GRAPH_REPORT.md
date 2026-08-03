@@ -1,23 +1,23 @@
 # Graph Report - workspace  (2026-08-03)
 
 ## Corpus Check
-- 148 files · ~247,180 words
+- 148 files · ~248,446 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 1666 nodes · 4003 edges · 87 communities (75 shown, 12 thin omitted)
+- 1667 nodes · 4005 edges · 93 communities (78 shown, 15 thin omitted)
 - Extraction: 99% EXTRACTED · 1% INFERRED · 0% AMBIGUOUS · INFERRED: 24 edges (avg confidence: 0.62)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `e3efaf9f`
+- Built from commit: `5b3d521d`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
 ## Community Hubs (Navigation)
 - runner.mjs
 - D1RunRepository
-- coordinate
+- coordinator.ts
 - run-details.ts
 - attempt-container.ts
 - ui-auth.ts
@@ -26,7 +26,7 @@
 - model-broker/src/index.ts
 - github.ts
 - conversation-ui.ts
-- compileWorkflow
+- coordinate
 - contracts.ts
 - attempt-dispatch.ts
 - D1Like
@@ -39,9 +39,9 @@
 - attempt-settlement.ts
 - compilerOptions
 - core/src/index.ts
-- usage.ts
+- model-usage.ts
 - workflow-view.test.ts
-- coordinator.ts
+- compileWorkflow
 - github.test.ts
 - D1ConversationRepository
 - agent-runner/package.json
@@ -50,7 +50,7 @@
 - aggregated-review.ts
 - Roundhouse V2
 - control-plane/src/index.ts
-- dependencies
+- createRun
 - compilerOptions
 - control-plane/worker-configuration.d.ts
 - core/tsconfig.json
@@ -59,9 +59,9 @@
 - Development environment, GitHub Actions, and wrangler
 - cloudflare-containers.ts
 - conversation-store.ts
-- isRecord
+- dashboard.ts
 - check-license-headers.mjs
-- LocalD1Statement
+- usage.ts
 - runtime-host/package.json
 - GitHubApi
 - model-broker/package.json
@@ -71,8 +71,8 @@
 - tsconfig.json
 - text-modules.d.ts
 - callback.ts
-- conversation-promotion.ts
 - conversation-worker.ts
+- conversation-liveness.ts
 - Cursor Cloud specific instructions
 - run-details.test.ts
 - implementation.md
@@ -83,22 +83,28 @@
 - review-data.md
 - review-holistic.md
 - review-security.md
-- model-usage.ts
+- github-ci.test.ts
 - workflow-view.ts
 - README.md
 - 9. Workflow implementation plan
 - Conversational entry v0 implementation plan
 - Conversational entry for Roundhouse
 - Roundhouse
-- createRun
-- GitHubClient
-- RunSnapshot
-- github-ci.test.ts
-- dashboard.ts
+- v2Profile
+- observeResponse
 - LocalD1Statement
-- attempt-workflow.ts
-- defaultIssueWorkflowSource
+- RunSnapshot
+- runtime-host.ts
+- dependencies
+- workflow.test.ts
 - 5. Runtime boundaries
+- attempt-workflow.ts
+- .head
+- CloudflareArtifactsNamespace
+- workflow-coordinator.test.ts
+- conversation-client.test.ts
+- safe-markdown.ts
+- ArtifactsNamespace
 
 ## God Nodes (most connected - your core abstractions)
 1. `D1RunRepository` - 72 edges
@@ -127,63 +133,63 @@
 ## Import Cycles
 - 3-file cycle: `packages/core/src/profile.ts -> packages/core/src/workflow.ts -> packages/core/src/run.ts -> packages/core/src/profile.ts`
 
-## Communities (87 total, 12 thin omitted)
+## Communities (93 total, 15 thin omitted)
 
 ### Community 0 - "runner.mjs"
 Cohesion: 0.05
 Nodes (97): activityRequest(), agentRuntime, agentSystemPrompt, agentToolNames(), artifactWriteTokenRequest(), bootstrapWorkspace(), checkpointWorkspace(), clone() (+89 more)
 
 ### Community 1 - "D1RunRepository"
-Cohesion: 0.07
-Nodes (20): modelEgress(), pauseForModelBudget(), recordModelEvent(), loadRecordedAttemptCompletion(), recordTerminalWorkflowFailure(), attemptFromRow(), D1RunRepository, PendingWakeup (+12 more)
+Cohesion: 0.06
+Nodes (22): modelEgress(), pauseForModelBudget(), recordModelEvent(), recordTerminalWorkflowFailure(), attemptFromRow(), D1RunRepository, PendingWakeup, Statement (+14 more)
 
-### Community 2 - "coordinate"
+### Community 2 - "coordinator.ts"
 Cohesion: 0.13
-Nodes (18): coordinate(), coordinateCompetition(), dispatchCompetitionAttempt(), dispatchReview(), effectiveAttemptCapabilities(), finalizePromotion(), recordAttemptOutcomeTransition(), recordIssuedCapabilities() (+10 more)
+Nodes (26): attemptInactivityMilliseconds, aggregateReviewAttempts(), attemptOutcomeTransition(), ciTransition(), CompetitionStep, evidenceForAttempt(), graphCompletedTransition(), implementationNode() (+18 more)
 
 ### Community 3 - "run-details.ts"
-Cohesion: 0.10
-Nodes (43): seedPreImplementationResults(), attemptLinks(), attemptResult(), boundaryWorkflowEvidence(), ciResult(), CompetitionGroup, competitionGroups(), competitionPanels() (+35 more)
+Cohesion: 0.14
+Nodes (37): attemptLinks(), attemptResult(), boundaryWorkflowEvidence(), ciResult(), CompetitionGroup, competitionGroups(), competitionPanels(), DetailsAttempt (+29 more)
 
 ### Community 4 - "attempt-container.ts"
-Cohesion: 0.07
-Nodes (26): attemptAllowedHosts(), AttemptAssignment, attemptCompletion(), attemptUsesProjectEnvironment(), containerRegistryHosts, PreparedAttempt, RoundhouseRuntimeSandbox, RunnerHttpResult (+18 more)
+Cohesion: 0.08
+Nodes (23): attemptAllowedHosts(), AttemptAssignment, attemptCompletion(), attemptUsesProjectEnvironment(), containerRegistryHosts, PreparedAttempt, RoundhouseRuntimeSandbox, RunnerHttpResult (+15 more)
 
 ### Community 5 - "ui-auth.ts"
-Cohesion: 0.07
-Nodes (50): authorizedRepositoryIds(), base64UrlDecode(), base64UrlEncode(), beginGitHubSignIn(), clearStateCookie(), decryptUiAccessToken(), encryptUiAccessToken(), enrolledRepositoryIds() (+42 more)
+Cohesion: 0.10
+Nodes (38): authorizedRepositoryIds(), base64UrlDecode(), base64UrlEncode(), beginGitHubSignIn(), clearStateCookie(), decryptUiAccessToken(), encryptUiAccessToken(), enrolledRepositoryIds() (+30 more)
 
 ### Community 6 - "profile.ts"
 Cohesion: 0.08
-Nodes (39): defaultBlockingSeverities, defaultConversationModel, defaultReviewerModels, defaultStageModels, enumList(), findingSeverities, FindingSeverity, hasOnlyKeys() (+31 more)
+Nodes (28): defaultBlockingSeverities, defaultConversationModel, defaultReviewerModels, defaultStageModels, findingSeverities, FindingSeverity, isProtectedRepositoryPath(), matches() (+20 more)
 
 ### Community 7 - "conversation-engine.ts"
 Cohesion: 0.07
-Nodes (39): adapterFor(), anthropicMessagesAdapter, briefSchema, Broker, brokerHeaders(), callModel(), ConversationExecutionResult, ConversationFirstReply (+31 more)
+Nodes (41): adapterFor(), anthropicMessagesAdapter, briefSchema, Broker, brokerHeaders(), callModel(), ConversationExecutionResult, ConversationFirstReply (+33 more)
 
 ### Community 8 - "model-broker/src/index.ts"
 Cohesion: 0.09
-Nodes (35): applyHostedResearch(), BrokerEnv, brokerRequest(), cloudflareStopReason(), configuredModels(), configuredRoutes(), defaultProtocol(), defaultRoutes (+27 more)
+Nodes (36): applyHostedResearch(), BrokerEnv, brokerRequest(), cloudflareStopReason(), configuredModels(), configuredRoutes(), defaultProtocol(), defaultRoutes (+28 more)
 
 ### Community 9 - "github.ts"
-Cohesion: 0.15
-Nodes (25): appJwt(), bytesToBase64Url(), CommentPayload, findOpenPullRequest(), findPullRequest(), implementationComment(), implementationNoChangeComment(), IssuePayload (+17 more)
+Cohesion: 0.12
+Nodes (29): appJwt(), bytesToBase64Url(), CommentPayload, findOpenPullRequest(), findPullRequest(), GitHubStageReporter, implementationComment(), implementationNoChangeComment() (+21 more)
 
 ### Community 10 - "conversation-ui.ts"
-Cohesion: 0.15
-Nodes (28): Conversation, ConversationSummary, actionableConversationStatus, briefEditor(), controlsHtml(), conversationPollingActive(), ConversationPollState, conversationStatus() (+20 more)
+Cohesion: 0.17
+Nodes (26): Conversation, actionableConversationStatus, briefEditor(), controlsHtml(), conversationPollingActive(), ConversationPollState, conversationStatus(), ConversationStatusInput (+18 more)
 
-### Community 11 - "compileWorkflow"
-Cohesion: 0.16
-Nodes (11): visualFeedbackProfile(), resolveWorkflowContexts(), resumeExternalWorkflowEvent(), commit, head, profileFor(), runWith(), WorkflowContextProvider (+3 more)
+### Community 11 - "coordinate"
+Cohesion: 0.12
+Nodes (19): coordinate(), coordinateCompetition(), dispatchCompetitionAttempt(), dispatchReview(), effectiveAttemptCapabilities(), finalizePromotion(), recordAttemptOutcomeTransition(), recordIssuedCapabilities() (+11 more)
 
 ### Community 12 - "contracts.ts"
-Cohesion: 0.10
-Nodes (23): Approval, ApprovalPurpose, approvalPurposes, AttemptKind, attemptKinds, AttemptOutcome, AttemptState, attemptStates (+15 more)
+Cohesion: 0.08
+Nodes (25): CompetitionPromoter, Approval, ApprovalPurpose, approvalPurposes, AttemptCompetition, AttemptKind, attemptKinds, AttemptOutcome (+17 more)
 
 ### Community 13 - "attempt-dispatch.ts"
-Cohesion: 0.11
-Nodes (32): aggregatedReview, artifactNeedsSync(), attemptArtifactAccess(), attemptContext(), AttemptEventRepository, AttemptWorkflowBinding, canonicalAttempts(), competitionAttemptBaseRole() (+24 more)
+Cohesion: 0.12
+Nodes (28): artifactNeedsSync(), attemptArtifactAccess(), attemptContext(), AttemptEventRepository, AttemptWorkflowBinding, canonicalAttempts(), competitionAttemptBaseRole(), competitionForAttempt() (+20 more)
 
 ### Community 14 - "D1Like"
 Cohesion: 0.29
@@ -191,55 +197,55 @@ Nodes (3): AttemptContainerEnv, ids, D1Like
 
 ### Community 15 - "attempt-runtime.ts"
 Cohesion: 0.13
-Nodes (21): AttemptNamespace, AttemptRuntimeEnv, attemptSandbox(), AttemptStub, checkpointIdentityExpectation(), checkpointIdentityRejection(), checkpointIdentityRejectionDetails, cleanupCheckpointResources() (+13 more)
+Nodes (20): AttemptNamespace, AttemptRuntimeEnv, attemptSandbox(), AttemptStub, checkpointIdentityExpectation(), checkpointIdentityRejection(), checkpointIdentityRejectionDetails, cleanupCheckpointResources() (+12 more)
 
 ### Community 16 - "workflow.ts"
-Cohesion: 0.07
-Nodes (33): ModelThinkingLevel, WaitingReason, executorCapabilities, outputPaths(), taskContracts, validateGraph(), WorkflowAdvance, WorkflowAgent (+25 more)
+Cohesion: 0.06
+Nodes (35): ModelThinkingLevel, WaitingReason, executorCapabilities, outputPaths(), scalar(), taskContracts, validateGraph(), WorkflowAdvance (+27 more)
 
 ### Community 17 - "Attempt"
 Cohesion: 0.11
-Nodes (6): Attempt, Lease, MemoryRunRepository, RunStage, WorkflowCapability, WorkflowExecutorKind
+Nodes (5): Attempt, Lease, MemoryRunRepository, WorkflowCapability, WorkflowExecutorKind
 
 ### Community 18 - "acceptGitHubComment"
-Cohesion: 0.15
-Nodes (8): acceptGitHubComment(), acceptGitHubIssueClosed(), concludedNoChangeQualification(), conversationPromotionMarker(), GitHubCancellationRepository, GitHubIntakeRepository, operatorAuthorized(), runId()
+Cohesion: 0.16
+Nodes (7): acceptGitHubComment(), acceptGitHubIssueClosed(), concludedNoChangeQualification(), conversationPromotionMarker(), GitHubCancellationRepository, GitHubIntakeRepository, runId()
 
 ### Community 19 - "github-ci.ts"
-Cohesion: 0.12
-Nodes (21): acceptGitHubCheckSuite(), acceptGitHubPullRequest(), atWorkflowExecutor(), checkEvidence(), CheckRun, checksCompleted(), CheckSuitePayload, CiDiagnostics (+13 more)
+Cohesion: 0.13
+Nodes (20): acceptGitHubCheckSuite(), acceptGitHubPullRequest(), atWorkflowExecutor(), checkEvidence(), CheckRun, checksCompleted(), CheckSuitePayload, CiDiagnostics (+12 more)
 
 ### Community 20 - "artifacts.ts"
-Cohesion: 0.09
-Nodes (17): ArtifactAccess, artifactAdvertisementHasMain(), artifactAdvertisementMainHead(), artifactIdentity(), ArtifactLocation, ArtifactRepository, artifactsErrorDetails(), ArtifactsNamespace (+9 more)
+Cohesion: 0.29
+Nodes (9): ArtifactAccess, artifactAdvertisementHasMain(), artifactAdvertisementMainHead(), ArtifactLocation, artifactsErrorDetails(), ArtifactToken, validateCheckpointIdentity(), validateReadOnlyCheckpoint() (+1 more)
 
 ### Community 21 - "attempt-settlement.ts"
 Cohesion: 0.21
-Nodes (21): artifactsNamespace(), attemptWorkspaceBackupKey(), sandboxName(), saveWorkspaceBackup(), acceptRecordedAttemptCompletion(), AttemptBackupResult, AttemptPublicationResult, AttemptSettlementOutcome (+13 more)
+Nodes (22): artifactsNamespace(), attemptWorkspaceBackupKey(), sandboxName(), saveWorkspaceBackup(), acceptRecordedAttemptCompletion(), AttemptBackupResult, AttemptPublicationResult, AttemptSettlementOutcome (+14 more)
 
 ### Community 22 - "compilerOptions"
 Cohesion: 0.11
 Nodes (18): compilerOptions, composite, declaration, declarationMap, esModuleInterop, forceConsistentCasingInFileNames, module, moduleResolution (+10 more)
 
 ### Community 23 - "core/src/index.ts"
-Cohesion: 0.14
-Nodes (23): ActiveAttemptLease, AttemptDiagnosticSnapshot, AttemptExecutionRecordOutcome, AttemptRow, Result, RunRow, UsageRow, AppliedProfile (+15 more)
-
-### Community 24 - "usage.ts"
 Cohesion: 0.13
-Nodes (20): extractModelUsage(), estimateModelCostUsd(), ModelPrice, modelPrices, ModelRates, resolveModelPrice(), call(), endAt (+12 more)
+Nodes (24): ActiveAttemptLease, AttemptDiagnosticSnapshot, AttemptExecutionRecordOutcome, AttemptRow, Result, RunRow, UsageRow, AppliedProfile (+16 more)
+
+### Community 24 - "model-usage.ts"
+Cohesion: 0.24
+Nodes (10): cost(), escapeHtml(), palette, renderChart(), renderModelUsage(), call(), endAt, tokens() (+2 more)
 
 ### Community 25 - "workflow-view.test.ts"
-Cohesion: 0.15
-Nodes (8): workflowGraphAsset(), workflowGraphClientScript, collection(), FakeElement, FakeNode, harness(), makeNode(), runFixture()
+Cohesion: 0.14
+Nodes (9): workflowGraphAsset(), workflowGraphClientScript, collection(), FakeElement, FakeNode, harness(), makeNode(), runFixture() (+1 more)
 
-### Community 26 - "coordinator.ts"
-Cohesion: 0.11
-Nodes (28): attemptInactivityMilliseconds, attemptOutcomeTransition(), ciTransition(), CompetitionPromoter, CompetitionStep, evidenceForAttempt(), graphCompletedTransition(), implementationNode() (+20 more)
+### Community 26 - "compileWorkflow"
+Cohesion: 0.27
+Nodes (18): visualFeedbackProfile(), agent(), competition(), compileWorkflow(), condition(), external(), hasOnlyKeys(), human() (+10 more)
 
 ### Community 27 - "github.test.ts"
 Cohesion: 0.14
-Nodes (9): loadDefaultBranchProfile(), loadRepositoryProfile(), resolveDefaultBranchCommit(), closureDelivery(), concludeQualification(), delivery(), IntakeRepository, reportedBodyWithDetails() (+1 more)
+Nodes (9): loadDefaultBranchProfile(), loadRepositoryProfile(), operatorAuthorized(), resolveDefaultBranchCommit(), closureDelivery(), concludeQualification(), delivery(), IntakeRepository (+1 more)
 
 ### Community 28 - "D1ConversationRepository"
 Cohesion: 0.13
@@ -258,8 +264,8 @@ Cohesion: 0.17
 Nodes (11): dependencies, yaml, exports, default, types, license, name, private (+3 more)
 
 ### Community 32 - "aggregated-review.ts"
-Cohesion: 0.25
-Nodes (6): AggregatedReviewFinding, attempt, configured, head, reviewers, WorkflowReview
+Cohesion: 0.22
+Nodes (8): aggregatedReview, AggregatedReviewFinding, attempt, configured, head, aggregateReviews(), reviewers, WorkflowReview
 
 ### Community 33 - "Roundhouse V2"
 Cohesion: 0.15
@@ -267,11 +273,11 @@ Nodes (13): 10. Acceptance and observability, 11. Complexity and documentation, 
 
 ### Community 34 - "control-plane/src/index.ts"
 Cohesion: 0.06
-Nodes (21): SandboxDestructionTrace, conversationPollClientScript, Region, AttemptTransportStatus, controlPlaneService, ExpiredAttemptRecoveryAction, ExpiredAttemptRecoveryHandlers, handleRequest() (+13 more)
+Nodes (23): destroyAttemptSandboxWithTrace(), SandboxDestructionTrace, competitionPromoter(), ciDiagnosticsNotice, AttemptTransportStatus, controlPlaneService, ExpiredAttemptRecoveryAction, ExpiredAttemptRecoveryHandlers (+15 more)
 
-### Community 35 - "dependencies"
-Cohesion: 0.11
-Nodes (18): dependencies, @cloudflare/playwright, @cloudflare/sandbox, cytoscape, marked, @roundhouse/core, @roundhouse/response-observer, @cloudflare/sandbox (+10 more)
+### Community 35 - "createRun"
+Cohesion: 0.15
+Nodes (13): runFixture(), workflowPageDb(), workflowRun(), resolveWorkflowContexts(), resumeExternalWorkflowEvent(), commit, head, profileFor() (+5 more)
 
 ### Community 36 - "compilerOptions"
 Cohesion: 0.12
@@ -302,24 +308,28 @@ Cohesion: 0.25
 Nodes (3): Container, ContainerProxy, outboundParams
 
 ### Community 43 - "conversation-store.ts"
-Cohesion: 0.14
-Nodes (15): ConversationQueue, ConversationService, BriefRow, CanonicalInboundMessage, ConversationContext, ConversationLink, ConversationRepositoryRef, ConversationRow (+7 more)
+Cohesion: 0.13
+Nodes (18): ConversationQueue, ConversationService, BriefRow, CanonicalInboundMessage, ConversationContext, ConversationLink, ConversationPromotion, ConversationRepositoryRef (+10 more)
 
-### Community 44 - "isRecord"
-Cohesion: 0.30
-Nodes (16): agent(), competition(), condition(), external(), hasOnlyKeys(), human(), isRecord(), model() (+8 more)
+### Community 44 - "dashboard.ts"
+Cohesion: 0.16
+Nodes (17): RunSummary, detailsPath(), escapeHtml(), labels, renderDashboard(), renderRun(), section(), prepare() (+9 more)
 
 ### Community 45 - "check-license-headers.mjs"
 Cohesion: 0.29
 Nodes (6): files, generatedFiles, missing, roots, run, sourceExtensions
+
+### Community 46 - "usage.ts"
+Cohesion: 0.16
+Nodes (18): extractModelUsage(), estimateModelCostUsd(), ModelPrice, modelPrices, ModelRates, resolveModelPrice(), usageDisplay(), usageTable() (+10 more)
 
 ### Community 47 - "runtime-host/package.json"
 Cohesion: 0.15
 Nodes (12): dependencies, @cloudflare/sandbox, @roundhouse/core, @roundhouse/response-observer, @cloudflare/sandbox, @roundhouse/core, @roundhouse/response-observer, license (+4 more)
 
 ### Community 48 - "GitHubApi"
-Cohesion: 0.18
-Nodes (4): ConversationWorkerDependencies, AttemptReporter, GitHubApi, GitHubStageReporter
+Cohesion: 0.22
+Nodes (3): ConversationWorkerDependencies, GitHubApi, GitHubAutomationApi
 
 ### Community 49 - "model-broker/package.json"
 Cohesion: 0.18
@@ -338,16 +348,16 @@ Cohesion: 0.40
 Nodes (3): DurableObject, RpcTarget, WorkerEntrypoint
 
 ### Community 57 - "callback.ts"
-Cohesion: 0.20
-Nodes (15): callbackForCompletion(), observedBranchHead(), settleAttempt(), acceptCallback(), BranchChangedError, bytesToHex(), callbackPayload(), encoder (+7 more)
+Cohesion: 0.21
+Nodes (14): Checkpoint, callbackForCompletion(), settleAttempt(), acceptCallback(), BranchChangedError, bytesToHex(), callbackPayload(), encoder (+6 more)
 
-### Community 58 - "conversation-promotion.ts"
-Cohesion: 0.15
-Nodes (18): promotionIssueMarker(), promotionStartMarker(), renderDeliveryBrief(), conversation, github, responsesRoute, turn, executeConversationPromotion() (+10 more)
+### Community 58 - "conversation-worker.ts"
+Cohesion: 0.19
+Nodes (16): promotionIssueMarker(), promotionStartMarker(), renderDeliveryBrief(), executeConversationPromotion(), findIssue(), GitHubComment, GitHubIssue, PromotionDependencies (+8 more)
 
-### Community 59 - "conversation-worker.ts"
+### Community 59 - "conversation-liveness.ts"
 Cohesion: 0.17
-Nodes (13): ConversationAdapter, VerifiedConversationActor, webConversationAdapter, webInboundMessage(), ConversationQueue, conversationWakeupRedeliveryMilliseconds, deliverPendingConversationReplies(), publishConversationWakeup() (+5 more)
+Nodes (12): ConversationAdapter, VerifiedConversationActor, webConversationAdapter, webInboundMessage(), ProtocolAdapter, ConversationQueue, conversationWakeupRedeliveryMilliseconds, deliverPendingConversationReplies() (+4 more)
 
 ### Community 60 - "Cursor Cloud specific instructions"
 Cohesion: 0.29
@@ -357,13 +367,13 @@ Nodes (6): AGENTS, Cursor Cloud specific instructions, Graphify knowledge graph,
 Cohesion: 0.21
 Nodes (11): RunDetails, completedRunDetailsFixture(), renderCompletedRunDetailsFixture(), renderReviewRunDetailsFixture(), reviewRunDetailsFixture(), DetailsAttempt, detailsFixture(), DetailsRun (+3 more)
 
-### Community 71 - "model-usage.ts"
+### Community 71 - "github-ci.test.ts"
 Cohesion: 0.21
-Nodes (14): cost(), escapeHtml(), palette, renderChart(), renderModelUsage(), tokens(), utc(), developmentBadge (+6 more)
+Nodes (8): AutomationRepository, head, mergeCommit, returnToCi(), setupCi(), setupIntegrated(), sourceCommit, GitHubEnv
 
 ### Community 72 - "workflow-view.ts"
 Cohesion: 0.26
-Nodes (15): escapeHtml(), escapeJsonForHtml(), humanizeWorkflowValue(), renderWorkflowView(), truncateLabel(), workflowEditUrl(), workflowEntryStage(), WorkflowGraphElement (+7 more)
+Nodes (14): escapeHtml(), escapeJsonForHtml(), humanizeWorkflowValue(), renderWorkflowView(), truncateLabel(), workflowEditUrl(), workflowEntryStage(), WorkflowGraphElement (+6 more)
 
 ### Community 73 - "README.md"
 Cohesion: 0.25
@@ -385,57 +395,65 @@ Nodes (13): Acceptance criteria, Accepted product decisions, Conversational entr
 Cohesion: 0.20
 Nodes (10): Development, Go deeper, How a repository opts in, License, Project status, Repository layout, Roundhouse, Should you keep reading? (+2 more)
 
-### Community 78 - "createRun"
-Cohesion: 0.24
-Nodes (8): runFixture(), workflowPageDb(), workflowRun(), input, commit, workflowRun(), parseProfile(), createRun()
+### Community 78 - "v2Profile"
+Cohesion: 0.31
+Nodes (13): enumList(), hasOnlyKeys(), instruction(), instructionSource(), isRecord(), model(), parseConversationModel(), reviewerConfig() (+5 more)
 
-### Community 79 - "GitHubClient"
-Cohesion: 0.23
-Nodes (4): GitHubClient, listComments(), postRunCommentOnce(), runDetailsUrl()
+### Community 79 - "observeResponse"
+Cohesion: 0.14
+Nodes (12): GitHubClient, body(), failedEntry(), headers(), isSecretField(), observeBufferedResponse(), observeEventStream(), observeResponse() (+4 more)
 
-### Community 80 - "RunSnapshot"
-Cohesion: 0.26
-Nodes (10): actionsJobLink(), aggregateReview(), checkRuns(), checksSucceeded(), exactAttempt(), failedConclusion(), GitHubAutomationRepository, GitHubCiAutomation (+2 more)
+### Community 81 - "RunSnapshot"
+Cohesion: 0.21
+Nodes (11): AttemptReporter, actionsJobLink(), aggregateReview(), checkRuns(), checksSucceeded(), exactAttempt(), failedConclusion(), GitHubAutomationRepository (+3 more)
 
-### Community 81 - "github-ci.test.ts"
-Cohesion: 0.17
-Nodes (8): AutomationRepository, head, mergeCommit, returnToCi(), setupCi(), setupIntegrated(), sourceCommit, GitHubAutomationApi
+### Community 82 - "runtime-host.ts"
+Cohesion: 0.60
+Nodes (3): handleRuntimeHostRequest(), runtimeHostService, worker
 
-### Community 82 - "dashboard.ts"
-Cohesion: 0.27
-Nodes (10): RunSummary, detailsPath(), escapeHtml(), labels, renderDashboard(), renderRun(), section(), prepare() (+2 more)
+### Community 83 - "dependencies"
+Cohesion: 0.11
+Nodes (18): dependencies, @cloudflare/playwright, @cloudflare/sandbox, cytoscape, marked, @roundhouse/core, @roundhouse/response-observer, @cloudflare/sandbox (+10 more)
 
-### Community 86 - "attempt-workflow.ts"
-Cohesion: 0.15
-Nodes (13): AttemptPreparationEnv, AttemptWorkflowParams, SandboxNamespace, AttemptSettlementEnv, AttemptSettlementResult, AttemptExecutionWorkflow, AttemptWorkflowEnv, noExecutionRetry (+5 more)
+### Community 84 - "workflow.test.ts"
+Cohesion: 0.60
+Nodes (4): advanceWorkflow(), evaluateWorkflowCondition(), selectWorkflowTransition(), commit
 
-### Community 89 - "defaultIssueWorkflowSource"
-Cohesion: 0.47
-Nodes (5): advanceWorkflow(), defaultIssueWorkflowSource, evaluateWorkflowCondition(), selectWorkflowTransition(), commit
-
-### Community 90 - "5. Runtime boundaries"
+### Community 85 - "5. Runtime boundaries"
 Cohesion: 0.50
 Nodes (4): 5.1 Control plane and storage, 5.2 Agent environment, 5.3 Models, 5. Runtime boundaries
+
+### Community 86 - "attempt-workflow.ts"
+Cohesion: 0.14
+Nodes (14): AttemptPreparationEnv, AttemptWorkflowParams, SandboxNamespace, AttemptSettlementEnv, AttemptSettlementResult, loadRecordedAttemptCompletion(), AttemptExecutionWorkflow, AttemptWorkflowEnv (+6 more)
+
+### Community 87 - ".head"
+Cohesion: 0.22
+Nodes (3): artifactIdentity(), ArtifactRepository, CloudflareArtifactRepository
+
+### Community 89 - "workflow-coordinator.test.ts"
+Cohesion: 0.33
+Nodes (4): commit, workflowRun(), parseProfile(), commit
 
 ## Knowledge Gaps
 - **425 isolated node(s):** `name`, `version`, `license`, `private`, `type` (+420 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **12 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **15 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `observeResponse()` connect `ui-auth.ts` to `runner.mjs`, `D1RunRepository`, `attempt-container.ts`, `model-broker/src/index.ts`, `github.ts`, `attempt-dispatch.ts`, `GitHubClient`, `artifacts.ts`?**
-  _High betweenness centrality (0.051) - this node is a cross-community bridge._
-- **Why does `D1RunRepository` connect `D1RunRepository` to `coordinate`, `control-plane/src/index.ts`, `attempt-container.ts`, `attempt-dispatch.ts`, `createRun`, `attempt-runtime.ts`, `dashboard.ts`, `artifacts.ts`, `attempt-settlement.ts`, `attempt-workflow.ts`, `core/src/index.ts`, `usage.ts`, `coordinator.ts`, `conversation-worker.ts`?**
-  _High betweenness centrality (0.047) - this node is a cross-community bridge._
-- **Why does `Attempt` connect `Attempt` to `D1RunRepository`, `coordinate`, `run-details.ts`, `attempt-container.ts`, `github.ts`, `contracts.ts`, `attempt-dispatch.ts`, `attempt-runtime.ts`, `acceptGitHubComment`, `github-ci.ts`, `attempt-settlement.ts`, `core/src/index.ts`, `coordinator.ts`, `github.test.ts`, `aggregated-review.ts`, `control-plane/src/index.ts`, `GitHubApi`, `run-details.test.ts`, `createRun`, `github-ci.test.ts`?**
-  _High betweenness centrality (0.029) - this node is a cross-community bridge._
+- **Why does `observeResponse()` connect `observeResponse` to `runner.mjs`, `D1RunRepository`, `attempt-container.ts`, `ui-auth.ts`, `model-broker/src/index.ts`, `github.ts`, `attempt-dispatch.ts`, `artifacts.ts`, `.head`, `conversation-worker.ts`?**
+  _High betweenness centrality (0.058) - this node is a cross-community bridge._
+- **Why does `D1RunRepository` connect `D1RunRepository` to `coordinator.ts`, `control-plane/src/index.ts`, `attempt-container.ts`, `github-ci.test.ts`, `coordinate`, `dashboard.ts`, `attempt-dispatch.ts`, `attempt-runtime.ts`, `attempt-settlement.ts`, `attempt-workflow.ts`, `core/src/index.ts`, `CloudflareArtifactsNamespace`, `model-usage.ts`, `conversation-liveness.ts`?**
+  _High betweenness centrality (0.036) - this node is a cross-community bridge._
+- **Why does `RunSnapshot` connect `RunSnapshot` to `D1RunRepository`, `coordinator.ts`, `github.ts`, `coordinate`, `contracts.ts`, `attempt-dispatch.ts`, `attempt-runtime.ts`, `Attempt`, `acceptGitHubComment`, `github-ci.ts`, `attempt-settlement.ts`, `core/src/index.ts`, `workflow-view.test.ts`, `github.test.ts`, `control-plane/src/index.ts`, `createRun`, `dashboard.ts`, `run-details.test.ts`, `github-ci.test.ts`, `workflow-view.ts`?**
+  _High betweenness centrality (0.032) - this node is a cross-community bridge._
 - **What connects `name`, `version`, `license` to the rest of the system?**
   _425 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `runner.mjs` be split into smaller, more focused modules?**
   _Cohesion score 0.05465346534653465 - nodes in this community are weakly interconnected._
 - **Should `D1RunRepository` be split into smaller, more focused modules?**
-  _Cohesion score 0.06655192197360872 - nodes in this community are weakly interconnected._
-- **Should `coordinate` be split into smaller, more focused modules?**
-  _Cohesion score 0.13174603174603175 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.05513612445664608 - nodes in this community are weakly interconnected._
+- **Should `coordinator.ts` be split into smaller, more focused modules?**
+  _Cohesion score 0.13118279569892474 - nodes in this community are weakly interconnected._

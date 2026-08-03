@@ -680,13 +680,13 @@
     "semantic_hash": ""
   },
   "apps/control-plane/src/conversation-ui.test.ts": {
-    "mtime": 1785774521.4599895,
-    "ast_hash": "629ee764a47344f4d118bcf48ae0fd8b",
+    "mtime": 1785774717.990574,
+    "ast_hash": "62583477d9476938781153b27f4b179e",
     "semantic_hash": ""
   },
   "apps/control-plane/src/conversation-ui.ts": {
-    "mtime": 1785774571.111632,
-    "ast_hash": "a0019a09843a8f04a58d508d658ea57f",
+    "mtime": 1785774731.9344733,
+    "ast_hash": "f2c0cf5943d33c5de3036ee099f56403",
     "semantic_hash": ""
   },
   "apps/control-plane/src/conversation-worker.test.ts": {
@@ -735,13 +735,13 @@
     "semantic_hash": ""
   },
   "apps/control-plane/src/conversation-client.test.ts": {
-    "mtime": 1785771401.0,
-    "ast_hash": "d9fe5dd837780f5606c350f92a9f91eb",
+    "mtime": 1785774717.990574,
+    "ast_hash": "76203981d00740bec6a192e4b49ebac6",
     "semantic_hash": ""
   },
   "apps/control-plane/src/conversation-client.ts": {
-    "mtime": 1785771401.0,
-    "ast_hash": "1d0b06cc1ac7c333902c74f019c96f9e",
+    "mtime": 1785774717.990574,
+    "ast_hash": "78c58c5068af5bd801eb90b240b839ff",
     "semantic_hash": ""
   },
   "apps/control-plane/src/model-prices.ts": {
