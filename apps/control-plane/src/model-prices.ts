@@ -1,6 +1,8 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
+import { normalizeModelId } from "./model-identity.js";
+
 export type ModelRates = readonly [
   input: number,
   cacheRead: number,
@@ -54,24 +56,23 @@ export function resolveModelPrice(input: {
   readonly configuredModel?: string;
   readonly provider?: string;
 }): { readonly price: ModelPrice; readonly provider: string } | undefined {
-  // Match write-path lookup: actual API model first, then configured route.
+  // Match write-path lookup: canonical actual API model first, then the
+  // canonical configured route. Unresolved bare IDs are intentionally not
+  // probed across providers.
   const candidates = [
-    input.model,
-    input.configuredModel,
-    input.model.includes("/") ? undefined : `anthropic/${input.model}`,
-    input.model.includes("/") ? undefined : `openai/${input.model}`,
-    input.model.includes("/") ? undefined : `moonshotai/${input.model}`,
+    normalizeModelId(input),
+    input.configuredModel
+      ? normalizeModelId({
+          model: input.configuredModel,
+          provider: input.provider,
+        })
+      : undefined,
   ].filter((value): value is string => Boolean(value));
   for (const key of candidates) {
     const price = modelPrices[key];
     if (!price) continue;
-    const provider =
-      input.provider ||
-      (key.includes("/") ? key.slice(0, key.indexOf("/")) : "") ||
-      (input.configuredModel?.includes("/")
-        ? input.configuredModel.slice(0, input.configuredModel.indexOf("/"))
-        : "");
-    return { price, provider };
+    const separator = key.indexOf("/");
+    return { price, provider: key.slice(0, separator) };
   }
   return undefined;
 }

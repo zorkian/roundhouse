@@ -28,6 +28,7 @@ import { PreviewTransport } from "./preview-transport.js";
 import { WorkspaceLifecycle } from "./workspace-lifecycle.js";
 import { attemptInactivityMilliseconds } from "./attempt-timeouts.js";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
+import { normalizeModelId } from "./model-identity.js";
 import { estimateModelCostUsd } from "./model-prices.js";
 
 interface AttemptAssignment extends Attempt {
@@ -463,6 +464,11 @@ export function extractModelUsage(
     (inputTokens !== undefined && outputTokens !== undefined
       ? inputTokens + outputTokens
       : undefined);
+  model = normalizeModelId({
+    model,
+    provider: routing.provider,
+    configuredModel: routedModel,
+  });
   const costUsd = estimateModelCostUsd({
     model,
     configuredModel: routedModel,

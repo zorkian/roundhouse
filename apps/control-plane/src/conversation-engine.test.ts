@@ -240,6 +240,32 @@ describe("conversation engine", () => {
     );
   });
 
+  it("normalizes bare conversation response models before pricing and persistence", async () => {
+    const modelBroker = broker([
+      Response.json(responsesRoute),
+      Response.json({
+        id: "response-bare-sol",
+        model: "gpt-5.6-sol",
+        output_text: JSON.stringify({
+          title: "Normalize Bare Model Usage",
+          reply: "The model identity is canonical.",
+        }),
+        usage: { input_tokens: 1_000, output_tokens: 100 },
+      }),
+    ]);
+    const result = await executeConversationTurn(
+      modelBroker,
+      github,
+      conversation,
+      turn,
+    );
+    expect(result.usage[0]).toMatchObject({
+      model: "openai/gpt-5.6-sol",
+      configuredModel: "openai/gpt-5.6-sol",
+      costUsd: 0.008,
+    });
+  });
+
   it.each([
     [
       "openai-completions",
