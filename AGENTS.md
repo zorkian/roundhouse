@@ -7,17 +7,14 @@ product overview and `docs/v2-plan.md` for the architecture). Standard commands
 live in the root `package.json` scripts and `README.md`; prefer those instead of
 inventing new ones.
 
-### Node version (important gotcha)
+### Node version
 
-The repo requires Node 24 (`.node-version` pins `24.18.0`). Cloud agent VMs
-also ship `/exec-daemon/node` (v22). That binary must not be modified, and
-Cursor often prepends `/exec-daemon` to `PATH`, so a later nvm entry is not
-enough — **Node 24 must be re-prepended** after that injection.
-
-Do this in the Cloud environment **install** script (and `BASH_ENV`), not by
-wrapping every command in `bash -lc`. Agent commands should be plain
-(`pnpm check`, `pnpm exec wrangler …`). If `node --version` is not `v24.x`,
-the environment install is wrong — fix that, don't paper over it per command.
+The repo requires Node 24 (`.node-version` pins `24.18.0`). That is configured
+in the Cursor Cloud environment install (dashboard), including beating
+`/exec-daemon/node` (v22) on `PATH`. Use plain commands (`pnpm check`,
+`pnpm exec wrangler …`) — do not wrap them in `bash -lc`. If
+`node --version` is not `v24.x`, fix the Cloud environment, not individual
+commands.
 
 ### There is no local dev server
 
@@ -185,78 +182,10 @@ before you finish the turn / open or update a PR):
    untracked.
 
 Do **not** regenerate the graph during Cursor Cloud environment install. The
-install script should only ensure the CLI is present; regenerating on every
-build dirties the reused git checkout.
-
-#### Recommended Cloud environment install
-
-Paste this as the environment **install** script in the Cursor Cloud Agents
-dashboard (https://cursor.com/dashboard/cloud-agents → this environment). Also
-set a persistent environment variable (same dashboard → env vars / secrets):
-
-- `BASH_ENV` = `/home/ubuntu/.node24-env`
-
-`BASH_ENV` is required so non-interactive agent shells (`bash -c`) re-prepend
-Node 24 after Cursor injects `/exec-daemon` on `PATH`. Without it, `node` can
-resolve to v22 even when nvm is installed.
-
-```bash
-set -euo pipefail
-
-NODE_VERSION="$(tr -d '[:space:]' < .node-version)"
-export NVM_DIR="$HOME/.nvm"
-
-if [ ! -s "$NVM_DIR/nvm.sh" ]; then
-  curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
-fi
-# shellcheck disable=SC1091
-. "$NVM_DIR/nvm.sh"
-nvm install "$NODE_VERSION"
-nvm alias default "$NODE_VERSION"
-
-NODE24_BIN="$NVM_DIR/versions/node/$NODE_VERSION/bin"
-# Always prepend (duplicates are fine). A "already on PATH" check is wrong:
-# /exec-daemon is often earlier than the nvm entry.
-cat > "$HOME/.node24-env" <<EOF
-# Managed by Cloud environment install — keep Node $NODE_VERSION ahead of /exec-daemon/node.
-export PATH="$NODE24_BIN:\$PATH"
-EOF
-
-# Interactive / login shells
-touch "$HOME/.bashrc"
-if ! grep -q 'roundhouse-node24' "$HOME/.bashrc"; then
-  cat >> "$HOME/.bashrc" <<'EOF'
-
-# roundhouse-node24
-export NVM_DIR="$HOME/.nvm"
-[ -s "$HOME/.node24-env" ] && . "$HOME/.node24-env"
-export BASH_ENV="$HOME/.node24-env"
-# roundhouse-node24-end
-EOF
-fi
-
-# Apply for this install process, then refuse to continue on the wrong Node.
-# shellcheck disable=SC1091
-. "$HOME/.node24-env"
-export BASH_ENV="$HOME/.node24-env"
-node --version | grep -q "^v${NODE_VERSION}"
-
-corepack enable
-pnpm install --frozen-lockfile
-
-# Graphify CLI only — graph artifacts are committed in-repo
-if ! command -v uv >/dev/null 2>&1; then
-  curl -LsSf https://astral.sh/uv/install.sh | sh
-fi
-export PATH="$HOME/.local/bin:$PATH"
-uv tool install "graphifyy[mcp]"
-```
-
-After updating the install script / `BASH_ENV`, trigger a new environment
-build (or wait for the next recurring build) so the snapshot picks it up.
-
-If the Cloud environment install still runs `graphify update` / `graphify
-extract`, remove that — only install the CLI as above.
+install script (dashboard) should only ensure the Graphify CLI is present;
+regenerating on every build dirties the reused git checkout. If install still
+runs `graphify update` / `graphify extract`, remove that from the dashboard
+config.
 
 ### Other notes
 
