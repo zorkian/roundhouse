@@ -184,6 +184,7 @@ function screenshotIdsForImplementation(
 ): readonly string[] | undefined {
   const implementation = result.implementation as
     Record<string, unknown> | undefined;
+  if (!implementation) return undefined;
   const impact = implementation?.visualImpact;
   if (impact !== "yes" && impact !== "uncertain") return undefined;
   const screenshots = implementation.screenshots;
