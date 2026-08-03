@@ -2,6 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ModelUsageSummary } from "./usage.js";
+import {
+  renderSiteHeader,
+  sharedHeaderStyles,
+  type HeaderAccount,
+} from "./ui-header.js";
 
 const escapeHtml = (value: unknown) =>
   String(value)
@@ -106,7 +111,7 @@ ${summary.callsWithoutTokens ? `<p class="note">${summary.callsWithoutTokens} of
 
 export function renderModelUsage(
   summary: ModelUsageSummary,
-  user: { readonly githubLogin: string },
+  user: HeaderAccount,
 ): string {
   const modelRows = summary.models
     .map(
@@ -129,8 +134,8 @@ export function renderModelUsage(
   if (summary.calls && summary.overall.costUsd === undefined)
     partial.push("some calls have no cost data, so cost totals are partial");
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Model usage · Roundhouse</title><style>
-:root{color-scheme:light;--ink:#18212f;--muted:#647084;--line:#dde3ea;--paper:#fff;--wash:#f4f7fa}*{box-sizing:border-box}body{margin:0;background:var(--wash);color:var(--ink);font:15px/1.5 ui-sans-serif,system-ui,-apple-system,sans-serif}a{color:inherit}header{background:#18212f;color:white;padding:2.25rem max(1.25rem,calc((100% - 1080px)/2))}header p{color:#bdc7d5;margin:.35rem 0 0}.heading{display:flex;align-items:center;gap:.7rem;flex-wrap:wrap}h1{font-size:2rem;margin:0;letter-spacing:-.025em}main{max-width:1080px;margin:0 auto;padding:1.5rem 1.25rem 4rem}.summary{display:flex;gap:.75rem;flex-wrap:wrap;margin-bottom:1.5rem}.summary span{background:var(--paper);border:1px solid var(--line);border-radius:999px;padding:.45rem .8rem}.summary strong{margin-right:.35rem}section{background:var(--paper);border:1px solid var(--line);border-radius:12px;margin:0 0 1rem;padding:1rem 1.2rem}h2{font-size:1.05rem;margin:0 0 .5rem}.chart{margin:0}.chart svg{width:100%;height:auto;display:block}.legend{list-style:none;display:flex;gap:1rem;flex-wrap:wrap;padding:0;margin:.6rem 0 0;font-size:.85rem}.legend li{display:flex;align-items:center;gap:.4rem}.swatch{display:inline-block;width:.8rem;height:.8rem;border-radius:2px}.note{color:var(--muted);font-size:.85rem;margin:.5rem 0 0}table{width:100%;border-collapse:collapse;font-size:.9rem}caption{text-align:left;font-weight:700;margin-bottom:.5rem}th,td{text-align:left;padding:.5rem .6rem;border-bottom:1px solid var(--line)}tbody th{font-weight:600}.empty{color:var(--muted);margin:0}.range{color:var(--muted)}.partial{color:#8a5b00;font-size:.85rem}@media(max-width:650px){section{padding:.9rem}th,td{padding:.45rem .35rem;font-size:.82rem}.chart-scroll{overflow-x:auto}.chart-scroll svg{min-width:640px}.chart-scroll:focus-visible{outline:2px solid #175cd3;outline-offset:2px}}
-</style></head><body><header><div class="heading"><h1>Model usage</h1></div><p>Signed in as ${escapeHtml(user.githubLogin)} · <a href="/">Dashboard</a> · <a href="/auth/sign-out">Sign out</a></p></header><main>
+${sharedHeaderStyles}:root{color-scheme:light;--ink:#18212f;--muted:#647084;--line:#dde3ea;--paper:#fff;--wash:#f4f7fa}*{box-sizing:border-box}body{margin:0;background:var(--wash);color:var(--ink);font:15px/1.5 ui-sans-serif,system-ui,-apple-system,sans-serif}a{color:inherit}h1{font-size:2rem;margin:0 0 1rem;letter-spacing:-.025em}main{max-width:1080px;margin:0 auto;padding:1.5rem 1.25rem 4rem}.summary{display:flex;gap:.75rem;flex-wrap:wrap;margin-bottom:1.5rem}.summary span{background:var(--paper);border:1px solid var(--line);border-radius:999px;padding:.45rem .8rem}.summary strong{margin-right:.35rem}section{background:var(--paper);border:1px solid var(--line);border-radius:12px;margin:0 0 1rem;padding:1rem 1.2rem}h2{font-size:1.05rem;margin:0 0 .5rem}.chart{margin:0}.chart svg{width:100%;height:auto;display:block}.legend{list-style:none;display:flex;gap:1rem;flex-wrap:wrap;padding:0;margin:.6rem 0 0;font-size:.85rem}.legend li{display:flex;align-items:center;gap:.4rem}.swatch{display:inline-block;width:.8rem;height:.8rem;border-radius:2px}.note{color:var(--muted);font-size:.85rem;margin:.5rem 0 0}table{width:100%;border-collapse:collapse;font-size:.9rem}caption{text-align:left;font-weight:700;margin-bottom:.5rem}th,td{text-align:left;padding:.5rem .6rem;border-bottom:1px solid var(--line)}tbody th{font-weight:600}.empty{color:var(--muted);margin:0}.range{color:var(--muted)}.partial{color:#8a5b00;font-size:.85rem}@media(max-width:650px){section{padding:.9rem}th,td{padding:.45rem .35rem;font-size:.82rem}.chart-scroll{overflow-x:auto}.chart-scroll svg{min-width:640px}.chart-scroll:focus-visible{outline:2px solid #175cd3;outline-offset:2px}}
+</style></head><body>${renderSiteHeader(user)}<main><h1>Model usage</h1>
 <p class="range">Rolling 30-day window: <time datetime="${new Date(summary.startAt).toISOString()}">${escapeHtml(utc(summary.startAt))} UTC</time> – <time datetime="${new Date(summary.endAt).toISOString()}">${escapeHtml(utc(summary.endAt))} UTC</time></p>
 <div class="summary"><span><strong>${summary.calls.toLocaleString("en-US")}</strong> model calls</span><span><strong>${tokens(summary.overall.totalTokens)}</strong> tokens</span><span><strong>${cost(summary.overall.costUsd)}</strong> estimated cost</span></div>
 ${partial.length ? `<p class="partial">Note: ${escapeHtml(partial.join("; "))}.</p>` : ""}
