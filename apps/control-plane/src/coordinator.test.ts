@@ -1348,7 +1348,7 @@ describe("single coordinator", () => {
     });
   });
 
-  it("completes screenshot-only implementation without empty review and CI work", () => {
+  it("skips visual approval when an unchanged candidate still claims visual impact", () => {
     const head = "b".repeat(40);
     const attempt = attemptFixture({
       id: "run_slice_rev_4",
@@ -1359,17 +1359,19 @@ describe("single coordinator", () => {
       acceptedHead: head,
       result: {
         implementation: {
-          summary: "Visual verification complete",
+          summary: "No code change after operator acceptance",
           visualImpact: "yes",
-          visualImpactRationale: "This pass updates the rendered view.",
-          screenshots: [{ url: "https://example.test/screenshot" }],
+          visualImpactRationale: "The overall feature remains visual.",
+          screenshots: [
+            { url: "https://example.test/before" },
+            { url: "https://example.test/after" },
+          ],
         },
       },
     });
     expect(implementationTransition(attempt)).toEqual({
-      status: "waiting",
-      stage: "implement",
-      waitingReason: "visual_feedback",
+      status: "active",
+      stage: "review",
       acceptedHead: head,
       heads: { candidateHead: head },
     });
@@ -1474,6 +1476,45 @@ describe("single coordinator", () => {
           visualImpact: "no",
           visualImpactRationale: "This pass adds no visual changes.",
           screenshots: [{ url: "https://example.test/screenshot" }],
+        },
+      },
+    });
+
+    expect(graphCompletedTransition(run, attempt)).toEqual({
+      status: "active",
+      stage: "review",
+      currentNodeId: "review",
+      acceptedHead: head,
+      heads: { candidateHead: head },
+    });
+  });
+
+  it("continues to review after acceptance when implement makes no candidate change", () => {
+    const head = "b".repeat(40);
+    const run = runFixture({
+      status: "active",
+      stage: "implement",
+      currentNodeId: "implement",
+      currentHead: head,
+      candidateHead: head,
+      revision: 14,
+    });
+    const attempt = attemptFixture({
+      id: "run_slice_rev_14",
+      runRevision: 14,
+      stage: "implement",
+      role: "implement",
+      expectedHead: head,
+      acceptedHead: head,
+      result: {
+        implementation: {
+          summary: "Operator accepted; left the candidate unchanged",
+          visualImpact: "yes",
+          visualImpactRationale: "The feature still changes rendered UI.",
+          screenshots: [
+            { url: "https://example.test/before" },
+            { url: "https://example.test/after" },
+          ],
         },
       },
     });
