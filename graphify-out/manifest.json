@@ -275,8 +275,8 @@
     "semantic_hash": ""
   },
   "apps/control-plane/src/run-details.ts": {
-    "mtime": 1785734651.0807152,
-    "ast_hash": "72518a0a048d542b20530023bde32ed8",
+    "mtime": 1785737366.1081774,
+    "ast_hash": "b48d8412d83210a04f79ab73d9a8d58e",
     "semantic_hash": ""
   },
   "apps/control-plane/src/runtime-host.test.ts": {
@@ -745,8 +745,13 @@
     "semantic_hash": ""
   },
   "apps/control-plane/src/model-prices.ts": {
-    "mtime": 1785736954.6714132,
-    "ast_hash": "f740503d5440b5b1f5f3db9c5b820fd7",
+    "mtime": 1785737346.76012,
+    "ast_hash": "518763dc006cf049da045ba7abccb758",
+    "semantic_hash": ""
+  },
+  "apps/control-plane/src/model-prices.test.ts": {
+    "mtime": 1785737366.1281776,
+    "ast_hash": "bcd459c554169bb60ad8a994ef60e487",
     "semantic_hash": ""
   }
 }

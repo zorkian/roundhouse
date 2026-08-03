@@ -54,9 +54,10 @@ export function resolveModelPrice(input: {
   readonly configuredModel?: string;
   readonly provider?: string;
 }): { readonly price: ModelPrice; readonly provider: string } | undefined {
+  // Match write-path lookup: actual API model first, then configured route.
   const candidates = [
-    input.configuredModel,
     input.model,
+    input.configuredModel,
     input.model.includes("/") ? undefined : `anthropic/${input.model}`,
     input.model.includes("/") ? undefined : `openai/${input.model}`,
     input.model.includes("/") ? undefined : `moonshotai/${input.model}`,
