@@ -149,6 +149,15 @@ nodes:
           path: attempt.protectedPathProposal
           equals: true
         terminal: succeeded
+      # An unchanged candidate has nothing new to approve. After operator
+      # acceptance the implementer often reassesses the same visual feature as
+      # yes; skip re-gating and continue to review.
+      - when:
+          all:
+            - exists: attempt.acceptedHead
+            - path: attempt.changed
+              equals: false
+        to: review
       - when:
           path: attempt.visualImpact
           in:

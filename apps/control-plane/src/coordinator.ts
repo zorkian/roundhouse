@@ -382,7 +382,11 @@ export function implementationTransition(attempt: Attempt) {
   const outcome = attempt.result?.implementation;
   if (!outcome || typeof outcome !== "object" || !attempt.acceptedHead)
     return { status: "failed", stage: "implement" } as const;
-  if (implementationVisualImpact(attempt) !== "no")
+  const unchanged = attempt.acceptedHead === attempt.expectedHead;
+  // Unchanged passes skip visual approval: there is no new candidate visual to
+  // review. This covers operator acceptance that returns through implement
+  // without edits, even when the model still labels the feature as visual.
+  if (implementationVisualImpact(attempt) !== "no" && !unchanged)
     return {
       status: "waiting",
       stage: "implement",
