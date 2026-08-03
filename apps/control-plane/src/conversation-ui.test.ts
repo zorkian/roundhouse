@@ -12,6 +12,7 @@ import type {
   Conversation,
   ConversationSummary,
 } from "./conversation-store.js";
+import { statusPillStyles } from "./status-ui.js";
 
 const base: Conversation = {
   id: "b1f486ff-7744-49f9-ab78-f74e8409fc2b",
@@ -102,14 +103,12 @@ describe("conversation UI", () => {
         '<span class="status waiting">Waiting to start delivery</span>',
       );
       expect(html).toContain(
-        '<span class="status succeeded">Delivery started</span>',
+        '<span class="status active">Delivery started</span>',
       );
       expect(html).toContain("Updated 6 minutes ago");
       expect(html).toContain("Updated 3 hours ago");
       expect(html).toContain("Updated 2 days ago");
-      expect(html).toContain(
-        ".status.waiting{background:#fff4d6;color:#8a5b00}",
-      );
+      expect(html).toContain(statusPillStyles);
       expect(html).toContain(
         'href="https://github.test/issues/482?label=&lt;unsafe&gt;&amp;state=open">Issue #482</a>',
       );
@@ -255,6 +254,34 @@ describe("conversation UI", () => {
     ] as const;
     for (const [, input, label] of cases)
       expect(actionableConversationStatus(input).label).toBe(label);
+  });
+
+  it("uses semantic tones for delivery, waiting, and failure states", () => {
+    const cases = [
+      [
+        {
+          status: "promoted" as const,
+          promotionState: "accepted" as const,
+          promotionRunStatus: "succeeded" as const,
+        },
+        { label: "Delivery complete", tone: "succeeded" },
+      ],
+      [
+        { status: "promoted" as const, promotionState: "accepted" as const },
+        { label: "Delivery started", tone: "active" },
+      ],
+      [
+        { status: "open" as const, currentBriefState: "draft" as const },
+        { label: "Delivery brief ready for review", tone: "waiting" },
+      ],
+      [
+        { status: "open" as const, latestTurnState: "failed" as const },
+        { label: "Needs attention", tone: "failed" },
+      ],
+    ] as const;
+
+    for (const [input, expected] of cases)
+      expect(actionableConversationStatus(input)).toEqual(expected);
   });
 
   it("renders a private, read-only thread without trusting message HTML", () => {

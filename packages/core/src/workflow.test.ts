@@ -209,6 +209,7 @@ nodes:
             visualImpact,
             // Historical screenshots do not affect this route.
             hasScreenshots: true,
+            changed: true,
             acceptedHead: "b".repeat(40),
           },
         }),
@@ -219,6 +220,19 @@ nodes:
           visualImpact: "no",
           // A nonvisual later pass still skips approval even with screenshots.
           hasScreenshots: true,
+          changed: true,
+          acceptedHead: "b".repeat(40),
+        },
+      }),
+    ).toMatchObject({ status: "active", currentNodeId: "review" });
+    // An unchanged candidate skips re-approval even when the model still says
+    // the feature is visual (typical after operator acceptance).
+    expect(
+      advanceWorkflow(workflow, "implement", {
+        attempt: {
+          visualImpact: "yes",
+          hasScreenshots: true,
+          changed: false,
           acceptedHead: "b".repeat(40),
         },
       }),
