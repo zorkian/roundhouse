@@ -215,23 +215,23 @@
     "semantic_hash": "43ed9486a5c53128b27b2c67654de6e8"
   },
   "apps/control-plane/src/github.test.ts": {
-    "mtime": 1785735279.550879,
-    "ast_hash": "bfd857c21412a30e5bb55e0ed5194814",
+    "mtime": 1785736189.6242101,
+    "ast_hash": "d383cf2e365a7b652f86e04b1b24f942",
     "semantic_hash": ""
   },
   "apps/control-plane/src/github.ts": {
-    "mtime": 1785735243.838301,
-    "ast_hash": "e4c874bab99d64189ba9e34941f8f070",
+    "mtime": 1785736189.6242101,
+    "ast_hash": "73d711a19027b2309808cb4661e730dd",
     "semantic_hash": ""
   },
   "apps/control-plane/src/index.test.ts": {
-    "mtime": 1785734651.0807152,
-    "ast_hash": "b57755e0d5e4a8c7757580916a6f7792",
+    "mtime": 1785736189.6242101,
+    "ast_hash": "701dd36fd0bda190f32c8108c592079e",
     "semantic_hash": ""
   },
   "apps/control-plane/src/index.ts": {
-    "mtime": 1785734651.0807152,
-    "ast_hash": "5ae366c876b8a315b1399a854ec44ebc",
+    "mtime": 1785736189.6242101,
+    "ast_hash": "203e336964e868b2daf567e83956f460",
     "semantic_hash": ""
   },
   "apps/control-plane/src/liveness.test.ts": {
@@ -680,13 +680,13 @@
     "semantic_hash": ""
   },
   "apps/control-plane/src/conversation-ui.test.ts": {
-    "mtime": 1785734651.0767152,
-    "ast_hash": "296bf46b018f01907a4aee2f1d331170",
+    "mtime": 1785736189.6242101,
+    "ast_hash": "8f42989a0ac2acafe3c49dea75465b74",
     "semantic_hash": ""
   },
   "apps/control-plane/src/conversation-ui.ts": {
-    "mtime": 1785734651.0767152,
-    "ast_hash": "e0cc5b8839e8680f3d154326a9fd954a",
+    "mtime": 1785736189.6242101,
+    "ast_hash": "6ae2706683f54ccbe30a60544bf8e71c",
     "semantic_hash": ""
   },
   "apps/control-plane/src/conversation-worker.test.ts": {
@@ -732,6 +732,16 @@
   "apps/control-plane/src/ui-header.ts": {
     "mtime": 1785734651.0807152,
     "ast_hash": "9d27d3c21fb7a021ab575e805f88f6ce",
+    "semantic_hash": ""
+  },
+  "apps/control-plane/src/conversation-client.test.ts": {
+    "mtime": 1785736189.6242101,
+    "ast_hash": "d9fe5dd837780f5606c350f92a9f91eb",
+    "semantic_hash": ""
+  },
+  "apps/control-plane/src/conversation-client.ts": {
+    "mtime": 1785736189.6242101,
+    "ast_hash": "1d0b06cc1ac7c333902c74f019c96f9e",
     "semantic_hash": ""
   }
 }
