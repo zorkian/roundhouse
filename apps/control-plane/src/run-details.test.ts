@@ -4,7 +4,10 @@
 import { compileWorkflow, defaultIssueWorkflowSource } from "@roundhouse/core";
 import { describe, expect, it } from "vitest";
 import type { RunDetails } from "./d1-store.js";
-import { renderCompletedRunDetailsFixture } from "./run-details.fixture.js";
+import {
+  renderCompletedRunDetailsFixture,
+  renderReviewRunDetailsFixture,
+} from "./run-details.fixture.js";
 import { renderRunDetails } from "./run-details.js";
 import { statusPillStyles } from "./status-ui.js";
 
@@ -77,6 +80,38 @@ describe("run details", () => {
     const html = renderCompletedRunDetailsFixture();
     expect(html).toContain("Pull request merged successfully.");
     expect(html).toContain("Pull request #486");
+  });
+
+  it("renders review state, findings, and safe Markdown from the visual fixture", () => {
+    const html = renderReviewRunDetailsFixture();
+
+    expect(html).toContain("Latest review");
+    expect(html).toContain("<dt>Result</dt><dd>failed</dd>");
+    expect(html).toContain("<dt>Findings</dt><dd>1 · high: 1</dd>");
+    expect(html).toContain("Review · Holistic design");
+    expect(html).toContain("Review · Security");
+    expect(html).toContain("Review · Data consistency");
+    expect(html).toContain("Candidate head");
+    expect(html).toContain("Reviewers skipped");
+    expect(html).toContain("Performance");
+    expect(html).toContain("<strong>Security</strong> · Ran · Failed");
+    expect(html).toContain(
+      "<strong>Data consistency</strong> · Ran · In progress",
+    );
+    expect(html).toContain(
+      "<strong>Accessibility</strong> · Selected · Pending",
+    );
+    expect(html).toContain("<h2>Overall review</h2>");
+    expect(html).toContain("<strong>design concern</strong>");
+    expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(html).not.toContain('href="javascript:');
+    expect(html).not.toContain("<img");
+    expect(html).toContain("diagram");
+    expect(html).toContain("<strong>high</strong> · Missing review state");
+    // The complete raw review contract remains in diagnostics.
+    expect(html).toContain(
+      '<summary class="diagnostics-summary">Diagnostics</summary>',
+    );
   });
 
   it("uses shared semantic tones for every run status", () => {
@@ -192,7 +227,7 @@ describe("run details", () => {
     );
 
     expect(html.indexOf(">implement</span>")).toBeLessThan(
-      html.indexOf(">review</span>"),
+      html.indexOf(">Review · implement</span>"),
     );
     expect(html).toContain("1m 5s");
     expect(html.match(/<details class="attempt">/g)).toHaveLength(2);

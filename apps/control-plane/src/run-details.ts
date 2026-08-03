@@ -1,8 +1,9 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import type { Attempt, RunStatus } from "@roundhouse/core";
+import type { Attempt, RunStatus, WorkflowReviewer } from "@roundhouse/core";
 import type { RunDetails } from "./d1-store.js";
+import { renderSafeMarkdown } from "./safe-markdown.js";
 import {
   formatUsage,
   formatUsageBreakdown,
@@ -294,6 +295,224 @@ function boundaryWorkflowEvidence(details: RunDetails): string {
 
 type DetailsAttempt = RunDetails["attempts"][number];
 
+type ReviewResult = {
+  readonly status?: string;
+  readonly summary?: string;
+  readonly findings?: readonly ReviewFinding[];
+  readonly selections?: readonly ReviewSelection[];
+};
+
+type ReviewFinding = {
+  readonly severity?: unknown;
+  readonly title?: unknown;
+  readonly file?: unknown;
+  readonly details?: unknown;
+};
+
+type ReviewSelection = {
+  readonly role?: unknown;
+  readonly applicable?: unknown;
+  readonly rationale?: unknown;
+};
+
+function reviewResultFor(attempt: DetailsAttempt): ReviewResult | undefined {
+  const review = attempt.result?.review;
+  return review && typeof review === "object" && !Array.isArray(review)
+    ? (review as ReviewResult)
+    : undefined;
+}
+
+function reviewDefinitions(
+  details: RunDetails,
+  attempt?: DetailsAttempt,
+): readonly WorkflowReviewer[] {
+  const nodes = Object.entries(details.run.profile?.workflow?.nodes ?? {});
+  const node = attempt?.nodeId
+    ? nodes.find(([id]) => id === attempt.nodeId)?.[1]
+    : nodes.find(([, candidate]) => candidate.review)?.[1];
+  return node?.review?.reviewers ?? [];
+}
+
+function reviewerFor(
+  details: RunDetails,
+  attempt: DetailsAttempt,
+): WorkflowReviewer | undefined {
+  return reviewDefinitions(details, attempt).find(
+    (reviewer) => reviewer.id === attempt.role,
+  );
+}
+
+function reviewLabel(reviewer?: WorkflowReviewer, role?: string): string {
+  const label = reviewer?.label ?? role?.replace(/^review-/, "") ?? "Review";
+  return label.replace(/\s+review$/i, "");
+}
+
+function reviewAttemptState(attempt?: DetailsAttempt): string {
+  if (!attempt) return "Pending";
+  if (attempt.state === "completed") return "Completed";
+  if (attempt.state === "failed") return "Failed";
+  return "In progress";
+}
+
+function reviewFindings(
+  findings: readonly ReviewFinding[] | undefined,
+): string {
+  if (!findings?.length) return '<p class="muted">No findings.</p>';
+  return `<ul class="review-findings">${findings
+    .map((finding) => {
+      const severity = String(finding.severity ?? "Unavailable");
+      const title = String(finding.title ?? "Finding");
+      const file =
+        typeof finding.file === "string" && finding.file.trim()
+          ? ` · <code>${escapeHtml(finding.file)}</code>`
+          : "";
+      const details =
+        typeof finding.details === "string" && finding.details.trim()
+          ? `<div class="review-markdown">${renderSafeMarkdown(finding.details)}</div>`
+          : "";
+      return `<li><strong>${escapeHtml(severity)}</strong> · ${escapeHtml(title)}${file}${details}</li>`;
+    })
+    .join("")}</ul>`;
+}
+
+function latestRoleAttempt(
+  attempts: readonly DetailsAttempt[],
+  role: string,
+): DetailsAttempt | undefined {
+  return [...attempts]
+    .filter((attempt) => attempt.role === role)
+    .sort(
+      (left, right) =>
+        right.createdAt - left.createdAt || right.id.localeCompare(left.id),
+    )[0];
+}
+
+function reviewAttemptPresentation(
+  details: RunDetails,
+  attempt: DetailsAttempt,
+): string {
+  const result = reviewResultFor(attempt);
+  const reviewer = reviewerFor(details, attempt);
+  const definitions = reviewDefinitions(details, attempt);
+  const isHolistic = Boolean(reviewer?.selects.length);
+  const summary =
+    typeof result?.summary === "string" && result.summary.trim()
+      ? `<div class="review-markdown">${renderSafeMarkdown(result.summary)}</div>`
+      : '<p class="muted">No review summary is available.</p>';
+  const reviewStatus =
+    typeof result?.status === "string" ? result.status : undefined;
+  const round = details.attempts.filter(
+    (candidate) =>
+      candidate.stage === "review" &&
+      candidate.runRevision === attempt.runRevision &&
+      candidate.expectedHead === attempt.expectedHead,
+  );
+  const selections = new Map(
+    (result?.selections ?? [])
+      .filter(
+        (selection) =>
+          typeof selection.role === "string" &&
+          typeof selection.applicable === "boolean",
+      )
+      .map((selection) => [selection.role as string, selection]),
+  );
+  const specialistDecisions = isHolistic
+    ? `<h4>Specialist decisions</h4><ul class="review-decisions">${reviewer!.selects
+        .map((role) => {
+          const definition = definitions.find(
+            (candidate) => candidate.id === role,
+          );
+          const selection = selections.get(role);
+          const selected = selection?.applicable === true;
+          const rationale =
+            typeof selection?.rationale === "string" &&
+            selection.rationale.trim()
+              ? `<div class="review-markdown">${renderSafeMarkdown(selection.rationale)}</div>`
+              : '<p class="muted">No selection rationale is available.</p>';
+          const specialistAttempt = latestRoleAttempt(round, role);
+          const state = selected
+            ? `${specialistAttempt ? "Ran" : "Selected"} · ${reviewAttemptState(specialistAttempt)}`
+            : selection?.applicable === false
+              ? "Skipped"
+              : "Pending";
+          return `<li><strong>${escapeHtml(reviewLabel(definition, role))}</strong> · ${escapeHtml(state)}${rationale}</li>`;
+        })
+        .join("")}</ul>`
+    : "";
+  return `<section class="review-presentation"><h4>Review</h4><dl><dt>Attempt status</dt><dd>${escapeHtml(reviewAttemptState(attempt))}</dd>${reviewStatus ? `<dt>Review result</dt><dd>${escapeHtml(reviewStatus)}</dd>` : ""}</dl><h4>Summary</h4>${summary}<h4>Findings</h4>${reviewFindings(result?.findings)}${specialistDecisions}</section>`;
+}
+
+function latestReviewSummary(details: RunDetails): string {
+  const attempts = details.attempts.filter(
+    (attempt) => attempt.stage === "review",
+  );
+  if (!attempts.length) return "";
+  const revision = Math.max(...attempts.map((attempt) => attempt.runRevision));
+  const revisionAttempts = attempts.filter(
+    (attempt) => attempt.runRevision === revision,
+  );
+  const candidateHead =
+    details.run.reviewedHead ??
+    revisionAttempts[0]?.expectedHead ??
+    "Unavailable";
+  const round = revisionAttempts.filter(
+    (attempt) => attempt.expectedHead === candidateHead,
+  );
+  const latestRound = round.length ? round : revisionAttempts;
+  const definitions = reviewDefinitions(details, latestRound[0]);
+  const holistic = definitions.find((reviewer) => reviewer.selects.length);
+  const holisticAttempt = holistic
+    ? latestRoleAttempt(latestRound, holistic.id)
+    : undefined;
+  const selections = new Map(
+    (holisticAttempt
+      ? (reviewResultFor(holisticAttempt)?.selections ?? [])
+      : []
+    )
+      .filter(
+        (selection) =>
+          typeof selection.role === "string" &&
+          typeof selection.applicable === "boolean",
+      )
+      .map((selection) => [selection.role as string, selection.applicable]),
+  );
+  const findings = latestRound.flatMap(
+    (attempt) => reviewResultFor(attempt)?.findings ?? [],
+  );
+  const severities = new Map<string, number>();
+  for (const finding of findings) {
+    const severity = String(finding.severity ?? "Unavailable");
+    severities.set(severity, (severities.get(severity) ?? 0) + 1);
+  }
+  const join = [...(details.events ?? [])]
+    .reverse()
+    .find(
+      (event) =>
+        event.kind === "workflow_review_join" &&
+        event.payload.candidateHead === candidateHead,
+    );
+  const joinedStatus =
+    typeof join?.payload.status === "string" ? join.payload.status : undefined;
+  const status = joinedStatus
+    ? joinedStatus
+    : latestRound.some((attempt) => attempt.state === "failed")
+      ? "failed"
+      : "in progress";
+  const ran = latestRound.map((attempt) =>
+    reviewLabel(
+      definitions.find((reviewer) => reviewer.id === attempt.role),
+      attempt.role,
+    ),
+  );
+  const skipped = definitions
+    .filter((reviewer) => selections.get(reviewer.id) === false)
+    .map((reviewer) => reviewLabel(reviewer));
+  const severitySummary = [...severities.entries()]
+    .map(([severity, count]) => `${severity}: ${count}`)
+    .join(", ");
+  return `<section class="review-summary"><h3>Latest review</h3><dl><dt>Result</dt><dd>${escapeHtml(status)}</dd><dt>Findings</dt><dd>${findings.length}${severitySummary ? ` · ${escapeHtml(severitySummary)}` : ""}</dd><dt>Reviewers ran</dt><dd>${escapeHtml(ran.join(", ") || "Unavailable")}</dd><dt>Reviewers skipped</dt><dd>${escapeHtml(skipped.join(", ") || "None")}</dd><dt>Review revision</dt><dd>${escapeHtml(revision)}</dd><dt>Candidate head</dt><dd><code>${escapeHtml(candidateHead)}</code></dd></dl></section>`;
+}
+
 interface CompetitionGroup {
   readonly nodeId?: string;
   readonly baseRole: string;
@@ -414,7 +633,15 @@ export function renderRunDetails(
       const attemptUsage = usage.filter(
         (item) => item.attemptId === attempt.id,
       );
-      return `<details class="attempt"><summary class="attempt-summary"><span><span class="label">Revision</span>${escapeHtml(attempt.runRevision ?? "Unavailable")}</span><span class="phase">${escapeHtml(stageLabel(attempt.stage))}</span><span><span class="label">Started</span>${escapeHtml(timestamp(attempt.createdAt))}</span><span><span class="label">Elapsed</span>${escapeHtml(elapsed(attempt.createdAt, attempt.updatedAt))}</span><span><span class="label">Status</span>${escapeHtml(attempt.state)}</span></summary><div class="attempt-details"><h3>${escapeHtml(stageLabel(attempt.stage))}</h3><p class="stage-result">${escapeHtml(stageResultSummary(attempt))}</p><dl><dt>Status</dt><dd>${escapeHtml(attempt.state)}</dd><dt>Started</dt><dd>${escapeHtml(timestamp(attempt.createdAt))}</dd><dt>Updated</dt><dd>${escapeHtml(timestamp(attempt.updatedAt))}</dd><dt>Elapsed</dt><dd>${escapeHtml(elapsed(attempt.createdAt, attempt.updatedAt))}</dd></dl>
+      const isReview = attempt.stage === "review";
+      const reviewer = isReview ? reviewerFor(details, attempt) : undefined;
+      const phase = isReview
+        ? `Review · ${reviewLabel(reviewer, attempt.role)}`
+        : stageLabel(attempt.stage);
+      const presentation = isReview
+        ? reviewAttemptPresentation(details, attempt)
+        : `<h3>${escapeHtml(stageLabel(attempt.stage))}</h3><p class="stage-result">${escapeHtml(stageResultSummary(attempt))}</p><dl><dt>Status</dt><dd>${escapeHtml(attempt.state)}</dd><dt>Started</dt><dd>${escapeHtml(timestamp(attempt.createdAt))}</dd><dt>Updated</dt><dd>${escapeHtml(timestamp(attempt.updatedAt))}</dd><dt>Elapsed</dt><dd>${escapeHtml(elapsed(attempt.createdAt, attempt.updatedAt))}</dd></dl>`;
+      return `<details class="attempt"><summary class="attempt-summary"><span><span class="label">Revision</span>${escapeHtml(attempt.runRevision ?? "Unavailable")}</span><span class="phase">${escapeHtml(phase)}</span><span><span class="label">Started</span>${escapeHtml(timestamp(attempt.createdAt))}</span><span><span class="label">Elapsed</span>${escapeHtml(elapsed(attempt.createdAt, attempt.updatedAt))}</span><span><span class="label">Status</span>${escapeHtml(attempt.state)}</span></summary><div class="attempt-details">${presentation}
 ${executionDisplay(details, attempt)}${attemptLinks(attempt)}<details class="diagnostics"><summary class="diagnostics-summary">Diagnostics</summary>${attempt.outcome ? `<h4>Executor outcome</h4>${value(attempt.outcome)}` : ""}${attempt.result === undefined ? "" : `<h4>Result</h4>${attemptResult(attempt)}`}<dl><dt>Role</dt><dd>${escapeHtml(attempt.role ?? "Unavailable")}</dd><dt>Revision</dt><dd>${escapeHtml(attempt.runRevision ?? "Unavailable")}</dd><dt>Base commit</dt><dd><code>${escapeHtml(attempt.baseCommit ?? "Unavailable")}</code></dd><dt>Expected head</dt><dd><code>${escapeHtml(attempt.expectedHead ?? "Unavailable")}</code></dd><dt>Accepted head</dt><dd><code>${escapeHtml(attempt.acceptedHead ?? "Unavailable")}</code></dd><dt>Effective capabilities</dt><dd>${value(attempt.capabilities ?? [])}</dd></dl>
 ${workflowEvidence(details, attempt)}<h4>Model routing</h4>${value(attempt.routing)}<h4>Model usage total</h4><p>${usageDisplay(attemptUsage)}</p>${usageTable(attemptUsage)}</details></div></details>`;
     })
@@ -430,7 +657,11 @@ ${workflowEvidence(details, attempt)}<h4>Model routing</h4>${value(attempt.routi
     outcomeParts.push(
       `<dl><dt>Waiting on</dt><dd>${escapeHtml(run.waitingReason.replaceAll("_", " "))}</dd></dl>`,
     );
-  if (latestAttempt && resultSummary(latestAttempt))
+  if (
+    latestAttempt &&
+    latestAttempt.stage !== "review" &&
+    resultSummary(latestAttempt)
+  )
     outcomeParts.push(
       `<p><strong>${escapeHtml(stageLabel(latestAttempt.stage))}:</strong> ${escapeHtml(stageResultSummary(latestAttempt))}</p>`,
     );
@@ -438,7 +669,8 @@ ${workflowEvidence(details, attempt)}<h4>Model routing</h4>${value(attempt.routi
     latestAttempt &&
     !resultSummary(latestAttempt) &&
     lastCompleted &&
-    lastCompleted.id !== latestAttempt.id
+    lastCompleted.id !== latestAttempt.id &&
+    lastCompleted.stage !== "review"
   )
     outcomeParts.push(
       `<p>Most recently completed: <strong>${escapeHtml(stageLabel(lastCompleted.stage))}</strong> — ${escapeHtml(stageResultSummary(lastCompleted))}</p>`,
@@ -447,7 +679,7 @@ ${workflowEvidence(details, attempt)}<h4>Model routing</h4>${value(attempt.routi
     outcomeParts.push(
       `<p>${link(prUrl, pr?.number ? `Pull request #${pr.number}` : "Pull request")}</p>`,
     );
-  const outcomeSection = `<section><h2>Outcome</h2>${outcomeParts.join("")}</section>`;
+  const outcomeSection = `<section><h2>Outcome</h2>${outcomeParts.join("")}${latestReviewSummary(details)}</section>`;
   const runDiagnostics = `<details class="diagnostics"><summary class="diagnostics-summary">Run diagnostics</summary><dl><dt>Authored candidate head</dt><dd><code>${escapeHtml(run.candidateHead ?? "Unavailable")}</code></dd><dt>Reviewed candidate head</dt><dd><code>${escapeHtml(run.reviewedHead ?? "Unavailable")}</code></dd><dt>Target base head</dt><dd><code>${escapeHtml(run.targetBaseHead ?? "Unavailable")}</code></dd><dt>Validated integration head</dt><dd><code>${escapeHtml(run.integrationHead ?? "Unavailable")}</code></dd></dl></details>`;
   const validPrUrl = validPullRequest(prUrl) ? prUrl : undefined;
   const prRow = validPrUrl
@@ -458,7 +690,7 @@ ${workflowEvidence(details, attempt)}<h4>Model routing</h4>${value(attempt.routi
     run.profile?.workflow && repositoryOwner && repositoryName
       ? `<dt>Workflow</dt><dd><a href="/repositories/${encodeURIComponent(repositoryOwner)}/${encodeURIComponent(repositoryName)}/issues/${run.issueNumber}/workflow">View workflow for this run</a></dd>`
       : "";
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(issueTitle)}</title><style>${sharedHeaderStyles}body{font:16px system-ui;line-height:1.5;margin:0;color:#202124}.page{max-width:1000px;margin:2rem auto;padding:0 1rem}h1,h2{line-height:1.2}section{border-top:1px solid #ddd;padding:1rem 0}details.attempt{border-top:1px solid #ddd}summary.attempt-summary{cursor:pointer;display:grid;grid-template-columns:.6fr 1.2fr 2fr 1fr 1fr;gap:1rem;padding:1rem;align-items:center}summary.attempt-summary:hover{background:#f6f8fa}details.diagnostics{border:1px solid #ddd;border-radius:.35rem;margin:.75rem 0;padding:0 1rem}summary.diagnostics-summary{cursor:pointer;font-weight:600;padding:.75rem 0}details.diagnostics[open] summary.diagnostics-summary{border-bottom:1px solid #ddd;margin-bottom:.75rem}details.diagnostics details.diagnostics{margin:.5rem 0}.phase{font-weight:700}.label{display:block;color:#666;font-size:.75rem;text-transform:uppercase}.attempt-details{padding:0 1rem 1rem 2rem;border-left:3px solid #ddd;margin-left:1rem}dl{display:grid;grid-template-columns:10rem 1fr;gap:.35rem 1rem}dt{font-weight:600}dd{margin:0;overflow-wrap:anywhere}table{border-collapse:collapse;width:100%}th,td{text-align:left;border-bottom:1px solid #ddd;padding:.4rem}pre{background:#f6f8fa;padding:1rem;overflow:auto;white-space:pre-wrap}.muted{color:#666}code{overflow-wrap:anywhere}${statusPillStyles}.usage-hint{border-bottom:1px dotted currentColor;cursor:help;display:inline-block;position:relative}.usage-breakdown{background:#202124;border-radius:.25rem;bottom:calc(100% + .35rem);color:#fff;display:none;font-size:.875rem;left:0;padding:.4rem .6rem;pointer-events:none;position:absolute;white-space:nowrap;z-index:1}.usage-hint:hover .usage-breakdown,.usage-hint:focus .usage-breakdown,.usage-hint:focus-within .usage-breakdown{display:block}@media(max-width:700px){.page{box-sizing:border-box;margin:1rem auto;max-width:none;padding:0 .75rem;width:100%}summary.attempt-summary{grid-template-columns:1fr 1fr}.phase{grid-column:auto}details.diagnostics{padding:0 .5rem;min-width:0}dl{grid-template-columns:minmax(0,1fr)}dd{margin-bottom:.5rem}.attempt-details{padding:0 0 1rem .75rem;margin-left:0;min-width:0}table{display:block;overflow-x:auto}.usage-breakdown{max-width:calc(100vw - 2rem);white-space:normal}}</style></head><body>${renderSiteHeader(user)}
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(issueTitle)}</title><style>${sharedHeaderStyles}body{font:16px system-ui;line-height:1.5;margin:0;color:#202124}.page{max-width:1000px;margin:2rem auto;padding:0 1rem}h1,h2{line-height:1.2}section{border-top:1px solid #ddd;padding:1rem 0}details.attempt{border-top:1px solid #ddd}summary.attempt-summary{cursor:pointer;display:grid;grid-template-columns:.6fr 1.2fr 2fr 1fr 1fr;gap:1rem;padding:1rem;align-items:center}summary.attempt-summary:hover{background:#f6f8fa}details.diagnostics{border:1px solid #ddd;border-radius:.35rem;margin:.75rem 0;padding:0 1rem}summary.diagnostics-summary{cursor:pointer;font-weight:600;padding:.75rem 0}details.diagnostics[open] summary.diagnostics-summary{border-bottom:1px solid #ddd;margin-bottom:.75rem}details.diagnostics details.diagnostics{margin:.5rem 0}.phase{font-weight:700}.review-summary{border:1px solid #dde3ea;border-radius:.35rem;margin-top:1rem;padding:.75rem 1rem}.review-summary h3{margin-top:0}.review-presentation{margin:.75rem 0}.review-presentation h4{margin:1rem 0 .35rem}.review-markdown{overflow-wrap:anywhere}.review-markdown>*:first-child{margin-top:0}.review-markdown>*:last-child{margin-bottom:0}.review-markdown a{color:#175cd3}.review-markdown pre{max-width:100%;overflow-x:auto}.review-findings,.review-decisions{padding-left:1.4rem}.review-findings>li,.review-decisions>li{margin:.65rem 0}.label{display:block;color:#666;font-size:.75rem;text-transform:uppercase}.attempt-details{padding:0 1rem 1rem 2rem;border-left:3px solid #ddd;margin-left:1rem}dl{display:grid;grid-template-columns:10rem 1fr;gap:.35rem 1rem}dt{font-weight:600}dd{margin:0;overflow-wrap:anywhere}table{border-collapse:collapse;width:100%}th,td{text-align:left;border-bottom:1px solid #ddd;padding:.4rem}pre{background:#f6f8fa;padding:1rem;overflow:auto;white-space:pre-wrap}.muted{color:#666}code{overflow-wrap:anywhere}${statusPillStyles}.usage-hint{border-bottom:1px dotted currentColor;cursor:help;display:inline-block;position:relative}.usage-breakdown{background:#202124;border-radius:.25rem;bottom:calc(100% + .35rem);color:#fff;display:none;font-size:.875rem;left:0;padding:.4rem .6rem;pointer-events:none;position:absolute;white-space:nowrap;z-index:1}.usage-hint:hover .usage-breakdown,.usage-hint:focus .usage-breakdown,.usage-hint:focus-within .usage-breakdown{display:block}@media(max-width:700px){.page{box-sizing:border-box;margin:1rem auto;max-width:none;padding:0 .75rem;width:100%}summary.attempt-summary{grid-template-columns:1fr 1fr}.phase{grid-column:auto}details.diagnostics{padding:0 .5rem;min-width:0}dl{grid-template-columns:minmax(0,1fr)}dd{margin-bottom:.5rem}.attempt-details{padding:0 0 1rem .75rem;margin-left:0;min-width:0}table{display:block;overflow-x:auto}.usage-breakdown{max-width:calc(100vw - 2rem);white-space:normal}}</style></head><body>${renderSiteHeader(user)}
 <main class="page"><h1>${escapeHtml(issueTitle)}</h1><p>${escapeHtml(run.repository)} issue ${escapeHtml(run.issueNumber)}</p>
 <dl><dt>Status</dt><dd><span class="status ${runStatusTone(run.status)}">${escapeHtml(statusLabels[run.status])}</span></dd><dt>Current stage</dt><dd>${escapeHtml(currentStage)}</dd><dt>Elapsed</dt><dd>${escapeHtml(elapsed(details.createdAt, details.updatedAt))}</dd><dt>Total usage</dt><dd>${usageDisplay(usage)}</dd><dt>Source issue</dt><dd>${link(run.issue?.url, `Issue #${run.issueNumber}`)}</dd>${prRow}${workflowRow}<dt>Created</dt><dd>${escapeHtml(new Date(details.createdAt).toISOString())}</dd><dt>Updated</dt><dd>${escapeHtml(new Date(details.updatedAt).toISOString())}</dd></dl>
 ${outcomeSection}${competitionPanels(details)}<section><h2>Attempt history</h2>${rows || '<p class="muted">No attempts recorded.</p>'}</section><section><h2>Diagnostics</h2>${runDiagnostics}${reviewWorkflowEvidence(details)}${boundaryWorkflowEvidence(details)}${profileSection}</section></main></body></html>`;

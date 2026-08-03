@@ -180,12 +180,12 @@
     "semantic_hash": ""
   },
   "apps/control-plane/src/coordinator.test.ts": {
-    "mtime": 1785774534.8544958,
+    "mtime": 1785774521.4599895,
     "ast_hash": "6adad985d4518909926a9ae15950731a",
     "semantic_hash": ""
   },
   "apps/control-plane/src/coordinator.ts": {
-    "mtime": 1785774534.8544958,
+    "mtime": 1785774521.4599895,
     "ast_hash": "3090478207d40de9ce8201161e03be0e",
     "semantic_hash": ""
   },
@@ -195,12 +195,12 @@
     "semantic_hash": ""
   },
   "apps/control-plane/src/dashboard.test.ts": {
-    "mtime": 1785774534.8544958,
+    "mtime": 1785774521.4599895,
     "ast_hash": "a44ff7ea274b3c96ed78bfaf4cd7700c",
     "semantic_hash": ""
   },
   "apps/control-plane/src/dashboard.ts": {
-    "mtime": 1785774534.8544958,
+    "mtime": 1785774521.4599895,
     "ast_hash": "5874cf3b342942012ae1a9ebe9d081f6",
     "semantic_hash": ""
   },
@@ -270,13 +270,13 @@
     "semantic_hash": "1d16df996f578a1c708c59690af8cea3"
   },
   "apps/control-plane/src/run-details.test.ts": {
-    "mtime": 1785774534.8544958,
-    "ast_hash": "97783ba7828b66395c28b2618f262813",
+    "mtime": 1785774597.77144,
+    "ast_hash": "9f1e29f1b3583da86ca24cd2edca2099",
     "semantic_hash": ""
   },
   "apps/control-plane/src/run-details.ts": {
-    "mtime": 1785774534.8544958,
-    "ast_hash": "e114dd6e18af497b92fb311c1652843e",
+    "mtime": 1785774597.77144,
+    "ast_hash": "96a0d20e9afa916e3ffb551f38b1770f",
     "semantic_hash": ""
   },
   "apps/control-plane/src/runtime-host.test.ts": {
@@ -295,12 +295,12 @@
     "semantic_hash": "0f67a942045f3eb5e35c165e36820686"
   },
   "apps/control-plane/src/ui-auth.test.ts": {
-    "mtime": 1785774534.8544958,
+    "mtime": 1785774521.4599895,
     "ast_hash": "1433f1efdd11c68215dc89a451ad61d2",
     "semantic_hash": ""
   },
   "apps/control-plane/src/ui-auth.ts": {
-    "mtime": 1785774534.8544958,
+    "mtime": 1785774521.4599895,
     "ast_hash": "fab47cb8ea3af2037edbff5b69d28d0a",
     "semantic_hash": ""
   },
@@ -395,12 +395,12 @@
     "semantic_hash": "b5cfd8165aeb399dc214b2a8c2b37711"
   },
   "containers/agent-runner/runner.mjs": {
-    "mtime": 1785774534.8544958,
+    "mtime": 1785774521.4639895,
     "ast_hash": "b33eae974cb7d5c59fc84e4559a5c470",
     "semantic_hash": ""
   },
   "containers/agent-runner/runner.test.mjs": {
-    "mtime": 1785774534.8544958,
+    "mtime": 1785774521.4639895,
     "ast_hash": "7240b53f99f1dc7586dfdd13dc8ab66c",
     "semantic_hash": ""
   },
@@ -465,12 +465,12 @@
     "semantic_hash": "e3869483ecb8fe82364da5250783ef28"
   },
   "packages/core/src/workflow.test.ts": {
-    "mtime": 1785774534.8664958,
+    "mtime": 1785774521.4719894,
     "ast_hash": "cb2b668810ab0fbcb4fbfafe4fccc60a",
     "semantic_hash": ""
   },
   "packages/core/src/workflow.ts": {
-    "mtime": 1785774534.8664958,
+    "mtime": 1785774521.4719894,
     "ast_hash": "b508d8715d637eb93c8b91371b70cf4c",
     "semantic_hash": ""
   },
@@ -590,7 +590,7 @@
     "semantic_hash": ""
   },
   ".roundhouse/workflow.yaml": {
-    "mtime": 1785774534.8544958,
+    "mtime": 1785774521.4599895,
     "ast_hash": "03d217d22f8827b6a7e2b861f5b76803",
     "semantic_hash": ""
   },
@@ -610,7 +610,7 @@
     "semantic_hash": ""
   },
   "docs/v2-plan.md": {
-    "mtime": 1785774534.8544958,
+    "mtime": 1785774521.4639895,
     "ast_hash": "c96ac9045f4cbb1be161db21573bacbe",
     "semantic_hash": ""
   },
@@ -680,13 +680,13 @@
     "semantic_hash": ""
   },
   "apps/control-plane/src/conversation-ui.test.ts": {
-    "mtime": 1785774534.8544958,
+    "mtime": 1785774717.990574,
     "ast_hash": "62583477d9476938781153b27f4b179e",
     "semantic_hash": ""
   },
   "apps/control-plane/src/conversation-ui.ts": {
-    "mtime": 1785774569.2388263,
-    "ast_hash": "79eca7c60c83652069fcfbc65bd4a0e8",
+    "mtime": 1785774731.9344733,
+    "ast_hash": "f2c0cf5943d33c5de3036ee099f56403",
     "semantic_hash": ""
   },
   "apps/control-plane/src/conversation-worker.test.ts": {
@@ -720,27 +720,27 @@
     "semantic_hash": ""
   },
   "apps/control-plane/src/run-details.fixture.ts": {
-    "mtime": 1785771401.0,
-    "ast_hash": "4a773f1011e1bb17320d880272b5c87d",
+    "mtime": 1785773862.1367385,
+    "ast_hash": "52d5cabfd8eeacb4d3a1ca887ee1ce98",
     "semantic_hash": ""
   },
   "apps/control-plane/src/ui-header.test.ts": {
-    "mtime": 1785774534.8544958,
+    "mtime": 1785774521.4599895,
     "ast_hash": "b16b9b5c1a6e9545bb901ffff60105d2",
     "semantic_hash": ""
   },
   "apps/control-plane/src/ui-header.ts": {
-    "mtime": 1785774534.8544958,
+    "mtime": 1785774521.4599895,
     "ast_hash": "e4af4980909fbbc29c74d6421934955d",
     "semantic_hash": ""
   },
   "apps/control-plane/src/conversation-client.test.ts": {
-    "mtime": 1785773916.541287,
+    "mtime": 1785774717.990574,
     "ast_hash": "76203981d00740bec6a192e4b49ebac6",
     "semantic_hash": ""
   },
   "apps/control-plane/src/conversation-client.ts": {
-    "mtime": 1785773891.9365704,
+    "mtime": 1785774717.990574,
     "ast_hash": "78c58c5068af5bd801eb90b240b839ff",
     "semantic_hash": ""
   },
@@ -755,8 +755,13 @@
     "semantic_hash": ""
   },
   "apps/control-plane/src/status-ui.ts": {
-    "mtime": 1785774534.8544958,
+    "mtime": 1785774521.4599895,
     "ast_hash": "7d6d2169a85173b1cb9912af1ac47449",
+    "semantic_hash": ""
+  },
+  "apps/control-plane/src/safe-markdown.ts": {
+    "mtime": 1785773862.1367385,
+    "ast_hash": "55b654ea2c81871685962f3e7d870336",
     "semantic_hash": ""
   }
 }
