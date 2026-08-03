@@ -9,6 +9,7 @@ import {
   renderReviewRunDetailsFixture,
 } from "./run-details.fixture.js";
 import { renderRunDetails } from "./run-details.js";
+import { statusPillStyles } from "./status-ui.js";
 
 type DetailsRun = RunDetails["run"];
 type DetailsAttempt = RunDetails["attempts"][number];
@@ -111,6 +112,22 @@ describe("run details", () => {
     expect(html).toContain(
       '<summary class="diagnostics-summary">Diagnostics</summary>',
     );
+  });
+
+  it("uses shared semantic tones for every run status", () => {
+    const cases = [
+      ["active", "active", "In progress"],
+      ["waiting", "waiting", "Waiting"],
+      ["succeeded", "succeeded", "Succeeded"],
+      ["failed", "failed", "Failed"],
+      ["cancelled", "failed", "Cancelled"],
+    ] as const;
+
+    for (const [status, tone, label] of cases) {
+      const html = renderRunDetails(detailsFixture({ run: { status } }));
+      expect(html).toContain(statusPillStyles);
+      expect(html).toContain(`<span class="status ${tone}">${label}</span>`);
+    }
   });
 
   it("renders escaped summary, usage, links, and workflow evidence", () => {
