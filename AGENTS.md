@@ -9,14 +9,15 @@ inventing new ones.
 
 ### Node version (important gotcha)
 
-The repo requires Node 24 (`.node-version` pins `24.18.0`). Cloud VMs also
-ship `/exec-daemon/node` (v22); that binary must not be modified. Node 24 is
-installed via `nvm`, and `~/.bashrc` prepends it to `PATH`. Agent shells
-usually already inherit that — **do not wrap every command in `bash -lc`**.
+The repo requires Node 24 (`.node-version` pins `24.18.0`). Cloud agent VMs
+also ship `/exec-daemon/node` (v22). That binary must not be modified, and
+Cursor often prepends `/exec-daemon` to `PATH`, so a later nvm entry is not
+enough — **Node 24 must be re-prepended** after that injection.
 
-Before builds/tests, confirm once with `node --version` (`v24.x`). If a shell
-still resolves v22, fix `PATH` (or start a login shell that sources
-`~/.bashrc`) and continue with plain commands like `pnpm check`.
+Do this in the Cloud environment **install** script (and `BASH_ENV`), not by
+wrapping every command in `bash -lc`. Agent commands should be plain
+(`pnpm check`, `pnpm exec wrangler …`). If `node --version` is not `v24.x`,
+the environment install is wrong — fix that, don't paper over it per command.
 
 ### There is no local dev server
 
@@ -185,9 +186,61 @@ before you finish the turn / open or update a PR):
 
 Do **not** regenerate the graph during Cursor Cloud environment install. The
 install script should only ensure the CLI is present; regenerating on every
-build dirties the reused git checkout. Recommended install snippet:
+build dirties the reused git checkout.
+
+#### Recommended Cloud environment install
+
+Paste this as the environment **install** script in the Cursor Cloud Agents
+dashboard (https://cursor.com/dashboard/cloud-agents → this environment). Also
+set a persistent environment variable (same dashboard → env vars / secrets):
+
+- `BASH_ENV` = `/home/ubuntu/.node24-env`
+
+`BASH_ENV` is required so non-interactive agent shells (`bash -c`) re-prepend
+Node 24 after Cursor injects `/exec-daemon` on `PATH`. Without it, `node` can
+resolve to v22 even when nvm is installed.
 
 ```bash
+set -euo pipefail
+
+NODE_VERSION="$(tr -d '[:space:]' < .node-version)"
+export NVM_DIR="$HOME/.nvm"
+
+if [ ! -s "$NVM_DIR/nvm.sh" ]; then
+  curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+fi
+# shellcheck disable=SC1091
+. "$NVM_DIR/nvm.sh"
+nvm install "$NODE_VERSION"
+nvm alias default "$NODE_VERSION"
+
+NODE24_BIN="$NVM_DIR/versions/node/$NODE_VERSION/bin"
+# Always prepend (duplicates are fine). A "already on PATH" check is wrong:
+# /exec-daemon is often earlier than the nvm entry.
+cat > "$HOME/.node24-env" <<EOF
+# Managed by Cloud environment install — keep Node $NODE_VERSION ahead of /exec-daemon/node.
+export PATH="$NODE24_BIN:\$PATH"
+EOF
+
+# Interactive / login shells
+touch "$HOME/.bashrc"
+if ! grep -q 'roundhouse-node24' "$HOME/.bashrc"; then
+  cat >> "$HOME/.bashrc" <<'EOF'
+
+# roundhouse-node24
+export NVM_DIR="$HOME/.nvm"
+[ -s "$HOME/.node24-env" ] && . "$HOME/.node24-env"
+export BASH_ENV="$HOME/.node24-env"
+# roundhouse-node24-end
+EOF
+fi
+
+# Apply for this install process, then refuse to continue on the wrong Node.
+# shellcheck disable=SC1091
+. "$HOME/.node24-env"
+export BASH_ENV="$HOME/.node24-env"
+node --version | grep -q "^v${NODE_VERSION}"
+
 corepack enable
 pnpm install --frozen-lockfile
 
@@ -199,8 +252,11 @@ export PATH="$HOME/.local/bin:$PATH"
 uv tool install "graphifyy[mcp]"
 ```
 
+After updating the install script / `BASH_ENV`, trigger a new environment
+build (or wait for the next recurring build) so the snapshot picks it up.
+
 If the Cloud environment install still runs `graphify update` / `graphify
-extract`, update it in the Cursor dashboard to match the snippet above.
+extract`, remove that — only install the CLI as above.
 
 ### Other notes
 
