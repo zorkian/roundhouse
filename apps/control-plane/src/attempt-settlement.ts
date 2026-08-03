@@ -10,10 +10,11 @@ import {
   type AttemptCallback,
   type AttemptCompletion,
 } from "./callback.js";
-import type {
-  Attempt,
-  CompetitionJudgement,
-  RunSnapshot,
+import {
+  annotateProtectedPathProposal,
+  type Attempt,
+  type CompetitionJudgement,
+  type RunSnapshot,
 } from "@roundhouse/core";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
 import {
@@ -514,11 +515,17 @@ export async function acceptRecordedAttemptCompletion(
   const input = await recordedCallback(env, completion);
   if (!input)
     return settlementResult(repository, completion.attemptId, "stale");
+  const existing = await repository.getAttempt(input.attemptId);
+  const run = existing ? await repository.get(existing.runId) : undefined;
   const outcome = await repository.completeAttempt(
     input.attemptId,
     input.expectedRevision,
     input.checkpoint.outputHead,
-    input.result,
+    annotateProtectedPathProposal(
+      input.result,
+      input.checkpoint.changedPaths,
+      run?.profile,
+    ),
   );
   const attempt = await repository.getAttempt(input.attemptId);
   if (attempt && (outcome === "completed" || outcome === "duplicate"))

@@ -3,7 +3,16 @@
 
 import type { Attempt, RunStatus } from "@roundhouse/core";
 import type { RunDetails } from "./d1-store.js";
-import { formatUsage, formatUsageBreakdown } from "./usage.js";
+import {
+  formatUsage,
+  formatUsageBreakdown,
+  withEstimatedUsageCost,
+} from "./usage.js";
+import {
+  renderSiteHeader,
+  sharedHeaderStyles,
+  type HeaderAccount,
+} from "./ui-header.js";
 
 const escapeHtml = (value: unknown) =>
   String(value)
@@ -13,8 +22,12 @@ const escapeHtml = (value: unknown) =>
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
 
+function validPullRequest(url: unknown): url is string {
+  return typeof url === "string" && /^https:\/\//.test(url);
+}
+
 function link(url: unknown, label: string): string {
-  return typeof url === "string" && /^https:\/\//.test(url)
+  return validPullRequest(url)
     ? `<a href="${escapeHtml(url)}">${escapeHtml(label)}</a>`
     : "Unavailable";
 }
@@ -94,13 +107,52 @@ function attemptLinks(attempt: Attempt): string {
   return `<h4>Related links</h4><p>${link(pullRequest.html_url, pullRequest.number ? `Pull request #${pullRequest.number}` : "Pull request")}</p>`;
 }
 
+function resultSummary(attempt: Attempt): string | undefined {
+  const result = attempt.result;
+  if (!result) return undefined;
+  const entries = [result, ...Object.values(result)];
+  for (const entry of entries) {
+    if (
+      entry &&
+      typeof entry === "object" &&
+      typeof (entry as { summary?: unknown }).summary === "string"
+    )
+      return (entry as { summary: string }).summary;
+  }
+  return undefined;
+}
+
+function stageResultSummary(attempt: Attempt): string {
+  const summary = resultSummary(attempt);
+  if (summary) return summary;
+  const stage = stageLabel(attempt.stage);
+  if (attempt.state === "completed") return `${stage} completed.`;
+  if (attempt.state === "failed") return `${stage} failed.`;
+  return `${stage} is in progress.`;
+}
+
+function runStatusSummary(status: RunStatus, stage: string): string {
+  switch (status) {
+    case "active":
+      return `The run is in progress at ${stage}.`;
+    case "waiting":
+      return `The run is waiting at ${stage}.`;
+    case "succeeded":
+      return `The run succeeded after ${stage}.`;
+    case "failed":
+      return `The run failed during ${stage}.`;
+    case "cancelled":
+      return `The run was cancelled during ${stage}.`;
+  }
+}
+
 function usageTable(items: NonNullable<RunDetails["usage"]>): string {
   if (!items.length) return '<p class="muted">No model calls recorded.</p>';
   return `<table><thead><tr><th>Provider</th><th>Configured model</th><th>Actual model</th><th>Tokens</th><th>Cost</th></tr></thead><tbody>${items
-    .map(
-      (item) =>
-        `<tr><td>${escapeHtml(item.provider ?? "Unavailable")}</td><td>${escapeHtml(item.configuredModel ?? "Unavailable")}</td><td>${escapeHtml(item.model)}</td><td>${escapeHtml(formatUsage([item]))}</td><td>${escapeHtml(item.costUsd === undefined ? "Unavailable" : `$${item.costUsd.toFixed(6)}`)}</td></tr>`,
-    )
+    .map((item) => {
+      const priced = withEstimatedUsageCost(item);
+      return `<tr><td>${escapeHtml(item.provider ?? "Unavailable")}</td><td>${escapeHtml(item.configuredModel ?? "Unavailable")}</td><td>${escapeHtml(item.model)}</td><td>${escapeHtml(formatUsage([priced]))}</td><td>${escapeHtml(priced.costUsd === undefined ? "Unavailable" : `$${priced.costUsd.toFixed(6)}`)}</td></tr>`;
+    })
     .join("")}</tbody></table>`;
 }
 
@@ -332,7 +384,10 @@ function competitionPanels(details: RunDetails): string {
   return `<section><h2>Model competitions</h2>${panels.join("")}</section>`;
 }
 
-export function renderRunDetails(details: RunDetails): string {
+export function renderRunDetails(
+  details: RunDetails,
+  user?: HeaderAccount,
+): string {
   const { run, attempts } = details;
   const issueTitle = run.issue?.title?.trim() || `Issue #${run.issueNumber}`;
   const currentStage = stageLabel(run.stage);
@@ -353,52 +408,47 @@ export function renderRunDetails(details: RunDetails): string {
     (left, right) =>
       left.createdAt - right.createdAt || left.id.localeCompare(right.id),
   );
-  const attemptOutcome = (attempt: DetailsAttempt): string =>
-    `${attempt.outcome ? `<h4>Executor outcome</h4>${value(attempt.outcome)}` : ""}${attempt.result === undefined ? "" : `<h4>Result</h4>${attemptResult(attempt)}`}${attemptLinks(attempt)}`;
   const rows = chronological
-    .map(
-      (
-        attempt,
-      ) => `<details class="attempt"><summary class="attempt-summary"><span><span class="label">Revision</span>${escapeHtml(attempt.runRevision ?? "Unavailable")}</span><span class="phase">${escapeHtml(stageLabel(attempt.stage))}</span><span><span class="label">Started</span>${escapeHtml(timestamp(attempt.createdAt))}</span><span><span class="label">Elapsed</span>${escapeHtml(elapsed(attempt.createdAt, attempt.updatedAt))}</span><span><span class="label">Status</span>${escapeHtml(attempt.state)}</span></summary><div class="attempt-details">
-${executionDisplay(details, attempt)}${attemptOutcome(attempt)}<details class="diagnostics"><summary class="diagnostics-summary">Diagnostics</summary><dl><dt>Role</dt><dd>${escapeHtml(attempt.role ?? "Unavailable")}</dd><dt>Revision</dt><dd>${escapeHtml(attempt.runRevision ?? "Unavailable")}</dd><dt>Updated</dt><dd>${escapeHtml(timestamp(attempt.updatedAt))}</dd><dt>Base commit</dt><dd><code>${escapeHtml(attempt.baseCommit ?? "Unavailable")}</code></dd><dt>Expected head</dt><dd><code>${escapeHtml(attempt.expectedHead ?? "Unavailable")}</code></dd><dt>Accepted head</dt><dd><code>${escapeHtml(attempt.acceptedHead ?? "Unavailable")}</code></dd><dt>Effective capabilities</dt><dd>${value(attempt.capabilities ?? [])}</dd></dl>
-${workflowEvidence(details, attempt)}<h4>Model routing</h4>${value(attempt.routing)}<h4>Model usage total</h4><p>${usageDisplay(usage.filter((item) => item.attemptId === attempt.id))}</p>${usageTable(usage.filter((item) => item.attemptId === attempt.id))}</details></div></details>`,
-    )
+    .map((attempt) => {
+      const attemptUsage = usage.filter(
+        (item) => item.attemptId === attempt.id,
+      );
+      return `<details class="attempt"><summary class="attempt-summary"><span><span class="label">Revision</span>${escapeHtml(attempt.runRevision ?? "Unavailable")}</span><span class="phase">${escapeHtml(stageLabel(attempt.stage))}</span><span><span class="label">Started</span>${escapeHtml(timestamp(attempt.createdAt))}</span><span><span class="label">Elapsed</span>${escapeHtml(elapsed(attempt.createdAt, attempt.updatedAt))}</span><span><span class="label">Status</span>${escapeHtml(attempt.state)}</span></summary><div class="attempt-details"><h3>${escapeHtml(stageLabel(attempt.stage))}</h3><p class="stage-result">${escapeHtml(stageResultSummary(attempt))}</p><dl><dt>Status</dt><dd>${escapeHtml(attempt.state)}</dd><dt>Started</dt><dd>${escapeHtml(timestamp(attempt.createdAt))}</dd><dt>Updated</dt><dd>${escapeHtml(timestamp(attempt.updatedAt))}</dd><dt>Elapsed</dt><dd>${escapeHtml(elapsed(attempt.createdAt, attempt.updatedAt))}</dd></dl>
+${executionDisplay(details, attempt)}${attemptLinks(attempt)}<details class="diagnostics"><summary class="diagnostics-summary">Diagnostics</summary>${attempt.outcome ? `<h4>Executor outcome</h4>${value(attempt.outcome)}` : ""}${attempt.result === undefined ? "" : `<h4>Result</h4>${attemptResult(attempt)}`}<dl><dt>Role</dt><dd>${escapeHtml(attempt.role ?? "Unavailable")}</dd><dt>Revision</dt><dd>${escapeHtml(attempt.runRevision ?? "Unavailable")}</dd><dt>Base commit</dt><dd><code>${escapeHtml(attempt.baseCommit ?? "Unavailable")}</code></dd><dt>Expected head</dt><dd><code>${escapeHtml(attempt.expectedHead ?? "Unavailable")}</code></dd><dt>Accepted head</dt><dd><code>${escapeHtml(attempt.acceptedHead ?? "Unavailable")}</code></dd><dt>Effective capabilities</dt><dd>${value(attempt.capabilities ?? [])}</dd></dl>
+${workflowEvidence(details, attempt)}<h4>Model routing</h4>${value(attempt.routing)}<h4>Model usage total</h4><p>${usageDisplay(attemptUsage)}</p>${usageTable(attemptUsage)}</details></div></details>`;
+    })
     .join("");
   const latestAttempt = chronological[chronological.length - 1];
-  const outcomeParts: string[] = [];
+  const lastCompleted = [...chronological]
+    .reverse()
+    .find((attempt) => attempt.state === "completed");
+  const outcomeParts = [
+    `<p>${escapeHtml(runStatusSummary(run.status, currentStage))}</p>`,
+  ];
   if (run.status === "waiting" && run.waitingReason)
     outcomeParts.push(
       `<dl><dt>Waiting on</dt><dd>${escapeHtml(run.waitingReason.replaceAll("_", " "))}</dd></dl>`,
     );
-  if (latestAttempt) {
-    const heading = (attempt: DetailsAttempt, label: string): string =>
-      `<h3>${label} · ${escapeHtml(stageLabel(attempt.stage))} · ${escapeHtml(attempt.state)}</h3>`;
-    const execution = executionDisplay(details, latestAttempt);
-    const outcome = attemptOutcome(latestAttempt);
-    if (outcome)
-      outcomeParts.push(
-        `${heading(latestAttempt, "Latest attempt")}${execution}${outcome}`,
-      );
-    else {
-      if (execution)
-        outcomeParts.push(
-          `${heading(latestAttempt, "Latest attempt")}${execution}`,
-        );
-      const lastCompleted = [...chronological]
-        .reverse()
-        .find((attempt) => attemptOutcome(attempt));
-      if (lastCompleted)
-        outcomeParts.push(
-          `${heading(lastCompleted, "Last completed stage")}${attemptOutcome(lastCompleted)}`,
-        );
-    }
-  }
-  const outcomeSection = outcomeParts.length
-    ? `<section><h2>Outcome</h2>${outcomeParts.join("")}</section>`
-    : "";
+  if (latestAttempt && resultSummary(latestAttempt))
+    outcomeParts.push(
+      `<p><strong>${escapeHtml(stageLabel(latestAttempt.stage))}:</strong> ${escapeHtml(stageResultSummary(latestAttempt))}</p>`,
+    );
+  if (
+    latestAttempt &&
+    !resultSummary(latestAttempt) &&
+    lastCompleted &&
+    lastCompleted.id !== latestAttempt.id
+  )
+    outcomeParts.push(
+      `<p>Most recently completed: <strong>${escapeHtml(stageLabel(lastCompleted.stage))}</strong> — ${escapeHtml(stageResultSummary(lastCompleted))}</p>`,
+    );
+  if (validPullRequest(prUrl))
+    outcomeParts.push(
+      `<p>${link(prUrl, pr?.number ? `Pull request #${pr.number}` : "Pull request")}</p>`,
+    );
+  const outcomeSection = `<section><h2>Outcome</h2>${outcomeParts.join("")}</section>`;
   const runDiagnostics = `<details class="diagnostics"><summary class="diagnostics-summary">Run diagnostics</summary><dl><dt>Authored candidate head</dt><dd><code>${escapeHtml(run.candidateHead ?? "Unavailable")}</code></dd><dt>Reviewed candidate head</dt><dd><code>${escapeHtml(run.reviewedHead ?? "Unavailable")}</code></dd><dt>Target base head</dt><dd><code>${escapeHtml(run.targetBaseHead ?? "Unavailable")}</code></dd><dt>Validated integration head</dt><dd><code>${escapeHtml(run.integrationHead ?? "Unavailable")}</code></dd></dl></details>`;
-  const validPrUrl =
-    typeof prUrl === "string" && /^https:\/\//.test(prUrl) ? prUrl : undefined;
+  const validPrUrl = validPullRequest(prUrl) ? prUrl : undefined;
   const prRow = validPrUrl
     ? `<dt>Pull request</dt><dd>${link(validPrUrl, pr?.number ? `Pull request #${pr.number}` : "Pull request")} · ${link(`${validPrUrl}/files`, "Files changed")}</dd>`
     : "";
@@ -407,8 +457,8 @@ ${workflowEvidence(details, attempt)}<h4>Model routing</h4>${value(attempt.routi
     run.profile?.workflow && repositoryOwner && repositoryName
       ? `<dt>Workflow</dt><dd><a href="/repositories/${encodeURIComponent(repositoryOwner)}/${encodeURIComponent(repositoryName)}/issues/${run.issueNumber}/workflow">View workflow for this run</a></dd>`
       : "";
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(issueTitle)}</title><style>body{font:16px system-ui;line-height:1.5;max-width:1000px;margin:2rem auto;padding:0 1rem;color:#202124}h1,h2{line-height:1.2}section{border-top:1px solid #ddd;padding:1rem 0}details.attempt{border-top:1px solid #ddd}summary.attempt-summary{cursor:pointer;display:grid;grid-template-columns:.6fr 1.2fr 2fr 1fr 1fr;gap:1rem;padding:1rem;align-items:center}summary.attempt-summary:hover{background:#f6f8fa}details.diagnostics{border:1px solid #ddd;border-radius:.35rem;margin:.75rem 0;padding:0 1rem}summary.diagnostics-summary{cursor:pointer;font-weight:600;padding:.75rem 0}details.diagnostics[open] summary.diagnostics-summary{border-bottom:1px solid #ddd;margin-bottom:.75rem}details.diagnostics details.diagnostics{margin:.5rem 0}.phase{font-weight:700}.label{display:block;color:#666;font-size:.75rem;text-transform:uppercase}.attempt-details{padding:0 1rem 1rem 2rem;border-left:3px solid #ddd;margin-left:1rem}dl{display:grid;grid-template-columns:10rem 1fr;gap:.35rem 1rem}dt{font-weight:600}dd{margin:0;overflow-wrap:anywhere}table{border-collapse:collapse;width:100%}th,td{text-align:left;border-bottom:1px solid #ddd;padding:.4rem}pre{background:#f6f8fa;padding:1rem;overflow:auto;white-space:pre-wrap}.muted{color:#666}code{overflow-wrap:anywhere}.status{display:inline-block;border-radius:999px;padding:.15rem .55rem;font-weight:700}.status.active{background:#e6f0ff;color:#175cd3}.status.waiting{background:#fff4d6;color:#8a5b00}.status.succeeded{background:#e8f7ee;color:#087443}.status.failed{background:#fee9e7;color:#b42318}.status.cancelled{background:#eef1f5;color:#344054}.usage-hint{border-bottom:1px dotted currentColor;cursor:help;display:inline-block;position:relative}.usage-breakdown{background:#202124;border-radius:.25rem;bottom:calc(100% + .35rem);color:#fff;display:none;font-size:.875rem;left:0;padding:.4rem .6rem;pointer-events:none;position:absolute;white-space:nowrap;z-index:1}.usage-hint:hover .usage-breakdown,.usage-hint:focus .usage-breakdown,.usage-hint:focus-within .usage-breakdown{display:block}@media(max-width:700px){body{box-sizing:border-box;margin:1rem auto;max-width:none;padding:0 .75rem;width:100%}summary.attempt-summary{grid-template-columns:1fr 1fr}.phase{grid-column:auto}details.diagnostics{padding:0 .5rem;min-width:0}dl{grid-template-columns:minmax(0,1fr)}dd{margin-bottom:.5rem}.attempt-details{padding:0 0 1rem .75rem;margin-left:0;min-width:0}table{display:block;overflow-x:auto}.usage-breakdown{max-width:calc(100vw - 2rem);white-space:normal}}</style></head><body>
-<p><a href="/">← Dashboard</a></p><h1>${escapeHtml(issueTitle)}</h1><p>${escapeHtml(run.repository)} issue ${escapeHtml(run.issueNumber)}</p>
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(issueTitle)}</title><style>${sharedHeaderStyles}body{font:16px system-ui;line-height:1.5;margin:0;color:#202124}.page{max-width:1000px;margin:2rem auto;padding:0 1rem}h1,h2{line-height:1.2}section{border-top:1px solid #ddd;padding:1rem 0}details.attempt{border-top:1px solid #ddd}summary.attempt-summary{cursor:pointer;display:grid;grid-template-columns:.6fr 1.2fr 2fr 1fr 1fr;gap:1rem;padding:1rem;align-items:center}summary.attempt-summary:hover{background:#f6f8fa}details.diagnostics{border:1px solid #ddd;border-radius:.35rem;margin:.75rem 0;padding:0 1rem}summary.diagnostics-summary{cursor:pointer;font-weight:600;padding:.75rem 0}details.diagnostics[open] summary.diagnostics-summary{border-bottom:1px solid #ddd;margin-bottom:.75rem}details.diagnostics details.diagnostics{margin:.5rem 0}.phase{font-weight:700}.label{display:block;color:#666;font-size:.75rem;text-transform:uppercase}.attempt-details{padding:0 1rem 1rem 2rem;border-left:3px solid #ddd;margin-left:1rem}dl{display:grid;grid-template-columns:10rem 1fr;gap:.35rem 1rem}dt{font-weight:600}dd{margin:0;overflow-wrap:anywhere}table{border-collapse:collapse;width:100%}th,td{text-align:left;border-bottom:1px solid #ddd;padding:.4rem}pre{background:#f6f8fa;padding:1rem;overflow:auto;white-space:pre-wrap}.muted{color:#666}code{overflow-wrap:anywhere}.status{display:inline-block;border-radius:999px;padding:.15rem .55rem;font-weight:700}.status.active{background:#e6f0ff;color:#175cd3}.status.waiting{background:#fff4d6;color:#8a5b00}.status.succeeded{background:#e8f7ee;color:#087443}.status.failed{background:#fee9e7;color:#b42318}.status.cancelled{background:#eef1f5;color:#344054}.usage-hint{border-bottom:1px dotted currentColor;cursor:help;display:inline-block;position:relative}.usage-breakdown{background:#202124;border-radius:.25rem;bottom:calc(100% + .35rem);color:#fff;display:none;font-size:.875rem;left:0;padding:.4rem .6rem;pointer-events:none;position:absolute;white-space:nowrap;z-index:1}.usage-hint:hover .usage-breakdown,.usage-hint:focus .usage-breakdown,.usage-hint:focus-within .usage-breakdown{display:block}@media(max-width:700px){.page{box-sizing:border-box;margin:1rem auto;max-width:none;padding:0 .75rem;width:100%}summary.attempt-summary{grid-template-columns:1fr 1fr}.phase{grid-column:auto}details.diagnostics{padding:0 .5rem;min-width:0}dl{grid-template-columns:minmax(0,1fr)}dd{margin-bottom:.5rem}.attempt-details{padding:0 0 1rem .75rem;margin-left:0;min-width:0}table{display:block;overflow-x:auto}.usage-breakdown{max-width:calc(100vw - 2rem);white-space:normal}}</style></head><body>${renderSiteHeader(user)}
+<main class="page"><h1>${escapeHtml(issueTitle)}</h1><p>${escapeHtml(run.repository)} issue ${escapeHtml(run.issueNumber)}</p>
 <dl><dt>Status</dt><dd><span class="status ${escapeHtml(run.status)}">${escapeHtml(statusLabels[run.status])}</span></dd><dt>Current stage</dt><dd>${escapeHtml(currentStage)}</dd><dt>Elapsed</dt><dd>${escapeHtml(elapsed(details.createdAt, details.updatedAt))}</dd><dt>Total usage</dt><dd>${usageDisplay(usage)}</dd><dt>Source issue</dt><dd>${link(run.issue?.url, `Issue #${run.issueNumber}`)}</dd>${prRow}${workflowRow}<dt>Created</dt><dd>${escapeHtml(new Date(details.createdAt).toISOString())}</dd><dt>Updated</dt><dd>${escapeHtml(new Date(details.updatedAt).toISOString())}</dd></dl>
-${outcomeSection}${competitionPanels(details)}<section><h2>Attempt history</h2>${rows || '<p class="muted">No attempts recorded.</p>'}</section><section><h2>Diagnostics</h2>${runDiagnostics}${reviewWorkflowEvidence(details)}${boundaryWorkflowEvidence(details)}${profileSection}</section></body></html>`;
+${outcomeSection}${competitionPanels(details)}<section><h2>Attempt history</h2>${rows || '<p class="muted">No attempts recorded.</p>'}</section><section><h2>Diagnostics</h2>${runDiagnostics}${reviewWorkflowEvidence(details)}${boundaryWorkflowEvidence(details)}${profileSection}</section></main></body></html>`;
 }

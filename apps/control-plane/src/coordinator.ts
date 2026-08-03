@@ -3,6 +3,7 @@
 
 import {
   advanceWorkflow,
+  attemptHasProtectedPathProposal,
   competitionAttemptId,
   competitionCandidateRole,
   competitionJudgeRole,
@@ -461,14 +462,21 @@ export function integrateTransition(attempt: Attempt) {
   if (
     outcome.status === "clean" &&
     outcome.head === attempt.acceptedHead &&
-    outcome.candidateHead === attempt.expectedHead &&
     attempt.acceptedHead &&
     attempt.acceptedHead !== attempt.expectedHead
   ) {
     // A conflict resolution must integrate the base selected by the
     // preceding conflict, which is carried immutably on the attempt.
+    // Its candidateHead is the reviewed candidate identity, which may
+    // differ from expectedHead when the workspace starts from a prior
+    // published/resolution tip (reintegration) rather than the raw
+    // reviewed commit.
     if (attempt.role === "conflict-resolution") {
-      if (baseHead !== attempt.baseCommit)
+      if (
+        baseHead !== attempt.baseCommit ||
+        typeof outcome.candidateHead !== "string" ||
+        !/^[a-f0-9]{40}$/.test(outcome.candidateHead)
+      )
         return { status: "failed", stage: "integrate" } as const;
       return {
         status: "active",
@@ -480,15 +488,16 @@ export function integrateTransition(attempt: Attempt) {
         },
       } as const;
     }
-    return {
-      status: "active",
-      stage: "ci",
-      acceptedHead: attempt.acceptedHead,
-      heads: {
-        targetBaseHead: baseHead,
-        integrationHead: attempt.acceptedHead,
-      },
-    } as const;
+    if (outcome.candidateHead === attempt.expectedHead)
+      return {
+        status: "active",
+        stage: "ci",
+        acceptedHead: attempt.acceptedHead,
+        heads: {
+          targetBaseHead: baseHead,
+          integrationHead: attempt.acceptedHead,
+        },
+      } as const;
   }
   return { status: "failed", stage: "integrate" } as const;
 }
@@ -656,6 +665,7 @@ function workflowAdvanceForAttempt(run: RunSnapshot, attempt: Attempt) {
         Boolean(attempt.acceptedHead) &&
         attempt.acceptedHead !== attempt.expectedHead,
       visualImpact: implementationVisualImpact(attempt),
+      protectedPathProposal: attemptHasProtectedPathProposal(attempt.result),
     },
     run: {
       revision: run.revision,
@@ -667,10 +677,45 @@ function workflowAdvanceForAttempt(run: RunSnapshot, attempt: Attempt) {
 }
 
 export function graphCompletedTransition(run: RunSnapshot, attempt: Attempt) {
-  const { workflow, nodeId, node, advance } = workflowAdvanceForAttempt(
-    run,
-    attempt,
-  );
+  const workflow = run.profile?.workflow;
+  const nodeId = run.currentNodeId;
+  if (!workflow || !nodeId || run.workflowHash !== workflow.hash)
+    throw new Error("run_workflow_snapshot_missing");
+  const node = workflow.nodes[nodeId];
+  if (!node) throw new Error("run_workflow_node_missing");
+  // A candidate that touches protected paths is a human-merge proposal:
+  // open the PR (via the implement reporter) and stop. Roundhouse never
+  // auto-merges it, and the in-progress run keeps its snapshotted profile.
+  if (
+    node.agent?.task === "implementation" &&
+    attemptHasProtectedPathProposal(attempt.result) &&
+    attempt.acceptedHead &&
+    attempt.acceptedHead !== attempt.expectedHead
+  ) {
+    console.log(
+      JSON.stringify({
+        message: "protected_path_proposal_terminal",
+        runId: run.id,
+        revision: run.revision,
+        attemptId: attempt.id,
+        workflowHash: workflow.hash,
+        fromNodeId: nodeId,
+        acceptedHead: attempt.acceptedHead,
+        protectedPaths: (
+          attempt.result?.protectedPathProposal as
+            { readonly paths?: readonly string[] } | undefined
+        )?.paths,
+      }),
+    );
+    return {
+      status: "succeeded" as const,
+      stage: "implement" as const,
+      currentNodeId: nodeId,
+      acceptedHead: attempt.acceptedHead,
+      heads: { candidateHead: attempt.acceptedHead },
+    };
+  }
+  const { advance } = workflowAdvanceForAttempt(run, attempt);
   const destination = workflow.nodes[advance.currentNodeId]!;
   const stage = stageForWorkflowNode(advance.currentNodeId, destination);
   const evidence = evidenceForAttempt(attempt, node, run.profile);
@@ -1742,9 +1787,15 @@ export async function coordinate(
   // an integration-delta review. Completed attempts from an older integration
   // cycle are not evidence for the current cycle even though they share the
   // same stage.
-  const integrateRole = async (): Promise<string> => {
+  const integrateRole = async (): Promise<{
+    role: string;
+    reason: string;
+  }> => {
     if (currentWorkflowNode.role !== "integrate")
-      return currentWorkflowNode.role ?? run.stage;
+      return {
+        role: currentWorkflowNode.role ?? run.stage,
+        reason: "workflow_node_role",
+      };
     const startedAt = Date.now();
     const previous = await repository.latestCompletedAttempt(
       run.id,
@@ -1813,9 +1864,10 @@ export async function coordinate(
       "integration_role_selected",
       payload,
     );
-    return role;
+    return { role, reason };
   };
-  const role = await integrateRole();
+  const { role, reason: integrateReason } = await integrateRole();
+  const reviewedCandidate = run.reviewedHead ?? run.candidateHead;
   const attempt: Attempt = {
     id: attemptId,
     runId: run.id,
@@ -1837,8 +1889,15 @@ export async function coordinate(
         ? role === "review-integration"
           ? (run.integrationHead ?? run.currentHead)
           : role === "conflict-resolution"
-            ? run.currentHead
-            : (run.reviewedHead ?? run.currentHead)
+            ? // After a conflicted mechanical merge, re-check out the reviewed
+              // candidate so resolution matches the conflict that was detected.
+              // A prior published/resolution tip may already include the target
+              // base and would no-op. After delta-review feedback, keep editing
+              // the current resolution tip in place.
+              integrateReason === "current_integration_review_requested_changes"
+              ? run.currentHead
+              : (reviewedCandidate ?? run.currentHead)
+            : (reviewedCandidate ?? run.currentHead)
         : run.currentHead,
   };
   const acquired = await repository.acquireAttempt(

@@ -459,6 +459,46 @@ describe("GitHub intake", () => {
     });
   });
 
+  it("does not cancel an active automatic merge when Fixes #N closes the issue", async () => {
+    const repository = new IntakeRepository();
+    const id = "run_123_issue_42";
+    await repository.create(
+      reportRun(id, {
+        githubRepositoryId: 123,
+        githubInstallationId: 456,
+        profile: {
+          sourcePath: ".roundhouse/profile.yaml",
+          sourceCommit: "a".repeat(40),
+          version: 2,
+          hash: "b".repeat(64),
+          paths: { allowed: ["**"], protected: [] },
+          merge: { mode: "automatic", method: "merge" },
+        },
+      }),
+    );
+    await repository.transition(id, 1, {
+      status: "active",
+      stage: "merge",
+      acceptedHead: "a".repeat(40),
+    });
+    await expect(
+      acceptGitHubIssueClosed(
+        await closureDelivery("automatic-merge-fixes-close"),
+        env,
+        repository,
+      ),
+    ).resolves.toEqual({
+      outcome: "closed",
+      wakeup: { runId: id, expectedRevision: 2 },
+    });
+    await expect(repository.get(id)).resolves.toMatchObject({
+      status: "active",
+      stage: "merge",
+      revision: 2,
+    });
+    expect(repository.issueStates.get(id)).toBe("closed");
+  });
+
   it("closes and reopens a failed issue without changing or restarting its run", async () => {
     const repository = new IntakeRepository();
     const failed = reportRun("run_123_issue_42", {
@@ -2444,6 +2484,120 @@ describe("GitHub intake", () => {
     expect(JSON.stringify(post.mock.calls)).toContain(
       "Visual approval was skipped and the change moved directly to review.",
     );
+  });
+
+  it("opens a ready pull request for a protected-path proposal and asks a human to merge", async () => {
+    const post = vi.fn(async (path: string, _body: unknown) =>
+      path.endsWith("/pulls")
+        ? {
+            number: 88,
+            html_url: "https://github.com/zorkian/roundhouse/pull/88",
+          }
+        : {},
+    );
+    const reporter = new GitHubStageReporter({
+      get: async <T>(path: string) =>
+        (path.includes("/comments")
+          ? []
+          : path.includes("/pulls?state=open")
+            ? []
+            : { default_branch: "main" }) as T,
+      post: post as GitHubApi["post"],
+    });
+    const run = reportRun("run_protected_proposal", {
+      status: "succeeded",
+      stage: "implement",
+      revision: 5,
+      currentHead: "b".repeat(40),
+    });
+    const attempt = reportAttempt(run, {
+      stage: "implement",
+      role: "implement",
+      expectedHead: "a".repeat(40),
+      acceptedHead: run.currentHead,
+      result: {
+        implementation: {
+          summary: "Route visual approval from the implementer assessment.",
+          pullRequestTitle: "Add visual approval routing",
+          pullRequestBody: "Updates the Roundhouse workflow.",
+        },
+        protectedPathProposal: {
+          paths: [".roundhouse/workflow.yaml"],
+        },
+      },
+    });
+
+    await reporter.report(run, attempt);
+
+    expect(post).toHaveBeenNthCalledWith(1, "/repos/zorkian/roundhouse/pulls", {
+      title: "Add visual approval routing",
+      head: "roundhouse/issue-42",
+      base: "main",
+      body: "Updates the Roundhouse workflow.\n\nFixes #42",
+      draft: false,
+    });
+    const comment = String(
+      (post.mock.calls[1]?.[1] as { body?: string } | undefined)?.body ?? "",
+    );
+    expect(comment).toContain("protected-path proposal");
+    expect(comment).toContain("will not merge");
+    expect(comment).toContain(
+      "[View pull request #88](https://github.com/zorkian/roundhouse/pull/88)",
+    );
+  });
+
+  it("marks an existing draft pull request ready for a protected-path proposal", async () => {
+    const patch = vi.fn(async () => ({}));
+    const post = vi.fn(async () => ({}));
+    const reporter = new GitHubStageReporter({
+      get: async <T>(path: string) =>
+        (path.includes("/comments")
+          ? []
+          : path.includes("/pulls?state=open")
+            ? [
+                {
+                  number: 91,
+                  html_url: "https://github.com/zorkian/roundhouse/pull/91",
+                  draft: true,
+                  head: { ref: "roundhouse/issue-42", sha: "b".repeat(40) },
+                },
+              ]
+            : { default_branch: "main" }) as T,
+      post: post as GitHubApi["post"],
+      patch: patch as GitHubApi["patch"],
+    });
+    const run = reportRun("run_protected_existing_draft", {
+      status: "succeeded",
+      stage: "implement",
+      revision: 5,
+      currentHead: "b".repeat(40),
+    });
+    const attempt = reportAttempt(run, {
+      stage: "implement",
+      role: "implement",
+      expectedHead: "a".repeat(40),
+      acceptedHead: run.currentHead,
+      result: {
+        implementation: {
+          summary: "Protected workflow change on an existing draft.",
+          pullRequestBody: "Updates the Roundhouse workflow.",
+        },
+        protectedPathProposal: {
+          paths: [".roundhouse/workflow.yaml"],
+        },
+      },
+    });
+
+    await reporter.report(run, attempt);
+
+    expect(post).not.toHaveBeenCalledWith(
+      "/repos/zorkian/roundhouse/pulls",
+      expect.anything(),
+    );
+    expect(patch).toHaveBeenCalledWith("/repos/zorkian/roundhouse/pulls/91", {
+      body: expect.stringContaining("View Files changed"),
+      draft: false,
+    });
   });
 
   it("shows screenshot evidence and repository instructions at the visual gate", async () => {

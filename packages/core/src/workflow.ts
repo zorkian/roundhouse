@@ -122,6 +122,10 @@ nodes:
           equals: no
         to: review
       - when:
+          path: attempt.protectedPathProposal
+          equals: true
+        terminal: succeeded
+      - when:
           path: attempt.visualImpact
           in: [yes, uncertain]
         to: approval

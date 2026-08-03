@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import {
+  attemptHasProtectedPathProposal,
   createRun,
   parseProfile,
   profileSourcePath,
@@ -519,21 +520,31 @@ function implementationComment(
   const implementation = attempt.result?.implementation as
     Record<string, unknown> | undefined;
   const visualFeedback = visualFeedbackRequest(run);
+  const protectedProposal = attemptHasProtectedPathProposal(attempt.result);
   const summary = String(
     implementation?.summary ?? "The requested change is ready for review.",
   );
+  const pullLabel = protectedProposal ? "pull request" : "draft pull request";
   return [
     `<!-- roundhouse:v2:implementation:${attempt.id} -->`,
     visualFeedback
       ? "## Please review the visual change"
-      : `## I ${created ? "opened" : "updated"} the draft pull request`,
+      : protectedProposal
+        ? `## I ${created ? "opened" : "updated"} a protected-path proposal`
+        : `## I ${created ? "opened" : "updated"} the draft pull request`,
     "",
     summary,
     ...visualImpactCommentLines(implementation),
+    ...(protectedProposal
+      ? [
+          "",
+          "This change touches protected paths, so Roundhouse will not merge it. Review the pull request and merge it yourself when you are ready.",
+        ]
+      : []),
     ...screenshotLines(implementation?.screenshots),
     ...(visualFeedback ? ["", visualFeedback.prompt.trim()] : []),
     "",
-    `[View draft pull request #${pullRequest.number}](${pullRequest.html_url})`,
+    `[View ${pullLabel} #${pullRequest.number}](${pullRequest.html_url})`,
   ].join("\n");
 }
 
@@ -850,6 +861,7 @@ export class GitHubStageReporter implements AttemptReporter {
       }
       let pullRequest = await findOpenPullRequest(this.github, run);
       const created = !pullRequest;
+      const protectedProposal = attemptHasProtectedPathProposal(attempt.result);
       if (!pullRequest) {
         const repository = await this.github.get<{ default_branch?: string }>(
           `/repos/${run.repository}`,
@@ -863,7 +875,9 @@ export class GitHubStageReporter implements AttemptReporter {
             head: `roundhouse/issue-${run.issueNumber}`,
             base: repository.default_branch ?? "main",
             body: pullRequestBody(run, implementation, this.detailsUrl(run)),
-            draft: true,
+            // Protected-path proposals are ready for human review and merge;
+            // ordinary candidates stay draft until Roundhouse finishes.
+            draft: !protectedProposal,
           },
         );
       }
@@ -872,6 +886,7 @@ export class GitHubStageReporter implements AttemptReporter {
           `/repos/${run.repository}/pulls/${pullRequest.number}`,
           {
             body: `${pullRequestBody(run, implementation, this.detailsUrl(run))}\n\n[View Files changed](${pullRequest.html_url}/files)`,
+            ...(protectedProposal ? { draft: false } : {}),
           },
         );
       }
@@ -1650,9 +1665,11 @@ export async function acceptGitHubIssueClosed(
   const state = payload.action === "closed" ? "closed" : "open";
   await repository.setGitHubIssueState(run.id, state);
   if (payload.action === "reopened") return { outcome: "reopened" };
+  // Closing the issue during merge is often the success path (Fixes #N after
+  // an automatic merge, or a maintainer merge). Do not cancel; wake the
+  // coordinator so it can finish or reconcile to succeeded.
   if (
     run.stage === "merge" &&
-    run.profile?.merge?.mode === "maintainer" &&
     (run.status === "active" ||
       (run.status === "waiting" && run.waitingReason === "maintainer_merge"))
   ) {

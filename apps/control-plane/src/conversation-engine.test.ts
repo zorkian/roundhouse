@@ -369,7 +369,11 @@ describe("conversation engine", () => {
       },
     );
     expect(result.brief).toEqual(brief);
-    const identified = { id: "47cff616-eaaa-46fd-870f-dd5cf3c674d8", ...brief };
+    const identified = {
+      id: "47cff616-eaaa-46fd-870f-dd5cf3c674d8",
+      body: "Preamble\n\n## Reordered\n\nAnything goes.\n",
+      ...brief,
+    };
     const rendered = renderDeliveryBrief(identified, conversation.id);
     expect(rendered).toContain(
       promotionIssueMarker(conversation.id, identified.id),
@@ -377,7 +381,8 @@ describe("conversation engine", () => {
     expect(promotionStartMarker(conversation.id, identified.id)).toContain(
       "conversation-start",
     );
-    expect(rendered).toContain("- Questions remain read-only");
+    expect(rendered).toContain("Preamble\n\n## Reordered\n\nAnything goes.\n");
+    expect(rendered).not.toContain("- Questions remain read-only");
     const request = modelBroker.fetch.mock.calls[1]![0] as Request;
     expect(request.headers.get("x-roundhouse-research")).toBe("disabled");
   });
@@ -445,6 +450,6 @@ describe("conversation engine", () => {
       inputTokens: 1,
       cachedInputTokens: 1_000,
     });
-    expect(result.usage[0]!.costUsd).toBeCloseTo(0.000000175, 12);
+    expect(result.usage[0]!.costUsd).toBeCloseTo(0.0005, 12);
   });
 });

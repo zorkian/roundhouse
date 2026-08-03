@@ -67,7 +67,7 @@ describe("D1 conversation repository", () => {
     const sqlite = new DatabaseSync(":memory:");
     sqlite.exec("PRAGMA foreign_keys=ON");
     sqlite.exec(
-      "CREATE TABLE repositories (id TEXT PRIMARY KEY, github_id TEXT NOT NULL UNIQUE, profile_version TEXT NOT NULL, profile_json TEXT NOT NULL, created_at INTEGER NOT NULL)",
+      "CREATE TABLE repositories (id TEXT PRIMARY KEY, github_id TEXT NOT NULL UNIQUE, profile_version TEXT NOT NULL, profile_json TEXT NOT NULL, created_at INTEGER NOT NULL); CREATE TABLE runs (id TEXT PRIMARY KEY, status TEXT NOT NULL)",
     );
     sqlite.exec(
       readFileSync(
@@ -78,6 +78,12 @@ describe("D1 conversation repository", () => {
     sqlite.exec(
       readFileSync(
         new URL("../migrations/0018_conversation_titles.sql", import.meta.url),
+        "utf8",
+      ),
+    );
+    sqlite.exec(
+      readFileSync(
+        new URL("../migrations/0019_delivery_brief_body.sql", import.meta.url),
         "utf8",
       ),
     );
@@ -210,9 +216,23 @@ describe("D1 conversation repository", () => {
         conversationId: ids.conversation,
         creatorGithubUserId: 7,
         turnId: "turn-brief",
+        messageId: "message-brief",
+        message: inbound("external-brief", "Prepare it with this answer.", now),
       }),
-    ).resolves.toBe(true);
-    await repository.claimTurn("turn-brief");
+    ).resolves.toBe("created");
+    await expect(
+      repository.requestBrief({
+        conversationId: ids.conversation,
+        creatorGithubUserId: 7,
+        turnId: "turn-brief",
+        messageId: "message-brief",
+        message: inbound("external-brief", "Prepare it with this answer.", now),
+      }),
+    ).resolves.toBe("duplicate");
+    await expect(repository.claimTurn("turn-brief")).resolves.toMatchObject({
+      kind: "brief",
+      triggeringMessageId: "message-brief",
+    });
     await expect(
       repository.completeBriefTurn("turn-brief", ids.brief, {
         title: "Build the flow",
@@ -239,7 +259,18 @@ describe("D1 conversation repository", () => {
     await expect(
       repository.get(ids.conversation, 7, ["123"]),
     ).resolves.toMatchObject({
-      currentBrief: { id: ids.brief, state: "draft" },
+      currentBrief: {
+        id: ids.brief,
+        state: "draft",
+        body: "## Outcome\n\nCreate a conversation flow.\n\n## Acceptance criteria\n\n- It is read-only\n\n## Constraints\n\n- No shell\n\n## Evidence and decisions\n\n- The user approved a web-first adapter\n",
+      },
+      messages: expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          body: "Prepare it with this answer.",
+          turnId: "turn-brief",
+        }),
+      ]),
     });
     await expect(
       repository.approveBriefAndRequestPromotion({
@@ -248,11 +279,7 @@ describe("D1 conversation repository", () => {
         creatorGithubLogin: "octocat",
         briefId: ids.brief,
         title: "Build the flow",
-        outcome: "Create a conversation flow.",
-        acceptanceCriteria: ["It is read-only"],
-        constraints: ["No shell"],
-        evidence: ["The user approved a web-first adapter"],
-        uncertainties: [],
+        body: "Custom preamble\n\n## Reordered\n\nExact body.\n",
         promotionId: ids.promotion,
         uiSessionHash: "session-hash",
       }),
@@ -295,6 +322,7 @@ describe("D1 conversation repository", () => {
         runUrl: "https://roundhouse.test/repositories/octo/project/issues/42",
       }),
     ).resolves.toBe(false);
+    sqlite.prepare("INSERT INTO runs VALUES (?1,?2)").run("run-42", "active");
     await expect(
       repository.recordPromotionIntake({
         conversationId: ids.conversation,
@@ -322,7 +350,12 @@ describe("D1 conversation repository", () => {
     ).resolves.toMatchObject({
       status: "promoted",
       title: "Plan conversation title persistence",
-      promotion: { state: "accepted", issueNumber: 42, runId: "run-42" },
+      promotion: {
+        state: "accepted",
+        issueNumber: 42,
+        runId: "run-42",
+        runStatus: "active",
+      },
       currentBrief: { state: "approved", title: "Build the flow" },
       links: [
         { kind: "github.issue", externalId: "42" },
@@ -333,6 +366,7 @@ describe("D1 conversation repository", () => {
         { role: "assistant", direction: "outbound" },
         { role: "user", direction: "inbound" },
         { role: "assistant", direction: "outbound" },
+        { role: "user", direction: "inbound", turnId: "turn-brief" },
       ],
     });
     await expect(repository.list(7, ["123"])).resolves.toEqual([
@@ -340,7 +374,27 @@ describe("D1 conversation repository", () => {
         id: ids.conversation,
         title: "Plan conversation title persistence",
         repository: "octo/project",
+        promotionRunStatus: "active",
       }),
+    ]);
+    sqlite
+      .prepare("UPDATE runs SET status='waiting' WHERE id=?1")
+      .run("run-42");
+    await expect(
+      repository.get(ids.conversation, 7, ["123"]),
+    ).resolves.toMatchObject({
+      promotion: { runStatus: "waiting" },
+    });
+    sqlite
+      .prepare("UPDATE runs SET status='succeeded' WHERE id=?1")
+      .run("run-42");
+    await expect(
+      repository.get(ids.conversation, 7, ["123"]),
+    ).resolves.toMatchObject({
+      promotion: { runStatus: "succeeded" },
+    });
+    await expect(repository.list(7, ["123"])).resolves.toEqual([
+      expect.objectContaining({ promotionRunStatus: "succeeded" }),
     ]);
     await expect(repository.list(7, ["999"])).resolves.toEqual([]);
     await expect(
@@ -358,7 +412,7 @@ describe("D1 conversation repository", () => {
     const sqlite = new DatabaseSync(":memory:");
     sqlite.exec("PRAGMA foreign_keys=ON");
     sqlite.exec(
-      "CREATE TABLE repositories (id TEXT PRIMARY KEY, github_id TEXT NOT NULL UNIQUE, profile_version TEXT NOT NULL, profile_json TEXT NOT NULL, created_at INTEGER NOT NULL)",
+      "CREATE TABLE repositories (id TEXT PRIMARY KEY, github_id TEXT NOT NULL UNIQUE, profile_version TEXT NOT NULL, profile_json TEXT NOT NULL, created_at INTEGER NOT NULL); CREATE TABLE runs (id TEXT PRIMARY KEY, status TEXT NOT NULL)",
     );
     sqlite.exec(
       readFileSync(
@@ -369,6 +423,12 @@ describe("D1 conversation repository", () => {
     sqlite.exec(
       readFileSync(
         new URL("../migrations/0018_conversation_titles.sql", import.meta.url),
+        "utf8",
+      ),
+    );
+    sqlite.exec(
+      readFileSync(
+        new URL("../migrations/0019_delivery_brief_body.sql", import.meta.url),
         "utf8",
       ),
     );
@@ -428,11 +488,7 @@ describe("D1 conversation repository", () => {
       creatorGithubLogin: "octocat",
       briefId: "stale-brief",
       title: "Prepare delivery",
-      outcome: "Prepare the requested delivery.",
-      acceptanceCriteria: [],
-      constraints: [],
-      evidence: [],
-      uncertainties: [],
+      body: "",
       promotionId: "stale-promotion",
       uiSessionHash: "session-hash",
     });

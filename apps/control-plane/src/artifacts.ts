@@ -270,18 +270,11 @@ export function validateCheckpointIdentity(
   if (!/^[a-f0-9]{40}$/.test(checkpoint.outputHead))
     throw new Error("invalid_output_head");
   if (expected.enforcePathPolicy === false) return;
+  // Protected paths are allowed through as proposals; only the allowlist
+  // still rejects. Without a profile snapshot there is no allowlist to apply.
   if (expected.profile) {
     for (const path of checkpoint.changedPaths)
       assertPathAllowed(expected.profile, path);
-  } else if (
-    checkpoint.changedPaths.some((path) =>
-      (expected.protectedPaths ?? []).some(
-        (protectedPath) =>
-          path === protectedPath || path.startsWith(`${protectedPath}/`),
-      ),
-    )
-  ) {
-    throw new Error("protected_path_changed");
   }
 }
 
