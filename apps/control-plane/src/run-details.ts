@@ -428,8 +428,9 @@ function reviewAttemptPresentation(
             selection.rationale.trim()
               ? `<div class="review-markdown">${renderSafeMarkdown(selection.rationale)}</div>`
               : '<p class="muted">No selection rationale is available.</p>';
+          const specialistAttempt = latestRoleAttempt(round, role);
           const state = selected
-            ? `Ran · ${reviewAttemptState(latestRoleAttempt(round, role))}`
+            ? `${specialistAttempt ? "Ran" : "Selected"} · ${reviewAttemptState(specialistAttempt)}`
             : selection?.applicable === false
               ? "Skipped"
               : "Pending";

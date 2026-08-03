@@ -97,7 +97,9 @@ describe("run details", () => {
     expect(html).toContain(
       "<strong>Data consistency</strong> · Ran · In progress",
     );
-    expect(html).toContain("<strong>Accessibility</strong> · Ran · Pending");
+    expect(html).toContain(
+      "<strong>Accessibility</strong> · Selected · Pending",
+    );
     expect(html).toContain("<h2>Overall review</h2>");
     expect(html).toContain("<strong>design concern</strong>");
     expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
