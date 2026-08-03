@@ -138,6 +138,10 @@ nodes:
           equals: true
         to: approval
       - when:
+          path: attempt.protectedPathProposal
+          equals: true
+        terminal: succeeded
+      - when:
           exists: attempt.acceptedHead
         to: review
       - terminal: failed

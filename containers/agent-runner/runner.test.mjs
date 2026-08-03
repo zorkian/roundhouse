@@ -1639,7 +1639,7 @@ describe("V2 agent runner", () => {
           paths: { allowed: ["**"], protected: ["README.md"] },
         },
       }),
-    ).rejects.toThrow("protected_path_changed");
+    ).resolves.toBeUndefined();
     await expect(
       validateCheckpoint({
         ...validationAssignment,

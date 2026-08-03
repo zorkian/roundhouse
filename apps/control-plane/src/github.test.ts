@@ -2441,6 +2441,66 @@ describe("GitHub intake", () => {
     );
   });
 
+  it("opens a ready pull request for a protected-path proposal and asks a human to merge", async () => {
+    const post = vi.fn(async (path: string, _body: unknown) =>
+      path.endsWith("/pulls")
+        ? {
+            number: 88,
+            html_url: "https://github.com/zorkian/roundhouse/pull/88",
+          }
+        : {},
+    );
+    const reporter = new GitHubStageReporter({
+      get: async <T>(path: string) =>
+        (path.includes("/comments")
+          ? []
+          : path.includes("/pulls?state=open")
+            ? []
+            : { default_branch: "main" }) as T,
+      post: post as GitHubApi["post"],
+    });
+    const run = reportRun("run_protected_proposal", {
+      status: "succeeded",
+      stage: "implement",
+      revision: 5,
+      currentHead: "b".repeat(40),
+    });
+    const attempt = reportAttempt(run, {
+      stage: "implement",
+      role: "implement",
+      expectedHead: "a".repeat(40),
+      acceptedHead: run.currentHead,
+      result: {
+        implementation: {
+          summary: "Route visual approval from the implementer assessment.",
+          pullRequestTitle: "Add visual approval routing",
+          pullRequestBody: "Updates the Roundhouse workflow.",
+        },
+        protectedPathProposal: {
+          paths: [".roundhouse/workflow.yaml"],
+        },
+      },
+    });
+
+    await reporter.report(run, attempt);
+
+    expect(post).toHaveBeenNthCalledWith(1, "/repos/zorkian/roundhouse/pulls", {
+      title: "Add visual approval routing",
+      head: "roundhouse/issue-42",
+      base: "main",
+      body: "Updates the Roundhouse workflow.\n\nFixes #42",
+      draft: false,
+    });
+    const comment = String(
+      (post.mock.calls[1]?.[1] as { body?: string } | undefined)?.body ?? "",
+    );
+    expect(comment).toContain("protected-path proposal");
+    expect(comment).toContain("will not merge");
+    expect(comment).toContain(
+      "[View pull request #88](https://github.com/zorkian/roundhouse/pull/88)",
+    );
+  });
+
   it("shows screenshot evidence and repository instructions at the visual gate", async () => {
     const post = vi.fn(async (path: string, _body: unknown) =>
       path.endsWith("/pulls")

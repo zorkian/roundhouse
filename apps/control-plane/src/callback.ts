@@ -1,7 +1,10 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import type { RunRepository } from "@roundhouse/core";
+import {
+  annotateProtectedPathProposal,
+  type RunRepository,
+} from "@roundhouse/core";
 import type { Checkpoint } from "./artifacts.js";
 
 export interface AttemptCallback {
@@ -174,10 +177,15 @@ export async function acceptCallback(
       throw new Error("attempt_outcome_settlement_failed");
     return "rejected";
   }
+  const run = await repository.get(attempt.runId);
   return repository.completeAttempt(
     input.attemptId,
     input.expectedRevision,
     input.checkpoint.outputHead,
-    input.result,
+    annotateProtectedPathProposal(
+      input.result,
+      input.checkpoint.changedPaths,
+      run?.profile,
+    ),
   );
 }

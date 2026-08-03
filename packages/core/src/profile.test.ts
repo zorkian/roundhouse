@@ -4,7 +4,11 @@
 import { describe, expect, it } from "vitest";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { assertPathAllowed, parseProfile } from "./profile.js";
+import {
+  annotateProtectedPathProposal,
+  assertPathAllowed,
+  parseProfile,
+} from "./profile.js";
 
 const commit = "a".repeat(40);
 const valid = `version: 1
@@ -190,12 +194,11 @@ paths:
     );
     expect(() => assertPathAllowed(profile, "index.ts")).not.toThrow();
     expect(() => assertPathAllowed(profile, "src/index.ts")).not.toThrow();
-    expect(() => assertPathAllowed(profile, "docs/generated.ts")).toThrow(
-      "protected_path_changed",
-    );
+    // Protected paths are allowed through as proposals; allowlist still applies.
+    expect(() => assertPathAllowed(profile, "docs/generated.ts")).not.toThrow();
     expect(() =>
       assertPathAllowed(profile, "docs/nested/generated.ts"),
-    ).toThrow("protected_path_changed");
+    ).not.toThrow();
   });
 
   it("allows either path list to be empty", async () => {
@@ -224,13 +227,43 @@ paths:
     );
   });
 
-  it("always protects the selected development container", async () => {
+  it("allows the selected development container as a protected proposal", async () => {
     const profile = await parseProfile(validV2, commit, async (path) =>
       path.endsWith("workflow.yaml") ? validWorkflow : path,
     );
     expect(() =>
       assertPathAllowed(profile, ".devcontainer/devcontainer.json"),
-    ).toThrow("protected_path_changed");
+    ).not.toThrow();
+  });
+
+  it("annotates protected path proposals from changed paths", async () => {
+    const profile = await parseProfile(
+      `version: 1
+paths:
+  allowed: ["**"]
+  protected: [".github/workflows/**"]
+`,
+      commit,
+    );
+    expect(
+      annotateProtectedPathProposal(
+        { implementation: { summary: "ok" } },
+        ["src/fix.ts", ".github/workflows/ci.yml", ".roundhouse/workflow.yaml"],
+        profile,
+      ),
+    ).toEqual({
+      implementation: { summary: "ok" },
+      protectedPathProposal: {
+        paths: [".github/workflows/ci.yml", ".roundhouse/workflow.yaml"],
+      },
+    });
+    expect(
+      annotateProtectedPathProposal(
+        { implementation: { summary: "ok" } },
+        ["src/fix.ts"],
+        profile,
+      ),
+    ).toEqual({ implementation: { summary: "ok" } });
   });
 
   it.each([

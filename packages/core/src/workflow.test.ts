@@ -235,6 +235,17 @@ nodes:
         run: { hasCandidate: true },
       }),
     ).toMatchObject({ status: "active", currentNodeId: "review" });
+    expect(
+      advanceWorkflow(workflow, "implement", {
+        attempt: {
+          changed: true,
+          hasScreenshots: false,
+          acceptedHead: "b".repeat(40),
+          protectedPathProposal: true,
+        },
+        run: { hasCandidate: false },
+      }),
+    ).toMatchObject({ status: "succeeded", currentNodeId: "implement" });
   });
 
   it("snapshots repository-selected prompt, model, branch, and return edge", async () => {

@@ -1398,6 +1398,44 @@ describe("single coordinator", () => {
     });
   });
 
+  it("ends a protected-path proposal after implementation without review or merge", () => {
+    const inputHead = "a".repeat(40);
+    const outputHead = "b".repeat(40);
+    const run = runFixture({
+      status: "active",
+      stage: "implement",
+      currentNodeId: "implement",
+      currentHead: inputHead,
+      revision: 4,
+    });
+    const attempt = attemptFixture({
+      id: "run_slice_rev_4",
+      runRevision: 4,
+      stage: "implement",
+      role: "implement",
+      expectedHead: inputHead,
+      acceptedHead: outputHead,
+      result: {
+        implementation: {
+          summary: "Route visual approval from the implementer",
+          screenshots: [
+            { url: "https://example.test/before", description: "Before" },
+          ],
+        },
+        protectedPathProposal: {
+          paths: [".roundhouse/workflow.yaml"],
+        },
+      },
+    });
+    expect(graphCompletedTransition(run, attempt)).toEqual({
+      status: "succeeded",
+      stage: "implement",
+      currentNodeId: "implement",
+      acceptedHead: outputHead,
+      heads: { candidateHead: outputHead },
+    });
+  });
+
   it("returns screenshot evidence to review when a candidate already exists", () => {
     const head = "b".repeat(40);
     const run = runFixture({
