@@ -1691,9 +1691,15 @@ export async function coordinate(
   // an integration-delta review. Completed attempts from an older integration
   // cycle are not evidence for the current cycle even though they share the
   // same stage.
-  const integrateRole = async (): Promise<string> => {
+  const integrateRole = async (): Promise<{
+    role: string;
+    reason: string;
+  }> => {
     if (currentWorkflowNode.role !== "integrate")
-      return currentWorkflowNode.role ?? run.stage;
+      return {
+        role: currentWorkflowNode.role ?? run.stage,
+        reason: "workflow_node_role",
+      };
     const startedAt = Date.now();
     const previous = await repository.latestCompletedAttempt(
       run.id,
@@ -1762,9 +1768,10 @@ export async function coordinate(
       "integration_role_selected",
       payload,
     );
-    return role;
+    return { role, reason };
   };
-  const role = await integrateRole();
+  const { role, reason: integrateReason } = await integrateRole();
+  const reviewedCandidate = run.reviewedHead ?? run.candidateHead;
   const attempt: Attempt = {
     id: attemptId,
     runId: run.id,
@@ -1786,8 +1793,15 @@ export async function coordinate(
         ? role === "review-integration"
           ? (run.integrationHead ?? run.currentHead)
           : role === "conflict-resolution"
-            ? run.currentHead
-            : (run.reviewedHead ?? run.currentHead)
+            ? // After a conflicted mechanical merge, re-check out the reviewed
+              // candidate so resolution matches the conflict that was detected.
+              // A prior published/resolution tip may already include the target
+              // base and would no-op. After delta-review feedback, keep editing
+              // the current resolution tip in place.
+              integrateReason === "current_integration_review_requested_changes"
+              ? run.currentHead
+              : (reviewedCandidate ?? run.currentHead)
+            : (reviewedCandidate ?? run.currentHead)
         : run.currentHead,
   };
   const acquired = await repository.acquireAttempt(
