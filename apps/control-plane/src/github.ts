@@ -847,6 +847,7 @@ export class GitHubStageReporter implements AttemptReporter {
           `/repos/${run.repository}/pulls/${pullRequest.number}`,
           {
             body: `${pullRequestBody(run, implementation, this.detailsUrl(run))}\n\n[View Files changed](${pullRequest.html_url}/files)`,
+            ...(protectedProposal ? { draft: false } : {}),
           },
         );
       }

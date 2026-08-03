@@ -264,6 +264,16 @@ paths:
         profile,
       ),
     ).toEqual({ implementation: { summary: "ok" } });
+    expect(
+      annotateProtectedPathProposal(
+        {
+          implementation: { summary: "forged" },
+          protectedPathProposal: { paths: [".roundhouse/workflow.yaml"] },
+        },
+        ["src/fix.ts"],
+        profile,
+      ),
+    ).toEqual({ implementation: { summary: "forged" } });
   });
 
   it.each([

@@ -2501,6 +2501,60 @@ describe("GitHub intake", () => {
     );
   });
 
+  it("marks an existing draft pull request ready for a protected-path proposal", async () => {
+    const patch = vi.fn(async () => ({}));
+    const post = vi.fn(async () => ({}));
+    const reporter = new GitHubStageReporter({
+      get: async <T>(path: string) =>
+        (path.includes("/comments")
+          ? []
+          : path.includes("/pulls?state=open")
+            ? [
+                {
+                  number: 91,
+                  html_url: "https://github.com/zorkian/roundhouse/pull/91",
+                  draft: true,
+                  head: { ref: "roundhouse/issue-42", sha: "b".repeat(40) },
+                },
+              ]
+            : { default_branch: "main" }) as T,
+      post: post as GitHubApi["post"],
+      patch: patch as GitHubApi["patch"],
+    });
+    const run = reportRun("run_protected_existing_draft", {
+      status: "succeeded",
+      stage: "implement",
+      revision: 5,
+      currentHead: "b".repeat(40),
+    });
+    const attempt = reportAttempt(run, {
+      stage: "implement",
+      role: "implement",
+      expectedHead: "a".repeat(40),
+      acceptedHead: run.currentHead,
+      result: {
+        implementation: {
+          summary: "Protected workflow change on an existing draft.",
+          pullRequestBody: "Updates the Roundhouse workflow.",
+        },
+        protectedPathProposal: {
+          paths: [".roundhouse/workflow.yaml"],
+        },
+      },
+    });
+
+    await reporter.report(run, attempt);
+
+    expect(post).not.toHaveBeenCalledWith(
+      "/repos/zorkian/roundhouse/pulls",
+      expect.anything(),
+    );
+    expect(patch).toHaveBeenCalledWith("/repos/zorkian/roundhouse/pulls/91", {
+      body: expect.stringContaining("View Files changed"),
+      draft: false,
+    });
+  });
+
   it("shows screenshot evidence and repository instructions at the visual gate", async () => {
     const post = vi.fn(async (path: string, _body: unknown) =>
       path.endsWith("/pulls")

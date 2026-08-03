@@ -1,7 +1,7 @@
 # Graph Report - workspace  (2026-08-03)
 
 ## Corpus Check
-- 142 files · ~241,866 words
+- 142 files · ~242,068 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
@@ -10,7 +10,7 @@
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `553034de`
+- Built from commit: `43884187`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -39,6 +39,7 @@
 - attempt-workflow.ts
 - compilerOptions
 - core/src/index.ts
+- 3. Target workflow architecture
 - workflow-view.test.ts
 - compileWorkflow
 - D1ConversationRepository
@@ -56,7 +57,6 @@
 - compilerOptions
 - Development environment, GitHub Actions, and wrangler
 - cloudflare-containers.ts
-- 5. Runtime boundaries
 - createRun
 - check-license-headers.mjs
 - conversation-store.ts
@@ -210,6 +210,10 @@ Nodes (18): compilerOptions, composite, declaration, declarationMap, esModuleInt
 Cohesion: 0.15
 Nodes (18): GitHubIntakeRepository, AppliedProfile, assertTransition(), CreateRunInput, IssueCommentSnapshot, IssueSnapshot, resumeRun(), RunResumeSignal (+10 more)
 
+### Community 24 - "3. Target workflow architecture"
+Cohesion: 0.50
+Nodes (4): 3.1 Repository source and compilation, 3.2 Typed executors, 3.3 Durable execution, 3. Target workflow architecture
+
 ### Community 25 - "workflow-view.test.ts"
 Cohesion: 0.14
 Nodes (9): workflowGraphAsset(), workflowGraphClientScript, collection(), FakeElement, FakeNode, harness(), makeNode(), runFixture() (+1 more)
@@ -240,7 +244,7 @@ Nodes (8): aggregatedReview, AggregatedReviewFinding, attempt, configured, head,
 
 ### Community 33 - "Roundhouse V2"
 Cohesion: 0.15
-Nodes (13): 10. Acceptance and observability, 11. Complexity and documentation, 1. Product and development rule, 2. Deployed behavior, 3.1 Repository source and compilation, 3.2 Typed executors, 3.3 Durable execution, 3. Target workflow architecture (+5 more)
+Nodes (13): 10. Acceptance and observability, 11. Complexity and documentation, 1. Product and development rule, 2. Deployed behavior, 4. Security kernel, 5.1 Control plane and storage, 5.2 Agent environment, 5.3 Models (+5 more)
 
 ### Community 34 - "control-plane/src/index.ts"
 Cohesion: 0.06
@@ -277,10 +281,6 @@ Nodes (7): Checking whether `main` has deployed, Debugging a live issue / run (D
 ### Community 42 - "cloudflare-containers.ts"
 Cohesion: 0.25
 Nodes (3): Container, ContainerProxy, outboundParams
-
-### Community 43 - "5. Runtime boundaries"
-Cohesion: 0.50
-Nodes (4): 5.1 Control plane and storage, 5.2 Agent environment, 5.3 Models, 5. Runtime boundaries
 
 ### Community 44 - "createRun"
 Cohesion: 0.14

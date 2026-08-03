@@ -604,11 +604,14 @@ export function annotateProtectedPathProposal(
   changedPaths: readonly string[],
   profile: AppliedProfile | undefined,
 ): Readonly<Record<string, unknown>> {
-  if (!profile) return result;
+  // Never trust an agent-supplied proposal marker. Only the trusted
+  // checkpoint's changed paths may authorize the human-merge terminal.
+  const { protectedPathProposal: _forged, ...rest } = result;
+  if (!profile) return rest;
   const paths = protectedPathsIn(profile, changedPaths);
-  if (!paths.length) return result;
+  if (!paths.length) return rest;
   return {
-    ...result,
+    ...rest,
     protectedPathProposal: { paths },
   };
 }
