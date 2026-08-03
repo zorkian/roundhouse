@@ -81,6 +81,12 @@ describe("D1 conversation repository", () => {
         "utf8",
       ),
     );
+    sqlite.exec(
+      readFileSync(
+        new URL("../migrations/0019_delivery_brief_body.sql", import.meta.url),
+        "utf8",
+      ),
+    );
     sqlite
       .prepare("INSERT INTO repositories VALUES (?1,?2,?3,?4,?5)")
       .run(
@@ -210,9 +216,23 @@ describe("D1 conversation repository", () => {
         conversationId: ids.conversation,
         creatorGithubUserId: 7,
         turnId: "turn-brief",
+        messageId: "message-brief",
+        message: inbound("external-brief", "Prepare it with this answer.", now),
       }),
-    ).resolves.toBe(true);
-    await repository.claimTurn("turn-brief");
+    ).resolves.toBe("created");
+    await expect(
+      repository.requestBrief({
+        conversationId: ids.conversation,
+        creatorGithubUserId: 7,
+        turnId: "turn-brief",
+        messageId: "message-brief",
+        message: inbound("external-brief", "Prepare it with this answer.", now),
+      }),
+    ).resolves.toBe("duplicate");
+    await expect(repository.claimTurn("turn-brief")).resolves.toMatchObject({
+      kind: "brief",
+      triggeringMessageId: "message-brief",
+    });
     await expect(
       repository.completeBriefTurn("turn-brief", ids.brief, {
         title: "Build the flow",
@@ -239,7 +259,18 @@ describe("D1 conversation repository", () => {
     await expect(
       repository.get(ids.conversation, 7, ["123"]),
     ).resolves.toMatchObject({
-      currentBrief: { id: ids.brief, state: "draft" },
+      currentBrief: {
+        id: ids.brief,
+        state: "draft",
+        body: "## Outcome\n\nCreate a conversation flow.\n\n## Acceptance criteria\n\n- It is read-only\n\n## Constraints\n\n- No shell\n\n## Evidence and decisions\n\n- The user approved a web-first adapter\n",
+      },
+      messages: expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          body: "Prepare it with this answer.",
+          turnId: "turn-brief",
+        }),
+      ]),
     });
     await expect(
       repository.approveBriefAndRequestPromotion({
@@ -248,11 +279,7 @@ describe("D1 conversation repository", () => {
         creatorGithubLogin: "octocat",
         briefId: ids.brief,
         title: "Build the flow",
-        outcome: "Create a conversation flow.",
-        acceptanceCriteria: ["It is read-only"],
-        constraints: ["No shell"],
-        evidence: ["The user approved a web-first adapter"],
-        uncertainties: [],
+        body: "Custom preamble\n\n## Reordered\n\nExact body.\n",
         promotionId: ids.promotion,
         uiSessionHash: "session-hash",
       }),
@@ -339,6 +366,7 @@ describe("D1 conversation repository", () => {
         { role: "assistant", direction: "outbound" },
         { role: "user", direction: "inbound" },
         { role: "assistant", direction: "outbound" },
+        { role: "user", direction: "inbound", turnId: "turn-brief" },
       ],
     });
     await expect(repository.list(7, ["123"])).resolves.toEqual([
@@ -398,6 +426,12 @@ describe("D1 conversation repository", () => {
         "utf8",
       ),
     );
+    sqlite.exec(
+      readFileSync(
+        new URL("../migrations/0019_delivery_brief_body.sql", import.meta.url),
+        "utf8",
+      ),
+    );
     sqlite
       .prepare("INSERT INTO repositories VALUES (?1,?2,?3,?4,?5)")
       .run(
@@ -454,11 +488,7 @@ describe("D1 conversation repository", () => {
       creatorGithubLogin: "octocat",
       briefId: "stale-brief",
       title: "Prepare delivery",
-      outcome: "Prepare the requested delivery.",
-      acceptanceCriteria: [],
-      constraints: [],
-      evidence: [],
-      uncertainties: [],
+      body: "",
       promotionId: "stale-promotion",
       uiSessionHash: "session-hash",
     });

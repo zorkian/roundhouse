@@ -74,10 +74,24 @@ export class ConversationService {
     readonly conversationId: string;
     readonly creatorGithubUserId: number;
     readonly turnId: string;
-  }): Promise<boolean> {
-    const created = await this.repository.requestBrief(input);
-    if (created) await this.publish({ kind: "turn", id: input.turnId });
-    return created;
+    readonly messageId?: string;
+    readonly message?: CanonicalInboundMessage;
+  }): Promise<"created" | "duplicate" | "unavailable"> {
+    const startedAt = Date.now();
+    const result = await this.repository.requestBrief(input);
+    if (result === "created")
+      await this.publish({ kind: "turn", id: input.turnId });
+    console.log(
+      JSON.stringify({
+        message: "conversation_brief_scheduled",
+        conversationId: input.conversationId,
+        turnId: input.turnId,
+        includedInboundMessage: Boolean(input.message),
+        outcome: result,
+        durationMs: Date.now() - startedAt,
+      }),
+    );
+    return result;
   }
 
   async approveBrief(

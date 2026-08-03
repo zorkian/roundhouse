@@ -60,6 +60,7 @@ function promotionFixture(overrides: Partial<ConversationPromotion> = {}) {
       revision: 1,
       state: "approved" as const,
       title: "Build the approved flow",
+      body: "Preamble\n\n## Custom section\n\nKeep this exact.\n",
       outcome: "Implement the conversation handoff.",
       acceptanceCriteria: ["Normal intake creates the run"],
       constraints: ["No agent writes"],
@@ -141,8 +142,8 @@ describe("conversation promotion", () => {
         postForSession,
       }),
     ).resolves.toBe("retry");
-    expect(persistedIssue?.body).toContain(
-      promotionIssueMarker(conversationId, briefId),
+    expect(persistedIssue?.body).toBe(
+      `${promotionIssueMarker(conversationId, briefId)}\nPreamble\n\n## Custom section\n\nKeep this exact.\n\n_Promoted from a [private Roundhouse conversation](https://roundhouse.example/conversations/${conversationId})._`,
     );
     await expect(
       executeConversationPromotion(repository, github, env, promotionId, {
