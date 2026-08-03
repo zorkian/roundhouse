@@ -450,6 +450,6 @@ describe("conversation engine", () => {
       inputTokens: 1,
       cachedInputTokens: 1_000,
     });
-    expect(result.usage[0]!.costUsd).toBeCloseTo(0.000000175, 12);
+    expect(result.usage[0]!.costUsd).toBeCloseTo(0.0005, 12);
   });
 });
