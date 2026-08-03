@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ModelUsage } from "@roundhouse/core";
+import { estimateModelCostUsd } from "./model-prices.js";
 
 export interface UsageTotal {
   inputTokens?: number;
@@ -12,6 +13,28 @@ export interface UsageTotal {
   totalTokens?: number;
   costUsd?: number;
 }
+
+// Prefer a stored cost. Otherwise estimate from known rates when input and
+// output token counts are present. Total-token-only rows stay unpriced.
+export function estimateUsageCostUsd(call: ModelUsage): number | undefined {
+  return estimateModelCostUsd({
+    model: call.model,
+    configuredModel: call.configuredModel,
+    provider: call.provider,
+    inputTokens: call.inputTokens,
+    cachedInputTokens: call.cachedInputTokens,
+    cacheCreationInputTokens: call.cacheCreationInputTokens,
+    outputTokens: call.outputTokens,
+    directCostUsd: call.costUsd,
+  });
+}
+
+export function withEstimatedUsageCost(call: ModelUsage): ModelUsage {
+  if (typeof call.costUsd === "number") return call;
+  const costUsd = estimateUsageCostUsd(call);
+  return costUsd === undefined ? call : { ...call, costUsd };
+}
+
 export function totalUsage(items: readonly ModelUsage[]): UsageTotal {
   const sum = (key: keyof UsageTotal) => {
     const values = items
@@ -32,7 +55,7 @@ export function totalUsage(items: readonly ModelUsage[]): UsageTotal {
   };
 }
 export function formatUsage(items: readonly ModelUsage[]): string {
-  const usage = totalUsage(items);
+  const usage = totalUsage(items.map(withEstimatedUsageCost));
   if (!items.length) return "Usage unavailable";
   const token = (value: number | undefined) =>
     value === undefined ? "unavailable" : value.toLocaleString("en-US");
@@ -81,8 +104,8 @@ const dayMilliseconds = 24 * 60 * 60_000;
 
 // Aggregates the authorized model calls inside the rolling window
 // [endAt - days, endAt] (start inclusive, end inclusive) by actual model and
-// by UTC day. Missing token or cost values stay missing in the totals rather
-// than being treated as zero.
+// by UTC day. Missing token values stay missing. Missing costs are estimated
+// from known rates when input and output token counts are present.
 export function summarizeModelUsage(
   calls: readonly (ModelUsage & {
     readonly createdAt?: number;
@@ -92,12 +115,17 @@ export function summarizeModelUsage(
   days = 30,
 ): ModelUsageSummary {
   const startAt = endAt - days * dayMilliseconds;
-  const inWindow = calls.filter(
-    (call) =>
-      typeof call.createdAt === "number" &&
-      call.createdAt >= startAt &&
-      call.createdAt <= endAt,
-  );
+  const inWindow = calls
+    .filter(
+      (call) =>
+        typeof call.createdAt === "number" &&
+        call.createdAt >= startAt &&
+        call.createdAt <= endAt,
+    )
+    .map((call) => ({
+      ...call,
+      ...withEstimatedUsageCost(call),
+    }));
   const byModel = new Map<string, ModelUsage[]>();
   const bySource = new Map<"delivery" | "conversation", ModelUsage[]>();
   for (const call of inWindow) {

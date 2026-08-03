@@ -14,6 +14,7 @@ import type {
   DeliveryBrief,
 } from "./conversation-store.js";
 import type { GitHubApi } from "./github.js";
+import { estimateModelCostUsd } from "./model-prices.js";
 
 type Broker = Pick<Fetcher, "fetch">;
 
@@ -667,16 +668,6 @@ function conversationInstructions(conversation: Conversation): string {
   ].join("\n\n");
 }
 
-const prices: Record<string, readonly [number, number, number, number?]> = {
-  "anthropic/claude-opus-4.8": [15, 1.5, 75, 18.75],
-  "anthropic/claude-fable-5": [3, 0.3, 15, 3.75],
-  "anthropic/claude-sonnet-5": [2, 0.2, 10, 2.5],
-  "moonshotai/kimi-k3": [0.6, 0.15, 2.5],
-  "openai/gpt-5": [1.25, 0.125, 10],
-  "openai/gpt-5.2": [1.75, 0.175, 14],
-  "openai/gpt-5.6-sol": [1.75, 0.175, 14],
-};
-
 function number(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value)
     ? value
@@ -737,22 +728,16 @@ function usageForResponse(input: {
         ? value.modelVersion
         : input.route.model;
   const directCost = number(usage.cost_usd ?? usage.cost ?? value.cost_usd);
-  const rate = prices[model] ?? prices[input.route.model];
-  const pricedCachedInputTokens = Math.min(
-    Math.max(cachedInputTokens ?? 0, 0),
-    Math.max(inputTokens ?? 0, 0),
-  );
-  const costUsd =
-    directCost ??
-    (rate && inputTokens !== undefined && outputTokens !== undefined
-      ? ((input.route.provider === "anthropic"
-          ? inputTokens * rate[0]
-          : (inputTokens - pricedCachedInputTokens) * rate[0]) +
-          pricedCachedInputTokens * rate[1] +
-          (cacheCreationInputTokens ?? 0) * (rate[3] ?? rate[0]) +
-          outputTokens * rate[2]) /
-        1_000_000
-      : undefined);
+  const costUsd = estimateModelCostUsd({
+    model,
+    configuredModel: input.route.model,
+    provider: input.route.provider,
+    inputTokens,
+    cachedInputTokens,
+    cacheCreationInputTokens,
+    outputTokens,
+    directCostUsd: directCost,
+  });
   const callId =
     typeof value.id === "string"
       ? value.id

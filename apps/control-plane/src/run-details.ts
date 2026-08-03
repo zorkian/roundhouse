@@ -3,7 +3,11 @@
 
 import type { Attempt, RunStatus } from "@roundhouse/core";
 import type { RunDetails } from "./d1-store.js";
-import { formatUsage, formatUsageBreakdown } from "./usage.js";
+import {
+  formatUsage,
+  formatUsageBreakdown,
+  withEstimatedUsageCost,
+} from "./usage.js";
 import {
   renderSiteHeader,
   sharedHeaderStyles,
@@ -145,10 +149,10 @@ function runStatusSummary(status: RunStatus, stage: string): string {
 function usageTable(items: NonNullable<RunDetails["usage"]>): string {
   if (!items.length) return '<p class="muted">No model calls recorded.</p>';
   return `<table><thead><tr><th>Provider</th><th>Configured model</th><th>Actual model</th><th>Tokens</th><th>Cost</th></tr></thead><tbody>${items
-    .map(
-      (item) =>
-        `<tr><td>${escapeHtml(item.provider ?? "Unavailable")}</td><td>${escapeHtml(item.configuredModel ?? "Unavailable")}</td><td>${escapeHtml(item.model)}</td><td>${escapeHtml(formatUsage([item]))}</td><td>${escapeHtml(item.costUsd === undefined ? "Unavailable" : `$${item.costUsd.toFixed(6)}`)}</td></tr>`,
-    )
+    .map((item) => {
+      const priced = withEstimatedUsageCost(item);
+      return `<tr><td>${escapeHtml(item.provider ?? "Unavailable")}</td><td>${escapeHtml(item.configuredModel ?? "Unavailable")}</td><td>${escapeHtml(item.model)}</td><td>${escapeHtml(formatUsage([priced]))}</td><td>${escapeHtml(priced.costUsd === undefined ? "Unavailable" : `$${priced.costUsd.toFixed(6)}`)}</td></tr>`;
+    })
     .join("")}</tbody></table>`;
 }
 
