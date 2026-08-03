@@ -442,14 +442,21 @@ export function integrateTransition(attempt: Attempt) {
   if (
     outcome.status === "clean" &&
     outcome.head === attempt.acceptedHead &&
-    outcome.candidateHead === attempt.expectedHead &&
     attempt.acceptedHead &&
     attempt.acceptedHead !== attempt.expectedHead
   ) {
     // A conflict resolution must integrate the base selected by the
     // preceding conflict, which is carried immutably on the attempt.
+    // Its candidateHead is the reviewed candidate identity, which may
+    // differ from expectedHead when the workspace starts from a prior
+    // published/resolution tip (reintegration) rather than the raw
+    // reviewed commit.
     if (attempt.role === "conflict-resolution") {
-      if (baseHead !== attempt.baseCommit)
+      if (
+        baseHead !== attempt.baseCommit ||
+        typeof outcome.candidateHead !== "string" ||
+        !/^[a-f0-9]{40}$/.test(outcome.candidateHead)
+      )
         return { status: "failed", stage: "integrate" } as const;
       return {
         status: "active",
@@ -461,15 +468,16 @@ export function integrateTransition(attempt: Attempt) {
         },
       } as const;
     }
-    return {
-      status: "active",
-      stage: "ci",
-      acceptedHead: attempt.acceptedHead,
-      heads: {
-        targetBaseHead: baseHead,
-        integrationHead: attempt.acceptedHead,
-      },
-    } as const;
+    if (outcome.candidateHead === attempt.expectedHead)
+      return {
+        status: "active",
+        stage: "ci",
+        acceptedHead: attempt.acceptedHead,
+        heads: {
+          targetBaseHead: baseHead,
+          integrationHead: attempt.acceptedHead,
+        },
+      } as const;
   }
   return { status: "failed", stage: "integrate" } as const;
 }

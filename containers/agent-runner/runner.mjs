@@ -2391,6 +2391,13 @@ export async function mechanicalIntegration(assignment, directory) {
   return { status: "clean", candidateHead, baseHead, head };
 }
 
+export function conflictResolutionCandidateHead(assignment) {
+  const candidate = assignment?.integration?.candidateHead;
+  if (typeof candidate !== "string" || !/^[a-f0-9]{40}$/.test(candidate))
+    throw new Error("integration_candidate_missing");
+  return candidate;
+}
+
 export async function resolveConflicts(assignment, directory, attemptSecret) {
   const resolution = await structuredAgent(
     assignment,
@@ -2920,7 +2927,13 @@ async function completeAssignment(assignment, headers) {
                         assignment.role === "conflict-resolution"
                           ? {
                               status: "clean",
-                              candidateHead: assignment.expectedHead,
+                              // Identity is the reviewed candidate from
+                              // dispatch, not the workspace checkout head.
+                              // After a prior resolution, expectedHead may be
+                              // the published/resolution tip while the run's
+                              // reviewedHead stays the original candidate.
+                              candidateHead:
+                                conflictResolutionCandidateHead(assignment),
                               baseHead: assignment.integration?.baseHead,
                               resolution: await resolveConflicts(
                                 agentAssignment,
