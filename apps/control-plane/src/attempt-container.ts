@@ -392,6 +392,7 @@ const prices: Record<string, ModelPrice> = {
   "anthropic/claude-opus-4.8": { standard: [5, 0.5, 25, 6.25] },
   "anthropic/claude-fable-5": { standard: [10, 1, 50, 12.5] },
   "anthropic/claude-opus-5": { standard: [5, 0.5, 25, 6.25] },
+  "anthropic/claude-sonnet-5": { standard: [2, 0.2, 10, 2.5] },
   "moonshotai/kimi-k3": { standard: [3, 0.3, 15] },
   "openai/gpt-5": { standard: [1.25, 0.125, 10] },
   "openai/gpt-5.2": { standard: [1.75, 0.175, 14] },
