@@ -459,6 +459,46 @@ describe("GitHub intake", () => {
     });
   });
 
+  it("does not cancel an active automatic merge when Fixes #N closes the issue", async () => {
+    const repository = new IntakeRepository();
+    const id = "run_123_issue_42";
+    await repository.create(
+      reportRun(id, {
+        githubRepositoryId: 123,
+        githubInstallationId: 456,
+        profile: {
+          sourcePath: ".roundhouse/profile.yaml",
+          sourceCommit: "a".repeat(40),
+          version: 2,
+          hash: "b".repeat(64),
+          paths: { allowed: ["**"], protected: [] },
+          merge: { mode: "automatic", method: "merge" },
+        },
+      }),
+    );
+    await repository.transition(id, 1, {
+      status: "active",
+      stage: "merge",
+      acceptedHead: "a".repeat(40),
+    });
+    await expect(
+      acceptGitHubIssueClosed(
+        await closureDelivery("automatic-merge-fixes-close"),
+        env,
+        repository,
+      ),
+    ).resolves.toEqual({
+      outcome: "closed",
+      wakeup: { runId: id, expectedRevision: 2 },
+    });
+    await expect(repository.get(id)).resolves.toMatchObject({
+      status: "active",
+      stage: "merge",
+      revision: 2,
+    });
+    expect(repository.issueStates.get(id)).toBe("closed");
+  });
+
   it("closes and reopens a failed issue without changing or restarting its run", async () => {
     const repository = new IntakeRepository();
     const failed = reportRun("run_123_issue_42", {
