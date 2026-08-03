@@ -67,7 +67,7 @@ describe("D1 conversation repository", () => {
     const sqlite = new DatabaseSync(":memory:");
     sqlite.exec("PRAGMA foreign_keys=ON");
     sqlite.exec(
-      "CREATE TABLE repositories (id TEXT PRIMARY KEY, github_id TEXT NOT NULL UNIQUE, profile_version TEXT NOT NULL, profile_json TEXT NOT NULL, created_at INTEGER NOT NULL); CREATE TABLE runs (id TEXT PRIMARY KEY, status TEXT NOT NULL)",
+      "CREATE TABLE repositories (id TEXT PRIMARY KEY, github_id TEXT NOT NULL UNIQUE, profile_version TEXT NOT NULL, profile_json TEXT NOT NULL, created_at INTEGER NOT NULL); CREATE TABLE runs (id TEXT PRIMARY KEY, status TEXT NOT NULL, updated_at INTEGER NOT NULL)",
     );
     sqlite.exec(
       readFileSync(
@@ -322,7 +322,9 @@ describe("D1 conversation repository", () => {
         runUrl: "https://roundhouse.test/repositories/octo/project/issues/42",
       }),
     ).resolves.toBe(false);
-    sqlite.prepare("INSERT INTO runs VALUES (?1,?2)").run("run-42", "active");
+    sqlite
+      .prepare("INSERT INTO runs VALUES (?1,?2,?3)")
+      .run("run-42", "active", now);
     await expect(
       repository.recordPromotionIntake({
         conversationId: ids.conversation,
@@ -377,21 +379,30 @@ describe("D1 conversation repository", () => {
         promotionRunStatus: "active",
       }),
     ]);
+    now = 1_000;
     sqlite
-      .prepare("UPDATE runs SET status='waiting' WHERE id=?1")
-      .run("run-42");
+      .prepare("UPDATE runs SET status='waiting',updated_at=?2 WHERE id=?1")
+      .run("run-42", now);
     await expect(
       repository.get(ids.conversation, 7, ["123"]),
     ).resolves.toMatchObject({
-      promotion: { runStatus: "waiting" },
+      promotion: { runStatus: "waiting", runUpdatedAt: 1_000 },
     });
+    await expect(repository.list(7, ["123"])).resolves.toEqual([
+      expect.objectContaining({
+        promotionRunStatus: "waiting",
+        promotionRunUpdatedAt: 1_000,
+        updatedAt: 1_000,
+      }),
+    ]);
+    now = 2_000;
     sqlite
-      .prepare("UPDATE runs SET status='succeeded' WHERE id=?1")
-      .run("run-42");
+      .prepare("UPDATE runs SET status='succeeded',updated_at=?2 WHERE id=?1")
+      .run("run-42", now);
     await expect(
       repository.get(ids.conversation, 7, ["123"]),
     ).resolves.toMatchObject({
-      promotion: { runStatus: "succeeded" },
+      promotion: { runStatus: "succeeded", runUpdatedAt: 2_000 },
     });
     await expect(repository.list(7, ["123"])).resolves.toEqual([
       expect.objectContaining({ promotionRunStatus: "succeeded" }),
@@ -412,7 +423,7 @@ describe("D1 conversation repository", () => {
     const sqlite = new DatabaseSync(":memory:");
     sqlite.exec("PRAGMA foreign_keys=ON");
     sqlite.exec(
-      "CREATE TABLE repositories (id TEXT PRIMARY KEY, github_id TEXT NOT NULL UNIQUE, profile_version TEXT NOT NULL, profile_json TEXT NOT NULL, created_at INTEGER NOT NULL); CREATE TABLE runs (id TEXT PRIMARY KEY, status TEXT NOT NULL)",
+      "CREATE TABLE repositories (id TEXT PRIMARY KEY, github_id TEXT NOT NULL UNIQUE, profile_version TEXT NOT NULL, profile_json TEXT NOT NULL, created_at INTEGER NOT NULL); CREATE TABLE runs (id TEXT PRIMARY KEY, status TEXT NOT NULL, updated_at INTEGER NOT NULL)",
     );
     sqlite.exec(
       readFileSync(
@@ -550,6 +561,48 @@ describe("D1 conversation repository", () => {
         promotionState: "rejected",
         updatedAt: 500,
       },
+      { id: "recent-conversation", updatedAt: 200 },
+    ]);
+
+    now = 800;
+    await repository.create({
+      id: "newest-conversation",
+      repositoryId: "repo_123",
+      creatorGithubUserId: 7,
+      creatorGithubLogin: "octocat",
+      sourceCommit: "a".repeat(40),
+      profileHash: "b".repeat(64),
+      context: {
+        model: { id: "openai/gpt-5.6-sol", reasoning: "high" },
+        defaultBranch: "main",
+      },
+      turnId: "newest-turn",
+      messageId: "newest-message",
+      message: inbound("newest-external", "Newest conversation", now),
+    });
+    await expect(repository.list(7, ["123"])).resolves.toMatchObject([
+      { id: "newest-conversation", updatedAt: 800 },
+      { id: "stale-conversation", updatedAt: 500 },
+      { id: "recent-conversation", updatedAt: 200 },
+    ]);
+
+    sqlite
+      .prepare("INSERT INTO runs VALUES (?1,?2,?3)")
+      .run("delivery-run", "cancelled", 900);
+    sqlite
+      .prepare(
+        "UPDATE conversation_promotions SET state='accepted',run_id=?1 WHERE id=?2",
+      )
+      .run("delivery-run", "stale-promotion");
+    await expect(repository.list(7, ["123"])).resolves.toMatchObject([
+      {
+        id: "stale-conversation",
+        promotionState: "accepted",
+        promotionRunStatus: "cancelled",
+        promotionRunUpdatedAt: 900,
+        updatedAt: 900,
+      },
+      { id: "newest-conversation", updatedAt: 800 },
       { id: "recent-conversation", updatedAt: 200 },
     ]);
     sqlite.close();

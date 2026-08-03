@@ -6,7 +6,11 @@ import {
   sharedHeaderStyles,
   type HeaderAccount,
 } from "./ui-header.js";
-import { statusPillStyles, type StatusTone } from "./status-ui.js";
+import {
+  runStatusTone,
+  statusPillStyles,
+  type StatusTone,
+} from "./status-ui.js";
 import type {
   Conversation,
   ConversationRepositoryRef,
@@ -56,10 +60,23 @@ export function actionableConversationStatus(
       return { label: "Starting delivery", tone: "active" };
     case "awaiting_intake":
       return { label: "Waiting to start delivery", tone: "waiting" };
-    case "accepted":
-      return conversation.promotionRunStatus === "succeeded"
-        ? { label: "Delivery complete", tone: "succeeded" }
-        : { label: "Delivery started", tone: "active" };
+    case "accepted": {
+      const runStatus = conversation.promotionRunStatus;
+      if (!runStatus) return { label: "Delivery started", tone: "active" };
+      return {
+        label:
+          runStatus === "active"
+            ? "Delivery started"
+            : runStatus === "waiting"
+              ? "Delivery waiting"
+              : runStatus === "succeeded"
+                ? "Delivery complete"
+                : runStatus === "failed"
+                  ? "Delivery failed"
+                  : "Delivery cancelled",
+        tone: runStatusTone(runStatus),
+      };
+    }
     case "rejected":
       return { label: "Delivery not accepted", tone: "failed" };
     case undefined:
@@ -190,7 +207,9 @@ function messageHtml(message: Conversation["messages"][number]): string {
 function statusKey(conversation: Conversation): string {
   if (conversation.activeTurn) return `turn:${conversation.activeTurn.state}`;
   if (conversation.promotion)
-    return `promotion:${conversation.promotion.state}`;
+    return conversation.promotion.state === "accepted"
+      ? `promotion:accepted:${conversation.promotion.runStatus ?? "active"}`
+      : `promotion:${conversation.promotion.state}`;
   if (conversation.latestTurn) return `turn:${conversation.latestTurn.state}`;
   return `conversation:${conversation.status}`;
 }
@@ -209,8 +228,16 @@ function statusAnnouncement(key: string): string {
       return "Roundhouse is preparing delivery.";
     case "promotion:awaiting_intake":
       return "Waiting for Roundhouse intake.";
-    case "promotion:accepted":
+    case "promotion:accepted:active":
       return "Delivery started.";
+    case "promotion:accepted:waiting":
+      return "Delivery waiting.";
+    case "promotion:accepted:succeeded":
+      return "Delivery complete.";
+    case "promotion:accepted:failed":
+      return "Delivery failed.";
+    case "promotion:accepted:cancelled":
+      return "Delivery cancelled.";
     case "promotion:rejected":
       return "Delivery was not accepted.";
     default:
@@ -222,9 +249,13 @@ export function conversationPollingActive(conversation: Conversation): boolean {
   return Boolean(
     conversation.activeTurn ||
     (conversation.promotion &&
-      ["requested", "issue_created", "awaiting_intake"].includes(
+      (["requested", "issue_created", "awaiting_intake"].includes(
         conversation.promotion.state,
-      )),
+      ) ||
+        (conversation.promotion.state === "accepted" &&
+          ["active", "waiting"].includes(
+            conversation.promotion.runStatus ?? "active",
+          )))),
   );
 }
 
@@ -282,6 +313,8 @@ export function renderConversationPollState(
         conversation.status,
         conversation.latestTurn?.updatedAt,
         conversation.promotion?.updatedAt,
+        conversation.promotion?.runStatus,
+        conversation.promotion?.runUpdatedAt,
       ]),
       html: statusHtml(conversation),
       key,
@@ -299,6 +332,8 @@ export function renderConversationPollState(
         conversation.promotion?.id,
         conversation.promotion?.state,
         conversation.promotion?.updatedAt,
+        conversation.promotion?.runStatus,
+        conversation.promotion?.runUpdatedAt,
         conversation.links,
       ]),
       html: controlsHtml(conversation, messageId),
