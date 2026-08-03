@@ -63,7 +63,9 @@ import { processConversationWakeup } from "./conversation-worker.js";
 import {
   renderConversation,
   renderConversationIndex,
+  renderConversationPollState,
 } from "./conversation-ui.js";
+import { conversationPollClientScript } from "./conversation-client.js";
 import { launch } from "@cloudflare/playwright";
 import { DurableAttemptDispatcher } from "./attempt-dispatch.js";
 import { recordAttemptCompletion } from "./attempt-settlement.js";
@@ -103,12 +105,17 @@ function json(value: unknown, status = 200, headers?: HeadersInit): Response {
   });
 }
 
-function html(value: string, status = 200, forms = false): Response {
+function html(
+  value: string,
+  status = 200,
+  forms = false,
+  connect = false,
+): Response {
   return new Response(value, {
     status,
     headers: {
       "cache-control": "no-store",
-      "content-security-policy": `default-src 'none'; img-src https://avatars.githubusercontent.com; script-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action ${forms ? "'self'" : "'none'"}; frame-ancestors 'none'`,
+      "content-security-policy": `default-src 'none'; img-src https://avatars.githubusercontent.com; script-src 'self'; style-src 'unsafe-inline'; connect-src ${connect ? "'self'" : "'none'"}; base-uri 'none'; form-action ${forms ? "'self'" : "'none'"}; frame-ancestors 'none'`,
       "content-type": "text/html; charset=utf-8",
       // same-origin keeps referrers on our own navigations while omitting them
       // cross-origin. no-referrer can cause browsers to send Origin: null on
@@ -494,6 +501,32 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
         },
       });
     }
+    // Static same-origin client asset for active conversation polling. It
+    // contains no conversation data, so it does not require a browser session.
+    if (
+      url.pathname === "/assets/conversation-poll.js" &&
+      isPublicUiRequest()
+    ) {
+      if (request.method !== "GET")
+        return json({ error: "method_not_allowed" }, 405, { allow: "GET" });
+      const assetStartedAt = Date.now();
+      console.log(
+        JSON.stringify({
+          message: "conversation_poll_asset_served",
+          bytes: conversationPollClientScript.length,
+          durationMs: Date.now() - assetStartedAt,
+        }),
+      );
+      return new Response(conversationPollClientScript, {
+        headers: {
+          "cache-control": "no-store",
+          "content-security-policy":
+            "default-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+          "content-type": "text/javascript; charset=utf-8",
+          "x-content-type-options": "nosniff",
+        },
+      });
+    }
     // Browser authentication lives only on the public UI hostname; every
     // other hostname and capability boundary is unchanged.
     if (url.pathname === "/auth/github" && isPublicUiRequest()) {
@@ -516,7 +549,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
       url.pathname === "/runs" ||
       url.pathname === "/usage" ||
       url.pathname === "/conversations" ||
-      /^\/conversations\/[0-9a-f-]{36}(?:\/(?:messages|brief|promote))?$/.test(
+      /^\/conversations\/[0-9a-f-]{36}(?:\/(?:messages|brief|promote|state))?$/.test(
         url.pathname,
       ) ||
       /^\/repositories\/[^/]+\/[^/]+\/(workflow|issues\/\d+(?:\/workflow)?)$/.test(
@@ -566,7 +599,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
     const uiHtml = (value: string, status = 200): Response =>
       withUiSession(html(value, status));
     const uiConversationHtml = (value: string, status = 200): Response =>
-      withUiSession(html(value, status, true));
+      withUiSession(html(value, status, true, true));
     const uiJson = (
       value: unknown,
       status = 200,
@@ -705,7 +738,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
       return uiRedirect(`/conversations/${started.conversationId}`);
     }
     const conversationMatch = url.pathname.match(
-      /^\/conversations\/([0-9a-f-]{36})(?:\/(messages|brief|promote))?$/,
+      /^\/conversations\/([0-9a-f-]{36})(?:\/(messages|brief|promote|state))?$/,
     );
     if (conversationMatch && isPublicUiRequest()) {
       const conversationId = conversationMatch[1]!;
@@ -721,6 +754,24 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
         uiSession!.repositoryIds,
       );
       if (!conversation) return uiConversationHtml(renderNotFoundPage(), 404);
+      if (action === "state") {
+        if (request.method !== "GET")
+          return uiJson({ error: "method_not_allowed" }, 405, {
+            allow: "GET",
+          });
+        const stateStartedAt = Date.now();
+        const state = renderConversationPollState(conversation);
+        console.log(
+          JSON.stringify({
+            message: "conversation_poll_state_served",
+            conversationId,
+            messages: state.messages.length,
+            polling: state.polling,
+            durationMs: Date.now() - stateStartedAt,
+          }),
+        );
+        return uiJson(state);
+      }
       if (!action && request.method === "GET")
         return uiConversationHtml(
           renderConversation(
