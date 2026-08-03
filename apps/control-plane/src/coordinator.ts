@@ -3,6 +3,7 @@
 
 import {
   advanceWorkflow,
+  attemptHasProtectedPathProposal,
   competitionAttemptId,
   competitionCandidateRole,
   competitionJudgeRole,
@@ -647,6 +648,7 @@ function workflowAdvanceForAttempt(run: RunSnapshot, attempt: Attempt) {
       hasScreenshots:
         Array.isArray(implementation?.screenshots) &&
         implementation.screenshots.length > 0,
+      protectedPathProposal: attemptHasProtectedPathProposal(attempt.result),
     },
     run: {
       revision: run.revision,
@@ -658,10 +660,45 @@ function workflowAdvanceForAttempt(run: RunSnapshot, attempt: Attempt) {
 }
 
 export function graphCompletedTransition(run: RunSnapshot, attempt: Attempt) {
-  const { workflow, nodeId, node, advance } = workflowAdvanceForAttempt(
-    run,
-    attempt,
-  );
+  const workflow = run.profile?.workflow;
+  const nodeId = run.currentNodeId;
+  if (!workflow || !nodeId || run.workflowHash !== workflow.hash)
+    throw new Error("run_workflow_snapshot_missing");
+  const node = workflow.nodes[nodeId];
+  if (!node) throw new Error("run_workflow_node_missing");
+  // A candidate that touches protected paths is a human-merge proposal:
+  // open the PR (via the implement reporter) and stop. Roundhouse never
+  // auto-merges it, and the in-progress run keeps its snapshotted profile.
+  if (
+    node.agent?.task === "implementation" &&
+    attemptHasProtectedPathProposal(attempt.result) &&
+    attempt.acceptedHead &&
+    attempt.acceptedHead !== attempt.expectedHead
+  ) {
+    console.log(
+      JSON.stringify({
+        message: "protected_path_proposal_terminal",
+        runId: run.id,
+        revision: run.revision,
+        attemptId: attempt.id,
+        workflowHash: workflow.hash,
+        fromNodeId: nodeId,
+        acceptedHead: attempt.acceptedHead,
+        protectedPaths: (
+          attempt.result?.protectedPathProposal as
+            { readonly paths?: readonly string[] } | undefined
+        )?.paths,
+      }),
+    );
+    return {
+      status: "succeeded" as const,
+      stage: "implement" as const,
+      currentNodeId: nodeId,
+      acceptedHead: attempt.acceptedHead,
+      heads: { candidateHead: attempt.acceptedHead },
+    };
+  }
+  const { advance } = workflowAdvanceForAttempt(run, attempt);
   const destination = workflow.nodes[advance.currentNodeId]!;
   const stage = stageForWorkflowNode(advance.currentNodeId, destination);
   const evidence = evidenceForAttempt(attempt, node, run.profile);

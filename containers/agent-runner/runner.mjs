@@ -2619,14 +2619,8 @@ export async function validateCheckpoint(assignment) {
       path.split("/").some((part) => !part || part === "." || part === "..")
     )
       throw new Error("invalid_repository_path");
-    if (
-      path === ".roundhouse" ||
-      path.startsWith(".roundhouse/") ||
-      assignment.profile.paths.protected.some((pattern) =>
-        matches(pattern, path),
-      )
-    )
-      throw new Error("protected_path_changed");
+    // Protected paths (.roundhouse/**, profile paths.protected, Dev Container)
+    // are allowed through as human-merge proposals. Only the allowlist rejects.
     if (
       !assignment.profile.paths.allowed.some((pattern) =>
         matches(pattern, path),

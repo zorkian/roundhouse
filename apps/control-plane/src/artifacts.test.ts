@@ -30,7 +30,7 @@ describe("trusted checkpoint path validation", () => {
     ref: "refs/heads/roundhouse/run-1",
   };
 
-  it("applies the explicit allowed and protected path policy", async () => {
+  it("allows protected paths through as proposals while enforcing the allowlist", async () => {
     const profile = await parseProfile(
       'version: 1\npaths:\n  allowed: ["**"]\n  protected: [".github/workflows/**"]\n',
       "a".repeat(40),
@@ -46,13 +46,13 @@ describe("trusted checkpoint path validation", () => {
         ...identity,
         profile,
       }),
-    ).toThrow("protected_path_changed");
+    ).not.toThrow();
     expect(() =>
       validateCheckpointIdentity(checkpoint([".roundhouse/profile.yaml"]), {
         ...identity,
         profile,
       }),
-    ).toThrow("protected_path_changed");
+    ).not.toThrow();
   });
 
   it("leaves trusted integration path validation to exact Git validation", async () => {

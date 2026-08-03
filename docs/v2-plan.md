@@ -385,7 +385,11 @@ The deployed Profile V2 defines:
 
 Roundhouse always protects `.roundhouse/**` and the selected Dev Container
 configuration. Repository instructions cannot override isolation, tool,
-read-only, credential, or result-submission rules.
+read-only, credential, or result-submission rules. An implementation that
+touches those paths or `paths.protected` may still open a pull request as a
+proposal; Roundhouse then ends the run successfully and never auto-merges.
+Merging that pull request updates only future runs — active runs keep their
+immutable profile and workflow snapshot.
 
 Operators may start and explicitly resume Roundhouse. Ordinary participants may
 answer a clarification while the run waits. An operator may answer an

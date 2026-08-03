@@ -561,20 +561,67 @@ function matches(pattern: string, path: string): boolean {
   return new RegExp(`^${expression}$`).test(path);
 }
 
+export function isProtectedRepositoryPath(
+  profile: AppliedProfile,
+  candidate: string,
+): boolean {
+  const path = normalizeRepositoryPath(candidate);
+  return (
+    path === ".roundhouse" ||
+    path.startsWith(".roundhouse/") ||
+    path === profile.developmentEnvironment?.devcontainer ||
+    profile.paths.protected.some((pattern) => matches(pattern, path))
+  );
+}
+
+export function protectedPathsIn(
+  profile: AppliedProfile,
+  changedPaths: readonly string[],
+): string[] {
+  return changedPaths.filter((path) => {
+    try {
+      return isProtectedRepositoryPath(profile, path);
+    } catch {
+      return false;
+    }
+  });
+}
+
+// Protected paths may be authored as a human-merge proposal. The allowlist
+// still bounds what an attempt may touch; Roundhouse never auto-merges a
+// candidate that includes protected paths.
 export function assertPathAllowed(
   profile: AppliedProfile,
   candidate: string,
 ): void {
   const path = normalizeRepositoryPath(candidate);
-  if (
-    path === ".roundhouse" ||
-    path.startsWith(".roundhouse/") ||
-    path === profile.developmentEnvironment?.devcontainer ||
-    profile.paths.protected.some((pattern) => matches(pattern, path))
-  )
-    throw new Error("protected_path_changed");
   if (!profile.paths.allowed.some((pattern) => matches(pattern, path)))
     throw new Error("path_outside_allowlist");
+}
+
+export function annotateProtectedPathProposal(
+  result: Readonly<Record<string, unknown>>,
+  changedPaths: readonly string[],
+  profile: AppliedProfile | undefined,
+): Readonly<Record<string, unknown>> {
+  // Never trust an agent-supplied proposal marker. Only the trusted
+  // checkpoint's changed paths may authorize the human-merge terminal.
+  const { protectedPathProposal: _forged, ...rest } = result;
+  if (!profile) return rest;
+  const paths = protectedPathsIn(profile, changedPaths);
+  if (!paths.length) return rest;
+  return {
+    ...rest,
+    protectedPathProposal: { paths },
+  };
+}
+
+export function attemptHasProtectedPathProposal(
+  result: Readonly<Record<string, unknown>> | undefined,
+): boolean {
+  const proposal = result?.protectedPathProposal as
+    { readonly paths?: unknown } | undefined;
+  return Array.isArray(proposal?.paths) && proposal.paths.length > 0;
 }
 
 export function profileModelForAttempt(

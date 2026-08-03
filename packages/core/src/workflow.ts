@@ -134,6 +134,10 @@ nodes:
               equals: true
         to: review
       - when:
+          path: attempt.protectedPathProposal
+          equals: true
+        terminal: succeeded
+      - when:
           path: attempt.hasScreenshots
           equals: true
         to: approval
