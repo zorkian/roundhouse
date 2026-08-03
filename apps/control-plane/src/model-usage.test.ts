@@ -105,6 +105,8 @@ describe("summarizeModelUsage", () => {
       [
         call("gpt-5", endAt - day, { totalTokens: 100, costUsd: 1 }),
         call("gpt-5", endAt - day, {
+          inputTokens: undefined,
+          outputTokens: undefined,
           totalTokens: undefined,
           costUsd: undefined,
         }),
@@ -123,6 +125,37 @@ describe("summarizeModelUsage", () => {
       0,
     );
     expect(charted).toBe(100);
+  });
+
+  it("estimates missing cost from known rates and bare provider model ids", () => {
+    const summary = summarizeModelUsage(
+      [
+        call("claude-sonnet-5", endAt - day, {
+          provider: "anthropic",
+          configuredModel: "anthropic/claude-sonnet-5",
+          inputTokens: 1000,
+          cachedInputTokens: 0,
+          outputTokens: 100,
+          totalTokens: 1100,
+          costUsd: undefined,
+        }),
+        call("claude-sonnet-5", endAt - day, {
+          // Bare API model id with no stored cost — still priceable.
+          inputTokens: 10,
+          outputTokens: 5,
+          totalTokens: 15,
+          costUsd: undefined,
+        }),
+      ],
+      endAt,
+    );
+    const model = summary.models.find(
+      (entry) => entry.model === "claude-sonnet-5",
+    );
+    // (1000*2 + 100*10)/1e6 + (10*2 + 5*10)/1e6
+    expect(model?.total.costUsd).toBeCloseTo(0.00307);
+    expect(summary.overall.costUsd).toBeCloseTo(0.00307);
+    expect(summary.callsWithoutCost).toBe(0);
   });
 
   it("builds UTC calendar-date buckets with per-model tokens", () => {
@@ -187,6 +220,8 @@ describe("renderModelUsage", () => {
       [
         call("gpt-5", endAt - day, { totalTokens: 100, costUsd: 1 }),
         call("gpt-5", endAt - day, {
+          inputTokens: undefined,
+          outputTokens: undefined,
           totalTokens: undefined,
           costUsd: undefined,
         }),

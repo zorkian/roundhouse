@@ -245,8 +245,8 @@
     "semantic_hash": "229ff914fe14bcff417caff18b57160b"
   },
   "apps/control-plane/src/model-usage.test.ts": {
-    "mtime": 1785734651.0807152,
-    "ast_hash": "5af4390f933f3d41c77f05506fb395b6",
+    "mtime": 1785736696.1198626,
+    "ast_hash": "bdf419c69a05ba758cc4ff83cb5efc2b",
     "semantic_hash": ""
   },
   "apps/control-plane/src/model-usage.ts": {
@@ -310,8 +310,8 @@
     "semantic_hash": ""
   },
   "apps/control-plane/src/usage.ts": {
-    "mtime": 1785725478.0,
-    "ast_hash": "2fde53d574bd76afb85a6aeb67918082",
+    "mtime": 1785736671.0558994,
+    "ast_hash": "d859b714e17ac59569f70eafa0a4a7d4",
     "semantic_hash": ""
   },
   "apps/control-plane/src/workflow-boundaries.test.ts": {
