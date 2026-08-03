@@ -17,6 +17,7 @@ import {
   completionRequest,
   completionResult,
   configureAgentToolExecution,
+  conflictResolutionCandidateHead,
   createAssignmentExecutor,
   createRunnerServer,
   deliverCompletion,
@@ -2036,6 +2037,29 @@ describe("V2 agent runner", () => {
     const checkpoint = await checkpointWorkspace(assignment, directory);
     expect(checkpoint.outputHead).toBe(featureHead);
     expect(checkpoint.changedPaths).toEqual([]);
+  });
+
+  it("binds conflict-resolution candidate identity to the reviewed head", () => {
+    const reviewed = "a".repeat(40);
+    const published = "b".repeat(40);
+    expect(
+      conflictResolutionCandidateHead({
+        expectedHead: published,
+        integration: { candidateHead: reviewed, baseHead: "c".repeat(40) },
+      }),
+    ).toBe(reviewed);
+    expect(() =>
+      conflictResolutionCandidateHead({
+        expectedHead: published,
+        integration: { baseHead: "c".repeat(40) },
+      }),
+    ).toThrow("integration_candidate_missing");
+    expect(() =>
+      conflictResolutionCandidateHead({
+        expectedHead: published,
+        integration: { candidateHead: "not-a-sha", baseHead: "c".repeat(40) },
+      }),
+    ).toThrow("integration_candidate_missing");
   });
 
   it("rejects unrelated conflict-resolution edits before publication", async () => {
