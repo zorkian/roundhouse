@@ -228,13 +228,22 @@ export function conversationPollingActive(conversation: Conversation): boolean {
   );
 }
 
+function turnFailureNotice(conversation: Conversation): string {
+  const turn = conversation.latestTurn;
+  if (turn?.state !== "failed") return "";
+  const subject = turn.kind === "brief" ? "delivery brief" : "reply";
+  const detail =
+    turn.errorCode === "conversation_model_http_429"
+      ? " The model provider rate-limited the request. Wait a moment and try again."
+      : turn.errorCode === "conversation_model_budget_exhausted"
+        ? " Model usage is paused until the account budget recovers."
+        : " You can try again or continue the conversation.";
+  return `<div class="notice">Roundhouse could not complete the last ${subject}.${detail}</div>`;
+}
+
 function statusHtml(conversation: Conversation): string {
   const status = conversationStatus(conversation);
-  const failure =
-    conversation.latestTurn?.state === "failed"
-      ? `<div class="notice">Roundhouse could not complete the last ${conversation.latestTurn.kind === "brief" ? "delivery brief" : "reply"}. You can try again or continue the conversation.</div>`
-      : "";
-  return `<p><span class="status ${status.tone}">${escapeHtml(status.label)}</span></p>${failure}`;
+  return `<p><span class="status ${status.tone}">${escapeHtml(status.label)}</span></p>${turnFailureNotice(conversation)}`;
 }
 
 function controlsHtml(conversation: Conversation, messageId: string): string {

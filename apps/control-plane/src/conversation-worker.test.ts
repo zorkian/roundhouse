@@ -7,7 +7,10 @@ import { runtimeCapabilitiesForModel } from "@roundhouse/core";
 import { describe, expect, it, vi } from "vitest";
 import { webConversationAdapter } from "./conversation-adapter.js";
 import { D1ConversationRepository } from "./conversation-store.js";
-import { processConversationWakeup } from "./conversation-worker.js";
+import {
+  conversationRateLimitRetryDelaySeconds,
+  processConversationWakeup,
+} from "./conversation-worker.js";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
 import type { GitHubApi } from "./github.js";
 
@@ -171,6 +174,143 @@ describe("conversation Queue worker", () => {
       "turn-1",
       "conversation_first_reply_invalid",
     );
+  });
+
+  it("retries rate-limited model calls with a delay instead of failing immediately", async () => {
+    const route = {
+      provider: "openai",
+      model: "openai/gpt-5.6-sol",
+      protocol: "openai-responses",
+      transport: "cloudflare-provider-native",
+      thinkingLevel: "high",
+      runtime: runtimeCapabilitiesForModel("openai/gpt-5.6-sol"),
+      rule: "profile-conversation-v2",
+    };
+    const repository = {
+      turn: vi.fn(async () => ({ state: "pending" })),
+      claimTurn: vi.fn(async () => ({
+        id: "turn-1",
+        kind: "message",
+        ordinal: 2,
+      })),
+      getForTurn: vi.fn(async () => ({
+        id: "b1f486ff-7744-49f9-ab78-f74e8409fc2b",
+        repository: { name: "octo/project", installationId: 99 },
+        sourceCommit: "a".repeat(40),
+        profileHash: "b".repeat(64),
+        context: {
+          model: { id: "openai/gpt-5.6-sol", reasoning: "high" },
+          defaultBranch: "main",
+        },
+        messages: [],
+      })),
+      renewTurn: vi.fn(async () => true),
+      recordTurnRoute: vi.fn(async () => undefined),
+      recordModelUsage: vi.fn(async () => undefined),
+      retryTurn: vi.fn(async () => undefined),
+      failTurn: vi.fn(async () => undefined),
+      completeWakeup: vi.fn(async () => undefined),
+    } as unknown as D1ConversationRepository;
+    const broker = {
+      fetch: vi
+        .fn()
+        .mockResolvedValueOnce(Response.json(route))
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ error: "rate_limited" }), {
+            status: 429,
+          }),
+        ),
+    };
+    await expect(
+      processConversationWakeup(
+        repository,
+        { MODEL_BROKER: broker } as never,
+        { kind: "turn", id: "turn-1" },
+        1,
+        new Map(),
+        {
+          github: {
+            get: vi.fn(async () => ({ private: false })),
+          } as unknown as GitHubApi,
+        },
+      ),
+    ).resolves.toEqual({
+      kind: "retry",
+      delaySeconds: conversationRateLimitRetryDelaySeconds,
+    });
+    expect(repository.retryTurn).toHaveBeenCalledWith(
+      "turn-1",
+      "conversation_model_http_429",
+    );
+    expect(repository.failTurn).not.toHaveBeenCalled();
+  });
+
+  it("fails closed immediately when the model broker reports a budget stop", async () => {
+    const route = {
+      provider: "openai",
+      model: "openai/gpt-5.6-sol",
+      protocol: "openai-responses",
+      transport: "cloudflare-provider-native",
+      thinkingLevel: "high",
+      runtime: runtimeCapabilitiesForModel("openai/gpt-5.6-sol"),
+      rule: "profile-conversation-v2",
+    };
+    const repository = {
+      turn: vi.fn(async () => ({ state: "pending" })),
+      claimTurn: vi.fn(async () => ({
+        id: "turn-1",
+        kind: "message",
+        ordinal: 2,
+      })),
+      getForTurn: vi.fn(async () => ({
+        id: "b1f486ff-7744-49f9-ab78-f74e8409fc2b",
+        repository: { name: "octo/project", installationId: 99 },
+        sourceCommit: "a".repeat(40),
+        profileHash: "b".repeat(64),
+        context: {
+          model: { id: "openai/gpt-5.6-sol", reasoning: "high" },
+          defaultBranch: "main",
+        },
+        messages: [],
+      })),
+      renewTurn: vi.fn(async () => true),
+      recordTurnRoute: vi.fn(async () => undefined),
+      recordModelUsage: vi.fn(async () => undefined),
+      retryTurn: vi.fn(async () => undefined),
+      failTurn: vi.fn(async () => undefined),
+      completeWakeup: vi.fn(async () => undefined),
+    } as unknown as D1ConversationRepository;
+    const broker = {
+      fetch: vi
+        .fn()
+        .mockResolvedValueOnce(Response.json(route))
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ error: "budget" }), {
+            status: 429,
+            headers: { "x-roundhouse-model-stop-reason": "budget" },
+          }),
+        ),
+    };
+    await expect(
+      processConversationWakeup(
+        repository,
+        { MODEL_BROKER: broker } as never,
+        { kind: "turn", id: "turn-1" },
+        1,
+        new Map(),
+        {
+          github: {
+            get: vi.fn(async () => ({ private: false })),
+          } as unknown as GitHubApi,
+        },
+      ),
+    ).resolves.toBe("completed");
+    expect(repository.failTurn).toHaveBeenCalledWith(
+      "turn-1",
+      "conversation_model_budget_exhausted",
+    );
+    expect(repository.retryTurn).not.toHaveBeenCalled();
+    expect(repository.completeWakeup).toHaveBeenCalledOnce();
   });
 
   it("turns at-least-once wakeups into one persisted title, reply, and usage calls", async () => {

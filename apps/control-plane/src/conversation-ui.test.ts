@@ -705,7 +705,34 @@ describe("conversation UI", () => {
     );
     expect(html).toContain("Needs attention");
     expect(html).toContain("could not complete the last reply");
+    expect(html).toContain("You can try again or continue the conversation");
     expect(html).toContain("Continue the conversation");
     expect(html).not.toContain("sensitive_upstream_detail");
+  });
+
+  it("explains known rate-limit turn failures without exposing the raw code", () => {
+    const html = renderConversation(
+      {
+        ...base,
+        latestTurn: {
+          id: "failed-turn",
+          conversationId: base.id,
+          kind: "message",
+          ordinal: 2,
+          state: "failed",
+          sourceCommit: base.sourceCommit,
+          configuredModel: "openai/gpt-5.6-sol",
+          configuredReasoning: "high",
+          attempts: 5,
+          errorCode: "conversation_model_http_429",
+          createdAt: 2,
+          updatedAt: 3,
+          completedAt: 3,
+        },
+      },
+      "octocat",
+    );
+    expect(html).toContain("rate-limited the request");
+    expect(html).not.toContain("conversation_model_http_429");
   });
 });

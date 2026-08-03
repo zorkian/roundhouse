@@ -1785,6 +1785,8 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
             conversationAdapters,
           );
           if (outcome === "retry") message.retry();
+          else if (typeof outcome === "object" && outcome.kind === "retry")
+            message.retry({ delaySeconds: outcome.delaySeconds });
           else message.ack();
         } catch (error) {
           console.error(

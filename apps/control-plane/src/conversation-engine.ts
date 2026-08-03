@@ -3,6 +3,7 @@
 
 import {
   isModelRoute,
+  modelStopReasonHeader,
   normalizeRepositoryPath,
   type ModelRoute,
 } from "@roundhouse/core";
@@ -814,11 +815,15 @@ async function callModel(input: {
     latencyMs: Date.now() - startedAt,
     outcome: response.ok ? "succeeded" : "failed",
   });
-  if (!response.ok)
+  if (!response.ok) {
+    const stopReason = response.headers.get(modelStopReasonHeader);
     throw new ConversationModelCallError(
-      `conversation_model_http_${response.status}`,
+      response.status === 429 && stopReason === "budget"
+        ? "conversation_model_budget_exhausted"
+        : `conversation_model_http_${response.status}`,
       usage,
     );
+  }
   return { value, usage };
 }
 

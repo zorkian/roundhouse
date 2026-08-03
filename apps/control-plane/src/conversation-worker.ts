@@ -42,6 +42,15 @@ function executionMetadata(error: unknown): {
   };
 }
 
+export type ConversationWakeupOutcome =
+  | "completed"
+  | "ignored"
+  | "retry"
+  | { readonly kind: "retry"; readonly delaySeconds: number };
+
+/** Delay between queue retries after a transient model rate limit. */
+export const conversationRateLimitRetryDelaySeconds = 30;
+
 export async function processConversationWakeup(
   repository: D1ConversationRepository,
   env: ConversationWorkerEnv,
@@ -49,7 +58,7 @@ export async function processConversationWakeup(
   deliveryAttempts: number,
   adapters: ReadonlyMap<string, ConversationAdapter>,
   dependencies: ConversationWorkerDependencies = {},
-): Promise<"completed" | "retry" | "ignored"> {
+): Promise<ConversationWakeupOutcome> {
   if (wakeup.kind === "promotion") {
     const work = await repository.promotionForWork(wakeup.id);
     if (!work) {
@@ -185,12 +194,20 @@ export async function processConversationWakeup(
     if (metadata.route)
       await repository.recordTurnRoute(turn.id, metadata.route);
     await repository.recordModelUsage(metadata.usage);
-    if (deliveryAttempts >= 5) {
+    if (
+      deliveryAttempts >= 5 ||
+      metadata.code === "conversation_model_budget_exhausted"
+    ) {
       await repository.failTurn(turn.id, metadata.code);
       await repository.completeWakeup(wakeup);
       return "completed";
     }
     await repository.retryTurn(turn.id, metadata.code);
+    if (metadata.code === "conversation_model_http_429")
+      return {
+        kind: "retry",
+        delaySeconds: conversationRateLimitRetryDelaySeconds,
+      };
     return "retry";
   }
 }
