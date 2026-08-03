@@ -7,6 +7,20 @@ product overview and `docs/v2-plan.md` for the architecture). Standard commands
 live in the root `package.json` scripts and `README.md`; prefer those instead of
 inventing new ones.
 
+### Scope: diagnose vs build
+
+Do **not** write code, open PRs, or spend tokens on implementation unless the
+user explicitly asks you to build, fix, change, or land something.
+
+- **Debug / investigate / explain** requests are read-only: use D1, wrangler,
+  GitHub, and the codebase to report what happened and why. Stop after the
+  diagnosis. Do not “helpfully” implement a fix, retry policy, UI copy, or
+  speculative hardening.
+- **Build / fix / implement / land** requests are the signal to create a
+  branch, change code, run checks, and open or update a PR.
+- When unsure, ask or default to diagnosis only. Prefer answering with
+  evidence over shipping unsolicited changes.
+
 ### Node version
 
 The repo requires Node 24 (`.node-version` pins `24.18.0`). That is configured
