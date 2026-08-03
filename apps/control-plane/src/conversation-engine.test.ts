@@ -57,6 +57,7 @@ const turn: ConversationTurn = {
   conversationId: conversation.id,
   triggeringMessageId: "message-1",
   kind: "message",
+  ordinal: 1,
   state: "running",
   sourceCommit: conversation.sourceCommit,
   configuredModel: "openai/gpt-5.6-sol",
@@ -184,7 +185,10 @@ describe("conversation engine", () => {
       }),
       Response.json({
         id: "response-2",
-        output_text: "The dashboard is rendered there.",
+        output_text: JSON.stringify({
+          title: "Locate dashboard rendering code",
+          reply: "The dashboard is rendered there.",
+        }),
         usage: { input_tokens: 12, output_tokens: 8, total_tokens: 20 },
       }),
     ]);
@@ -199,7 +203,10 @@ describe("conversation engine", () => {
     await expect(
       executeConversationTurn(modelBroker, repositoryApi, conversation, turn),
     ).resolves.toMatchObject({
-      text: "The dashboard is rendered there.",
+      firstReply: {
+        title: "Locate dashboard rendering code",
+        reply: "The dashboard is rendered there.",
+      },
       usage: [{ totalTokens: 12 }, { totalTokens: 20 }],
     });
     const firstModelRequest = modelBroker.fetch.mock.calls[1]![0] as Request;
@@ -207,6 +214,17 @@ describe("conversation engine", () => {
     expect(firstModelRequest.headers.get("x-roundhouse-research")).toBe(
       "enabled",
     );
+    await expect(firstModelRequest.clone().json()).resolves.toMatchObject({
+      instructions: expect.stringContaining(
+        "central question or desired outcome",
+      ),
+      text: {
+        format: {
+          name: "conversation_first_reply",
+          schema: { required: ["title", "reply"] },
+        },
+      },
+    });
     const continuedBody = (await (
       modelBroker.fetch.mock.calls[2]![0] as Request
     )
@@ -226,7 +244,17 @@ describe("conversation engine", () => {
     [
       "openai-completions",
       {
-        choices: [{ message: { role: "assistant", content: "Chat answer" } }],
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              content: JSON.stringify({
+                title: "Explain chat completion adapter support",
+                reply: "Chat answer",
+              }),
+            },
+          },
+        ],
         usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5 },
       },
       "Chat answer",
@@ -234,7 +262,15 @@ describe("conversation engine", () => {
     [
       "anthropic-messages",
       {
-        content: [{ type: "text", text: "Anthropic answer" }],
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              title: "Explain Anthropic adapter support",
+              reply: "Anthropic answer",
+            }),
+          },
+        ],
         usage: { input_tokens: 3, output_tokens: 4 },
       },
       "Anthropic answer",
@@ -243,7 +279,19 @@ describe("conversation engine", () => {
       "google-generative-ai",
       {
         candidates: [
-          { content: { role: "model", parts: [{ text: "Google answer" }] } },
+          {
+            content: {
+              role: "model",
+              parts: [
+                {
+                  text: JSON.stringify({
+                    title: "Explain Google adapter support",
+                    reply: "Google answer",
+                  }),
+                },
+              ],
+            },
+          },
         ],
         usageMetadata: {
           promptTokenCount: 4,
@@ -254,7 +302,7 @@ describe("conversation engine", () => {
       "Google answer",
     ],
   ] as const)(
-    "supports the %s protocol adapter",
+    "supports structured first replies through the %s protocol adapter",
     async (protocol, response, expected) => {
       const route = { ...responsesRoute, protocol, model: `${protocol}/model` };
       const modelBroker = broker([
@@ -264,9 +312,32 @@ describe("conversation engine", () => {
       await expect(
         executeConversationTurn(modelBroker, github, conversation, turn),
       ).resolves.toMatchObject({
-        text: expected,
+        firstReply: { reply: expected },
         route: { protocol },
       });
+      const requestBody = (await (
+        modelBroker.fetch.mock.calls[1]![0] as Request
+      )
+        .clone()
+        .json()) as Record<string, unknown>;
+      if (protocol === "openai-completions")
+        expect(requestBody).toMatchObject({
+          response_format: {
+            json_schema: {
+              name: "conversation_first_reply",
+              schema: { required: ["title", "reply"] },
+            },
+          },
+        });
+      if (protocol === "anthropic-messages")
+        expect(requestBody.system).toContain("conversation_first_reply");
+      if (protocol === "google-generative-ai")
+        expect(requestBody).toMatchObject({
+          generationConfig: {
+            responseMimeType: "application/json",
+            responseSchema: { required: ["title", "reply"] },
+          },
+        });
     },
   );
 
@@ -327,7 +398,28 @@ describe("conversation engine", () => {
     });
   });
 
-  it("clamps cached tokens when estimating cost from malformed usage", async () => {
+  it.each([
+    "Build semantic titles",
+    "build semantic titles for conversations",
+    "Build semantic conversation titles.",
+    "Create a conversation title that is deliberately much longer than the eighty character limit for validation",
+  ])("rejects an invalid first-turn title", async (title) => {
+    const modelBroker = broker([
+      Response.json(responsesRoute),
+      Response.json({
+        output_text: JSON.stringify({ title, reply: "A normal reply." }),
+        usage: { total_tokens: 7 },
+      }),
+    ]);
+    await expect(
+      executeConversationTurn(modelBroker, github, conversation, turn),
+    ).rejects.toMatchObject({
+      message: "conversation_first_reply_invalid",
+      usage: [{ totalTokens: 7 }],
+    });
+  });
+
+  it("keeps later turns on ordinary reply output while estimating cost", async () => {
     const modelBroker = broker([
       Response.json(responsesRoute),
       Response.json({
@@ -345,8 +437,10 @@ describe("conversation engine", () => {
       modelBroker,
       github,
       conversation,
-      turn,
+      { ...turn, ordinal: 2 },
     );
+    expect(result.text).toBe("Cached answer");
+    expect(result.firstReply).toBeUndefined();
     expect(result.usage[0]).toMatchObject({
       inputTokens: 1,
       cachedInputTokens: 1_000,

@@ -120,12 +120,53 @@ export async function processConversationWakeup(
     await repository.recordTurnRoute(turn.id, result.route);
     await repository.recordModelUsage(result.usage);
     if (turn.kind === "message") {
-      if (!result.text) throw new Error("conversation_model_output_missing");
-      const completed = await repository.completeMessageTurn(
-        turn.id,
-        crypto.randomUUID(),
-        result.text,
-      );
+      const firstReply = turn.ordinal === 1 ? result.firstReply : undefined;
+      if (turn.ordinal === 1 && !firstReply)
+        throw new Error("conversation_first_reply_missing");
+      const reply = firstReply?.reply ?? result.text;
+      if (!reply) throw new Error("conversation_model_output_missing");
+      const completionStartedAt = Date.now();
+      let completed: boolean;
+      try {
+        completed = await repository.completeMessageTurn(
+          turn.id,
+          crypto.randomUUID(),
+          reply,
+          firstReply?.title,
+        );
+      } catch (error) {
+        if (firstReply)
+          console.error(
+            JSON.stringify({
+              message: "conversation_first_reply_completion",
+              conversationId: conversation.id,
+              turnId: turn.id,
+              outcome: "failed",
+              titleLength: firstReply.title.length,
+              titleWordCount: firstReply.title.split(/\s+/u).filter(Boolean)
+                .length,
+              errorCode:
+                error instanceof Error
+                  ? error.message
+                  : "conversation_turn_completion_failed",
+              durationMs: Date.now() - completionStartedAt,
+            }),
+          );
+        throw error;
+      }
+      if (firstReply)
+        console.log(
+          JSON.stringify({
+            message: "conversation_first_reply_completion",
+            conversationId: conversation.id,
+            turnId: turn.id,
+            outcome: completed ? "succeeded" : "conflict",
+            titleLength: firstReply.title.length,
+            titleWordCount: firstReply.title.split(/\s+/u).filter(Boolean)
+              .length,
+            durationMs: Date.now() - completionStartedAt,
+          }),
+        );
       if (!completed) throw new Error("conversation_turn_completion_conflict");
       await deliverPendingConversationReplies(repository, adapters);
     } else {
