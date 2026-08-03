@@ -126,6 +126,12 @@ nodes:
           equals: true
         terminal: succeeded
       - when:
+          all:
+            - exists: attempt.acceptedHead
+            - path: attempt.changed
+              equals: false
+        to: review
+      - when:
           path: attempt.visualImpact
           in: [yes, uncertain]
         to: approval

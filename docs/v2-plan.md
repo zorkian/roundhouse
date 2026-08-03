@@ -592,7 +592,8 @@ their existing workflow.
 
 Exit gate: a visual candidate cannot reach review or merge until an operator
 responds; requested changes return with updated evidence; an accepted unchanged
-candidate proceeds; and non-visual candidates do not wait at the gate.
+candidate proceeds without asking for visual approval again; and non-visual
+candidates do not wait at the gate.
 
 ### Slice 9.0 — Conversational entry
 

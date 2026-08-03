@@ -654,7 +654,7 @@ describe("V2 agent runner", () => {
     expect(prompt).toContain("Latest maintainer visual feedback:");
     expect(prompt).toContain("Move the action closer to the heading.");
     expect(prompt).toContain(
-      "If the maintainer accepts the design or asks to continue without a visual change, do not modify the candidate",
+      "If the maintainer accepts the design or asks to continue without a visual change, do not modify the candidate and set visualImpact to no",
     );
     expect(prompt).toContain(
       "If the maintainer requests a change, implement only that feedback",
