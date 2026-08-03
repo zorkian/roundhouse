@@ -10,6 +10,8 @@ import {
   handleGitHubCallback,
   sessionCookieHeader,
   signOut,
+  renderNotFoundPage,
+  renderSignInPage,
   uiSessionCookie,
   uiSessionLifetimeMs,
   uiStateCookie,
@@ -303,6 +305,12 @@ afterEach(() => {
 });
 
 describe("GitHub UI sign-in", () => {
+  it("shows the Development badge on sign-in pages but not on the not-found page", () => {
+    for (const page of [renderSignInPage(), renderSignInPage("Try again.")])
+      expect(page.match(/class="env-badge"/g)).toHaveLength(1);
+    expect(renderNotFoundPage()).not.toContain('class="env-badge"');
+  });
+
   it("redirects to GitHub with a one-time state and no secrets in the URL", async () => {
     const { db, states } = authDb();
     const response = await beginGitHubSignIn(env(db));

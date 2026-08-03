@@ -132,6 +132,7 @@ describe("dashboard", () => {
     expect(html).toContain("https://github.com/zorkian/roundhouse/issues/2");
     expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
     expect(html).not.toContain("<script>alert(1)</script>");
+    expect(html.match(/class="env-badge"/g)).toHaveLength(1);
   });
 
   it("uses investigate for active and waiting investigation runs", () => {
