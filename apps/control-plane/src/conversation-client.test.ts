@@ -4,10 +4,17 @@
 import { describe, expect, it, vi } from "vitest";
 import { conversationPollClientScript } from "./conversation-client.js";
 
+type Rectangle = { top: number; bottom: number; height: number };
+type Message = {
+  getAttribute(name: string): string | null;
+  matches(selector: string): boolean;
+  getBoundingClientRect(): Rectangle;
+};
+
 type Region = {
   innerHTML: string;
   textContent?: string;
-  children: { getAttribute(name: string): string | null }[];
+  children: Message[];
   getAttribute(name: string): string | null;
   setAttribute(name: string, value: string): void;
 };
@@ -21,6 +28,30 @@ function region(version: string, key?: string): Region {
     getAttribute: (name) => attributes.get(name) ?? null,
     setAttribute: (name, value) => attributes.set(name, value),
   };
+}
+
+function message(
+  id: string,
+  role: "assistant" | "user",
+  version: string,
+  rectangle: () => Rectangle,
+): Message {
+  return {
+    getAttribute: (name) =>
+      name === "data-message-id"
+        ? id
+        : name === "data-version"
+          ? version
+          : null,
+    matches: (selector) =>
+      selector === ".message.assistant" && role === "assistant",
+    getBoundingClientRect: rectangle,
+  };
+}
+
+async function flushPoll(scheduled: (() => void)[]): Promise<void> {
+  scheduled[0]!();
+  await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 describe("conversation polling client", () => {
@@ -79,9 +110,7 @@ describe("conversation polling client", () => {
       "console",
       conversationPollClientScript,
     )(document, window, fetch, { log: () => undefined });
-    expect(scheduled).toHaveLength(1);
-    scheduled[0]!();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await flushPoll(scheduled);
 
     expect(status.innerHTML).toBe("<p>Done</p>");
     expect(controls.innerHTML).toBe("<form></form>");
@@ -93,14 +122,11 @@ describe("conversation polling client", () => {
   it("keeps unchanged keyed messages in place", async () => {
     const messages = region("messages");
     messages.children = [
-      {
-        getAttribute: (name) =>
-          name === "data-message-id"
-            ? "message"
-            : name === "data-version"
-              ? "message-version"
-              : null,
-      },
+      message("message", "user", "message-version", () => ({
+        top: 0,
+        bottom: 50,
+        height: 50,
+      })),
     ];
     const status = region("status-version", "turn:running");
     const controls = region("controls-version");
@@ -159,139 +185,67 @@ describe("conversation polling client", () => {
       "console",
       conversationPollClientScript,
     )(document, window, fetch, { log: () => undefined });
-    scheduled[0]!();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await flushPoll(scheduled);
 
     expect(createElement).not.toHaveBeenCalled();
     expect(window.scrollTo).not.toHaveBeenCalled();
   });
 
-  it("follows an appended assistant response when the reader is near the bottom", async () => {
+  function pendingResponseFixture(options: {
+    responseTop: number;
+    responseHeight?: number;
+    role?: "assistant" | "user";
+    composerTop?: number;
+    polling?: boolean;
+    initialBannerHidden?: boolean;
+  }) {
+    let responseTop = options.responseTop;
+    const responseHeight = options.responseHeight ?? 200;
+    const role = options.role ?? "assistant";
+    const response = message("response", role, "response-version", () => ({
+      top: responseTop,
+      bottom: responseTop + responseHeight,
+      height: responseHeight,
+    }));
     const messages = region("messages") as Region & {
-      appendChild(element: unknown): void;
-      lastElementChild?: unknown;
+      appendChild(element: Message): void;
     };
-    const appended: unknown[] = [];
-    messages.appendChild = (element) => appended.push(element);
+    messages.appendChild = (element) => messages.children.push(element);
     const status = region("status", "turn:running");
     const controls = region("controls");
-    const target = { getAttribute: () => "working", scrollIntoView: vi.fn() };
     const scheduled: (() => void)[] = [];
-    const document = {
-      currentScript: {
-        getAttribute: (name: string) =>
-          name === "data-state-url"
-            ? "/conversations/id/state"
-            : name === "data-polling"
-              ? "true"
-              : null,
-      },
-      documentElement: { scrollHeight: 1_000 },
-      body: { scrollHeight: 0 },
-      querySelector: () => target,
-      getElementById: (id: string) => {
-        const elements: Record<string, Region> = {
-          "conversation-messages": messages,
-          "conversation-status": status,
-          "conversation-controls": controls,
-        };
-        return elements[id] ?? null;
-      },
-      createElement: () => ({
-        content: {
-          firstElementChild: { getAttribute: () => null },
-        },
-      }),
-    };
-    const window = {
-      scrollX: 0,
-      scrollY: 300,
-      innerHeight: 600,
-      scrollTo: vi.fn(),
-      setTimeout: (callback: () => void) => scheduled.push(callback),
-    };
-    const fetch = async () => ({
-      ok: true,
-      json: async () => ({
-        messages: [
-          {
-            id: "assistant",
-            version: "assistant-version",
-            html: '<article class="message assistant" data-message-id="assistant"></article>',
-          },
-        ],
-        status: {
-          version: "status",
-          html: "",
-          key: "turn:running",
-          announcement: "Roundhouse is working.",
-        },
-        controls: { version: "controls", html: "" },
-        polling: false,
-      }),
-    });
-
-    new Function(
-      "document",
-      "window",
-      "fetch",
-      "console",
-      conversationPollClientScript,
-    )(document, window, fetch, { log: () => undefined });
-    scheduled[0]!();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(appended).toHaveLength(1);
-    expect(target.scrollIntoView).toHaveBeenCalledTimes(2);
-    expect(window.scrollTo).not.toHaveBeenCalled();
-  });
-
-  it("preserves a reading anchor and exposes the new-response control", async () => {
-    let top = 50;
-    const anchor = {
-      getAttribute: (name: string) =>
-        name === "data-message-id"
-          ? "older"
-          : name === "data-version"
-            ? "older-version"
-            : null,
-      getBoundingClientRect: () => ({ top, bottom: top + 50 }),
-    };
-    const messages = region("messages") as Region & {
-      appendChild(element: unknown): void;
-    };
-    messages.children = [anchor];
-    messages.appendChild = () => {
-      top = 70;
-    };
-    const status = region("status", "turn:running");
-    const controls = region("controls");
+    const scrollListeners: (() => void)[] = [];
     let click: (() => void) | undefined;
     const newResponse = {
-      hidden: true,
+      hidden: options.initialBannerHidden ?? true,
       style: { bottom: "1rem" },
       addEventListener: (_event: string, handler: () => void) => {
         click = handler;
       },
     };
-    const target = { getAttribute: () => "composer", scrollIntoView: vi.fn() };
     const composer = {
-      getBoundingClientRect: () => ({ height: 220 }),
+      getBoundingClientRect: () => ({
+        top: options.composerTop ?? 500,
+        bottom: 600,
+        height: 100,
+      }),
     };
-    const scheduled: (() => void)[] = [];
+    const landing = { getAttribute: () => "composer", scrollIntoView: vi.fn() };
     const document = {
       currentScript: {
         getAttribute: (name: string) =>
           name === "data-state-url"
             ? "/conversations/id/state"
             : name === "data-polling"
-              ? "true"
+              ? options.polling === false
+                ? "false"
+                : "true"
               : null,
       },
       documentElement: { scrollHeight: 2_000 },
       body: { scrollHeight: 0 },
       querySelector: (selector: string) =>
-        selector === ".composer" ? composer : target,
+        selector === ".composer" ? composer : landing,
       getElementById: (id: string) => {
         if (id === "conversation-new-response") return newResponse;
         const elements: Record<string, Region> = {
@@ -301,9 +255,7 @@ describe("conversation polling client", () => {
         };
         return elements[id] ?? null;
       },
-      createElement: () => ({
-        content: { firstElementChild: { getAttribute: () => null } },
-      }),
+      createElement: () => ({ content: { firstElementChild: response } }),
     };
     const window = {
       scrollX: 0,
@@ -311,15 +263,17 @@ describe("conversation polling client", () => {
       innerHeight: 600,
       scrollTo: vi.fn(),
       setTimeout: (callback: () => void) => scheduled.push(callback),
+      addEventListener: (_event: string, handler: () => void) =>
+        scrollListeners.push(handler),
     };
     const fetch = async () => ({
       ok: true,
       json: async () => ({
         messages: [
           {
-            id: "user",
-            version: "user-version",
-            html: '<article class="message user" data-message-id="user"></article>',
+            id: "response",
+            version: "response-version",
+            html: `<article class="message ${role}" data-message-id="response"></article>`,
           },
         ],
         status: {
@@ -332,65 +286,151 @@ describe("conversation polling client", () => {
         polling: false,
       }),
     });
+    return {
+      click: () => click!(),
+      document,
+      fetch,
+      landing,
+      newResponse,
+      responseTop: (top: number) => {
+        responseTop = top;
+      },
+      scheduled,
+      scrollListeners,
+      window,
+    };
+  }
 
+  it("does not show the banner when an appended response begins in the readable area", async () => {
+    const fixture = pendingResponseFixture({ responseTop: 100 });
     new Function(
       "document",
       "window",
       "fetch",
       "console",
       conversationPollClientScript,
-    )(document, window, fetch, { log: () => undefined });
-    scheduled[0]!();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(window.scrollTo).toHaveBeenCalledWith(0, 120);
-    expect(newResponse.hidden).toBe(false);
-    expect(newResponse.style.bottom).toBe("236px");
-    click!();
-    expect(newResponse.hidden).toBe(true);
-    expect(target.scrollIntoView).toHaveBeenCalledTimes(2);
-  });
-
-  it("initializes positioning without polling inactive conversations", () => {
-    const messages = region("messages");
-    const status = region("status", "turn:succeeded");
-    const controls = region("controls");
-    const target = { getAttribute: () => "delivery", scrollIntoView: vi.fn() };
-    const scheduled: (() => void)[] = [];
-    const document = {
-      currentScript: {
-        getAttribute: (name: string) =>
-          name === "data-state-url" ? "/conversations/id/state" : "false",
-      },
-      querySelector: () => target,
-      getElementById: (id: string) => {
-        const elements: Record<string, Region> = {
-          "conversation-messages": messages,
-          "conversation-status": status,
-          "conversation-controls": controls,
-        };
-        return elements[id] ?? null;
-      },
-      createElement: () => ({ content: { firstElementChild: null } }),
-    };
-    const window = {
-      scrollX: 0,
-      scrollY: 0,
-      innerHeight: 600,
-      scrollTo: vi.fn(),
-      setTimeout: (callback: () => void) => scheduled.push(callback),
-    };
-    new Function(
-      "document",
-      "window",
-      "fetch",
-      "console",
-      conversationPollClientScript,
-    )(document, window, () => Promise.resolve(undefined), {
+    )(fixture.document, fixture.window, fixture.fetch, {
       log: () => undefined,
     });
-    expect(target.scrollIntoView).toHaveBeenCalledOnce();
-    expect(scheduled).toHaveLength(0);
+    await flushPoll(fixture.scheduled);
+
+    expect(fixture.newResponse.hidden).toBe(true);
+  });
+
+  it("shows the banner for an appended response below the readable area", async () => {
+    const fixture = pendingResponseFixture({ responseTop: 550 });
+    new Function(
+      "document",
+      "window",
+      "fetch",
+      "console",
+      conversationPollClientScript,
+    )(fixture.document, fixture.window, fixture.fetch, {
+      log: () => undefined,
+    });
+    await flushPoll(fixture.scheduled);
+
+    expect(fixture.newResponse.hidden).toBe(false);
+    expect(fixture.newResponse.style.bottom).toBe("116px");
+  });
+
+  it("permanently dismisses a pending response after its beginning becomes visible", async () => {
+    const fixture = pendingResponseFixture({ responseTop: 550 });
+    new Function(
+      "document",
+      "window",
+      "fetch",
+      "console",
+      conversationPollClientScript,
+    )(fixture.document, fixture.window, fixture.fetch, {
+      log: () => undefined,
+    });
+    await flushPoll(fixture.scheduled);
+
+    fixture.responseTop(300);
+    fixture.scrollListeners[0]!();
+    expect(fixture.newResponse.hidden).toBe(true);
+
+    fixture.responseTop(700);
+    fixture.scrollListeners[0]!();
+    expect(fixture.newResponse.hidden).toBe(true);
+  });
+
+  it("scrolls from the banner to the pending response with breathing room above it", async () => {
+    const fixture = pendingResponseFixture({ responseTop: 550 });
+    new Function(
+      "document",
+      "window",
+      "fetch",
+      "console",
+      conversationPollClientScript,
+    )(fixture.document, fixture.window, fixture.fetch, {
+      log: () => undefined,
+    });
+    await flushPoll(fixture.scheduled);
+
+    fixture.click();
+
+    expect(fixture.newResponse.hidden).toBe(true);
+    expect(fixture.window.scrollTo).toHaveBeenLastCalledWith({
+      top: 626,
+      behavior: "smooth",
+    });
+    expect(fixture.landing.scrollIntoView).toHaveBeenCalledOnce();
+  });
+
+  it("does not show the response banner for a non-assistant append", async () => {
+    const fixture = pendingResponseFixture({ responseTop: 550, role: "user" });
+    new Function(
+      "document",
+      "window",
+      "fetch",
+      "console",
+      conversationPollClientScript,
+    )(fixture.document, fixture.window, fixture.fetch, {
+      log: () => undefined,
+    });
+    await flushPoll(fixture.scheduled);
+
+    expect(fixture.newResponse.hidden).toBe(true);
+  });
+
+  it("follows an appended assistant response when the reader is near the bottom", async () => {
+    const fixture = pendingResponseFixture({ responseTop: 550 });
+    fixture.window.scrollY = 1_300;
+    new Function(
+      "document",
+      "window",
+      "fetch",
+      "console",
+      conversationPollClientScript,
+    )(fixture.document, fixture.window, fixture.fetch, {
+      log: () => undefined,
+    });
+    await flushPoll(fixture.scheduled);
+
+    expect(fixture.landing.scrollIntoView).toHaveBeenCalledTimes(2);
+    expect(fixture.newResponse.hidden).toBe(true);
+  });
+
+  it("keeps the banner hidden when a completed conversation is opened", () => {
+    const fixture = pendingResponseFixture({
+      responseTop: 550,
+      polling: false,
+      initialBannerHidden: false,
+    });
+    new Function(
+      "document",
+      "window",
+      "fetch",
+      "console",
+      conversationPollClientScript,
+    )(fixture.document, fixture.window, fixture.fetch, {
+      log: () => undefined,
+    });
+
+    expect(fixture.newResponse.hidden).toBe(true);
+    expect(fixture.scheduled).toHaveLength(0);
   });
 
   it("continues polling after a failed request", async () => {
@@ -434,8 +474,7 @@ describe("conversation polling client", () => {
       "console",
       conversationPollClientScript,
     )(document, window, fetch, { log: () => undefined });
-    scheduled[0]!();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await flushPoll(scheduled);
 
     expect(scheduled).toHaveLength(2);
   });

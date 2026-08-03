@@ -15,7 +15,10 @@ export const conversationPollClientScript = `(function () {
   var startedAt = Date.now();
   var delay = 2000;
   var nearBottomThreshold = 160;
+  var responseSeenDepth = 96;
+  var responseClickOffset = 24;
   var statusKey = status && status.getAttribute("data-status-key");
+  var unseenResponse = null;
   function log(message, detail) {
     detail = detail || {};
     detail.message = message;
@@ -79,7 +82,21 @@ export const conversationPollClientScript = `(function () {
     var rect = anchor.element.getBoundingClientRect();
     window.scrollTo(scrollX, scrollY + rect.top - anchor.top);
   }
-  function showNewResponse() {
+  function responseId(response) {
+    return response && response.getAttribute && response.getAttribute("data-message-id");
+  }
+  function readableBottom() {
+    var composer = document.querySelector && document.querySelector(".composer");
+    if (composer && composer.getBoundingClientRect) return composer.getBoundingClientRect().top;
+    return window.innerHeight;
+  }
+  function responseIsSeen(response) {
+    if (!response || !response.getBoundingClientRect) return false;
+    var rect = response.getBoundingClientRect();
+    var seenDepth = Math.min(responseSeenDepth, rect.height);
+    return rect.top >= 0 && rect.top + seenDepth <= readableBottom();
+  }
+  function showNewResponse(reason) {
     if (!newResponse) return;
     var composer = document.querySelector && document.querySelector(".composer");
     var offset = 16;
@@ -87,7 +104,42 @@ export const conversationPollClientScript = `(function () {
       offset += Math.max(0, Math.round(composer.getBoundingClientRect().height));
     }
     newResponse.style.bottom = offset + "px";
+    if (!newResponse.hidden) return;
     newResponse.hidden = false;
+    log("conversation_new_response_shown", {
+      responseId: responseId(unseenResponse),
+      reason: reason
+    });
+  }
+  function dismissNewResponse(reason) {
+    if (!unseenResponse) return;
+    var response = unseenResponse;
+    unseenResponse = null;
+    if (newResponse) newResponse.hidden = true;
+    log("conversation_new_response_dismissed", {
+      responseId: responseId(response),
+      reason: reason
+    });
+  }
+  function evaluateNewResponse(reason) {
+    if (!unseenResponse) return;
+    if (responseIsSeen(unseenResponse)) dismissNewResponse("visible");
+    else showNewResponse(reason);
+  }
+  function scrollToNewResponse() {
+    if (!unseenResponse) return;
+    var response = unseenResponse;
+    dismissNewResponse("new_response_control");
+    var rect = response.getBoundingClientRect();
+    window.scrollTo({
+      top: Math.max(0, window.scrollY + rect.top - responseClickOffset),
+      behavior: "smooth"
+    });
+    log("conversation_positioned", {
+      reason: "new_response_control",
+      target: "new-response",
+      responseId: responseId(response)
+    });
   }
   function reconcile(state) {
     var scrollX = window.scrollX;
@@ -96,6 +148,7 @@ export const conversationPollClientScript = `(function () {
     var anchor = follow ? null : readingAnchor();
     var changedMessages = 0;
     var appended = false;
+    var appendedAssistant = null;
     var changed = false;
     for (var i = 0; i < state.messages.length; i += 1) {
       var update = state.messages[i];
@@ -106,6 +159,7 @@ export const conversationPollClientScript = `(function () {
       if (current) current.replaceWith(next); else {
         messages.appendChild(next);
         appended = true;
+        if (next.matches && next.matches(".message.assistant")) appendedAssistant = next;
       }
       changedMessages += 1;
       changed = true;
@@ -124,7 +178,10 @@ export const conversationPollClientScript = `(function () {
         outcome = "followed";
       } else {
         preserveAnchor(anchor, scrollX, scrollY);
-        showNewResponse();
+        if (appendedAssistant) {
+          unseenResponse = appendedAssistant;
+          evaluateNewResponse("appended");
+        }
         outcome = "preserved";
       }
     } else if (changed) window.scrollTo(scrollX, scrollY);
@@ -154,7 +211,9 @@ export const conversationPollClientScript = `(function () {
   }
   if (!stateUrl || !messages || !status || !controls) return;
   if (newResponse && newResponse.addEventListener)
-    newResponse.addEventListener("click", function () { jumpToCurrent("new_response_control"); });
+    newResponse.addEventListener("click", scrollToNewResponse);
+  if (window.addEventListener)
+    window.addEventListener("scroll", function () { evaluateNewResponse("scroll"); });
   jumpToCurrent("initial");
   log("conversation_poll_initialized", { stateUrl: stateUrl, polling: polling, nearBottomThreshold: nearBottomThreshold });
   if (polling) window.setTimeout(poll, delay);
