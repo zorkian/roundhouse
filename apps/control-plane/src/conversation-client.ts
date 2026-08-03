@@ -6,12 +6,15 @@
 export const conversationPollClientScript = `(function () {
   var script = document.currentScript;
   var stateUrl = script && script.getAttribute("data-state-url");
+  var polling = script && script.getAttribute("data-polling") === "true";
   var messages = document.getElementById("conversation-messages");
   var status = document.getElementById("conversation-status");
   var controls = document.getElementById("conversation-controls");
   var live = document.getElementById("conversation-live-status");
+  var newResponse = document.getElementById("conversation-new-response");
   var startedAt = Date.now();
   var delay = 2000;
+  var nearBottomThreshold = 160;
   var statusKey = status && status.getAttribute("data-status-key");
   function log(message, detail) {
     detail = detail || {};
@@ -37,10 +40,62 @@ export const conversationPollClientScript = `(function () {
     region.setAttribute("data-version", update.version);
     return true;
   }
+  function landingTarget() {
+    var names = ["delivery", "brief", "working", "composer"];
+    for (var i = 0; i < names.length; i += 1) {
+      var target = document.querySelector && document.querySelector('[data-conversation-landing="' + names[i] + '"]');
+      if (target) return target;
+    }
+    return messages && messages.lastElementChild;
+  }
+  function jumpToCurrent(reason) {
+    var target = landingTarget();
+    if (target && target.scrollIntoView) target.scrollIntoView({ block: "end" });
+    if (newResponse) newResponse.hidden = true;
+    log("conversation_positioned", {
+      reason: reason,
+      target: target && target.getAttribute ? target.getAttribute("data-conversation-landing") || "latest-message" : "none"
+    });
+  }
+  function nearBottom() {
+    var root = document.documentElement;
+    var body = document.body;
+    var height = Math.max(root ? root.scrollHeight : 0, body ? body.scrollHeight : 0);
+    return height - (window.scrollY + window.innerHeight) <= nearBottomThreshold;
+  }
+  function readingAnchor() {
+    var children = messages ? messages.children : [];
+    for (var i = 0; i < children.length; i += 1) {
+      var rect = children[i].getBoundingClientRect && children[i].getBoundingClientRect();
+      if (rect && rect.bottom > 0) return { element: children[i], top: rect.top };
+    }
+    return null;
+  }
+  function preserveAnchor(anchor, scrollX, scrollY) {
+    if (!anchor || !anchor.element.getBoundingClientRect) {
+      window.scrollTo(scrollX, scrollY);
+      return;
+    }
+    var rect = anchor.element.getBoundingClientRect();
+    window.scrollTo(scrollX, scrollY + rect.top - anchor.top);
+  }
+  function showNewResponse() {
+    if (!newResponse) return;
+    var composer = document.querySelector && document.querySelector(".composer");
+    var offset = 16;
+    if (composer && composer.getBoundingClientRect) {
+      offset += Math.max(0, Math.round(composer.getBoundingClientRect().height));
+    }
+    newResponse.style.bottom = offset + "px";
+    newResponse.hidden = false;
+  }
   function reconcile(state) {
     var scrollX = window.scrollX;
     var scrollY = window.scrollY;
+    var follow = nearBottom();
+    var anchor = follow ? null : readingAnchor();
     var changedMessages = 0;
+    var appended = false;
     var changed = false;
     for (var i = 0; i < state.messages.length; i += 1) {
       var update = state.messages[i];
@@ -48,7 +103,10 @@ export const conversationPollClientScript = `(function () {
       if (current && current.getAttribute("data-version") === update.version) continue;
       var next = element(update.html);
       if (!next) continue;
-      if (current) current.replaceWith(next); else messages.appendChild(next);
+      if (current) current.replaceWith(next); else {
+        messages.appendChild(next);
+        appended = true;
+      }
       changedMessages += 1;
       changed = true;
     }
@@ -59,12 +117,23 @@ export const conversationPollClientScript = `(function () {
       statusKey = state.status.key;
       if (live) live.textContent = state.status.announcement;
     }
-    if (changed) window.scrollTo(scrollX, scrollY);
+    var outcome;
+    if (appended) {
+      if (follow) {
+        jumpToCurrent("update");
+        outcome = "followed";
+      } else {
+        preserveAnchor(anchor, scrollX, scrollY);
+        showNewResponse();
+        outcome = "preserved";
+      }
+    } else if (changed) window.scrollTo(scrollX, scrollY);
     log("conversation_poll_updated", {
       changedMessages: changedMessages,
       statusChanged: statusChanged,
       controlsChanged: controlsChanged,
-      polling: state.polling
+      polling: state.polling,
+      outcome: outcome
     });
   }
   function poll() {
@@ -84,7 +153,10 @@ export const conversationPollClientScript = `(function () {
       });
   }
   if (!stateUrl || !messages || !status || !controls) return;
-  log("conversation_poll_initialized", { stateUrl: stateUrl });
-  window.setTimeout(poll, delay);
+  if (newResponse && newResponse.addEventListener)
+    newResponse.addEventListener("click", function () { jumpToCurrent("new_response_control"); });
+  jumpToCurrent("initial");
+  log("conversation_poll_initialized", { stateUrl: stateUrl, polling: polling, nearBottomThreshold: nearBottomThreshold });
+  if (polling) window.setTimeout(poll, delay);
 })();
 `;
