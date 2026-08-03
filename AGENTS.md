@@ -9,13 +9,14 @@ inventing new ones.
 
 ### Node version (important gotcha)
 
-The repo requires Node 24 (`.node-version` pins `24.18.0`), but the VM's default
-`node` on `PATH` (`/exec-daemon/node`) is v22 and is a sandbox-internal binary
-that must not be modified. Node 24 is installed via `nvm`, and the interactive
-login shell (`~/.bashrc`) is configured to prepend it to `PATH`. Run tooling
-through a login shell so you get Node 24 — e.g. `bash -lc 'pnpm check'` — or
-otherwise confirm `node --version` reports `v24.x` before running builds/tests.
-Plain non-login shells may still resolve the v22 binary first.
+The repo requires Node 24 (`.node-version` pins `24.18.0`). Cloud VMs also
+ship `/exec-daemon/node` (v22); that binary must not be modified. Node 24 is
+installed via `nvm`, and `~/.bashrc` prepends it to `PATH`. Agent shells
+usually already inherit that — **do not wrap every command in `bash -lc`**.
+
+Before builds/tests, confirm once with `node --version` (`v24.x`). If a shell
+still resolves v22, fix `PATH` (or start a login shell that sources
+`~/.bashrc`) and continue with plain commands like `pnpm check`.
 
 ### There is no local dev server
 
@@ -86,27 +87,27 @@ Prefer GitHub Actions first, then corroborate with wrangler if needed.
 
 ```bash
 # Recent CI runs (merge deploys and PR checks both appear as pull_request)
-bash -lc 'gh run list --workflow=ci.yml --limit 20'
+gh run list --workflow=ci.yml --limit 20
 
 # Inspect a run: Deploy development is success on merge deploys, often
 # skipped on ordinary PR checks
-bash -lc 'gh run view <run-id> --json jobs,displayTitle,conclusion,url,headBranch,createdAt \
-  --jq "{title: .displayTitle, conclusion, url, branch: .headBranch, createdAt, jobs: [.jobs[] | {name, conclusion, status, completedAt}]}"'
+gh run view <run-id> --json jobs,displayTitle,conclusion,url,headBranch,createdAt \
+  --jq '{title: .displayTitle, conclusion, url, branch: .headBranch, createdAt, jobs: [.jobs[] | {name, conclusion, status, completedAt}]}'
 
 # Failed job logs
-bash -lc 'gh run view <run-id> --log-failed'
+gh run view <run-id> --log-failed
 
 # Recent merges into main (what should have triggered deploy)
-bash -lc 'gh pr list --state merged --base main --limit 10'
+gh pr list --state merged --base main --limit 10
 ```
 
 Cross-check the live Worker version timestamps:
 
 ```bash
-bash -lc 'pnpm exec wrangler deployments status --config apps/control-plane/wrangler.jsonc'
-bash -lc 'pnpm exec wrangler deployments list --config apps/control-plane/wrangler.jsonc'
-bash -lc 'pnpm exec wrangler deployments status --config apps/runtime-host/wrangler.jsonc'
-bash -lc 'pnpm exec wrangler deployments status --config apps/model-broker/wrangler.jsonc'
+pnpm exec wrangler deployments status --config apps/control-plane/wrangler.jsonc
+pnpm exec wrangler deployments list --config apps/control-plane/wrangler.jsonc
+pnpm exec wrangler deployments status --config apps/runtime-host/wrangler.jsonc
+pnpm exec wrangler deployments status --config apps/model-broker/wrangler.jsonc
 ```
 
 A successful merge deploy should show a **Deploy development** job conclusion
@@ -119,27 +120,27 @@ should be at or after that job's completion.
 **not** on global `PATH`; invoke it via `pnpm exec wrangler` or the `pnpm
 deploy:development*` scripts. Auth in this Cloud environment is typically an
 Account API Token from `CLOUDFLARE_API_TOKEN` (confirm with `pnpm exec
-wrangler whoami`). Always use a login shell so Node 24 is first on `PATH`.
+wrangler whoami`).
 
 Useful read-oriented commands:
 
 ```bash
-bash -lc 'pnpm exec wrangler whoami'
+pnpm exec wrangler whoami
 
 # Live logs (Ctrl-C / kill when done; use --format=json for scraping)
-bash -lc 'pnpm exec wrangler tail --config apps/control-plane/wrangler.jsonc --format=json'
-bash -lc 'pnpm exec wrangler tail --config apps/control-plane/wrangler.jsonc --status=error'
-bash -lc 'pnpm exec wrangler tail --config apps/runtime-host/wrangler.jsonc --format=json'
-bash -lc 'pnpm exec wrangler tail --config apps/model-broker/wrangler.jsonc --format=json'
+pnpm exec wrangler tail --config apps/control-plane/wrangler.jsonc --format=json
+pnpm exec wrangler tail --config apps/control-plane/wrangler.jsonc --status=error
+pnpm exec wrangler tail --config apps/runtime-host/wrangler.jsonc --format=json
+pnpm exec wrangler tail --config apps/model-broker/wrangler.jsonc --format=json
 
 # Remote D1 (read-only SELECTs preferred unless the user asked for a write)
-bash -lc 'pnpm exec wrangler d1 execute roundhouse-v2-development --remote \
+pnpm exec wrangler d1 execute roundhouse-v2-development --remote \
   --config apps/control-plane/wrangler.jsonc \
-  --command "SELECT id, status, stage, current_node_id, updated_at FROM runs ORDER BY updated_at DESC LIMIT 20;"'
+  --command "SELECT id, status, stage, current_node_id, updated_at FROM runs ORDER BY updated_at DESC LIMIT 20;"
 
-bash -lc 'pnpm exec wrangler d1 execute roundhouse-v2-development --remote \
+pnpm exec wrangler d1 execute roundhouse-v2-development --remote \
   --config apps/control-plane/wrangler.jsonc \
-  --command "SELECT id, status, updated_at FROM conversations ORDER BY updated_at DESC LIMIT 20;"'
+  --command "SELECT id, status, updated_at FROM conversations ORDER BY updated_at DESC LIMIT 20;"
 ```
 
 Schema for those tables lives under `apps/control-plane/migrations/`.
@@ -187,8 +188,8 @@ install script should only ensure the CLI is present; regenerating on every
 build dirties the reused git checkout. Recommended install snippet:
 
 ```bash
-bash -lc "corepack enable"
-bash -lc "pnpm install --frozen-lockfile"
+corepack enable
+pnpm install --frozen-lockfile
 
 # Graphify CLI only — graph artifacts are committed in-repo
 if ! command -v uv >/dev/null 2>&1; then
