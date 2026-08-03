@@ -1135,7 +1135,7 @@ export const implementationSchema = Object.freeze({
   },
   allOf: [
     {
-      if: { properties: { visualImpact: { const: "yes" } } },
+      if: { properties: { visualImpact: { enum: ["yes", "uncertain"] } } },
       then: { properties: { screenshots: { minItems: 2 } } },
     },
   ],
