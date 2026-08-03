@@ -79,13 +79,23 @@ export const conversationPollClientScript = `(function () {
     var rect = anchor.element.getBoundingClientRect();
     window.scrollTo(scrollX, scrollY + rect.top - anchor.top);
   }
+  function showNewResponse() {
+    if (!newResponse) return;
+    var composer = document.querySelector && document.querySelector(".composer");
+    var offset = 16;
+    if (composer && composer.getBoundingClientRect) {
+      offset += Math.max(0, Math.round(composer.getBoundingClientRect().height));
+    }
+    newResponse.style.bottom = offset + "px";
+    newResponse.hidden = false;
+  }
   function reconcile(state) {
     var scrollX = window.scrollX;
     var scrollY = window.scrollY;
     var follow = nearBottom();
     var anchor = follow ? null : readingAnchor();
     var changedMessages = 0;
-    var appendedAssistant = false;
+    var appended = false;
     var changed = false;
     for (var i = 0; i < state.messages.length; i += 1) {
       var update = state.messages[i];
@@ -95,7 +105,7 @@ export const conversationPollClientScript = `(function () {
       if (!next) continue;
       if (current) current.replaceWith(next); else {
         messages.appendChild(next);
-        appendedAssistant = appendedAssistant || update.html.indexOf('class="message assistant"') !== -1;
+        appended = true;
       }
       changedMessages += 1;
       changed = true;
@@ -108,13 +118,13 @@ export const conversationPollClientScript = `(function () {
       if (live) live.textContent = state.status.announcement;
     }
     var outcome;
-    if (appendedAssistant) {
+    if (appended) {
       if (follow) {
         jumpToCurrent("update");
         outcome = "followed";
       } else {
         preserveAnchor(anchor, scrollX, scrollY);
-        if (newResponse) newResponse.hidden = false;
+        showNewResponse();
         outcome = "preserved";
       }
     } else if (changed) window.scrollTo(scrollX, scrollY);

@@ -269,11 +269,15 @@ describe("conversation polling client", () => {
     let click: (() => void) | undefined;
     const newResponse = {
       hidden: true,
+      style: { bottom: "1rem" },
       addEventListener: (_event: string, handler: () => void) => {
         click = handler;
       },
     };
     const target = { getAttribute: () => "composer", scrollIntoView: vi.fn() };
+    const composer = {
+      getBoundingClientRect: () => ({ height: 220 }),
+    };
     const scheduled: (() => void)[] = [];
     const document = {
       currentScript: {
@@ -286,7 +290,8 @@ describe("conversation polling client", () => {
       },
       documentElement: { scrollHeight: 2_000 },
       body: { scrollHeight: 0 },
-      querySelector: () => target,
+      querySelector: (selector: string) =>
+        selector === ".composer" ? composer : target,
       getElementById: (id: string) => {
         if (id === "conversation-new-response") return newResponse;
         const elements: Record<string, Region> = {
@@ -312,9 +317,9 @@ describe("conversation polling client", () => {
       json: async () => ({
         messages: [
           {
-            id: "assistant",
-            version: "assistant-version",
-            html: '<article class="message assistant" data-message-id="assistant"></article>',
+            id: "user",
+            version: "user-version",
+            html: '<article class="message user" data-message-id="user"></article>',
           },
         ],
         status: {
@@ -340,6 +345,7 @@ describe("conversation polling client", () => {
 
     expect(window.scrollTo).toHaveBeenCalledWith(0, 120);
     expect(newResponse.hidden).toBe(false);
+    expect(newResponse.style.bottom).toBe("236px");
     click!();
     expect(newResponse.hidden).toBe(true);
     expect(target.scrollIntoView).toHaveBeenCalledTimes(2);
