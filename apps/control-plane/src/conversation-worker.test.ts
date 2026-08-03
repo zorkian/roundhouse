@@ -180,7 +180,7 @@ describe("conversation Queue worker", () => {
       "CREATE TABLE repositories (id TEXT PRIMARY KEY, github_id TEXT NOT NULL UNIQUE, profile_version TEXT NOT NULL, profile_json TEXT NOT NULL, created_at INTEGER NOT NULL)",
     );
     sqlite.exec(
-      "CREATE TABLE work_items (id TEXT PRIMARY KEY, repository_id TEXT NOT NULL); CREATE TABLE runs (id TEXT PRIMARY KEY, work_item_id TEXT NOT NULL); CREATE TABLE attempts (id TEXT PRIMARY KEY, run_id TEXT NOT NULL); CREATE TABLE model_usage (call_id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL, model TEXT NOT NULL, provider TEXT, configured_model TEXT, routing_rule TEXT, input_tokens INTEGER, cached_input_tokens INTEGER, cache_creation_input_tokens INTEGER, reasoning_tokens INTEGER, output_tokens INTEGER, total_tokens INTEGER, cost_usd REAL, created_at INTEGER NOT NULL)",
+      "CREATE TABLE work_items (id TEXT PRIMARY KEY, repository_id TEXT NOT NULL); CREATE TABLE runs (id TEXT PRIMARY KEY, work_item_id TEXT NOT NULL, status TEXT NOT NULL); CREATE TABLE attempts (id TEXT PRIMARY KEY, run_id TEXT NOT NULL); CREATE TABLE model_usage (call_id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL, model TEXT NOT NULL, provider TEXT, configured_model TEXT, routing_rule TEXT, input_tokens INTEGER, cached_input_tokens INTEGER, cache_creation_input_tokens INTEGER, reasoning_tokens INTEGER, output_tokens INTEGER, total_tokens INTEGER, cost_usd REAL, created_at INTEGER NOT NULL)",
     );
     sqlite.exec(
       readFileSync(
