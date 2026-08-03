@@ -3,7 +3,11 @@
 
 import type { AppliedProfile } from "@roundhouse/core";
 import { describe, expect, it } from "vitest";
-import { checkpointIdentityExpectation } from "./attempt-runtime.js";
+import {
+  checkpointIdentityExpectation,
+  checkpointIdentityRejection,
+} from "./attempt-runtime.js";
+import { CheckpointRejectedError } from "./callback.js";
 
 describe("attempt runtime checkpoint identity", () => {
   it("uses an integration attempt's selected target instead of the run's original base", () => {
@@ -35,5 +39,21 @@ describe("attempt runtime checkpoint identity", () => {
       profile,
       enforcePathPolicy: false,
     });
+  });
+
+  it("maps permanent identity failures to checkpoint rejections", () => {
+    const rejected = checkpointIdentityRejection(
+      new Error("protected_path_changed"),
+    );
+    expect(rejected).toBeInstanceOf(CheckpointRejectedError);
+    expect(rejected?.status).toBe(422);
+    expect(rejected?.detail).toBe(
+      '{"error":"invalid_checkpoint","detail":"protected_path_changed"}',
+    );
+    expect(checkpointIdentityRejection(new Error("docker_timeout"))).toBe(
+      undefined,
+    );
+    const existing = new CheckpointRejectedError(422, "already");
+    expect(checkpointIdentityRejection(existing)).toBe(existing);
   });
 });
