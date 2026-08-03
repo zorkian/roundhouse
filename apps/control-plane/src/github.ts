@@ -473,6 +473,44 @@ function visualFeedbackRequest(run: RunSnapshot) {
   };
 }
 
+function visualImpactCommentLines(
+  implementation: Record<string, unknown> | undefined,
+): readonly string[] {
+  const impact = implementation?.visualImpact;
+  const rationale = implementation?.visualImpactRationale;
+  const reason =
+    typeof rationale === "string" && rationale.trim()
+      ? rationale.trim()
+      : "No rationale was provided.";
+  if (impact === "no")
+    return [
+      "",
+      "### Visual impact",
+      `The implementer assessed this pass as having no visual impact: ${reason}`,
+      "Visual approval was skipped and the change moved directly to review.",
+    ];
+  if (impact === "uncertain")
+    return [
+      "",
+      "### Visual impact",
+      `The implementer was uncertain whether this pass has visual impact: ${reason}`,
+      "Operator visual approval is requested because the assessment is uncertain.",
+    ];
+  if (impact === "yes")
+    return [
+      "",
+      "### Visual impact",
+      `The implementer assessed this pass as visually impactful: ${reason}`,
+      "Operator visual approval is requested for the fresh screenshots captured by this pass.",
+    ];
+  return [
+    "",
+    "### Visual impact",
+    "The implementer did not provide a visual-impact assessment.",
+    "Operator visual approval is requested because the assessment is missing.",
+  ];
+}
+
 function implementationComment(
   run: RunSnapshot,
   attempt: Attempt,
@@ -496,6 +534,7 @@ function implementationComment(
         : `## I ${created ? "opened" : "updated"} the draft pull request`,
     "",
     summary,
+    ...visualImpactCommentLines(implementation),
     ...(protectedProposal
       ? [
           "",

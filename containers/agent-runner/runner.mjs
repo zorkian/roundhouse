@@ -1108,6 +1108,8 @@ export const implementationSchema = Object.freeze({
     "pullRequestTitle",
     "pullRequestBody",
     "validation",
+    "visualImpact",
+    "visualImpactRationale",
     "screenshots",
   ],
   properties: {
@@ -1127,33 +1129,20 @@ export const implementationSchema = Object.freeze({
         },
       },
     },
+    visualImpact: { type: "string", enum: ["yes", "no", "uncertain"] },
+    visualImpactRationale: { type: "string" },
     screenshots: screenshotEvidenceSchema,
   },
+  allOf: [
+    {
+      if: { properties: { visualImpact: { enum: ["yes", "uncertain"] } } },
+      then: { properties: { screenshots: { minItems: 2 } } },
+    },
+  ],
 });
 
-export function visualEvidenceRequested(assignment) {
-  if (assignment.context?.visualFeedback) return true;
-  const issue = assignment.issue ?? {};
-  const conversation = Array.isArray(issue.clarifications)
-    ? issue.clarifications
-    : [];
-  return [issue.title, issue.body, ...conversation.map((entry) => entry?.body)]
-    .filter((value) => typeof value === "string")
-    .some((value) => /\bscreenshots?\b/i.test(value));
-}
-
-export function implementationResultSchema(assignment) {
-  if (!visualEvidenceRequested(assignment)) return implementationSchema;
-  return {
-    ...implementationSchema,
-    properties: {
-      ...implementationSchema.properties,
-      screenshots: {
-        ...screenshotEvidenceSchema,
-        minItems: 1,
-      },
-    },
-  };
+export function implementationResultSchema() {
+  return implementationSchema;
 }
 
 const reviewProperties = {
@@ -1877,8 +1866,9 @@ export function implementationPrompt(assignment) {
     "Repository-configured validation commands:",
     JSON.stringify(configuredValidation(assignment)),
     "Run every repository-configured validation command plus any other focused validation needed for this change, and record each command, exit code, and useful output in validation.",
-    "When the issue or conversation asks for a screenshot, that screenshot is a completion requirement. Run the application with its server bound to 0.0.0.0 (not 127.0.0.1 or localhost), use capture_screenshot before submitting, and include every returned screenshot URL and a short description in screenshots. Do not submit an empty screenshots array after a screenshot was requested, even if you also found and fixed a separate code or test problem. Treat a requested visual adjustment as scoped: preserve unrelated visible elements, and compare the relevant UI before and after so moving one element does not silently remove another.",
-    "When Latest maintainer visual feedback is present, treat it as the current instruction for the visual candidate. If the maintainer accepts the design or asks to continue without a visual change, do not modify the candidate: validate it and preserve its screenshot evidence. If the maintainer requests a change, implement only that feedback and capture updated before-and-after screenshots for another visual review. Later review findings or CI diagnostics remain mandatory and take precedence over an earlier visual acceptance; address them and capture updated visual evidence for another approval.",
+    "Classify the current implementation pass's visual impact as yes, no, or uncertain and include a short visualImpactRationale. Make this judgment directly; do not inspect changed files or compare images to decide it. A no assessment means the pass will skip visual approval and proceed to review. Use uncertain if you cannot make a confident judgment; it will request operator visual approval.",
+    "For a yes assessment, capture fresh matching before-and-after screenshots from this isolated workspace and include their URLs and descriptions in screenshots. Use the relevant desktop path and viewport by default; capture mobile when the issue specifically concerns mobile behavior. Do not reuse screenshots from a prior implementation pass. For no or uncertain, return an empty screenshots array unless this pass captured new evidence.",
+    "When Latest maintainer visual feedback is present, treat it as the current instruction for the visual candidate. If the maintainer accepts the design or asks to continue without a visual change, do not modify the candidate. If the maintainer requests a change, implement only that feedback and make a new visual-impact assessment for this pass. Later review findings or CI diagnostics remain mandatory and take precedence over an earlier visual acceptance.",
     "Write a concise pull request title and body for a maintainer. Describe the change and why; do not include validation commands or command output in the pull request body.",
     "Return only the requested structured implementation result.",
   ].join("\n");

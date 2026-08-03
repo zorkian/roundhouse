@@ -1463,7 +1463,7 @@ describe("V2 control plane", () => {
     });
   });
 
-  it("preserves implementation screenshots across repeated fix passes", async () => {
+  it("uses only the latest implementation screenshots across repeated fix passes", async () => {
     const repository = new MemoryRunRepository();
     const initial = workflowRun(
       "run_cumulative_implementation_evidence",
@@ -1549,10 +1549,6 @@ describe("V2 control plane", () => {
           description: "Signed in, still valid",
         },
         {
-          url: "https://example.test/unauthorized",
-          description: "Denied",
-        },
-        {
           url: "https://example.test/signed-out",
           description: "Signed out",
         },
@@ -1562,7 +1558,6 @@ describe("V2 control plane", () => {
       selector: "nodes.implement.implementation",
       present: true,
       sourceAttemptId: latest.id,
-      sourceAttemptIds: [first.id, latest.id],
       sourceHead: latest.acceptedHead,
     });
   });

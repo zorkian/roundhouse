@@ -266,11 +266,11 @@ describe("workflow graph view", () => {
       (edge) =>
         edge.data["source"] === "implement" &&
         edge.data["target"] === "review" &&
-        edge.data["outcome"] === "accepted head",
+        edge.data["outcome"] === "no",
     );
     expect(forward?.data).toMatchObject({
       route: "forward",
-      outcome: "accepted head",
+      outcome: "no",
     });
   });
 

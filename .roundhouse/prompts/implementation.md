@@ -24,7 +24,6 @@ shared development or production deployment.
 When working on Roundhouse itself, do not start Wrangler's local Worker or D1
 runtime merely to capture visual evidence; that runtime does not complete in
 the agent sandbox. Use deterministic test fixtures with the actual candidate
-renderer. If a review asks only for visual evidence and the rendered
-application has not changed since valid screenshots were captured, inspect the
-issue and pull-request history and reuse that evidence instead of recreating
-it.
+renderer. Capture fresh evidence for each implementation pass that judges its
+current changes to have visual impact; do not reuse earlier pass screenshots as
+current-pass evidence.

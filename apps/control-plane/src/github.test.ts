@@ -2443,6 +2443,8 @@ describe("GitHub intake", () => {
       result: {
         implementation: {
           summary: "Empty input now returns an empty list.",
+          visualImpact: "no",
+          visualImpactRationale: "Only parser behavior changed.",
           pullRequestTitle: "Handle empty input",
           pullRequestBody: "Fixes the empty-input behavior described in #42.",
           validation: [{ command: "pnpm test", exitCode: 0, output: "passed" }],
@@ -2478,6 +2480,9 @@ describe("GitHub intake", () => {
     expect(JSON.stringify(post.mock.calls)).not.toContain("passed");
     expect(JSON.stringify(post.mock.calls)).toContain(
       "![Empty  state  view](https://roundhouse-dev.rm-rf.rip/screenshots/example)",
+    );
+    expect(JSON.stringify(post.mock.calls)).toContain(
+      "Visual approval was skipped and the change moved directly to review.",
     );
   });
 
@@ -2634,6 +2639,8 @@ describe("GitHub intake", () => {
         result: {
           implementation: {
             summary: "Adjusted the mobile layout.",
+            visualImpact: "yes",
+            visualImpactRationale: "The mobile layout changed.",
             pullRequestTitle: "Adjust mobile layout",
             pullRequestBody: "Improves the mobile layout.",
             validation: [],
@@ -2657,6 +2664,9 @@ describe("GitHub intake", () => {
     expect(comment).toContain("## Please review the visual change");
     expect(comment).toContain("![Before]");
     expect(comment).toContain("![After]");
+    expect(comment).toContain(
+      "The implementer assessed this pass as visually impactful",
+    );
     expect(comment).toContain(
       "Compare the before-and-after screenshots. Reply with changes or say the result looks right.",
     );

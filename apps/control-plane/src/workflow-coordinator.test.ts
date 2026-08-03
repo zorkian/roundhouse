@@ -91,7 +91,13 @@ describe("workflow-backed coordinator transitions", () => {
               : attempt.stage === "plan"
                 ? { plan: { status: "ready" } }
                 : attempt.stage === "implement"
-                  ? { implementation: { summary: "Implemented" } }
+                  ? {
+                      implementation: {
+                        summary: "Implemented",
+                        visualImpact: "no",
+                        visualImpactRationale: "No rendered behavior changed.",
+                      },
+                    }
                   : attempt.stage === "integrate"
                     ? {
                         integration: {
