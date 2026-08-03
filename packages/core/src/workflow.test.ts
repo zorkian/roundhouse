@@ -239,6 +239,17 @@ nodes:
       advanceWorkflow(workflow, "implement", {
         attempt: {
           changed: true,
+          hasScreenshots: true,
+          acceptedHead: "b".repeat(40),
+          protectedPathProposal: true,
+        },
+        run: { hasCandidate: false },
+      }),
+    ).toMatchObject({ status: "succeeded", currentNodeId: "implement" });
+    expect(
+      advanceWorkflow(workflow, "implement", {
+        attempt: {
+          changed: true,
           hasScreenshots: false,
           acceptedHead: "b".repeat(40),
           protectedPathProposal: true,

@@ -465,13 +465,13 @@
     "semantic_hash": "e3869483ecb8fe82364da5250783ef28"
   },
   "packages/core/src/workflow.test.ts": {
-    "mtime": 1785734826.3957636,
-    "ast_hash": "5466708ae92eb7d9292250ac0456f37b",
+    "mtime": 1785735435.7529142,
+    "ast_hash": "d611fcac9cf9804db3d670aa11269cc6",
     "semantic_hash": ""
   },
   "packages/core/src/workflow.ts": {
-    "mtime": 1785734743.6802177,
-    "ast_hash": "2254191130f8e1be8bb50ea3d9f4bf39",
+    "mtime": 1785735435.7689142,
+    "ast_hash": "adfa589080c27d7acc6def81ac239ac3",
     "semantic_hash": ""
   },
   "packages/core/tsconfig.json": {
@@ -590,8 +590,8 @@
     "semantic_hash": ""
   },
   ".roundhouse/workflow.yaml": {
-    "mtime": 1785734743.6562178,
-    "ast_hash": "5d3381087861868d1e45a8c4826b7101",
+    "mtime": 1785735435.7569141,
+    "ast_hash": "84850cfbdefa0d7df5d986529d5a2bd5",
     "semantic_hash": ""
   },
   "AGENTS.md": {
