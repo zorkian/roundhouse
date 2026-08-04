@@ -343,6 +343,33 @@ describe("conversation UI", () => {
     expect(html).not.toContain("<script>alert(1)</script>");
   });
 
+  it("renders the only activity status in the polling region and links the pinned commit", () => {
+    const html = renderConversation(base, "octocat");
+    const conversationHeaderStart = html.indexOf(
+      '<header class="conversation-header">',
+    );
+    const conversationHeader = html.slice(
+      conversationHeaderStart,
+      html.indexOf("</header>", conversationHeaderStart),
+    );
+    const statusRegion = html.slice(
+      html.indexOf('<div id="conversation-status"'),
+      html.indexOf('<section id="conversation-messages">'),
+    );
+
+    expect(html.match(/<span class="status [^"]+">/g)).toHaveLength(1);
+    expect(statusRegion).toContain(
+      '<span class="status waiting">Waiting for your response</span>',
+    );
+    expect(conversationHeader).not.toContain('class="status');
+    expect(conversationHeader).toContain(
+      '<span class="readonly">Read only</span>',
+    );
+    expect(html).toContain(
+      `<a href="https://github.com/octo/project/commit/${base.sourceCommit}"><code>aaaaaaaaaaaa</code></a>`,
+    );
+  });
+
   it("marks each state-relevant landing region while keeping messages chronological", () => {
     const assistant = {
       ...base.messages[0]!,
