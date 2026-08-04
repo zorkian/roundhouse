@@ -261,6 +261,37 @@ nodes:
     ).toMatchObject({ status: "succeeded", currentNodeId: "implement" });
   });
 
+  it("routes visual-feedback adjudication to review, implement, or re-ask", async () => {
+    const workflow = await compileWorkflow(defaultIssueWorkflowSource, commit);
+    expect(workflow.nodes.adjudicate?.agent).toMatchObject({
+      task: "adjudication",
+      result: {
+        key: "adjudication",
+        schema: "roundhouse.adjudication.v1",
+      },
+    });
+    expect(
+      advanceWorkflow(workflow, "approval", {
+        output: { human: { status: "answered", body: "LGTM" } },
+      }),
+    ).toMatchObject({ status: "active", currentNodeId: "adjudicate" });
+    expect(
+      advanceWorkflow(workflow, "adjudicate", {
+        output: { adjudication: { decision: "accepted" } },
+      }),
+    ).toMatchObject({ status: "active", currentNodeId: "review" });
+    expect(
+      advanceWorkflow(workflow, "adjudicate", {
+        output: { adjudication: { decision: "changes_requested" } },
+      }),
+    ).toMatchObject({ status: "active", currentNodeId: "implement" });
+    expect(
+      advanceWorkflow(workflow, "adjudicate", {
+        output: { adjudication: { decision: "unclear" } },
+      }),
+    ).toMatchObject({ status: "active", currentNodeId: "approval" });
+  });
+
   it("snapshots repository-selected prompt, model, branch, and return edge", async () => {
     const configured = source
       .replace(

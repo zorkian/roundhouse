@@ -68,6 +68,8 @@ export function workflowNodeSummary(node: WorkflowNode): string {
       return "Creates an implementation plan from the issue and evidence.";
     if (node.agent.task === "implementation")
       return "Implements and validates the planned change.";
+    if (node.agent.task === "adjudication")
+      return "Classifies operator visual feedback as acceptance, changes, or unclear.";
   }
   if (node.review)
     return `Coordinates up to ${node.review.reviewers.length} configured reviewer${node.review.reviewers.length === 1 ? "" : "s"}.`;

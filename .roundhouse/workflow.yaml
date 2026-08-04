@@ -149,9 +149,8 @@ nodes:
           path: attempt.protectedPathProposal
           equals: true
         terminal: succeeded
-      # An unchanged candidate has nothing new to approve. After operator
-      # acceptance the implementer often reassesses the same visual feature as
-      # yes; skip re-gating and continue to review.
+      # An unchanged candidate has nothing new to approve. Later fix passes
+      # that leave the head untouched skip re-gating and continue to review.
       - when:
           all:
             - exists: attempt.acceptedHead
@@ -182,7 +181,40 @@ nodes:
       - when:
           path: output.human.status
           equals: answered
+        to: adjudicate
+      - terminal: failed
+
+  adjudicate:
+    executor: agent.read
+    role: adjudicate
+    agent:
+      task: adjudication
+      inputs:
+        visualFeedback: nodes.approval.human
+      result:
+        key: adjudication
+        schema: roundhouse.adjudication.v1
+      model:
+        id: openai/gpt-5.6-luna
+        reasoning: low
+      prompt: prompts/adjudication.md
+    capabilities:
+      - context.read
+    outputs:
+      - adjudication.decision
+    transitions:
+      - when:
+          path: output.adjudication.decision
+          equals: accepted
+        to: review
+      - when:
+          path: output.adjudication.decision
+          equals: changes_requested
         to: implement
+      - when:
+          path: output.adjudication.decision
+          equals: unclear
+        to: approval
       - terminal: failed
 
   review:

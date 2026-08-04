@@ -227,17 +227,33 @@ describe("workflow graph view", () => {
       route: "self",
       outcome: "needs resolution",
     });
-    const approvalReturn = edges.find(
+    const approvalForward = edges.find(
       (edge) =>
         edge.data["source"] === "approval" &&
+        edge.data["target"] === "adjudicate",
+    );
+    expect(approvalForward?.data).toMatchObject({
+      route: "forward",
+      outcome: "answered",
+    });
+    const adjudicateAccept = edges.find(
+      (edge) =>
+        edge.data["source"] === "adjudicate" &&
+        edge.data["target"] === "review" &&
+        edge.data["outcome"] === "accepted",
+    );
+    expect(adjudicateAccept?.data).toMatchObject({
+      outcome: "accepted",
+    });
+    expect(adjudicateAccept?.data["route"]).toMatch(/^(forward|return)$/);
+    const adjudicateChanges = edges.find(
+      (edge) =>
+        edge.data["source"] === "adjudicate" &&
         edge.data["target"] === "implement",
     );
-    expect(approvalReturn?.data).toMatchObject({
+    expect(adjudicateChanges?.data).toMatchObject({
       route: "return",
-      outcome: "answered",
-      returnSide: "left",
-      returnLane: "1",
-      returnBend: "-300",
+      outcome: "changes requested",
     });
     const reviewReturn = edges.find(
       (edge) =>
@@ -247,8 +263,6 @@ describe("workflow graph view", () => {
       route: "return",
       outcome: "changes requested",
       returnSide: "right",
-      returnLane: "1",
-      returnBend: "300",
     });
     const integrationReturn = edges.find(
       (edge) =>
@@ -259,8 +273,6 @@ describe("workflow graph view", () => {
       route: "return",
       outcome: "changes requested",
       returnSide: "left",
-      returnLane: "2",
-      returnBend: "-390",
     });
     const forward = edges.find(
       (edge) =>
@@ -288,6 +300,8 @@ describe("workflow graph view", () => {
       plan: "Creates an implementation plan from the issue and evidence.",
       implement: "Implements and validates the planned change.",
       approval: "Waits for visual feedback from an operator.",
+      adjudicate:
+        "Classifies operator visual feedback as acceptance, changes, or unclear.",
       review: "Coordinates up to 3 configured reviewers.",
       integrate:
         "Integrates the reviewed change with the latest target branch.",

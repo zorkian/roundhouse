@@ -213,6 +213,7 @@ function routingRule(role: string): string {
   if (role === "reproduce") return "reproduction-default-v1";
   if (role === "plan") return "planning-default-v1";
   if (role === "implement") return "implementation-default-v1";
+  if (role === "adjudicate") return "adjudication-default-v1";
   if (role === "review") return "review-default-v1";
   return "qualification-default-v1";
 }

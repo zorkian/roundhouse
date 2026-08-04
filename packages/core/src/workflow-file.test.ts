@@ -18,11 +18,16 @@ describe("Roundhouse repository workflow", () => {
       "plan",
       "implement",
       "approval",
+      "adjudicate",
       "review",
       "integrate",
       "checks",
       "merge",
     ]);
+    expect(workflow.nodes.approval?.transitions).toEqual(
+      expect.arrayContaining([expect.objectContaining({ to: "adjudicate" })]),
+    );
+    expect(workflow.nodes.adjudicate?.agent?.task).toBe("adjudication");
     const roundTripped = await compileWorkflow(
       serializeWorkflow(workflow),
       "a".repeat(40),

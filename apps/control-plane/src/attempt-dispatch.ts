@@ -146,6 +146,7 @@ export function attemptContext(parts: {
   readonly reproduction?: unknown;
   readonly plan?: unknown;
   readonly implementation?: unknown;
+  readonly visualFeedback?: unknown;
   readonly holisticSelection?: unknown;
   readonly review?: unknown;
   readonly ci?: unknown;
@@ -155,6 +156,7 @@ export function attemptContext(parts: {
     reproduction,
     plan,
     implementation,
+    visualFeedback,
     holisticSelection,
     review,
     ci,
@@ -164,6 +166,7 @@ export function attemptContext(parts: {
     !reproduction &&
     !plan &&
     !implementation &&
+    !visualFeedback &&
     !review &&
     !ci
   )
@@ -173,6 +176,7 @@ export function attemptContext(parts: {
     ...(reproduction ? { reproduction } : {}),
     ...(plan ? { plan } : {}),
     ...(implementation ? { implementation } : {}),
+    ...(visualFeedback ? { visualFeedback } : {}),
     ...(holisticSelection ? { holisticSelection } : {}),
     ...(review ? { review } : {}),
     ...(ci ? { ci } : {}),
@@ -847,15 +851,27 @@ class SandboxAttemptPreparer {
       attempt.stage === "implement" || attempt.stage === "review"
         ? await this.runs.latestCompletedAttempt(run.id, "plan", run.revision)
         : undefined;
-    const implementationAttempt = ["implement", "review"].includes(
-      attempt.stage,
-    )
+    const implementationAttempt = [
+      "implement",
+      "review",
+      "adjudicate",
+    ].includes(attempt.stage)
       ? await this.runs.latestCompletedAttempt(
           run.id,
           "implement",
           run.revision,
         )
       : undefined;
+    const visualFeedbackAttempt =
+      attempt.stage === "review" ||
+      attempt.stage === "adjudicate" ||
+      attempt.stage === "implement"
+        ? await this.runs.latestCompletedNodeAttempt(
+            run.id,
+            "approval",
+            run.revision,
+          )
+        : undefined;
     const reviewAttempt =
       attempt.stage === "implement" || attempt.role === "conflict-resolution"
         ? await this.runs.latestCompletedAttempt(run.id, "review", run.revision)
@@ -882,6 +898,7 @@ class SandboxAttemptPreparer {
     const reproduction = reproductionAttempt?.result?.reproduction;
     const plan = planAttempt?.result?.plan;
     const implementation = implementationAttempt?.result?.implementation;
+    const visualFeedback = visualFeedbackAttempt?.result?.human;
     const review = reviewAttempt
       ? aggregatedReview(
           reviewAttempts,
@@ -976,6 +993,7 @@ class SandboxAttemptPreparer {
             reproduction,
             plan,
             implementation,
+            visualFeedback,
             holisticSelection,
             review,
             ci,
