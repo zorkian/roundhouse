@@ -351,8 +351,8 @@
       "source_location": "L16",
       "_origin": "ast",
       "id": "apps_control_plane_src_artifacts_artifactrepository",
-      "community": 87,
-      "community_name": "CloudflareArtifactRepository",
+      "community": 20,
+      "community_name": "artifacts.ts",
       "norm_label": "artifactrepository"
     },
     {
@@ -362,8 +362,8 @@
       "source_location": "L23",
       "_origin": "ast",
       "id": "apps_control_plane_src_artifacts_artifactrepository_createtoken",
-      "community": 87,
-      "community_name": "CloudflareArtifactRepository",
+      "community": 20,
+      "community_name": "artifacts.ts",
       "norm_label": ".createtoken()"
     },
     {
@@ -373,8 +373,8 @@
       "source_location": "L27",
       "_origin": "ast",
       "id": "apps_control_plane_src_artifacts_artifactrepository_revoketoken",
-      "community": 87,
-      "community_name": "CloudflareArtifactRepository",
+      "community": 20,
+      "community_name": "artifacts.ts",
       "norm_label": ".revoketoken()"
     },
     {
@@ -384,8 +384,8 @@
       "source_location": "L28",
       "_origin": "ast",
       "id": "apps_control_plane_src_artifacts_artifactrepository_revokeactivetokens",
-      "community": 87,
-      "community_name": "CloudflareArtifactRepository",
+      "community": 20,
+      "community_name": "artifacts.ts",
       "norm_label": ".revokeactivetokens()"
     },
     {
@@ -505,8 +505,8 @@
       "source_location": "L94",
       "_origin": "ast",
       "id": "apps_control_plane_src_artifacts_cloudflareartifactrepository",
-      "community": 87,
-      "community_name": "CloudflareArtifactRepository",
+      "community": 20,
+      "community_name": "artifacts.ts",
       "norm_label": "cloudflareartifactrepository"
     },
     {
@@ -527,8 +527,8 @@
       "source_location": "L124",
       "_origin": "ast",
       "id": "apps_control_plane_src_artifacts_cloudflareartifactrepository_createtoken",
-      "community": 87,
-      "community_name": "CloudflareArtifactRepository",
+      "community": 20,
+      "community_name": "artifacts.ts",
       "norm_label": ".createtoken()"
     },
     {
@@ -549,8 +549,8 @@
       "source_location": "L138",
       "_origin": "ast",
       "id": "apps_control_plane_src_artifacts_cloudflareartifactrepository_revokeactivetokens",
-      "community": 87,
-      "community_name": "CloudflareArtifactRepository",
+      "community": 20,
+      "community_name": "artifacts.ts",
       "norm_label": ".revokeactivetokens()"
     },
     {
@@ -648,8 +648,8 @@
       "source_location": "L237",
       "_origin": "ast",
       "id": "apps_control_plane_src_artifacts_checkpoint",
-      "community": 15,
-      "community_name": "attempt-runtime.ts",
+      "community": 57,
+      "community_name": "callback.ts",
       "norm_label": "checkpoint"
     },
     {
@@ -689,18 +689,18 @@
       "label": "AttemptAssignment",
       "file_type": "code",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L33",
+      "source_location": "L34",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_container_attemptassignment",
-      "community": 17,
-      "community_name": "Attempt",
+      "community": 4,
+      "community_name": "attempt-container.ts",
       "norm_label": "attemptassignment"
     },
     {
       "label": "AttemptContainerEnv",
       "file_type": "code",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L55",
+      "source_location": "L56",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_container_attemptcontainerenv",
       "community": 14,
@@ -711,7 +711,7 @@
       "label": "PreparedAttempt",
       "file_type": "code",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L61",
+      "source_location": "L62",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_container_preparedattempt",
       "community": 4,
@@ -722,7 +722,7 @@
       "label": "RunnerHttpResult",
       "file_type": "code",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L68",
+      "source_location": "L69",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_container_runnerhttpresult",
       "community": 4,
@@ -733,18 +733,18 @@
       "label": "attemptCompletion()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L73",
+      "source_location": "L74",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_container_attemptcompletion",
-      "community": 57,
-      "community_name": "callback.ts",
+      "community": 4,
+      "community_name": "attempt-container.ts",
       "norm_label": "attemptcompletion()"
     },
     {
       "label": "containerRegistryHosts",
       "file_type": "code",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L88",
+      "source_location": "L89",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_container_containerregistryhosts",
       "community": 4,
@@ -755,7 +755,7 @@
       "label": "recordModelEvent()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L99",
+      "source_location": "L100",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_container_recordmodelevent",
       "community": 4,
@@ -766,7 +766,7 @@
       "label": "pauseForModelBudget()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L119",
+      "source_location": "L120",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_container_pauseformodelbudget",
       "community": 1,
@@ -777,7 +777,7 @@
       "label": "attemptAllowedHosts()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L151",
+      "source_location": "L152",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_container_attemptallowedhosts",
       "community": 4,
@@ -788,7 +788,7 @@
       "label": "attemptUsesProjectEnvironment()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L182",
+      "source_location": "L183",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_container_attemptusesprojectenvironment",
       "community": 4,
@@ -799,7 +799,7 @@
       "label": "modelEgress()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L188",
+      "source_location": "L189",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_container_modelegress",
       "community": 1,
@@ -810,7 +810,7 @@
       "label": "extractModelUsage()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L379",
+      "source_location": "L380",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_container_extractmodelusage",
       "community": 46,
@@ -821,7 +821,7 @@
       "label": "RoundhouseRuntimeSandbox",
       "file_type": "code",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L498",
+      "source_location": "L504",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox",
       "community": 4,
@@ -832,7 +832,7 @@
       "label": ".constructor()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L506",
+      "source_location": "L512",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_constructor",
       "community": 4,
@@ -843,7 +843,7 @@
       "label": ".execSessionless()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L512",
+      "source_location": "L518",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_execsessionless",
       "community": 4,
@@ -854,7 +854,7 @@
       "label": ".getProcessSessionless()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L520",
+      "source_location": "L526",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_getprocesssessionless",
       "community": 4,
@@ -865,7 +865,7 @@
       "label": ".componentHost()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L524",
+      "source_location": "L530",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_componenthost",
       "community": 4,
@@ -876,7 +876,7 @@
       "label": ".traceSetup()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L542",
+      "source_location": "L548",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_tracesetup",
       "community": 4,
@@ -887,7 +887,7 @@
       "label": ".awaitWithHeartbeat()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L581",
+      "source_location": "L587",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_awaitwithheartbeat",
       "community": 4,
@@ -898,7 +898,7 @@
       "label": ".restoreWorkspace()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L605",
+      "source_location": "L611",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_restoreworkspace",
       "community": 4,
@@ -909,7 +909,7 @@
       "label": ".prepareAttempt()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L615",
+      "source_location": "L621",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_prepareattempt",
       "community": 4,
@@ -920,7 +920,7 @@
       "label": ".restorePreparedAttempt()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L648",
+      "source_location": "L654",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_restorepreparedattempt",
       "community": 4,
@@ -931,7 +931,7 @@
       "label": ".executePreparedAttempt()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L690",
+      "source_location": "L696",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_executepreparedattempt",
       "community": 4,
@@ -942,7 +942,7 @@
       "label": ".backupWorkspace()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L740",
+      "source_location": "L746",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_backupworkspace",
       "community": 4,
@@ -953,7 +953,7 @@
       "label": ".fetchPreview()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L749",
+      "source_location": "L755",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_fetchpreview",
       "community": 4,
@@ -964,7 +964,7 @@
       "label": ".runAttempt()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L767",
+      "source_location": "L773",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_runattempt",
       "community": 4,
@@ -975,7 +975,7 @@
       "label": ".ensureDocker()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L969",
+      "source_location": "L975",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_ensuredocker",
       "community": 4,
@@ -986,7 +986,7 @@
       "label": ".checkpointRequest()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L973",
+      "source_location": "L979",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_checkpointrequest",
       "community": 4,
@@ -997,7 +997,7 @@
       "label": ".validateCheckpoint()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L1138",
+      "source_location": "L1144",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_validatecheckpoint",
       "community": 4,
@@ -1008,7 +1008,7 @@
       "label": ".publishCheckpoint()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L1144",
+      "source_location": "L1150",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_publishcheckpoint",
       "community": 4,
@@ -1066,8 +1066,8 @@
       "source_location": "L43",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_dispatch_attemptpreparationenv",
-      "community": 21,
-      "community_name": "attempt-settlement.ts",
+      "community": 24,
+      "community_name": "attempt-workflow.ts",
       "norm_label": "attemptpreparationenv"
     },
     {
@@ -1077,8 +1077,8 @@
       "source_location": "L51",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_dispatch_attemptworkflowparams",
-      "community": 21,
-      "community_name": "attempt-settlement.ts",
+      "community": 24,
+      "community_name": "attempt-workflow.ts",
       "norm_label": "attemptworkflowparams"
     },
     {
@@ -1286,8 +1286,8 @@
       "source_location": "L581",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_dispatch_sandboxattemptpreparer",
-      "community": 13,
-      "community_name": "attempt-dispatch.ts",
+      "community": 1,
+      "community_name": "D1RunRepository",
       "norm_label": "sandboxattemptpreparer"
     },
     {
@@ -1297,8 +1297,8 @@
       "source_location": "L582",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_dispatch_sandboxattemptpreparer_constructor",
-      "community": 13,
-      "community_name": "attempt-dispatch.ts",
+      "community": 1,
+      "community_name": "D1RunRepository",
       "norm_label": ".constructor()"
     },
     {
@@ -1308,8 +1308,8 @@
       "source_location": "L587",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_dispatch_sandboxattemptpreparer_resolvemodelroute",
-      "community": 13,
-      "community_name": "attempt-dispatch.ts",
+      "community": 1,
+      "community_name": "D1RunRepository",
       "norm_label": ".resolvemodelroute()"
     },
     {
@@ -1440,8 +1440,8 @@
       "source_location": "L59",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_runtime_sandboxnamespace",
-      "community": 21,
-      "community_name": "attempt-settlement.ts",
+      "community": 24,
+      "community_name": "attempt-workflow.ts",
       "norm_label": "sandboxnamespace"
     },
     {
@@ -1506,8 +1506,8 @@
       "source_location": "L95",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_runtime_destroyattemptsandboxwithtrace",
-      "community": 21,
-      "community_name": "attempt-settlement.ts",
+      "community": 24,
+      "community_name": "attempt-workflow.ts",
       "norm_label": "destroyattemptsandboxwithtrace()"
     },
     {
@@ -1583,8 +1583,8 @@
       "source_location": "L227",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_runtime_attemptworkspaceref",
-      "community": 13,
-      "community_name": "attempt-dispatch.ts",
+      "community": 15,
+      "community_name": "attempt-runtime.ts",
       "norm_label": "attemptworkspaceref()"
     },
     {
@@ -1594,8 +1594,8 @@
       "source_location": "L241",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_runtime_artifactrepositoryname",
-      "community": 13,
-      "community_name": "attempt-dispatch.ts",
+      "community": 15,
+      "community_name": "attempt-runtime.ts",
       "norm_label": "artifactrepositoryname()"
     },
     {
@@ -1605,8 +1605,8 @@
       "source_location": "L249",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_runtime_attemptworkspacebackupkey",
-      "community": 21,
-      "community_name": "attempt-settlement.ts",
+      "community": 13,
+      "community_name": "attempt-dispatch.ts",
       "norm_label": "attemptworkspacebackupkey()"
     },
     {
@@ -1649,8 +1649,8 @@
       "source_location": "L319",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_runtime_sandboxcheckpointvalidator",
-      "community": 15,
-      "community_name": "attempt-runtime.ts",
+      "community": 57,
+      "community_name": "callback.ts",
       "norm_label": "sandboxcheckpointvalidator"
     },
     {
@@ -1660,8 +1660,8 @@
       "source_location": "L320",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_runtime_sandboxcheckpointvalidator_constructor",
-      "community": 15,
-      "community_name": "attempt-runtime.ts",
+      "community": 57,
+      "community_name": "callback.ts",
       "norm_label": ".constructor()"
     },
     {
@@ -1869,8 +1869,8 @@
       "source_location": "L40",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_settlement_attemptsettlementresult",
-      "community": 21,
-      "community_name": "attempt-settlement.ts",
+      "community": 24,
+      "community_name": "attempt-workflow.ts",
       "norm_label": "attemptsettlementresult"
     },
     {
@@ -1913,8 +1913,8 @@
       "source_location": "L65",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_settlement_attemptsettlementenv",
-      "community": 21,
-      "community_name": "attempt-settlement.ts",
+      "community": 24,
+      "community_name": "attempt-workflow.ts",
       "norm_label": "attemptsettlementenv"
     },
     {
@@ -1968,8 +1968,8 @@
       "source_location": "L146",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_settlement_loadrecordedattemptcompletion",
-      "community": 21,
-      "community_name": "attempt-settlement.ts",
+      "community": 24,
+      "community_name": "attempt-workflow.ts",
       "norm_label": "loadrecordedattemptcompletion()"
     },
     {
@@ -1979,8 +1979,8 @@
       "source_location": "L172",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_settlement_observedbranchhead",
-      "community": 21,
-      "community_name": "attempt-settlement.ts",
+      "community": 57,
+      "community_name": "callback.ts",
       "norm_label": "observedbranchhead()"
     },
     {
@@ -2133,8 +2133,8 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_workflow_test",
-      "community": 57,
-      "community_name": "callback.ts",
+      "community": 24,
+      "community_name": "attempt-workflow.ts",
       "norm_label": "attempt-workflow.test.ts"
     },
     {
@@ -2144,8 +2144,8 @@
       "source_location": "L6",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_workflow_test_acceptrecordedattemptcompletion_backuprecordedattemptworkspace_getattempt_loadrecordedattemptcompletion_markdispatched_prepareattemptexecution_publishwakeup_publishrecordedattemptcompletion_recordattemptevent_requestwakeup_settlementworkflowcreate_settlementworkflowget_settlementworkflowstatus_sandbox_settleattemptoutcome_validaterecordedattemptcompletion",
-      "community": 57,
-      "community_name": "callback.ts",
+      "community": 24,
+      "community_name": "attempt-workflow.ts",
       "norm_label": "{\n  acceptrecordedattemptcompletion,\n  backuprecordedattemptworkspace,\n  getattempt,\n  loadrecordedattemptcompletion,\n  markdispatched,\n  prepareattemptexecution,\n  publishwakeup,\n  publishrecordedattemptcompletion,\n  recordattemptevent,\n  requestwakeup,\n  settlementworkflowcreate,\n  settlementworkflowget,\n  settlementworkflowstatus,\n  sandbox,\n  settleattemptoutcome,\n  validaterecordedattemptcompletion,\n}"
     },
     {
@@ -2155,8 +2155,8 @@
       "source_location": "L77",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_workflow_test_completion",
-      "community": 57,
-      "community_name": "callback.ts",
+      "community": 24,
+      "community_name": "attempt-workflow.ts",
       "norm_label": "completion"
     },
     {
@@ -2177,8 +2177,8 @@
       "source_location": "L115",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_workflow_test_event",
-      "community": 57,
-      "community_name": "callback.ts",
+      "community": 24,
+      "community_name": "attempt-workflow.ts",
       "norm_label": "event()"
     },
     {
@@ -2188,8 +2188,8 @@
       "source_location": "L127",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_workflow_test_steps",
-      "community": 57,
-      "community_name": "callback.ts",
+      "community": 24,
+      "community_name": "attempt-workflow.ts",
       "norm_label": "steps()"
     },
     {
@@ -2199,8 +2199,8 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_workflow",
-      "community": 21,
-      "community_name": "attempt-settlement.ts",
+      "community": 24,
+      "community_name": "attempt-workflow.ts",
       "norm_label": "attempt-workflow.ts"
     },
     {
@@ -2210,8 +2210,8 @@
       "source_location": "L32",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_workflow_attemptworkflowenv",
-      "community": 21,
-      "community_name": "attempt-settlement.ts",
+      "community": 24,
+      "community_name": "attempt-workflow.ts",
       "norm_label": "attemptworkflowenv"
     },
     {
@@ -2221,8 +2221,8 @@
       "source_location": "L41",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_workflow_noexecutionretry",
-      "community": 21,
-      "community_name": "attempt-settlement.ts",
+      "community": 24,
+      "community_name": "attempt-workflow.ts",
       "norm_label": "noexecutionretry"
     },
     {
@@ -2232,8 +2232,8 @@
       "source_location": "L53",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_workflow_trace",
-      "community": 21,
-      "community_name": "attempt-settlement.ts",
+      "community": 24,
+      "community_name": "attempt-workflow.ts",
       "norm_label": "trace()"
     },
     {
@@ -2243,8 +2243,8 @@
       "source_location": "L91",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_workflow_recordterminalworkflowfailure",
-      "community": 21,
-      "community_name": "attempt-settlement.ts",
+      "community": 24,
+      "community_name": "attempt-workflow.ts",
       "norm_label": "recordterminalworkflowfailure()"
     },
     {
@@ -2254,8 +2254,8 @@
       "source_location": "L248",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_workflow_attemptexecutionworkflow",
-      "community": 21,
-      "community_name": "attempt-settlement.ts",
+      "community": 24,
+      "community_name": "attempt-workflow.ts",
       "norm_label": "attemptexecutionworkflow"
     },
     {
@@ -2265,8 +2265,8 @@
       "source_location": "L252",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_workflow_attemptexecutionworkflow_run",
-      "community": 21,
-      "community_name": "attempt-settlement.ts",
+      "community": 24,
+      "community_name": "attempt-workflow.ts",
       "norm_label": ".run()"
     },
     {
@@ -2276,8 +2276,8 @@
       "source_location": "L282",
       "_origin": "ast",
       "id": "apps_control_plane_src_attempt_workflow_attemptexecutionworkflow_execute",
-      "community": 21,
-      "community_name": "attempt-settlement.ts",
+      "community": 24,
+      "community_name": "attempt-workflow.ts",
       "norm_label": ".execute()"
     },
     {
@@ -2298,8 +2298,8 @@
       "source_location": "L10",
       "_origin": "ast",
       "id": "apps_control_plane_src_callback_attemptcallback",
-      "community": 15,
-      "community_name": "attempt-runtime.ts",
+      "community": 57,
+      "community_name": "callback.ts",
       "norm_label": "attemptcallback"
     },
     {
@@ -2309,8 +2309,8 @@
       "source_location": "L19",
       "_origin": "ast",
       "id": "apps_control_plane_src_callback_attemptcompletion",
-      "community": 57,
-      "community_name": "callback.ts",
+      "community": 24,
+      "community_name": "attempt-workflow.ts",
       "norm_label": "attemptcompletion"
     },
     {
@@ -2320,8 +2320,8 @@
       "source_location": "L21",
       "_origin": "ast",
       "id": "apps_control_plane_src_callback_record",
-      "community": 57,
-      "community_name": "callback.ts",
+      "community": 4,
+      "community_name": "attempt-container.ts",
       "norm_label": "record()"
     },
     {
@@ -2331,8 +2331,8 @@
       "source_location": "L25",
       "_origin": "ast",
       "id": "apps_control_plane_src_callback_validattemptcompletion",
-      "community": 57,
-      "community_name": "callback.ts",
+      "community": 4,
+      "community_name": "attempt-container.ts",
       "norm_label": "validattemptcompletion()"
     },
     {
@@ -2342,8 +2342,8 @@
       "source_location": "L55",
       "_origin": "ast",
       "id": "apps_control_plane_src_callback_checkpointvalidator",
-      "community": 15,
-      "community_name": "attempt-runtime.ts",
+      "community": 57,
+      "community_name": "callback.ts",
       "norm_label": "checkpointvalidator"
     },
     {
@@ -2353,8 +2353,8 @@
       "source_location": "L56",
       "_origin": "ast",
       "id": "apps_control_plane_src_callback_checkpointvalidator_validate",
-      "community": 15,
-      "community_name": "attempt-runtime.ts",
+      "community": 57,
+      "community_name": "callback.ts",
       "norm_label": ".validate()"
     },
     {
@@ -2386,8 +2386,8 @@
       "source_location": "L69",
       "_origin": "ast",
       "id": "apps_control_plane_src_callback_branchchangederror",
-      "community": 57,
-      "community_name": "callback.ts",
+      "community": 15,
+      "community_name": "attempt-runtime.ts",
       "norm_label": "branchchangederror"
     },
     {
@@ -2397,8 +2397,8 @@
       "source_location": "L70",
       "_origin": "ast",
       "id": "apps_control_plane_src_callback_branchchangederror_constructor",
-      "community": 57,
-      "community_name": "callback.ts",
+      "community": 15,
+      "community_name": "attempt-runtime.ts",
       "norm_label": ".constructor()"
     },
     {
@@ -2474,8 +2474,8 @@
       "source_location": "L130",
       "_origin": "ast",
       "id": "apps_control_plane_src_callback_acceptcallback",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 57,
+      "community_name": "callback.ts",
       "norm_label": "acceptcallback()"
     },
     {
@@ -2556,10 +2556,32 @@
       "norm_label": "conversation-client.test.ts"
     },
     {
-      "label": "Region",
+      "label": "Rectangle",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-client.test.ts",
       "source_location": "L7",
+      "_origin": "ast",
+      "id": "apps_control_plane_src_conversation_client_test_rectangle",
+      "community": 90,
+      "community_name": "conversation-client.test.ts",
+      "norm_label": "rectangle"
+    },
+    {
+      "label": "Message",
+      "file_type": "code",
+      "source_file": "apps/control-plane/src/conversation-client.test.ts",
+      "source_location": "L8",
+      "_origin": "ast",
+      "id": "apps_control_plane_src_conversation_client_test_message",
+      "community": 90,
+      "community_name": "conversation-client.test.ts",
+      "norm_label": "message"
+    },
+    {
+      "label": "Region",
+      "file_type": "code",
+      "source_file": "apps/control-plane/src/conversation-client.test.ts",
+      "source_location": "L14",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_client_test_region",
       "community": 90,
@@ -2567,15 +2589,26 @@
       "norm_label": "region"
     },
     {
-      "label": "appendChild()",
+      "label": "flushPoll()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-client.test.ts",
-      "source_location": "L171",
+      "source_location": "L52",
       "_origin": "ast",
-      "id": "apps_control_plane_src_conversation_client_test_appendchild",
+      "id": "apps_control_plane_src_conversation_client_test_flushpoll",
       "community": 90,
       "community_name": "conversation-client.test.ts",
-      "norm_label": "appendchild()"
+      "norm_label": "flushpoll()"
+    },
+    {
+      "label": "pendingResponseFixture()",
+      "file_type": "code",
+      "source_file": "apps/control-plane/src/conversation-client.test.ts",
+      "source_location": "L194",
+      "_origin": "ast",
+      "id": "apps_control_plane_src_conversation_client_test_pendingresponsefixture",
+      "community": 90,
+      "community_name": "conversation-client.test.ts",
+      "norm_label": "pendingresponsefixture()"
     },
     {
       "label": "conversation-client.ts",
@@ -2680,7 +2713,7 @@
       "label": "Broker",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L19",
+      "source_location": "L20",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_broker",
       "community": 7,
@@ -2691,7 +2724,7 @@
       "label": "routeHeaders",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L27",
+      "source_location": "L28",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_routeheaders",
       "community": 7,
@@ -2702,7 +2735,7 @@
       "label": "ToolDefinition",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L36",
+      "source_location": "L37",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_tooldefinition",
       "community": 7,
@@ -2713,7 +2746,7 @@
       "label": "repositoryTools",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L42",
+      "source_location": "L43",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_repositorytools",
       "community": 7,
@@ -2724,7 +2757,7 @@
       "label": "FunctionCall",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L69",
+      "source_location": "L70",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_functioncall",
       "community": 7,
@@ -2735,7 +2768,7 @@
       "label": "ParsedModelResponse",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L75",
+      "source_location": "L76",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_parsedmodelresponse",
       "community": 7,
@@ -2746,7 +2779,7 @@
       "label": "ModelRequest",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L81",
+      "source_location": "L82",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_modelrequest",
       "community": 7,
@@ -2757,7 +2790,7 @@
       "label": "StructuredOutput",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L86",
+      "source_location": "L87",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_structuredoutput",
       "community": 7,
@@ -2768,7 +2801,7 @@
       "label": "ProtocolAdapter",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L91",
+      "source_location": "L92",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_protocoladapter",
       "community": 7,
@@ -2779,7 +2812,7 @@
       "label": "brokerHeaders()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L111",
+      "source_location": "L112",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_brokerheaders",
       "community": 7,
@@ -2790,7 +2823,7 @@
       "label": "resolveConversationRoute()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L126",
+      "source_location": "L127",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_resolveconversationroute",
       "community": 7,
@@ -2801,7 +2834,7 @@
       "label": "selectedTranscript()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L151",
+      "source_location": "L152",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_selectedtranscript",
       "community": 7,
@@ -2812,7 +2845,7 @@
       "label": "textFromUnknown()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L163",
+      "source_location": "L164",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_textfromunknown",
       "community": 7,
@@ -2823,7 +2856,7 @@
       "label": "openAiResponsesAdapter",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L178",
+      "source_location": "L179",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_openairesponsesadapter",
       "community": 7,
@@ -2834,7 +2867,7 @@
       "label": "openAiCompletionsAdapter",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L281",
+      "source_location": "L282",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_openaicompletionsadapter",
       "community": 7,
@@ -2845,7 +2878,7 @@
       "label": "anthropicMessagesAdapter",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L372",
+      "source_location": "L373",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_anthropicmessagesadapter",
       "community": 7,
@@ -2856,7 +2889,7 @@
       "label": "googleGenerativeAiAdapter",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L456",
+      "source_location": "L457",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_googlegenerativeaiadapter",
       "community": 7,
@@ -2867,7 +2900,7 @@
       "label": "adapterFor()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L553",
+      "source_location": "L554",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_adapterfor",
       "community": 7,
@@ -2878,7 +2911,7 @@
       "label": "decodeBase64Utf8()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L562",
+      "source_location": "L563",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_decodebase64utf8",
       "community": 7,
@@ -2889,7 +2922,7 @@
       "label": "executeRepositoryTool()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L574",
+      "source_location": "L575",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_executerepositorytool",
       "community": 7,
@@ -2900,7 +2933,7 @@
       "label": "conversationInstructions()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L655",
+      "source_location": "L656",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_conversationinstructions",
       "community": 7,
@@ -2911,7 +2944,7 @@
       "label": "number()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L671",
+      "source_location": "L672",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_number",
       "community": 7,
@@ -2922,7 +2955,7 @@
       "label": "usageForResponse()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L677",
+      "source_location": "L678",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_usageforresponse",
       "community": 7,
@@ -2933,7 +2966,7 @@
       "label": "ConversationModelCallError",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L773",
+      "source_location": "L778",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_conversationmodelcallerror",
       "community": 7,
@@ -2944,7 +2977,7 @@
       "label": ".constructor()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L774",
+      "source_location": "L779",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_conversationmodelcallerror_constructor",
       "community": 7,
@@ -2955,7 +2988,7 @@
       "label": "callModel()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L782",
+      "source_location": "L787",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_callmodel",
       "community": 7,
@@ -2966,7 +2999,7 @@
       "label": "ConversationFirstReply",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L825",
+      "source_location": "L830",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_conversationfirstreply",
       "community": 7,
@@ -2977,7 +3010,7 @@
       "label": "ConversationExecutionResult",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L830",
+      "source_location": "L835",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_conversationexecutionresult",
       "community": 7,
@@ -2988,7 +3021,7 @@
       "label": "firstReplySchema",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L847",
+      "source_location": "L852",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_firstreplyschema",
       "community": 7,
@@ -2999,7 +3032,7 @@
       "label": "briefSchema",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L857",
+      "source_location": "L862",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_briefschema",
       "community": 7,
@@ -3010,7 +3043,7 @@
       "label": "stringArray()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L878",
+      "source_location": "L883",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_stringarray",
       "community": 7,
@@ -3021,7 +3054,7 @@
       "label": "parseBrief()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L884",
+      "source_location": "L889",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_parsebrief",
       "community": 7,
@@ -3032,7 +3065,7 @@
       "label": "titleWordCount()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L917",
+      "source_location": "L922",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_titlewordcount",
       "community": 7,
@@ -3043,7 +3076,7 @@
       "label": "parseFirstReply()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L921",
+      "source_location": "L926",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_parsefirstreply",
       "community": 7,
@@ -3054,7 +3087,7 @@
       "label": "executeConversationTurn()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L948",
+      "source_location": "L953",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_executeconversationturn",
       "community": 7,
@@ -3065,7 +3098,7 @@
       "label": "promotionIssueMarker()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L1073",
+      "source_location": "L1078",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_promotionissuemarker",
       "community": 58,
@@ -3076,7 +3109,7 @@
       "label": "promotionStartMarker()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L1080",
+      "source_location": "L1085",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_promotionstartmarker",
       "community": 58,
@@ -3087,7 +3120,7 @@
       "label": "parsePromotionMarker()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L1087",
+      "source_location": "L1092",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_parsepromotionmarker",
       "community": 7,
@@ -3098,7 +3131,7 @@
       "label": "renderDeliveryBrief()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L1096",
+      "source_location": "L1101",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_engine_renderdeliverybrief",
       "community": 58,
@@ -4476,8 +4509,8 @@
       "source_location": "L21",
       "_origin": "ast",
       "id": "apps_control_plane_src_conversation_worker_conversationworkerdependencies",
-      "community": 48,
-      "community_name": ".report",
+      "community": 82,
+      "community_name": "GitHubApi",
       "norm_label": "conversationworkerdependencies"
     },
     {
@@ -4520,8 +4553,8 @@
       "source_location": "L44",
       "_origin": "ast",
       "id": "apps_control_plane_src_coordinator_test_locald1statement",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 81,
+      "community_name": "LocalD1Statement",
       "norm_label": "locald1statement"
     },
     {
@@ -4531,8 +4564,8 @@
       "source_location": "L47",
       "_origin": "ast",
       "id": "apps_control_plane_src_coordinator_test_locald1statement_constructor",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 81,
+      "community_name": "LocalD1Statement",
       "norm_label": ".constructor()"
     },
     {
@@ -4542,8 +4575,8 @@
       "source_location": "L49",
       "_origin": "ast",
       "id": "apps_control_plane_src_coordinator_test_locald1statement_bind",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 81,
+      "community_name": "LocalD1Statement",
       "norm_label": ".bind()"
     },
     {
@@ -4553,8 +4586,8 @@
       "source_location": "L54",
       "_origin": "ast",
       "id": "apps_control_plane_src_coordinator_test_locald1statement_first",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 81,
+      "community_name": "LocalD1Statement",
       "norm_label": ".first()"
     },
     {
@@ -4564,8 +4597,8 @@
       "source_location": "L58",
       "_origin": "ast",
       "id": "apps_control_plane_src_coordinator_test_locald1statement_run",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 81,
+      "community_name": "LocalD1Statement",
       "norm_label": ".run()"
     },
     {
@@ -4575,8 +4608,8 @@
       "source_location": "L63",
       "_origin": "ast",
       "id": "apps_control_plane_src_coordinator_test_locald1statement_all",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 81,
+      "community_name": "LocalD1Statement",
       "norm_label": ".all()"
     },
     {
@@ -4586,8 +4619,8 @@
       "source_location": "L68",
       "_origin": "ast",
       "id": "apps_control_plane_src_coordinator_test_locald1",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 81,
+      "community_name": "LocalD1Statement",
       "norm_label": "locald1"
     },
     {
@@ -4597,8 +4630,8 @@
       "source_location": "L71",
       "_origin": "ast",
       "id": "apps_control_plane_src_coordinator_test_locald1_constructor",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 81,
+      "community_name": "LocalD1Statement",
       "norm_label": ".constructor()"
     },
     {
@@ -4608,8 +4641,8 @@
       "source_location": "L79",
       "_origin": "ast",
       "id": "apps_control_plane_src_coordinator_test_locald1_prepare",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 81,
+      "community_name": "LocalD1Statement",
       "norm_label": ".prepare()"
     },
     {
@@ -4619,8 +4652,8 @@
       "source_location": "L83",
       "_origin": "ast",
       "id": "apps_control_plane_src_coordinator_test_locald1_batch",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 81,
+      "community_name": "LocalD1Statement",
       "norm_label": ".batch()"
     },
     {
@@ -4663,8 +4696,8 @@
       "source_location": "L119",
       "_origin": "ast",
       "id": "apps_control_plane_src_coordinator_test_runfixture",
-      "community": 27,
-      "community_name": "github.test.ts",
+      "community": 35,
+      "community_name": "createRun",
       "norm_label": "runfixture()"
     },
     {
@@ -4707,8 +4740,8 @@
       "source_location": "L30",
       "_origin": "ast",
       "id": "apps_control_plane_src_coordinator_attemptdispatcher",
-      "community": 13,
-      "community_name": "attempt-dispatch.ts",
+      "community": 11,
+      "community_name": "coordinator.ts",
       "norm_label": "attemptdispatcher"
     },
     {
@@ -4718,8 +4751,8 @@
       "source_location": "L31",
       "_origin": "ast",
       "id": "apps_control_plane_src_coordinator_attemptdispatcher_submit",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": ".submit()"
     },
     {
@@ -4729,8 +4762,8 @@
       "source_location": "L34",
       "_origin": "ast",
       "id": "apps_control_plane_src_coordinator_attemptreporter",
-      "community": 81,
-      "community_name": "RunSnapshot",
+      "community": 17,
+      "community_name": "Attempt",
       "norm_label": "attemptreporter"
     },
     {
@@ -4740,8 +4773,8 @@
       "source_location": "L35",
       "_origin": "ast",
       "id": "apps_control_plane_src_coordinator_attemptreporter_report",
-      "community": 81,
-      "community_name": "RunSnapshot",
+      "community": 17,
+      "community_name": "Attempt",
       "norm_label": ".report()"
     },
     {
@@ -4751,8 +4784,8 @@
       "source_location": "L36",
       "_origin": "ast",
       "id": "apps_control_plane_src_coordinator_attemptreporter_reportstarted",
-      "community": 81,
-      "community_name": "RunSnapshot",
+      "community": 17,
+      "community_name": "Attempt",
       "norm_label": ".reportstarted()"
     },
     {
@@ -4795,8 +4828,8 @@
       "source_location": "L57",
       "_origin": "ast",
       "id": "apps_control_plane_src_coordinator_effectiveattemptcapabilities",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": "effectiveattemptcapabilities()"
     },
     {
@@ -4828,8 +4861,8 @@
       "source_location": "L107",
       "_origin": "ast",
       "id": "apps_control_plane_src_coordinator_recordattemptoutcometransition",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": "recordattemptoutcometransition()"
     },
     {
@@ -4839,8 +4872,8 @@
       "source_location": "L138",
       "_origin": "ast",
       "id": "apps_control_plane_src_coordinator_recordissuedcapabilities",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": "recordissuedcapabilities()"
     },
     {
@@ -4861,8 +4894,8 @@
       "source_location": "L185",
       "_origin": "ast",
       "id": "apps_control_plane_src_coordinator_reportstarted",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": "reportstarted()"
     },
     {
@@ -4872,8 +4905,8 @@
       "source_location": "L204",
       "_origin": "ast",
       "id": "apps_control_plane_src_coordinator_revisitstarted",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": "revisitstarted()"
     },
     {
@@ -4883,8 +4916,8 @@
       "source_location": "L221",
       "_origin": "ast",
       "id": "apps_control_plane_src_coordinator_resumecreateddispatch",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": "resumecreateddispatch()"
     },
     {
@@ -5070,8 +5103,8 @@
       "source_location": "L822",
       "_origin": "ast",
       "id": "apps_control_plane_src_coordinator_settleimmediateworkflowwait",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": "settleimmediateworkflowwait()"
     },
     {
@@ -5092,8 +5125,8 @@
       "source_location": "L897",
       "_origin": "ast",
       "id": "apps_control_plane_src_coordinator_aggregatereviews",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 32,
+      "community_name": "aggregated-review.ts",
       "norm_label": "aggregatereviews()"
     },
     {
@@ -5125,8 +5158,8 @@
       "source_location": "L988",
       "_origin": "ast",
       "id": "apps_control_plane_src_coordinator_dispatchcompetitionattempt",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": "dispatchcompetitionattempt()"
     },
     {
@@ -5136,8 +5169,8 @@
       "source_location": "L1103",
       "_origin": "ast",
       "id": "apps_control_plane_src_coordinator_finalizepromotion",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": "finalizepromotion()"
     },
     {
@@ -5147,8 +5180,8 @@
       "source_location": "L1170",
       "_origin": "ast",
       "id": "apps_control_plane_src_coordinator_coordinatecompetition",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": "coordinatecompetition()"
     },
     {
@@ -5158,8 +5191,8 @@
       "source_location": "L1395",
       "_origin": "ast",
       "id": "apps_control_plane_src_coordinator_coordinate",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": "coordinate()"
     },
     {
@@ -5169,8 +5202,8 @@
       "source_location": "L1950",
       "_origin": "ast",
       "id": "apps_control_plane_src_coordinator_dispatchreview",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": "dispatchreview()"
     },
     {
@@ -5180,8 +5213,8 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "apps_control_plane_src_d1_store",
-      "community": 81,
-      "community_name": "RunSnapshot",
+      "community": 23,
+      "community_name": "core/src/index.ts",
       "norm_label": "d1-store.ts"
     },
     {
@@ -5191,8 +5224,8 @@
       "source_location": "L24",
       "_origin": "ast",
       "id": "apps_control_plane_src_d1_store_result",
-      "community": 81,
-      "community_name": "RunSnapshot",
+      "community": 23,
+      "community_name": "core/src/index.ts",
       "norm_label": "result"
     },
     {
@@ -5290,8 +5323,8 @@
       "source_location": "L39",
       "_origin": "ast",
       "id": "apps_control_plane_src_d1_store_runrow",
-      "community": 81,
-      "community_name": "RunSnapshot",
+      "community": 23,
+      "community_name": "core/src/index.ts",
       "norm_label": "runrow"
     },
     {
@@ -5301,8 +5334,8 @@
       "source_location": "L40",
       "_origin": "ast",
       "id": "apps_control_plane_src_d1_store_attemptrow",
-      "community": 81,
-      "community_name": "RunSnapshot",
+      "community": 23,
+      "community_name": "core/src/index.ts",
       "norm_label": "attemptrow"
     },
     {
@@ -5312,8 +5345,8 @@
       "source_location": "L61",
       "_origin": "ast",
       "id": "apps_control_plane_src_d1_store_attemptexecutionrecordoutcome",
-      "community": 81,
-      "community_name": "RunSnapshot",
+      "community": 23,
+      "community_name": "core/src/index.ts",
       "norm_label": "attemptexecutionrecordoutcome"
     },
     {
@@ -5323,8 +5356,8 @@
       "source_location": "L63",
       "_origin": "ast",
       "id": "apps_control_plane_src_d1_store_rundetails",
-      "community": 81,
-      "community_name": "RunSnapshot",
+      "community": 23,
+      "community_name": "core/src/index.ts",
       "norm_label": "rundetails"
     },
     {
@@ -5334,8 +5367,8 @@
       "source_location": "L80",
       "_origin": "ast",
       "id": "apps_control_plane_src_d1_store_runsummary",
-      "community": 81,
-      "community_name": "RunSnapshot",
+      "community": 23,
+      "community_name": "core/src/index.ts",
       "norm_label": "runsummary"
     },
     {
@@ -5345,8 +5378,8 @@
       "source_location": "L88",
       "_origin": "ast",
       "id": "apps_control_plane_src_d1_store_attemptdiagnosticsnapshot",
-      "community": 81,
-      "community_name": "RunSnapshot",
+      "community": 17,
+      "community_name": "Attempt",
       "norm_label": "attemptdiagnosticsnapshot"
     },
     {
@@ -5367,8 +5400,8 @@
       "source_location": "L103",
       "_origin": "ast",
       "id": "apps_control_plane_src_d1_store_activeattemptlease",
-      "community": 81,
-      "community_name": "RunSnapshot",
+      "community": 23,
+      "community_name": "core/src/index.ts",
       "norm_label": "activeattemptlease"
     },
     {
@@ -5378,8 +5411,8 @@
       "source_location": "L109",
       "_origin": "ast",
       "id": "apps_control_plane_src_d1_store_usagerow",
-      "community": 81,
-      "community_name": "RunSnapshot",
+      "community": 23,
+      "community_name": "core/src/index.ts",
       "norm_label": "usagerow"
     },
     {
@@ -5686,8 +5719,8 @@
       "source_location": "L852",
       "_origin": "ast",
       "id": "apps_control_plane_src_d1_store_d1runrepository_getattemptcompletion",
-      "community": 21,
-      "community_name": "attempt-settlement.ts",
+      "community": 24,
+      "community_name": "attempt-workflow.ts",
       "norm_label": ".getattemptcompletion()"
     },
     {
@@ -6357,8 +6390,8 @@
       "source_location": "L104",
       "_origin": "ast",
       "id": "apps_control_plane_src_github_ci_cidiagnosticsnotice",
-      "community": 19,
-      "community_name": "github-ci.ts",
+      "community": 34,
+      "community_name": "control-plane/src/index.ts",
       "norm_label": "cidiagnosticsnotice"
     },
     {
@@ -6753,8 +6786,8 @@
       "source_location": "L109",
       "_origin": "ast",
       "id": "apps_control_plane_src_github_test_visualfeedbackprofile",
-      "community": 2,
-      "community_name": "compileWorkflow",
+      "community": 27,
+      "community_name": "github.test.ts",
       "norm_label": "visualfeedbackprofile()"
     },
     {
@@ -6775,8 +6808,8 @@
       "source_location": "L168",
       "_origin": "ast",
       "id": "apps_control_plane_src_github_test_reportedbody",
-      "community": 48,
-      "community_name": ".report",
+      "community": 27,
+      "community_name": "github.test.ts",
       "norm_label": "reportedbody()"
     },
     {
@@ -6984,8 +7017,8 @@
       "source_location": "L69",
       "_origin": "ast",
       "id": "apps_control_plane_src_github_githubapi",
-      "community": 48,
-      "community_name": ".report",
+      "community": 82,
+      "community_name": "GitHubApi",
       "norm_label": "githubapi"
     },
     {
@@ -6995,8 +7028,8 @@
       "source_location": "L70",
       "_origin": "ast",
       "id": "apps_control_plane_src_github_githubapi_get",
-      "community": 48,
-      "community_name": ".report",
+      "community": 82,
+      "community_name": "GitHubApi",
       "norm_label": ".get()"
     },
     {
@@ -7006,8 +7039,8 @@
       "source_location": "L71",
       "_origin": "ast",
       "id": "apps_control_plane_src_github_githubapi_post",
-      "community": 48,
-      "community_name": ".report",
+      "community": 82,
+      "community_name": "GitHubApi",
       "norm_label": ".post()"
     },
     {
@@ -7017,8 +7050,8 @@
       "source_location": "L72",
       "_origin": "ast",
       "id": "apps_control_plane_src_github_githubapi_patch",
-      "community": 48,
-      "community_name": ".report",
+      "community": 82,
+      "community_name": "GitHubApi",
       "norm_label": ".patch()"
     },
     {
@@ -7072,8 +7105,8 @@
       "source_location": "L84",
       "_origin": "ast",
       "id": "apps_control_plane_src_github_githubenv",
-      "community": 15,
-      "community_name": "attempt-runtime.ts",
+      "community": 59,
+      "community_name": "conversation-worker.ts",
       "norm_label": "githubenv"
     },
     {
@@ -7116,8 +7149,8 @@
       "source_location": "L123",
       "_origin": "ast",
       "id": "apps_control_plane_src_github_bytestobase64url",
-      "community": 9,
-      "community_name": "github.ts",
+      "community": 79,
+      "community_name": "GitHubClient",
       "norm_label": "bytestobase64url()"
     },
     {
@@ -7127,8 +7160,8 @@
       "source_location": "L133",
       "_origin": "ast",
       "id": "apps_control_plane_src_github_pembytes",
-      "community": 9,
-      "community_name": "github.ts",
+      "community": 79,
+      "community_name": "GitHubClient",
       "norm_label": "pembytes()"
     },
     {
@@ -7138,8 +7171,8 @@
       "source_location": "L138",
       "_origin": "ast",
       "id": "apps_control_plane_src_github_appjwt",
-      "community": 9,
-      "community_name": "github.ts",
+      "community": 79,
+      "community_name": "GitHubClient",
       "norm_label": "appjwt()"
     },
     {
@@ -7314,8 +7347,8 @@
       "source_location": "L370",
       "_origin": "ast",
       "id": "apps_control_plane_src_github_qualificationheading",
-      "community": 48,
-      "community_name": ".report",
+      "community": 9,
+      "community_name": "github.ts",
       "norm_label": "qualificationheading()"
     },
     {
@@ -7413,8 +7446,8 @@
       "source_location": "L577",
       "_origin": "ast",
       "id": "apps_control_plane_src_github_findpullrequest",
-      "community": 48,
-      "community_name": ".report",
+      "community": 9,
+      "community_name": "github.ts",
       "norm_label": "findpullrequest()"
     },
     {
@@ -7424,8 +7457,8 @@
       "source_location": "L592",
       "_origin": "ast",
       "id": "apps_control_plane_src_github_findopenpullrequest",
-      "community": 48,
-      "community_name": ".report",
+      "community": 9,
+      "community_name": "github.ts",
       "norm_label": "findopenpullrequest()"
     },
     {
@@ -7435,8 +7468,8 @@
       "source_location": "L595",
       "_origin": "ast",
       "id": "apps_control_plane_src_github_reviewcomment",
-      "community": 48,
-      "community_name": ".report",
+      "community": 9,
+      "community_name": "github.ts",
       "norm_label": "reviewcomment()"
     },
     {
@@ -7446,8 +7479,8 @@
       "source_location": "L626",
       "_origin": "ast",
       "id": "apps_control_plane_src_github_pullrequestbody",
-      "community": 48,
-      "community_name": ".report",
+      "community": 9,
+      "community_name": "github.ts",
       "norm_label": "pullrequestbody()"
     },
     {
@@ -7457,8 +7490,8 @@
       "source_location": "L638",
       "_origin": "ast",
       "id": "apps_control_plane_src_github_rundetailsurl",
-      "community": 79,
-      "community_name": "GitHubClient",
+      "community": 48,
+      "community_name": "GitHubStageReporter",
       "norm_label": "rundetailsurl()"
     },
     {
@@ -7479,8 +7512,8 @@
       "source_location": "L659",
       "_origin": "ast",
       "id": "apps_control_plane_src_github_listcomments",
-      "community": 79,
-      "community_name": "GitHubClient",
+      "community": 48,
+      "community_name": "GitHubStageReporter",
       "norm_label": "listcomments()"
     },
     {
@@ -7491,7 +7524,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_github_githubstagereporter",
       "community": 48,
-      "community_name": ".report",
+      "community_name": "GitHubStageReporter",
       "norm_label": "githubstagereporter"
     },
     {
@@ -7502,7 +7535,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_github_githubstagereporter_constructor",
       "community": 48,
-      "community_name": ".report",
+      "community_name": "GitHubStageReporter",
       "norm_label": ".constructor()"
     },
     {
@@ -7513,7 +7546,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_github_githubstagereporter_detailsurl",
       "community": 48,
-      "community_name": ".report",
+      "community_name": "GitHubStageReporter",
       "norm_label": ".detailsurl()"
     },
     {
@@ -7524,7 +7557,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_github_githubstagereporter_withdetails",
       "community": 48,
-      "community_name": ".report",
+      "community_name": "GitHubStageReporter",
       "norm_label": ".withdetails()"
     },
     {
@@ -7535,7 +7568,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_github_githubstagereporter_reportstarted",
       "community": 48,
-      "community_name": ".report",
+      "community_name": "GitHubStageReporter",
       "norm_label": ".reportstarted()"
     },
     {
@@ -7545,8 +7578,8 @@
       "source_location": "L739",
       "_origin": "ast",
       "id": "apps_control_plane_src_github_githubstagereporter_report",
-      "community": 48,
-      "community_name": ".report",
+      "community": 9,
+      "community_name": "github.ts",
       "norm_label": ".report()"
     },
     {
@@ -7567,8 +7600,8 @@
       "source_location": "L1009",
       "_origin": "ast",
       "id": "apps_control_plane_src_github_loadrepositoryprofile",
-      "community": 9,
-      "community_name": "github.ts",
+      "community": 27,
+      "community_name": "github.test.ts",
       "norm_label": "loadrepositoryprofile()"
     },
     {
@@ -7578,8 +7611,8 @@
       "source_location": "L1059",
       "_origin": "ast",
       "id": "apps_control_plane_src_github_resolvedefaultbranchcommit",
-      "community": 9,
-      "community_name": "github.ts",
+      "community": 27,
+      "community_name": "github.test.ts",
       "norm_label": "resolvedefaultbranchcommit()"
     },
     {
@@ -7589,8 +7622,8 @@
       "source_location": "L1090",
       "_origin": "ast",
       "id": "apps_control_plane_src_github_loaddefaultbranchprofile",
-      "community": 9,
-      "community_name": "github.ts",
+      "community": 27,
+      "community_name": "github.test.ts",
       "norm_label": "loaddefaultbranchprofile()"
     },
     {
@@ -7622,8 +7655,8 @@
       "source_location": "L1127",
       "_origin": "ast",
       "id": "apps_control_plane_src_github_postruncommentonce",
-      "community": 79,
-      "community_name": "GitHubClient",
+      "community": 48,
+      "community_name": "GitHubStageReporter",
       "norm_label": "postruncommentonce()"
     },
     {
@@ -7721,8 +7754,8 @@
       "source_location": "L69",
       "_origin": "ast",
       "id": "apps_control_plane_src_index_test_workflowrun",
-      "community": 27,
-      "community_name": "github.test.ts",
+      "community": 35,
+      "community_name": "createRun",
       "norm_label": "workflowrun()"
     },
     {
@@ -7776,8 +7809,8 @@
       "source_location": "L289",
       "_origin": "ast",
       "id": "apps_control_plane_src_index_test_workflowpagedb",
-      "community": 27,
-      "community_name": "github.test.ts",
+      "community": 35,
+      "community_name": "createRun",
       "norm_label": "workflowpagedb()"
     },
     {
@@ -7996,8 +8029,8 @@
       "source_location": "L175",
       "_origin": "ast",
       "id": "apps_control_plane_src_index_scheduleattemptsandboxdestruction",
-      "community": 21,
-      "community_name": "attempt-settlement.ts",
+      "community": 24,
+      "community_name": "attempt-workflow.ts",
       "norm_label": "scheduleattemptsandboxdestruction()"
     },
     {
@@ -8249,8 +8282,8 @@
       "source_location": "L13",
       "_origin": "ast",
       "id": "apps_control_plane_src_liveness_publishwakeup",
-      "community": 21,
-      "community_name": "attempt-settlement.ts",
+      "community": 24,
+      "community_name": "attempt-workflow.ts",
       "norm_label": "publishwakeup()"
     },
     {
@@ -8276,14 +8309,58 @@
       "norm_label": "publishpendingwakeups()"
     },
     {
+      "label": "model-identity.test.ts",
+      "file_type": "code",
+      "source_file": "apps/control-plane/src/model-identity.test.ts",
+      "source_location": "L1",
+      "_origin": "ast",
+      "id": "apps_control_plane_src_model_identity_test",
+      "community": 4,
+      "community_name": "attempt-container.ts",
+      "norm_label": "model-identity.test.ts"
+    },
+    {
+      "label": "model-identity.ts",
+      "file_type": "code",
+      "source_file": "apps/control-plane/src/model-identity.ts",
+      "source_location": "L1",
+      "_origin": "ast",
+      "id": "apps_control_plane_src_model_identity",
+      "community": 4,
+      "community_name": "attempt-container.ts",
+      "norm_label": "model-identity.ts"
+    },
+    {
+      "label": "providerFromModel()",
+      "file_type": "code",
+      "source_file": "apps/control-plane/src/model-identity.ts",
+      "source_location": "L4",
+      "_origin": "ast",
+      "id": "apps_control_plane_src_model_identity_providerfrommodel",
+      "community": 4,
+      "community_name": "attempt-container.ts",
+      "norm_label": "providerfrommodel()"
+    },
+    {
+      "label": "normalizeModelId()",
+      "file_type": "code",
+      "source_file": "apps/control-plane/src/model-identity.ts",
+      "source_location": "L13",
+      "_origin": "ast",
+      "id": "apps_control_plane_src_model_identity_normalizemodelid",
+      "community": 4,
+      "community_name": "attempt-container.ts",
+      "norm_label": "normalizemodelid()"
+    },
+    {
       "label": "model-prices.test.ts",
       "file_type": "code",
       "source_file": "apps/control-plane/src/model-prices.test.ts",
       "source_location": "L1",
       "_origin": "ast",
       "id": "apps_control_plane_src_model_prices_test",
-      "community": 46,
-      "community_name": "usage.ts",
+      "community": 4,
+      "community_name": "attempt-container.ts",
       "norm_label": "model-prices.test.ts"
     },
     {
@@ -8293,63 +8370,63 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "apps_control_plane_src_model_prices",
-      "community": 46,
-      "community_name": "usage.ts",
+      "community": 4,
+      "community_name": "attempt-container.ts",
       "norm_label": "model-prices.ts"
     },
     {
       "label": "ModelRates",
       "file_type": "code",
       "source_file": "apps/control-plane/src/model-prices.ts",
-      "source_location": "L4",
+      "source_location": "L6",
       "_origin": "ast",
       "id": "apps_control_plane_src_model_prices_modelrates",
-      "community": 46,
-      "community_name": "usage.ts",
+      "community": 4,
+      "community_name": "attempt-container.ts",
       "norm_label": "modelrates"
     },
     {
       "label": "ModelPrice",
       "file_type": "code",
       "source_file": "apps/control-plane/src/model-prices.ts",
-      "source_location": "L11",
+      "source_location": "L13",
       "_origin": "ast",
       "id": "apps_control_plane_src_model_prices_modelprice",
-      "community": 46,
-      "community_name": "usage.ts",
+      "community": 4,
+      "community_name": "attempt-container.ts",
       "norm_label": "modelprice"
     },
     {
       "label": "modelPrices",
       "file_type": "code",
       "source_file": "apps/control-plane/src/model-prices.ts",
-      "source_location": "L21",
+      "source_location": "L23",
       "_origin": "ast",
       "id": "apps_control_plane_src_model_prices_modelprices",
-      "community": 46,
-      "community_name": "usage.ts",
+      "community": 4,
+      "community_name": "attempt-container.ts",
       "norm_label": "modelprices"
     },
     {
       "label": "resolveModelPrice()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/model-prices.ts",
-      "source_location": "L52",
+      "source_location": "L54",
       "_origin": "ast",
       "id": "apps_control_plane_src_model_prices_resolvemodelprice",
-      "community": 46,
-      "community_name": "usage.ts",
+      "community": 4,
+      "community_name": "attempt-container.ts",
       "norm_label": "resolvemodelprice()"
     },
     {
       "label": "estimateModelCostUsd()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/model-prices.ts",
-      "source_location": "L79",
+      "source_location": "L80",
       "_origin": "ast",
       "id": "apps_control_plane_src_model_prices_estimatemodelcostusd",
-      "community": 46,
-      "community_name": "usage.ts",
+      "community": 4,
+      "community_name": "attempt-container.ts",
       "norm_label": "estimatemodelcostusd()"
     },
     {
@@ -8389,7 +8466,7 @@
       "label": "prepare()",
       "file_type": "code",
       "source_file": "apps/control-plane/src/model-usage.test.ts",
-      "source_location": "L255",
+      "source_location": "L297",
       "_origin": "ast",
       "id": "apps_control_plane_src_model_usage_test_prepare",
       "community": 46,
@@ -8403,8 +8480,8 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "apps_control_plane_src_model_usage",
-      "community": 24,
-      "community_name": "model-usage.ts",
+      "community": 46,
+      "community_name": "usage.ts",
       "norm_label": "model-usage.ts"
     },
     {
@@ -8414,8 +8491,8 @@
       "source_location": "L11",
       "_origin": "ast",
       "id": "apps_control_plane_src_model_usage_escapehtml",
-      "community": 24,
-      "community_name": "model-usage.ts",
+      "community": 46,
+      "community_name": "usage.ts",
       "norm_label": "escapehtml()"
     },
     {
@@ -8425,8 +8502,8 @@
       "source_location": "L19",
       "_origin": "ast",
       "id": "apps_control_plane_src_model_usage_palette",
-      "community": 24,
-      "community_name": "model-usage.ts",
+      "community": 46,
+      "community_name": "usage.ts",
       "norm_label": "palette"
     },
     {
@@ -8436,8 +8513,8 @@
       "source_location": "L30",
       "_origin": "ast",
       "id": "apps_control_plane_src_model_usage_tokens",
-      "community": 24,
-      "community_name": "model-usage.ts",
+      "community": 46,
+      "community_name": "usage.ts",
       "norm_label": "tokens()"
     },
     {
@@ -8447,8 +8524,8 @@
       "source_location": "L32",
       "_origin": "ast",
       "id": "apps_control_plane_src_model_usage_cost",
-      "community": 24,
-      "community_name": "model-usage.ts",
+      "community": 46,
+      "community_name": "usage.ts",
       "norm_label": "cost()"
     },
     {
@@ -8458,8 +8535,8 @@
       "source_location": "L34",
       "_origin": "ast",
       "id": "apps_control_plane_src_model_usage_utc",
-      "community": 24,
-      "community_name": "model-usage.ts",
+      "community": 46,
+      "community_name": "usage.ts",
       "norm_label": "utc()"
     },
     {
@@ -8469,8 +8546,8 @@
       "source_location": "L41",
       "_origin": "ast",
       "id": "apps_control_plane_src_model_usage_renderchart",
-      "community": 24,
-      "community_name": "model-usage.ts",
+      "community": 46,
+      "community_name": "usage.ts",
       "norm_label": "renderchart()"
     },
     {
@@ -8480,8 +8557,8 @@
       "source_location": "L112",
       "_origin": "ast",
       "id": "apps_control_plane_src_model_usage_rendermodelusage",
-      "community": 24,
-      "community_name": "model-usage.ts",
+      "community": 46,
+      "community_name": "usage.ts",
       "norm_label": "rendermodelusage()"
     },
     {
@@ -9107,8 +9184,8 @@
       "source_location": "L173",
       "_origin": "ast",
       "id": "apps_control_plane_src_run_details_usagedisplay",
-      "community": 46,
-      "community_name": "usage.ts",
+      "community": 3,
+      "community_name": "run-details.ts",
       "norm_label": "usagedisplay()"
     },
     {
@@ -9404,8 +9481,8 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "apps_control_plane_src_safe_markdown",
-      "community": 91,
-      "community_name": "safe-markdown.ts",
+      "community": 3,
+      "community_name": "run-details.ts",
       "norm_label": "safe-markdown.ts"
     },
     {
@@ -9415,8 +9492,8 @@
       "source_location": "L6",
       "_origin": "ast",
       "id": "apps_control_plane_src_safe_markdown_escapehtml",
-      "community": 91,
-      "community_name": "safe-markdown.ts",
+      "community": 3,
+      "community_name": "run-details.ts",
       "norm_label": "escapehtml()"
     },
     {
@@ -9426,8 +9503,8 @@
       "source_location": "L14",
       "_origin": "ast",
       "id": "apps_control_plane_src_safe_markdown_markdownlinkprotocols",
-      "community": 91,
-      "community_name": "safe-markdown.ts",
+      "community": 3,
+      "community_name": "run-details.ts",
       "norm_label": "markdownlinkprotocols"
     },
     {
@@ -9437,8 +9514,8 @@
       "source_location": "L16",
       "_origin": "ast",
       "id": "apps_control_plane_src_safe_markdown_safemarkdownlink",
-      "community": 91,
-      "community_name": "safe-markdown.ts",
+      "community": 3,
+      "community_name": "run-details.ts",
       "norm_label": "safemarkdownlink()"
     },
     {
@@ -9448,8 +9525,8 @@
       "source_location": "L25",
       "_origin": "ast",
       "id": "apps_control_plane_src_safe_markdown_safemarkdown",
-      "community": 91,
-      "community_name": "safe-markdown.ts",
+      "community": 3,
+      "community_name": "run-details.ts",
       "norm_label": "safemarkdown"
     },
     {
@@ -9657,8 +9734,8 @@
       "source_location": "L8",
       "_origin": "ast",
       "id": "apps_control_plane_src_ui_auth_uiauthenv",
-      "community": 59,
-      "community_name": "conversation-worker.ts",
+      "community": 58,
+      "community_name": "conversation-promotion.ts",
       "norm_label": "uiauthenv"
     },
     {
@@ -10053,8 +10130,8 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "apps_control_plane_src_ui_header_test",
-      "community": 24,
-      "community_name": "model-usage.ts",
+      "community": 44,
+      "community_name": "dashboard.ts",
       "norm_label": "ui-header.test.ts"
     },
     {
@@ -10064,8 +10141,8 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "apps_control_plane_src_ui_header",
-      "community": 24,
-      "community_name": "model-usage.ts",
+      "community": 44,
+      "community_name": "dashboard.ts",
       "norm_label": "ui-header.ts"
     },
     {
@@ -10075,8 +10152,8 @@
       "source_location": "L4",
       "_origin": "ast",
       "id": "apps_control_plane_src_ui_header_headeraccount",
-      "community": 24,
-      "community_name": "model-usage.ts",
+      "community": 44,
+      "community_name": "dashboard.ts",
       "norm_label": "headeraccount"
     },
     {
@@ -10086,8 +10163,8 @@
       "source_location": "L9",
       "_origin": "ast",
       "id": "apps_control_plane_src_ui_header_escapehtml",
-      "community": 24,
-      "community_name": "model-usage.ts",
+      "community": 44,
+      "community_name": "dashboard.ts",
       "norm_label": "escapehtml()"
     },
     {
@@ -10097,8 +10174,8 @@
       "source_location": "L17",
       "_origin": "ast",
       "id": "apps_control_plane_src_ui_header_developmentbadge",
-      "community": 5,
-      "community_name": "ui-auth.ts",
+      "community": 44,
+      "community_name": "dashboard.ts",
       "norm_label": "developmentbadge"
     },
     {
@@ -10108,8 +10185,8 @@
       "source_location": "L19",
       "_origin": "ast",
       "id": "apps_control_plane_src_ui_header_developmentbadgestyles",
-      "community": 5,
-      "community_name": "ui-auth.ts",
+      "community": 44,
+      "community_name": "dashboard.ts",
       "norm_label": "developmentbadgestyles"
     },
     {
@@ -10119,8 +10196,8 @@
       "source_location": "L21",
       "_origin": "ast",
       "id": "apps_control_plane_src_ui_header_sharedheaderstyles",
-      "community": 24,
-      "community_name": "model-usage.ts",
+      "community": 44,
+      "community_name": "dashboard.ts",
       "norm_label": "sharedheaderstyles"
     },
     {
@@ -10130,8 +10207,8 @@
       "source_location": "L23",
       "_origin": "ast",
       "id": "apps_control_plane_src_ui_header_rendersiteheader",
-      "community": 24,
-      "community_name": "model-usage.ts",
+      "community": 44,
+      "community_name": "dashboard.ts",
       "norm_label": "rendersiteheader()"
     },
     {
@@ -10174,8 +10251,8 @@
       "source_location": "L19",
       "_origin": "ast",
       "id": "apps_control_plane_src_usage_estimateusagecostusd",
-      "community": 46,
-      "community_name": "usage.ts",
+      "community": 4,
+      "community_name": "attempt-container.ts",
       "norm_label": "estimateusagecostusd()"
     },
     {
@@ -10285,7 +10362,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_workflow_boundaries_test",
       "community": 35,
-      "community_name": "workflow-boundaries.test.ts",
+      "community_name": "createRun",
       "norm_label": "workflow-boundaries.test.ts"
     },
     {
@@ -10296,7 +10373,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_workflow_boundaries_test_commit",
       "community": 35,
-      "community_name": "workflow-boundaries.test.ts",
+      "community_name": "createRun",
       "norm_label": "commit"
     },
     {
@@ -10307,7 +10384,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_workflow_boundaries_test_head",
       "community": 35,
-      "community_name": "workflow-boundaries.test.ts",
+      "community_name": "createRun",
       "norm_label": "head"
     },
     {
@@ -10318,7 +10395,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_workflow_boundaries_test_profilefor",
       "community": 35,
-      "community_name": "workflow-boundaries.test.ts",
+      "community_name": "createRun",
       "norm_label": "profilefor()"
     },
     {
@@ -10329,7 +10406,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_workflow_boundaries_test_runwith",
       "community": 35,
-      "community_name": "workflow-boundaries.test.ts",
+      "community_name": "createRun",
       "norm_label": "runwith()"
     },
     {
@@ -10340,7 +10417,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_workflow_boundaries",
       "community": 35,
-      "community_name": "workflow-boundaries.test.ts",
+      "community_name": "createRun",
       "norm_label": "workflow-boundaries.ts"
     },
     {
@@ -10351,7 +10428,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_workflow_boundaries_workflowcontextrequest",
       "community": 35,
-      "community_name": "workflow-boundaries.test.ts",
+      "community_name": "createRun",
       "norm_label": "workflowcontextrequest"
     },
     {
@@ -10362,7 +10439,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_workflow_boundaries_workflowcontextprovider",
       "community": 35,
-      "community_name": "workflow-boundaries.test.ts",
+      "community_name": "createRun",
       "norm_label": "workflowcontextprovider"
     },
     {
@@ -10373,7 +10450,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_workflow_boundaries_workflowcontextprovider_resolve",
       "community": 35,
-      "community_name": "workflow-boundaries.test.ts",
+      "community_name": "createRun",
       "norm_label": ".resolve()"
     },
     {
@@ -10384,7 +10461,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_workflow_boundaries_resolveworkflowcontexts",
       "community": 35,
-      "community_name": "workflow-boundaries.test.ts",
+      "community_name": "createRun",
       "norm_label": "resolveworkflowcontexts()"
     },
     {
@@ -10395,7 +10472,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_workflow_boundaries_resumeexternalworkflowevent",
       "community": 35,
-      "community_name": "workflow-boundaries.test.ts",
+      "community_name": "createRun",
       "norm_label": "resumeexternalworkflowevent()"
     },
     {
@@ -10406,7 +10483,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_workflow_client",
       "community": 25,
-      "community_name": "workflow-view.test.ts",
+      "community_name": "compileWorkflow",
       "norm_label": "workflow-client.ts"
     },
     {
@@ -10417,7 +10494,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_workflow_client_workflowgraphclientscript",
       "community": 25,
-      "community_name": "workflow-view.test.ts",
+      "community_name": "compileWorkflow",
       "norm_label": "workflowgraphclientscript"
     },
     {
@@ -10428,7 +10505,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_workflow_client_workflowgraphasset",
       "community": 25,
-      "community_name": "workflow-view.test.ts",
+      "community_name": "compileWorkflow",
       "norm_label": "workflowgraphasset()"
     },
     {
@@ -10483,7 +10560,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_workflow_view_test",
       "community": 25,
-      "community_name": "workflow-view.test.ts",
+      "community_name": "compileWorkflow",
       "norm_label": "workflow-view.test.ts"
     },
     {
@@ -10493,7 +10570,7 @@
       "source_location": "L17",
       "_origin": "ast",
       "id": "apps_control_plane_src_workflow_view_test_runfixture",
-      "community": 2,
+      "community": 25,
       "community_name": "compileWorkflow",
       "norm_label": "runfixture()"
     },
@@ -10505,7 +10582,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_workflow_view_test_fakeelement",
       "community": 25,
-      "community_name": "workflow-view.test.ts",
+      "community_name": "compileWorkflow",
       "norm_label": "fakeelement"
     },
     {
@@ -10516,7 +10593,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_workflow_view_test_fakeelement_setattribute",
       "community": 25,
-      "community_name": "workflow-view.test.ts",
+      "community_name": "compileWorkflow",
       "norm_label": ".setattribute()"
     },
     {
@@ -10527,7 +10604,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_workflow_view_test_fakeelement_getattribute",
       "community": 25,
-      "community_name": "workflow-view.test.ts",
+      "community_name": "compileWorkflow",
       "norm_label": ".getattribute()"
     },
     {
@@ -10538,7 +10615,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_workflow_view_test_fakeelement_addeventlistener",
       "community": 25,
-      "community_name": "workflow-view.test.ts",
+      "community_name": "compileWorkflow",
       "norm_label": ".addeventlistener()"
     },
     {
@@ -10549,7 +10626,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_workflow_view_test_harness",
       "community": 25,
-      "community_name": "workflow-view.test.ts",
+      "community_name": "compileWorkflow",
       "norm_label": "harness()"
     },
     {
@@ -10560,7 +10637,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_workflow_view_test_fakeelement_firstchild",
       "community": 25,
-      "community_name": "workflow-view.test.ts",
+      "community_name": "compileWorkflow",
       "norm_label": ".firstchild()"
     },
     {
@@ -10571,7 +10648,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_workflow_view_test_fakeelement_appendchild",
       "community": 25,
-      "community_name": "workflow-view.test.ts",
+      "community_name": "compileWorkflow",
       "norm_label": ".appendchild()"
     },
     {
@@ -10582,7 +10659,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_workflow_view_test_fakeelement_removechild",
       "community": 25,
-      "community_name": "workflow-view.test.ts",
+      "community_name": "compileWorkflow",
       "norm_label": ".removechild()"
     },
     {
@@ -10593,7 +10670,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_workflow_view_test_fakeelement_click",
       "community": 25,
-      "community_name": "workflow-view.test.ts",
+      "community_name": "compileWorkflow",
       "norm_label": ".click()"
     },
     {
@@ -10604,7 +10681,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_workflow_view_test_fakenode",
       "community": 25,
-      "community_name": "workflow-view.test.ts",
+      "community_name": "compileWorkflow",
       "norm_label": "fakenode"
     },
     {
@@ -10615,7 +10692,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_workflow_view_test_collection",
       "community": 25,
-      "community_name": "workflow-view.test.ts",
+      "community_name": "compileWorkflow",
       "norm_label": "collection()"
     },
     {
@@ -10626,7 +10703,7 @@
       "_origin": "ast",
       "id": "apps_control_plane_src_workflow_view_test_makenode",
       "community": 25,
-      "community_name": "workflow-view.test.ts",
+      "community_name": "compileWorkflow",
       "norm_label": "makenode()"
     },
     {
@@ -10691,8 +10768,8 @@
       "source_location": "L42",
       "_origin": "ast",
       "id": "apps_control_plane_src_workflow_view_workflowviewoptions",
-      "community": 72,
-      "community_name": "workflow-view.ts",
+      "community": 44,
+      "community_name": "dashboard.ts",
       "norm_label": "workflowviewoptions"
     },
     {
@@ -14046,8 +14123,8 @@
       "source_location": "L122",
       "_origin": "ast",
       "id": "packages_core_src_contracts_modelstopreasonheader",
-      "community": 8,
-      "community_name": "model-broker/src/index.ts",
+      "community": 4,
+      "community_name": "attempt-container.ts",
       "norm_label": "modelstopreasonheader"
     },
     {
@@ -14112,8 +14189,8 @@
       "source_location": "L186",
       "_origin": "ast",
       "id": "packages_core_src_contracts_modelusage",
-      "community": 81,
-      "community_name": "RunSnapshot",
+      "community": 23,
+      "community_name": "core/src/index.ts",
       "norm_label": "modelusage"
     },
     {
@@ -14211,8 +14288,8 @@
       "source_location": "L275",
       "_origin": "ast",
       "id": "packages_core_src_contracts_runrepository",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": "runrepository"
     },
     {
@@ -14222,8 +14299,8 @@
       "source_location": "L276",
       "_origin": "ast",
       "id": "packages_core_src_contracts_runrepository_create",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": ".create()"
     },
     {
@@ -14233,8 +14310,8 @@
       "source_location": "L277",
       "_origin": "ast",
       "id": "packages_core_src_contracts_runrepository_get",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 35,
+      "community_name": "createRun",
       "norm_label": ".get()"
     },
     {
@@ -14244,8 +14321,8 @@
       "source_location": "L278",
       "_origin": "ast",
       "id": "packages_core_src_contracts_runrepository_transition",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": ".transition()"
     },
     {
@@ -14266,8 +14343,8 @@
       "source_location": "L291",
       "_origin": "ast",
       "id": "packages_core_src_contracts_runrepository_claimlease",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": ".claimlease()"
     },
     {
@@ -14277,8 +14354,8 @@
       "source_location": "L297",
       "_origin": "ast",
       "id": "packages_core_src_contracts_runrepository_acquireattempt",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": ".acquireattempt()"
     },
     {
@@ -14288,8 +14365,8 @@
       "source_location": "L304",
       "_origin": "ast",
       "id": "packages_core_src_contracts_runrepository_releaselease",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": ".releaselease()"
     },
     {
@@ -14299,8 +14376,8 @@
       "source_location": "L309",
       "_origin": "ast",
       "id": "packages_core_src_contracts_runrepository_createattempt",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": ".createattempt()"
     },
     {
@@ -14310,8 +14387,8 @@
       "source_location": "L310",
       "_origin": "ast",
       "id": "packages_core_src_contracts_runrepository_markdispatched",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": ".markdispatched()"
     },
     {
@@ -14321,8 +14398,8 @@
       "source_location": "L311",
       "_origin": "ast",
       "id": "packages_core_src_contracts_runrepository_completeattempt",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": ".completeattempt()"
     },
     {
@@ -14332,8 +14409,8 @@
       "source_location": "L317",
       "_origin": "ast",
       "id": "packages_core_src_contracts_runrepository_failattempt",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": ".failattempt()"
     },
     {
@@ -14343,8 +14420,8 @@
       "source_location": "L322",
       "_origin": "ast",
       "id": "packages_core_src_contracts_runrepository_settleattemptoutcome",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": ".settleattemptoutcome()"
     },
     {
@@ -14354,8 +14431,8 @@
       "source_location": "L330",
       "_origin": "ast",
       "id": "packages_core_src_contracts_runrepository_getattempt",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": ".getattempt()"
     },
     {
@@ -14365,8 +14442,8 @@
       "source_location": "L331",
       "_origin": "ast",
       "id": "packages_core_src_contracts_runrepository_latestcompletedattempt",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 17,
+      "community_name": "Attempt",
       "norm_label": ".latestcompletedattempt()"
     },
     {
@@ -14376,8 +14453,8 @@
       "source_location": "L336",
       "_origin": "ast",
       "id": "packages_core_src_contracts_runrepository_latestcompletednodeattempt",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": ".latestcompletednodeattempt()"
     },
     {
@@ -14387,8 +14464,8 @@
       "source_location": "L341",
       "_origin": "ast",
       "id": "packages_core_src_contracts_runrepository_completednodeattempts",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": ".completednodeattempts()"
     },
     {
@@ -14398,8 +14475,8 @@
       "source_location": "L352",
       "_origin": "ast",
       "id": "packages_core_src_contracts_runrepository_consumedcievidence",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": ".consumedcievidence()"
     },
     {
@@ -14409,8 +14486,8 @@
       "source_location": "L357",
       "_origin": "ast",
       "id": "packages_core_src_contracts_runrepository_attemptsforrevision",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": ".attemptsforrevision()"
     },
     {
@@ -14420,8 +14497,8 @@
       "source_location": "L361",
       "_origin": "ast",
       "id": "packages_core_src_contracts_runrepository_expiredleases",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": ".expiredleases()"
     },
     {
@@ -14431,8 +14508,8 @@
       "source_location": "L362",
       "_origin": "ast",
       "id": "packages_core_src_contracts_runrepository_recordevent",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": ".recordevent()"
     },
     {
@@ -14453,8 +14530,8 @@
       "source_location": "L374",
       "_origin": "ast",
       "id": "packages_core_src_contracts_reviewerattemptid",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": "reviewerattemptid()"
     },
     {
@@ -14464,8 +14541,8 @@
       "source_location": "L390",
       "_origin": "ast",
       "id": "packages_core_src_contracts_competitioncandidaterole",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": "competitioncandidaterole()"
     },
     {
@@ -14475,8 +14552,8 @@
       "source_location": "L402",
       "_origin": "ast",
       "id": "packages_core_src_contracts_competitionjudgerole",
-      "community": 12,
-      "community_name": "contracts.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": "competitionjudgerole()"
     },
     {
@@ -14486,8 +14563,8 @@
       "source_location": "L408",
       "_origin": "ast",
       "id": "packages_core_src_contracts_competitionattemptid",
-      "community": 11,
-      "community_name": "coordinator.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": "competitionattemptid()"
     },
     {
@@ -14497,8 +14574,8 @@
       "source_location": "L419",
       "_origin": "ast",
       "id": "packages_core_src_contracts_validatecompetitionjudgement",
-      "community": 12,
-      "community_name": "contracts.ts",
+      "community": 2,
+      "community_name": "coordinate",
       "norm_label": "validatecompetitionjudgement()"
     },
     {
@@ -14541,8 +14618,8 @@
       "source_location": "L25",
       "_origin": "ast",
       "id": "packages_core_src_memory_store_memoryrunrepository_create",
-      "community": 81,
-      "community_name": "RunSnapshot",
+      "community": 17,
+      "community_name": "Attempt",
       "norm_label": ".create()"
     },
     {
@@ -14552,8 +14629,8 @@
       "source_location": "L30",
       "_origin": "ast",
       "id": "packages_core_src_memory_store_memoryrunrepository_get",
-      "community": 81,
-      "community_name": "RunSnapshot",
+      "community": 17,
+      "community_name": "Attempt",
       "norm_label": ".get()"
     },
     {
@@ -15355,8 +15432,8 @@
       "source_location": "L593",
       "_origin": "ast",
       "id": "packages_core_src_profile_assertpathallowed",
-      "community": 20,
-      "community_name": "artifacts.ts",
+      "community": 6,
+      "community_name": "profile.ts",
       "norm_label": "assertpathallowed()"
     },
     {
@@ -15366,8 +15443,8 @@
       "source_location": "L602",
       "_origin": "ast",
       "id": "packages_core_src_profile_annotateprotectedpathproposal",
-      "community": 21,
-      "community_name": "attempt-settlement.ts",
+      "community": 57,
+      "community_name": "callback.ts",
       "norm_label": "annotateprotectedpathproposal()"
     },
     {
@@ -15498,8 +15575,8 @@
       "source_location": "L44",
       "_origin": "ast",
       "id": "packages_core_src_run_runstage",
-      "community": 23,
-      "community_name": "core/src/index.ts",
+      "community": 17,
+      "community_name": "Attempt",
       "norm_label": "runstage"
     },
     {
@@ -15531,8 +15608,8 @@
       "source_location": "L62",
       "_origin": "ast",
       "id": "packages_core_src_run_runsnapshot",
-      "community": 81,
-      "community_name": "RunSnapshot",
+      "community": 23,
+      "community_name": "core/src/index.ts",
       "norm_label": "runsnapshot"
     },
     {
@@ -15597,8 +15674,8 @@
       "source_location": "L139",
       "_origin": "ast",
       "id": "packages_core_src_run_assertcreateinput",
-      "community": 27,
-      "community_name": "github.test.ts",
+      "community": 35,
+      "community_name": "createRun",
       "norm_label": "assertcreateinput()"
     },
     {
@@ -15608,8 +15685,8 @@
       "source_location": "L168",
       "_origin": "ast",
       "id": "packages_core_src_run_createrun",
-      "community": 27,
-      "community_name": "github.test.ts",
+      "community": 35,
+      "community_name": "createRun",
       "norm_label": "createrun()"
     },
     {
@@ -15652,7 +15729,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "packages_core_src_workflow_file_test",
-      "community": 2,
+      "community": 25,
       "community_name": "compileWorkflow",
       "norm_label": "workflow-file.test.ts"
     },
@@ -15960,8 +16037,8 @@
       "source_location": "L400",
       "_origin": "ast",
       "id": "packages_core_src_workflow_workflowcompetition",
-      "community": 16,
-      "community_name": "workflow.ts",
+      "community": 13,
+      "community_name": "attempt-dispatch.ts",
       "norm_label": "workflowcompetition"
     },
     {
@@ -16136,8 +16213,8 @@
       "source_location": "L654",
       "_origin": "ast",
       "id": "packages_core_src_workflow_scalar",
-      "community": 26,
-      "community_name": "isRecord",
+      "community": 16,
+      "community_name": "workflow.ts",
       "norm_label": "scalar()"
     },
     {
@@ -16147,8 +16224,8 @@
       "source_location": "L663",
       "_origin": "ast",
       "id": "packages_core_src_workflow_path",
-      "community": 0,
-      "community_name": "runner.mjs",
+      "community": 20,
+      "community_name": "artifacts.ts",
       "norm_label": "path()"
     },
     {
@@ -16158,8 +16235,8 @@
       "source_location": "L672",
       "_origin": "ast",
       "id": "packages_core_src_workflow_condition",
-      "community": 26,
-      "community_name": "isRecord",
+      "community": 16,
+      "community_name": "workflow.ts",
       "norm_label": "condition()"
     },
     {
@@ -16257,7 +16334,7 @@
       "source_location": "L898",
       "_origin": "ast",
       "id": "packages_core_src_workflow_validatecompetitionroles",
-      "community": 2,
+      "community": 25,
       "community_name": "compileWorkflow",
       "norm_label": "validatecompetitionroles()"
     },
@@ -16323,8 +16400,8 @@
       "source_location": "L1224",
       "_origin": "ast",
       "id": "packages_core_src_workflow_outputpaths",
-      "community": 2,
-      "community_name": "compileWorkflow",
+      "community": 16,
+      "community_name": "workflow.ts",
       "norm_label": "outputpaths()"
     },
     {
@@ -16334,8 +16411,8 @@
       "source_location": "L1235",
       "_origin": "ast",
       "id": "packages_core_src_workflow_validategraph",
-      "community": 2,
-      "community_name": "compileWorkflow",
+      "community": 16,
+      "community_name": "workflow.ts",
       "norm_label": "validategraph()"
     },
     {
@@ -16378,7 +16455,7 @@
       "source_location": "L1390",
       "_origin": "ast",
       "id": "packages_core_src_workflow_compileworkflow",
-      "community": 2,
+      "community": 25,
       "community_name": "compileWorkflow",
       "norm_label": "compileworkflow()"
     },
@@ -19874,7 +19951,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L151",
+      "source_location": "L152",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container",
@@ -19885,7 +19962,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L33",
+      "source_location": "L34",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container",
@@ -19896,7 +19973,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L73",
+      "source_location": "L74",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container",
@@ -19907,7 +19984,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L55",
+      "source_location": "L56",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container",
@@ -19918,7 +19995,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L182",
+      "source_location": "L183",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container",
@@ -19929,7 +20006,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L88",
+      "source_location": "L89",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container",
@@ -19940,7 +20017,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L379",
+      "source_location": "L380",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container",
@@ -19951,7 +20028,7 @@
       "relation": "indirect_call",
       "confidence": "INFERRED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L1151",
+      "source_location": "L1157",
       "weight": 1.0,
       "_origin": "ast",
       "context": "collection",
@@ -19963,7 +20040,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L119",
+      "source_location": "L120",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container",
@@ -19974,7 +20051,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L61",
+      "source_location": "L62",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container",
@@ -19985,7 +20062,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L99",
+      "source_location": "L100",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container",
@@ -19996,7 +20073,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L498",
+      "source_location": "L504",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container",
@@ -20007,7 +20084,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L68",
+      "source_location": "L69",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container",
@@ -20155,7 +20232,7 @@
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container",
-      "target": "apps_control_plane_src_model_prices",
+      "target": "apps_control_plane_src_model_identity",
       "confidence_score": 1.0
     },
     {
@@ -20164,6 +20241,30 @@
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
       "source_location": "L31",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "apps_control_plane_src_attempt_container",
+      "target": "apps_control_plane_src_model_identity_normalizemodelid",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "apps/control-plane/src/attempt-container.ts",
+      "source_location": "L32",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "apps_control_plane_src_attempt_container",
+      "target": "apps_control_plane_src_model_prices",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "apps/control-plane/src/attempt-container.ts",
+      "source_location": "L32",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container",
@@ -20415,7 +20516,7 @@
       "context": "type",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L33",
+      "source_location": "L34",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_attemptassignment",
@@ -20427,7 +20528,7 @@
       "context": "field",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L56",
+      "source_location": "L57",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_attemptcontainerenv",
@@ -20439,7 +20540,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L78",
+      "source_location": "L79",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_attemptcompletion",
@@ -20451,7 +20552,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L713",
+      "source_location": "L719",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_executepreparedattempt",
@@ -20463,7 +20564,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L292",
+      "source_location": "L293",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_modelegress",
@@ -20476,7 +20577,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L106",
+      "source_location": "L107",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_recordmodelevent",
@@ -20487,7 +20588,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L320",
+      "source_location": "L321",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_modelegress",
@@ -20500,7 +20601,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L137",
+      "source_location": "L138",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_pauseformodelbudget",
@@ -20512,7 +20613,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L123",
+      "source_location": "L124",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_pauseformodelbudget",
@@ -20524,7 +20625,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L131",
+      "source_location": "L132",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_pauseformodelbudget",
@@ -20548,7 +20649,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L169",
+      "source_location": "L170",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_attemptallowedhosts",
@@ -20559,7 +20660,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L982",
+      "source_location": "L988",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_checkpointrequest",
@@ -20571,7 +20672,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L789",
+      "source_location": "L795",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_runattempt",
@@ -20596,7 +20697,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L185",
+      "source_location": "L186",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_attemptusesprojectenvironment",
@@ -20607,7 +20708,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L1001",
+      "source_location": "L1007",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_checkpointrequest",
@@ -20619,7 +20720,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L794",
+      "source_location": "L800",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_runattempt",
@@ -20643,7 +20744,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L196",
+      "source_location": "L197",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_modelegress",
@@ -20656,7 +20757,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L212",
+      "source_location": "L213",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_modelegress",
@@ -20668,7 +20769,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L236",
+      "source_location": "L237",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_modelegress",
@@ -20679,7 +20780,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L254",
+      "source_location": "L255",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_modelegress",
@@ -20691,7 +20792,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L245",
+      "source_location": "L246",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_modelegress",
@@ -20703,7 +20804,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L339",
+      "source_location": "L340",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_modelegress",
@@ -20716,7 +20817,19 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L466",
+      "source_location": "L467",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "apps_control_plane_src_attempt_container_extractmodelusage",
+      "target": "apps_control_plane_src_model_identity_normalizemodelid"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "apps/control-plane/src/attempt-container.ts",
+      "source_location": "L472",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_extractmodelusage",
@@ -20738,7 +20851,7 @@
       "relation": "method",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L581",
+      "source_location": "L587",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox",
@@ -20749,7 +20862,7 @@
       "relation": "method",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L740",
+      "source_location": "L746",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox",
@@ -20760,7 +20873,7 @@
       "relation": "method",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L973",
+      "source_location": "L979",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox",
@@ -20771,7 +20884,7 @@
       "relation": "method",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L524",
+      "source_location": "L530",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox",
@@ -20782,7 +20895,7 @@
       "relation": "method",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L506",
+      "source_location": "L512",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox",
@@ -20793,7 +20906,7 @@
       "relation": "method",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L969",
+      "source_location": "L975",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox",
@@ -20804,7 +20917,7 @@
       "relation": "method",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L512",
+      "source_location": "L518",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox",
@@ -20815,7 +20928,7 @@
       "relation": "method",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L690",
+      "source_location": "L696",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox",
@@ -20826,7 +20939,7 @@
       "relation": "method",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L749",
+      "source_location": "L755",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox",
@@ -20837,7 +20950,7 @@
       "relation": "method",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L520",
+      "source_location": "L526",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox",
@@ -20848,7 +20961,7 @@
       "relation": "method",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L615",
+      "source_location": "L621",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox",
@@ -20859,7 +20972,7 @@
       "relation": "method",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L1144",
+      "source_location": "L1150",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox",
@@ -20870,7 +20983,7 @@
       "relation": "method",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L648",
+      "source_location": "L654",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox",
@@ -20881,7 +20994,7 @@
       "relation": "method",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L605",
+      "source_location": "L611",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox",
@@ -20892,7 +21005,7 @@
       "relation": "method",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L767",
+      "source_location": "L773",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox",
@@ -20903,7 +21016,7 @@
       "relation": "method",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L542",
+      "source_location": "L548",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox",
@@ -20914,7 +21027,7 @@
       "relation": "method",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L1138",
+      "source_location": "L1144",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox",
@@ -20962,7 +21075,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L1051",
+      "source_location": "L1057",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_checkpointrequest",
@@ -20974,7 +21087,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L528",
+      "source_location": "L534",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_componenthost",
@@ -20986,7 +21099,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L867",
+      "source_location": "L873",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_runattempt",
@@ -20998,7 +21111,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L1005",
+      "source_location": "L1011",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_checkpointrequest",
@@ -21010,7 +21123,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L529",
+      "source_location": "L535",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_componenthost",
@@ -21022,7 +21135,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L823",
+      "source_location": "L829",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_runattempt",
@@ -21034,7 +21147,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L744",
+      "source_location": "L750",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_backupworkspace",
@@ -21046,7 +21159,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L538",
+      "source_location": "L544",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_componenthost",
@@ -21058,7 +21171,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L527",
+      "source_location": "L533",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_componenthost",
@@ -21070,7 +21183,7 @@
       "context": "return_type",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L524",
+      "source_location": "L530",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_componenthost",
@@ -21082,7 +21195,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L970",
+      "source_location": "L976",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_ensuredocker",
@@ -21094,7 +21207,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L759",
+      "source_location": "L765",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_fetchpreview",
@@ -21106,7 +21219,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L609",
+      "source_location": "L615",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_restoreworkspace",
@@ -21118,7 +21231,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L599",
+      "source_location": "L605",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_awaitwithheartbeat",
@@ -21130,7 +21243,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L979",
+      "source_location": "L985",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_checkpointrequest",
@@ -21142,7 +21255,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L696",
+      "source_location": "L702",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_executepreparedattempt",
@@ -21154,7 +21267,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L622",
+      "source_location": "L628",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_prepareattempt",
@@ -21166,7 +21279,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L654",
+      "source_location": "L660",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_restorepreparedattempt",
@@ -21178,7 +21291,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L779",
+      "source_location": "L785",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_runattempt",
@@ -21190,7 +21303,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L665",
+      "source_location": "L671",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_restorepreparedattempt",
@@ -21202,7 +21315,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L703",
+      "source_location": "L709",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_executepreparedattempt",
@@ -21214,7 +21327,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L690",
+      "source_location": "L696",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_executepreparedattempt",
@@ -21226,7 +21339,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L745",
+      "source_location": "L751",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_backupworkspace",
@@ -21238,7 +21351,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L812",
+      "source_location": "L818",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_runattempt",
@@ -21251,7 +21364,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L911",
+      "source_location": "L917",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_runattempt",
@@ -21262,7 +21375,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L1004",
+      "source_location": "L1010",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_checkpointrequest",
@@ -21275,7 +21388,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L1087",
+      "source_location": "L1093",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_checkpointrequest",
@@ -21286,7 +21399,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L1147",
+      "source_location": "L1153",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_publishcheckpoint",
@@ -21298,7 +21411,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/attempt-container.ts",
-      "source_location": "L1141",
+      "source_location": "L1147",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_attempt_container_roundhouseruntimesandbox_validatecheckpoint",
@@ -27963,18 +28076,51 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-client.test.ts",
-      "source_location": "L261",
+      "source_location": "L52",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_client_test",
-      "target": "apps_control_plane_src_conversation_client_test_appendchild",
+      "target": "apps_control_plane_src_conversation_client_test_flushpoll",
       "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-client.test.ts",
-      "source_location": "L15",
+      "source_location": "L33",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "apps_control_plane_src_conversation_client_test",
+      "target": "apps_control_plane_src_conversation_client_test_message",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "apps/control-plane/src/conversation-client.test.ts",
+      "source_location": "L194",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "apps_control_plane_src_conversation_client_test",
+      "target": "apps_control_plane_src_conversation_client_test_pendingresponsefixture",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "apps/control-plane/src/conversation-client.test.ts",
+      "source_location": "L7",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "apps_control_plane_src_conversation_client_test",
+      "target": "apps_control_plane_src_conversation_client_test_rectangle",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "apps/control-plane/src/conversation-client.test.ts",
+      "source_location": "L22",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_client_test",
@@ -28243,7 +28389,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L553",
+      "source_location": "L554",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28254,7 +28400,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L372",
+      "source_location": "L373",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28265,7 +28411,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L857",
+      "source_location": "L862",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28276,7 +28422,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L19",
+      "source_location": "L20",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28287,7 +28433,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L111",
+      "source_location": "L112",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28298,7 +28444,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L782",
+      "source_location": "L787",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28309,7 +28455,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L830",
+      "source_location": "L835",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28320,7 +28466,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L825",
+      "source_location": "L830",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28331,7 +28477,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L655",
+      "source_location": "L656",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28342,7 +28488,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L773",
+      "source_location": "L778",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28353,7 +28499,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L562",
+      "source_location": "L563",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28364,7 +28510,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L948",
+      "source_location": "L953",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28375,7 +28521,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L574",
+      "source_location": "L575",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28386,7 +28532,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L847",
+      "source_location": "L852",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28397,7 +28543,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L69",
+      "source_location": "L70",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28408,7 +28554,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L456",
+      "source_location": "L457",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28419,7 +28565,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L81",
+      "source_location": "L82",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28430,7 +28576,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L671",
+      "source_location": "L672",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28441,7 +28587,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L281",
+      "source_location": "L282",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28452,7 +28598,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L178",
+      "source_location": "L179",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28463,7 +28609,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L884",
+      "source_location": "L889",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28474,7 +28620,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L75",
+      "source_location": "L76",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28485,7 +28631,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L921",
+      "source_location": "L926",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28496,7 +28642,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L1087",
+      "source_location": "L1092",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28507,7 +28653,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L1073",
+      "source_location": "L1078",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28518,7 +28664,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L1080",
+      "source_location": "L1085",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28529,7 +28675,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L91",
+      "source_location": "L92",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28540,7 +28686,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L1096",
+      "source_location": "L1101",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28551,7 +28697,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L42",
+      "source_location": "L43",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28562,7 +28708,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L126",
+      "source_location": "L127",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28573,7 +28719,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L27",
+      "source_location": "L28",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28584,7 +28730,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L151",
+      "source_location": "L152",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28595,7 +28741,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L878",
+      "source_location": "L883",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28606,7 +28752,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L86",
+      "source_location": "L87",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28617,7 +28763,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L163",
+      "source_location": "L164",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28628,7 +28774,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L917",
+      "source_location": "L922",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28639,7 +28785,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L36",
+      "source_location": "L37",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28650,7 +28796,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L677",
+      "source_location": "L678",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28762,7 +28908,7 @@
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
-      "target": "apps_control_plane_src_model_prices",
+      "target": "apps_control_plane_src_model_identity",
       "confidence_score": 1.0
     },
     {
@@ -28771,6 +28917,30 @@
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
       "source_location": "L17",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "apps_control_plane_src_conversation_engine",
+      "target": "apps_control_plane_src_model_identity_normalizemodelid",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "apps/control-plane/src/conversation-engine.ts",
+      "source_location": "L18",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "apps_control_plane_src_conversation_engine",
+      "target": "apps_control_plane_src_model_prices",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "apps/control-plane/src/conversation-engine.ts",
+      "source_location": "L18",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine",
@@ -28867,7 +29037,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L130",
+      "source_location": "L131",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine_resolveconversationroute",
@@ -28879,7 +29049,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L804",
+      "source_location": "L809",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine_callmodel",
@@ -28891,7 +29061,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L146",
+      "source_location": "L147",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine_resolveconversationroute",
@@ -28902,7 +29072,7 @@
       "context": "field",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L92",
+      "source_location": "L93",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine_protocoladapter",
@@ -28914,7 +29084,7 @@
       "context": "field",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L92",
+      "source_location": "L93",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine_protocoladapter",
@@ -28926,7 +29096,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L798",
+      "source_location": "L803",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine_callmodel",
@@ -28938,7 +29108,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L955",
+      "source_location": "L960",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine_executeconversationturn",
@@ -28951,7 +29121,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L147",
+      "source_location": "L148",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine_resolveconversationroute",
@@ -28962,7 +29132,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L956",
+      "source_location": "L961",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine_executeconversationturn",
@@ -28974,7 +29144,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L645",
+      "source_location": "L646",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine_executerepositorytool",
@@ -28986,7 +29156,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L1053",
+      "source_location": "L1058",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine_executeconversationturn",
@@ -28999,7 +29169,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L624",
+      "source_location": "L625",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine_executerepositorytool",
@@ -29010,7 +29180,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L977",
+      "source_location": "L982",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine_executeconversationturn",
@@ -29022,7 +29192,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L697",
+      "source_location": "L698",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine_usageforresponse",
@@ -29034,7 +29204,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L808",
+      "source_location": "L813",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine_callmodel",
@@ -29046,7 +29216,19 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L731",
+      "source_location": "L725",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "apps_control_plane_src_conversation_engine_usageforresponse",
+      "target": "apps_control_plane_src_model_identity_normalizemodelid",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "apps/control-plane/src/conversation-engine.ts",
+      "source_location": "L736",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine_usageforresponse",
@@ -29057,7 +29239,7 @@
       "relation": "method",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L774",
+      "source_location": "L779",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine_conversationmodelcallerror",
@@ -29069,7 +29251,7 @@
       "context": "parameter_type",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L774",
+      "source_location": "L779",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine_conversationmodelcallerror_constructor",
@@ -29081,7 +29263,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L998",
+      "source_location": "L1003",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine_executeconversationturn",
@@ -29093,7 +29275,7 @@
       "context": "field",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L844",
+      "source_location": "L849",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine_conversationexecutionresult",
@@ -29105,7 +29287,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L834",
+      "source_location": "L839",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine_conversationexecutionresult",
@@ -29117,7 +29299,7 @@
       "context": "field",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L831",
+      "source_location": "L836",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine_conversationexecutionresult",
@@ -29129,7 +29311,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L891",
+      "source_location": "L896",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine_parsebrief",
@@ -29141,7 +29323,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L1012",
+      "source_location": "L1017",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine_executeconversationturn",
@@ -29153,7 +29335,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L1024",
+      "source_location": "L1029",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine_executeconversationturn",
@@ -29165,7 +29347,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L938",
+      "source_location": "L943",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine_parsefirstreply",
@@ -29177,7 +29359,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L1016",
+      "source_location": "L1021",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine_executeconversationturn",
@@ -29190,7 +29372,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L1007",
+      "source_location": "L1012",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine_executeconversationturn",
@@ -29225,7 +29407,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/conversation-engine.ts",
-      "source_location": "L1102",
+      "source_location": "L1107",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_conversation_engine_renderdeliverybrief",
@@ -46298,6 +46480,100 @@
       "relation": "imports_from",
       "context": "import",
       "confidence": "EXTRACTED",
+      "source_file": "apps/control-plane/src/model-identity.test.ts",
+      "source_location": "L7",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "apps_control_plane_src_model_identity_test",
+      "target": "apps_control_plane_src_model_identity",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "apps/control-plane/src/model-identity.test.ts",
+      "source_location": "L7",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "apps_control_plane_src_model_identity_test",
+      "target": "apps_control_plane_src_model_identity_normalizemodelid",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "apps/control-plane/src/model-identity.ts",
+      "source_location": "L13",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "apps_control_plane_src_model_identity",
+      "target": "apps_control_plane_src_model_identity_normalizemodelid",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "apps/control-plane/src/model-identity.ts",
+      "source_location": "L4",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "apps_control_plane_src_model_identity",
+      "target": "apps_control_plane_src_model_identity_providerfrommodel",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "apps/control-plane/src/model-prices.ts",
+      "source_location": "L4",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "apps_control_plane_src_model_prices",
+      "target": "apps_control_plane_src_model_identity",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "apps/control-plane/src/model-identity.ts",
+      "source_location": "L18",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "apps_control_plane_src_model_identity_normalizemodelid",
+      "target": "apps_control_plane_src_model_identity_providerfrommodel",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "apps/control-plane/src/model-prices.ts",
+      "source_location": "L4",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "apps_control_plane_src_model_prices",
+      "target": "apps_control_plane_src_model_identity_normalizemodelid",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "apps/control-plane/src/model-prices.ts",
+      "source_location": "L63",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "apps_control_plane_src_model_prices_resolvemodelprice",
+      "target": "apps_control_plane_src_model_identity_normalizemodelid"
+    },
+    {
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/model-prices.test.ts",
       "source_location": "L5",
       "weight": 1.0,
@@ -46334,7 +46610,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/model-prices.ts",
-      "source_location": "L79",
+      "source_location": "L80",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_model_prices",
@@ -46345,7 +46621,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/model-prices.ts",
-      "source_location": "L11",
+      "source_location": "L13",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_model_prices",
@@ -46356,7 +46632,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/model-prices.ts",
-      "source_location": "L21",
+      "source_location": "L23",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_model_prices",
@@ -46367,7 +46643,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/model-prices.ts",
-      "source_location": "L4",
+      "source_location": "L6",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_model_prices",
@@ -46378,7 +46654,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/model-prices.ts",
-      "source_location": "L52",
+      "source_location": "L54",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_model_prices",
@@ -46402,7 +46678,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/model-prices.ts",
-      "source_location": "L92",
+      "source_location": "L93",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_model_prices_estimatemodelcostusd",
@@ -46483,7 +46759,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "apps/control-plane/src/model-usage.test.ts",
-      "source_location": "L285",
+      "source_location": "L327",
       "weight": 1.0,
       "_origin": "ast",
       "source": "apps_control_plane_src_model_usage_test",
@@ -65112,5 +65388,5 @@
     }
   ],
   "hyperedges": [],
-  "built_at_commit": "ec48bf86e253182dbd4913fb73b8838b447ca4e1"
+  "built_at_commit": "91a8a030145886feea8a388e51eaa085d6f105d2"
 }
