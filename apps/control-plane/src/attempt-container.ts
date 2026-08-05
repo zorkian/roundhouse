@@ -10,7 +10,14 @@ import {
 import {
   attemptHasCapability,
   isModelRoute,
+  modelErrorCodesHeader,
+  modelErrorMessageHeader,
+  modelErrorParamHeader,
+  modelErrorSourceHeader,
+  modelErrorTypeHeader,
+  modelRetryAfterHeader,
   modelStopReasonHeader,
+  modelUpstreamRequestIdHeader,
   type Attempt,
   type ModelRoute,
   type ModelUsage,
@@ -250,6 +257,7 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
   headers.delete("x-api-key");
   headers.delete("x-roundhouse-attempt-capability");
   headers.set("x-roundhouse-role", attempt.role);
+  headers.set("x-roundhouse-workload", "attempt");
   headers.set(
     "x-roundhouse-research",
     attemptHasCapability(attempt, "research.public") ? "enabled" : "disabled",
@@ -312,10 +320,46 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
     attemptId,
   };
   if (!response.ok) {
-    await recordModelEvent(repository, attemptId, "model_response_rejected", {
+    const stopReason = response.headers.get(modelStopReasonHeader);
+    const source = response.headers.get(modelErrorSourceHeader);
+    const errorType = response.headers.get(modelErrorTypeHeader);
+    const errorMessage = response.headers.get(modelErrorMessageHeader);
+    const codes = response.headers.get(modelErrorCodesHeader);
+    const errorParam = response.headers.get(modelErrorParamHeader);
+    const requestId = response.headers.get(modelUpstreamRequestIdHeader);
+    const retryAfter = response.headers.get(modelRetryAfterHeader);
+    const rejection = {
       status: response.status,
       hasBody: Boolean(response.body),
-    });
+      provider: route.provider,
+      model: route.model,
+      protocol: route.protocol,
+      transport: route.transport ?? null,
+      stopReason: stopReason ?? null,
+      ...(source ? { source } : {}),
+      ...(errorType ? { errorType } : {}),
+      ...(errorMessage ? { errorMessage } : {}),
+      ...(codes ? { codes: codes.split(",").filter(Boolean) } : {}),
+      ...(errorParam ? { errorParam } : {}),
+      ...(requestId ? { requestId } : {}),
+      ...(retryAfter ? { retryAfter } : {}),
+    };
+    await recordModelEvent(
+      repository,
+      attemptId,
+      "model_response_rejected",
+      rejection,
+    );
+    console.error(
+      JSON.stringify({
+        message: "model_response_rejected",
+        api: "model_broker",
+        operation: `${request.method} ${requestedUrl.pathname}`,
+        attemptId,
+        rule: route.rule,
+        ...rejection,
+      }),
+    );
   }
   if (response.headers.get(modelStopReasonHeader) === "budget") {
     const paused = await pauseForModelBudget(repository, attempt);
@@ -330,7 +374,17 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
       );
   }
   const responseHeaders = new Headers(response.headers);
-  responseHeaders.delete(modelStopReasonHeader);
+  for (const header of [
+    modelStopReasonHeader,
+    modelErrorSourceHeader,
+    modelErrorTypeHeader,
+    modelErrorMessageHeader,
+    modelErrorCodesHeader,
+    modelErrorParamHeader,
+    modelUpstreamRequestIdHeader,
+    modelRetryAfterHeader,
+  ])
+    responseHeaders.delete(header);
   response = new Response(response.body, {
     status: response.status,
     statusText: response.statusText,

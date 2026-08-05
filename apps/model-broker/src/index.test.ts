@@ -2,7 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { brokerRequest, resolveRoute, type BrokerEnv } from "./index.js";
+import {
+  brokerRequest,
+  diagnoseUpstreamFailure,
+  diagnoseUpstreamLimit,
+  resolveRoute,
+  type BrokerEnv,
+} from "./index.js";
 
 const env = {
   AI: {} as Ai,
@@ -602,10 +608,354 @@ describe("model broker", () => {
       upstream.outboundFetch as unknown as typeof fetch,
     );
     await expect(response.json()).resolves.toMatchObject({ id: "response_1" });
-    const entries = log.mock.calls.map((call) => String(call[0])).join("\n");
-    expect(entries).toContain("model_response_received");
-    expect(entries).not.toContain("private transcript answer");
-    expect(entries).not.toContain("private transcript question");
+    const entries = log.mock.calls.map((call) => String(call[0]));
+    expect(JSON.parse(entries[0]!)).toMatchObject({
+      message: "model_response_received",
+      workload: "conversation",
+      role: "conversation",
+      ok: true,
+      status: 200,
+      body: "[REDACTED]",
+      provider: "openai",
+      model: "openai/gpt-5.6-sol",
+    });
+    expect(entries.join("\n")).not.toContain("private transcript answer");
+    expect(entries.join("\n")).not.toContain("private transcript question");
+  });
+
+  it("logs structured attempt successes and provider failures to Cloudflare logs", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const error = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const successRequest = modelRequest(
+      "openai-completions",
+      "review-security",
+      {
+        messages: [],
+      },
+    );
+    successRequest.headers.set("x-roundhouse-workload", "attempt");
+    const success = await brokerRequest(successRequest, env, {
+      run: vi.fn(async () => Response.json({ id: "chat_1", choices: [] })),
+    });
+    expect(success.status).toBe(200);
+    expect(
+      log.mock.calls
+        .map((call) => JSON.parse(String(call[0])))
+        .some(
+          (entry) =>
+            entry.message === "model_response_received" &&
+            entry.workload === "attempt" &&
+            entry.ok === true &&
+            entry.model === "moonshotai/kimi-k3",
+        ),
+    ).toBe(true);
+
+    const failedRequest = modelRequest(
+      "openai-completions",
+      "review-security",
+      { messages: [] },
+    );
+    failedRequest.headers.set("x-roundhouse-workload", "attempt");
+    const failed = await brokerRequest(failedRequest, env, {
+      run: vi.fn(async () =>
+        Response.json(
+          {
+            error: {
+              message: "The model is overloaded. Please try again later.",
+              type: "server_error",
+              code: "server_error",
+            },
+          },
+          { status: 503 },
+        ),
+      ),
+    });
+    expect(failed.status).toBe(503);
+    expect(
+      error.mock.calls
+        .map((call) => JSON.parse(String(call[0])))
+        .find((entry) => entry.message === "model_response_rejected"),
+    ).toMatchObject({
+      message: "model_response_rejected",
+      workload: "attempt",
+      role: "review-security",
+      status: 503,
+      ok: false,
+      source: "upstream_unavailable",
+      errorType: "server_error",
+      errorMessage: "The model is overloaded. Please try again later.",
+      provider: "moonshotai",
+      model: "moonshotai/kimi-k3",
+      errorBody: {
+        error: {
+          message: "The model is overloaded. Please try again later.",
+          type: "server_error",
+          code: "server_error",
+        },
+      },
+    });
+    expect(failed.headers.get("x-roundhouse-model-error-source")).toBe(
+      "upstream_unavailable",
+    );
+  });
+
+  it("classifies auth, invalid request, and not-found failures", async () => {
+    const error = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const auth = await brokerRequest(
+      modelRequest("openai-completions", "review-security", { messages: [] }),
+      env,
+      {
+        run: vi.fn(async () =>
+          Response.json(
+            {
+              error: {
+                message: "Incorrect API key provided",
+                type: "invalid_request_error",
+                code: "invalid_api_key",
+              },
+            },
+            { status: 401 },
+          ),
+        ),
+      },
+    );
+    expect(auth.status).toBe(401);
+    expect(auth.headers.get("x-roundhouse-model-error-source")).toBe(
+      "auth_error",
+    );
+    expect(
+      error.mock.calls
+        .map((call) => JSON.parse(String(call[0])))
+        .find((entry) => entry.status === 401),
+    ).toMatchObject({
+      message: "model_response_rejected",
+      source: "auth_error",
+      errorType: "invalid_request_error",
+      errorMessage: "Incorrect API key provided",
+    });
+
+    const invalid = await brokerRequest(
+      modelRequest("openai-completions", "review-security", { messages: [] }),
+      env,
+      {
+        run: vi.fn(async () =>
+          Response.json(
+            {
+              error: {
+                message: "Invalid schema for response_format",
+                type: "invalid_request_error",
+                param: "response_format",
+                code: "invalid_request_error",
+              },
+            },
+            { status: 400 },
+          ),
+        ),
+      },
+    );
+    expect(invalid.headers.get("x-roundhouse-model-error-source")).toBe(
+      "invalid_request",
+    );
+    expect(invalid.headers.get("x-roundhouse-model-error-param")).toBe(
+      "response_format",
+    );
+
+    const missing = await brokerRequest(
+      modelRequest("openai-completions", "review-security", { messages: [] }),
+      env,
+      {
+        run: vi.fn(async () =>
+          Response.json(
+            { error: { message: "Model not found", type: "not_found_error" } },
+            { status: 404 },
+          ),
+        ),
+      },
+    );
+    expect(missing.headers.get("x-roundhouse-model-error-source")).toBe(
+      "not_found",
+    );
+  });
+
+  it("logs provider rate-limit diagnostics for conversation 429s", async () => {
+    const error = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const upstream = nativeUpstream(async () =>
+      Response.json(
+        {
+          error: {
+            message: "Rate limit reached for gpt-5.6-sol",
+            type: "rate_limit_exceeded",
+            code: "rate_limit_exceeded",
+          },
+        },
+        { status: 429 },
+      ),
+    );
+    const request = modelRequest("openai-responses", "conversation", {
+      input: [{ role: "user", content: "private transcript question" }],
+    });
+    request.headers.set("x-roundhouse-workload", "conversation");
+    request.headers.set(
+      "x-roundhouse-conversation-id",
+      "0d07f731-6088-4d09-be47-711246ccc533",
+    );
+    request.headers.set(
+      "x-roundhouse-turn-id",
+      "635f0835-51e6-40db-a235-c5ad0eae4ac1",
+    );
+    const response = await brokerRequest(
+      request,
+      env,
+      upstream.ai,
+      upstream.outboundFetch as unknown as typeof fetch,
+    );
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-roundhouse-model-stop-reason")).toBeNull();
+    const entries = error.mock.calls.map((call) => String(call[0]));
+    expect(entries).toHaveLength(1);
+    expect(JSON.parse(entries[0]!)).toMatchObject({
+      message: "model_upstream_limited",
+      workload: "conversation",
+      role: "conversation",
+      ok: false,
+      status: 429,
+      source: "provider_rate_limit",
+      stopReason: null,
+      provider: "openai",
+      model: "openai/gpt-5.6-sol",
+      api: "ai_gateway_provider_native",
+      conversationId: "0d07f731-6088-4d09-be47-711246ccc533",
+      turnId: "635f0835-51e6-40db-a235-c5ad0eae4ac1",
+      errorType: "rate_limit_exceeded",
+      errorMessage: "Rate limit reached for gpt-5.6-sol",
+      errorBody: {
+        error: {
+          message: "Rate limit reached for gpt-5.6-sol",
+          type: "rate_limit_exceeded",
+          code: "rate_limit_exceeded",
+        },
+      },
+    });
+    expect(entries[0]).not.toContain("private transcript question");
+    expect(response.headers.get("x-roundhouse-model-error-source")).toBe(
+      "provider_rate_limit",
+    );
+    expect(response.headers.get("x-roundhouse-model-error-type")).toBe(
+      "rate_limit_exceeded",
+    );
+  });
+
+  it("logs Cloudflare AI Gateway budget diagnostics for 429s", async () => {
+    const error = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const response = await brokerRequest(
+      modelRequest("openai-completions", "review-security", { messages: [] }),
+      env,
+      {
+        run: vi.fn(async () =>
+          Response.json(
+            {
+              success: false,
+              error: [{ code: 2041, message: "Spend limit exceeded" }],
+              internalCode: 2041,
+            },
+            { status: 429 },
+          ),
+        ),
+      },
+    );
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-roundhouse-model-stop-reason")).toBe(
+      "budget",
+    );
+    expect(
+      error.mock.calls
+        .map((call) => JSON.parse(String(call[0])))
+        .find((entry) => entry.message === "model_upstream_limited"),
+    ).toMatchObject({
+      message: "model_upstream_limited",
+      source: "cloudflare_ai_gateway_budget",
+      stopReason: "budget",
+      codes: expect.arrayContaining(["2041"]),
+      errorMessage: "Spend limit exceeded",
+      ok: false,
+    });
+  });
+
+  it("classifies Workers AI account limits, gateway budgets, and provider caps", () => {
+    expect(
+      diagnoseUpstreamLimit(429, {
+        success: false,
+        errors: [{ code: "3036", message: "Account limited" }],
+      }),
+    ).toMatchObject({
+      source: "cloudflare_workers_ai_budget",
+      stopReason: "budget",
+      codes: ["3036"],
+    });
+    expect(
+      diagnoseUpstreamLimit(429, {
+        error: {
+          type: "rate_limit_error",
+          message:
+            "Number of request tokens has exceeded your per-minute rate limit",
+        },
+      }),
+    ).toMatchObject({
+      source: "provider_rate_limit",
+      errorType: "rate_limit_error",
+    });
+    expect(
+      diagnoseUpstreamLimit(429, {
+        success: false,
+        errors: [{ code: 3040, message: "Out of capacity" }],
+      }),
+    ).toMatchObject({
+      source: "cloudflare_capacity",
+      codes: ["3040"],
+    });
+    expect(
+      diagnoseUpstreamFailure(503, {
+        error: { type: "server_error", message: "Overloaded" },
+      }),
+    ).toMatchObject({
+      source: "upstream_unavailable",
+      errorType: "server_error",
+      errorMessage: "Overloaded",
+    });
+    expect(
+      diagnoseUpstreamFailure(500, {
+        success: false,
+        errors: [{ code: 1000, message: "Internal error" }],
+      }),
+    ).toMatchObject({
+      source: "cloudflare_error",
+      codes: ["1000"],
+    });
+    expect(
+      diagnoseUpstreamFailure(401, {
+        error: { type: "invalid_request_error", message: "bad key" },
+      }),
+    ).toMatchObject({ source: "auth_error" });
+    expect(
+      diagnoseUpstreamFailure(400, {
+        error: {
+          type: "invalid_request_error",
+          message: "bad schema",
+          param: "tools",
+        },
+      }),
+    ).toMatchObject({
+      source: "invalid_request",
+      errorParam: "tools",
+    });
   });
 
   it("marks an exhausted Workers AI account as a budget stop", async () => {

@@ -186,10 +186,34 @@ export async function processConversationWakeup(
       await repository.recordTurnRoute(turn.id, metadata.route);
     await repository.recordModelUsage(metadata.usage);
     if (deliveryAttempts >= 5) {
+      console.error(
+        JSON.stringify({
+          message: "conversation_turn_failed",
+          conversationId: conversation.id,
+          turnId: turn.id,
+          turnKind: turn.kind,
+          deliveryAttempts,
+          errorCode: metadata.code,
+          provider: metadata.route?.provider ?? null,
+          model: metadata.route?.model ?? null,
+        }),
+      );
       await repository.failTurn(turn.id, metadata.code);
       await repository.completeWakeup(wakeup);
       return "completed";
     }
+    console.error(
+      JSON.stringify({
+        message: "conversation_turn_retry",
+        conversationId: conversation.id,
+        turnId: turn.id,
+        turnKind: turn.kind,
+        deliveryAttempts,
+        errorCode: metadata.code,
+        provider: metadata.route?.provider ?? null,
+        model: metadata.route?.model ?? null,
+      }),
+    );
     await repository.retryTurn(turn.id, metadata.code);
     return "retry";
   }

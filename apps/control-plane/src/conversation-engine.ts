@@ -3,6 +3,14 @@
 
 import {
   isModelRoute,
+  modelErrorCodesHeader,
+  modelErrorMessageHeader,
+  modelErrorParamHeader,
+  modelErrorSourceHeader,
+  modelErrorTypeHeader,
+  modelRetryAfterHeader,
+  modelStopReasonHeader,
+  modelUpstreamRequestIdHeader,
   normalizeRepositoryPath,
   type ModelRoute,
 } from "@roundhouse/core";
@@ -109,11 +117,19 @@ interface ProtocolAdapter {
   ) => ModelRequest;
 }
 
-function brokerHeaders(route: ModelRoute, research: boolean): Headers {
+function brokerHeaders(
+  route: ModelRoute,
+  research: boolean,
+  conversation: Pick<Conversation, "id">,
+  turn: Pick<ConversationTurn, "id">,
+): Headers {
   const headers = new Headers({
     "content-type": "application/json",
     "x-roundhouse-research": research ? "enabled" : "disabled",
     "x-roundhouse-workload": "conversation",
+    "x-roundhouse-role": "conversation",
+    "x-roundhouse-conversation-id": conversation.id,
+    "x-roundhouse-turn-id": turn.id,
   });
   headers.set(routeHeaders.provider, route.provider);
   headers.set(routeHeaders.model, route.model);
@@ -122,6 +138,99 @@ function brokerHeaders(route: ModelRoute, research: boolean): Headers {
   headers.set(routeHeaders.thinkingLevel, route.thinkingLevel);
   headers.set(routeHeaders.rule, route.rule);
   return headers;
+}
+
+function brokerFailureFields(response: Headers): Record<string, unknown> {
+  const source = response.get(modelErrorSourceHeader);
+  const errorType = response.get(modelErrorTypeHeader);
+  const errorMessage = response.get(modelErrorMessageHeader);
+  const codes = response.get(modelErrorCodesHeader);
+  const errorParam = response.get(modelErrorParamHeader);
+  const requestId = response.get(modelUpstreamRequestIdHeader);
+  const retryAfter = response.get(modelRetryAfterHeader);
+  const stopReason = response.get(modelStopReasonHeader);
+  return {
+    stopReason: stopReason ?? null,
+    ...(source ? { source } : {}),
+    ...(errorType ? { errorType } : {}),
+    ...(errorMessage ? { errorMessage } : {}),
+    ...(codes ? { codes: codes.split(",").filter(Boolean) } : {}),
+    ...(errorParam ? { errorParam } : {}),
+    ...(requestId ? { requestId } : {}),
+    ...(retryAfter ? { retryAfter } : {}),
+  };
+}
+
+function conversationModelErrorFields(value: Record<string, unknown>): {
+  readonly errorType?: string;
+  readonly errorMessage?: string;
+  readonly codes?: readonly string[];
+  readonly errorParam?: string;
+} {
+  const codes = [
+    value.internalCode,
+    ...((value.errors as readonly { code?: unknown }[] | undefined) ?? []).map(
+      (error) => error.code,
+    ),
+    ...(Array.isArray(value.error)
+      ? value.error.map((error: { code?: unknown }) => error.code)
+      : value.error && typeof value.error === "object"
+        ? [(value.error as { code?: unknown }).code]
+        : []),
+  ]
+    .filter((code) => code !== undefined && code !== null && code !== "")
+    .map((code) => String(code));
+  const error = value.error;
+  if (typeof error === "string")
+    return {
+      ...(codes.length ? { codes } : {}),
+      errorMessage: error.slice(0, 500),
+    };
+  if (error && typeof error === "object" && !Array.isArray(error)) {
+    const record = error as Record<string, unknown>;
+    return {
+      ...(codes.length ? { codes } : {}),
+      ...(typeof record.type === "string"
+        ? { errorType: record.type }
+        : typeof record.code === "string"
+          ? { errorType: record.code }
+          : {}),
+      ...(typeof record.message === "string"
+        ? { errorMessage: record.message.slice(0, 500) }
+        : {}),
+      ...(typeof record.param === "string"
+        ? { errorParam: record.param.slice(0, 120) }
+        : {}),
+    };
+  }
+  const first = Array.isArray(value.errors)
+    ? value.errors.find(
+        (item): item is Record<string, unknown> =>
+          Boolean(item) && typeof item === "object",
+      )
+    : Array.isArray(value.error)
+      ? value.error.find(
+          (item): item is Record<string, unknown> =>
+            Boolean(item) && typeof item === "object",
+        )
+      : undefined;
+  return {
+    ...(codes.length ? { codes } : {}),
+    ...(first &&
+    (typeof first.type === "string" ||
+      typeof first.code === "string" ||
+      typeof first.code === "number")
+      ? {
+          errorType:
+            typeof first.type === "string" ? first.type : String(first.code),
+        }
+      : {}),
+    ...(first && typeof first.message === "string"
+      ? { errorMessage: first.message.slice(0, 500) }
+      : typeof value.message === "string"
+        ? { errorMessage: value.message.slice(0, 500) }
+        : {}),
+  };
 }
 
 export async function resolveConversationRoute(
@@ -800,7 +909,12 @@ async function callModel(input: {
   const response = await input.broker.fetch(
     new Request(`https://broker.roundhouse.internal${input.request.endpoint}`, {
       method: "POST",
-      headers: brokerHeaders(input.route, input.research),
+      headers: brokerHeaders(
+        input.route,
+        input.research,
+        input.conversation,
+        input.turn,
+      ),
       body: JSON.stringify(input.request.body),
     }),
   );
@@ -819,11 +933,29 @@ async function callModel(input: {
     latencyMs: Date.now() - startedAt,
     outcome: response.ok ? "succeeded" : "failed",
   });
-  if (!response.ok)
+  if (!response.ok) {
+    console.error(
+      JSON.stringify({
+        message: "conversation_model_response_rejected",
+        conversationId: input.conversation.id,
+        turnId: input.turn.id,
+        callKind: input.callKind,
+        status: response.status,
+        provider: input.route.provider,
+        model: input.route.model,
+        protocol: input.route.protocol,
+        transport: input.route.transport ?? null,
+        rule: input.route.rule,
+        latencyMs: Date.now() - startedAt,
+        ...brokerFailureFields(response.headers),
+        ...conversationModelErrorFields(value),
+      }),
+    );
     throw new ConversationModelCallError(
       `conversation_model_http_${response.status}`,
       usage,
     );
+  }
   return { value, usage };
 }
 

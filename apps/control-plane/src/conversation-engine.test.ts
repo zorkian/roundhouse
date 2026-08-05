@@ -478,4 +478,46 @@ describe("conversation engine", () => {
     });
     expect(result.usage[0]!.costUsd).toBeCloseTo(0.0005, 12);
   });
+
+  it("logs provider and status when a model call is rejected", async () => {
+    const error = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const limited = Response.json(
+      {
+        error: {
+          message: "Rate limit reached for gpt-5.6-sol",
+          type: "rate_limit_exceeded",
+          code: "rate_limit_exceeded",
+        },
+      },
+      { status: 429 },
+    );
+    const modelBroker = broker([Response.json(responsesRoute), limited]);
+    await expect(
+      executeConversationTurn(modelBroker, github, conversation, {
+        ...turn,
+        ordinal: 2,
+      }),
+    ).rejects.toMatchObject({
+      message: "conversation_model_http_429",
+    });
+    const modelRequest = modelBroker.fetch.mock.calls[1]![0] as Request;
+    expect(modelRequest.headers.get("x-roundhouse-conversation-id")).toBe(
+      conversation.id,
+    );
+    expect(modelRequest.headers.get("x-roundhouse-turn-id")).toBe(turn.id);
+    expect(JSON.parse(String(error.mock.calls.at(-1)?.[0]))).toMatchObject({
+      message: "conversation_model_response_rejected",
+      conversationId: conversation.id,
+      turnId: turn.id,
+      status: 429,
+      provider: "openai",
+      model: "openai/gpt-5.6-sol",
+      stopReason: null,
+      errorType: "rate_limit_exceeded",
+      errorMessage: "Rate limit reached for gpt-5.6-sol",
+    });
+    error.mockRestore();
+  });
 });

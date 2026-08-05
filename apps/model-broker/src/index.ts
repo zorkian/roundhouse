@@ -2,9 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import {
+  modelErrorCodesHeader,
+  modelErrorMessageHeader,
+  modelErrorParamHeader,
+  modelErrorSourceHeader,
+  modelErrorTypeHeader,
+  modelRetryAfterHeader,
   modelStopReasonHeader,
   modelSupportsThinkingLevel,
   modelThinkingLevels,
+  modelUpstreamRequestIdHeader,
   modelProtocols,
   modelTransports,
   runtimeCapabilitiesForModel,
@@ -467,32 +474,453 @@ function runUnified(
   });
 }
 
-async function cloudflareStopReason(
-  response: Response,
-): Promise<"budget" | undefined> {
-  if (response.status !== 429) return undefined;
-  try {
-    const body = (await response.clone().json()) as {
-      errors?: readonly { code?: unknown }[];
-      error?: unknown;
-      internalCode?: unknown;
-    };
-    const gatewayErrorCodes = Array.isArray(body.error)
-      ? body.error.map((error: { code?: unknown }) => error.code)
-      : body.error && typeof body.error === "object"
-        ? [(body.error as { code?: unknown }).code]
-        : [];
-    const codes = [
-      body.internalCode,
-      ...(body.errors ?? []).map((error) => error.code),
-      ...gatewayErrorCodes,
-    ];
-    return codes.some((code) => ["3036", "2041"].includes(String(code)))
-      ? "budget"
-      : undefined;
-  } catch {
-    return undefined;
+export type UpstreamLimitSource =
+  | "cloudflare_workers_ai_budget"
+  | "cloudflare_ai_gateway_budget"
+  | "cloudflare_capacity"
+  | "provider_rate_limit"
+  | "unknown";
+
+export type UpstreamFailureSource =
+  | UpstreamLimitSource
+  | "provider_error"
+  | "cloudflare_error"
+  | "auth_error"
+  | "invalid_request"
+  | "not_found"
+  | "upstream_unavailable";
+
+export interface UpstreamFailureDiagnostics {
+  readonly stopReason?: "budget";
+  readonly source: UpstreamFailureSource;
+  readonly codes: readonly string[];
+  readonly errorType?: string;
+  readonly errorMessage?: string;
+  readonly errorParam?: string;
+  readonly requestId?: string;
+  readonly retryAfter?: string;
+  readonly statusText?: string;
+  readonly contentType?: string;
+  readonly errorBody?: unknown;
+}
+
+/** @deprecated Prefer UpstreamFailureDiagnostics; kept for existing call sites. */
+export type UpstreamLimitDiagnostics = UpstreamFailureDiagnostics;
+
+const secretDiagnosticFields = new Set([
+  "authorization",
+  "credential",
+  "credentials",
+  "password",
+  "privatekey",
+  "secret",
+  "clientsecret",
+  "signature",
+  "token",
+  "accesstoken",
+  "refreshtoken",
+  "idtoken",
+  "apikey",
+]);
+
+function truncateDiagnostic(value: string, max = 500): string {
+  return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
+}
+
+function isSecretDiagnosticField(name: string): boolean {
+  return secretDiagnosticFields.has(name.replaceAll(/[-_]/g, "").toLowerCase());
+}
+
+function redactDiagnosticValue(value: unknown, depth = 0): unknown {
+  if (depth > 6) return "[TRUNCATED]";
+  if (Array.isArray(value))
+    return value
+      .slice(0, 20)
+      .map((item) => redactDiagnosticValue(item, depth + 1));
+  if (!value || typeof value !== "object") {
+    if (typeof value === "string") return truncateDiagnostic(value, 500);
+    return value;
   }
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .slice(0, 40)
+      .map(([key, child]) => [
+        key,
+        isSecretDiagnosticField(key)
+          ? "[REDACTED]"
+          : redactDiagnosticValue(child, depth + 1),
+      ]),
+  );
+}
+
+function diagnosticCodes(body: Record<string, unknown>): string[] {
+  const gatewayErrorCodes = Array.isArray(body.error)
+    ? body.error.map((error: { code?: unknown }) => error.code)
+    : body.error && typeof body.error === "object"
+      ? [(body.error as { code?: unknown }).code]
+      : [];
+  const statusCode =
+    body.error && typeof body.error === "object" && !Array.isArray(body.error)
+      ? ((body.error as { status?: unknown; statusCode?: unknown }).status ??
+        (body.error as { statusCode?: unknown }).statusCode)
+      : body.status;
+  return [
+    ...new Set(
+      [
+        body.internalCode,
+        statusCode,
+        ...(
+          (body.errors as readonly { code?: unknown }[] | undefined) ?? []
+        ).map((error) => error.code),
+        ...gatewayErrorCodes,
+      ]
+        .filter((code) => code !== undefined && code !== null && code !== "")
+        .map((code) => String(code)),
+    ),
+  ];
+}
+
+function diagnosticErrorFields(body: Record<string, unknown>): {
+  readonly errorType?: string;
+  readonly errorMessage?: string;
+  readonly errorParam?: string;
+} {
+  const error = body.error;
+  if (typeof error === "string")
+    return { errorMessage: truncateDiagnostic(error) };
+  if (error && typeof error === "object" && !Array.isArray(error)) {
+    const record = error as Record<string, unknown>;
+    const type =
+      typeof record.type === "string"
+        ? record.type
+        : typeof record.status === "string"
+          ? record.status
+          : typeof record.code === "string"
+            ? record.code
+            : undefined;
+    return {
+      ...(type ? { errorType: type } : {}),
+      ...(typeof record.message === "string"
+        ? { errorMessage: truncateDiagnostic(record.message) }
+        : {}),
+      ...(typeof record.param === "string"
+        ? { errorParam: truncateDiagnostic(record.param, 120) }
+        : {}),
+    };
+  }
+  const first = Array.isArray(body.errors)
+    ? body.errors.find(
+        (item): item is Record<string, unknown> =>
+          Boolean(item) && typeof item === "object",
+      )
+    : Array.isArray(body.error)
+      ? body.error.find(
+          (item): item is Record<string, unknown> =>
+            Boolean(item) && typeof item === "object",
+        )
+      : undefined;
+  if (!first) {
+    return typeof body.message === "string"
+      ? { errorMessage: truncateDiagnostic(body.message) }
+      : {};
+  }
+  return {
+    ...(typeof first.type === "string"
+      ? { errorType: first.type }
+      : typeof first.code === "string" || typeof first.code === "number"
+        ? { errorType: String(first.code) }
+        : {}),
+    ...(typeof first.message === "string"
+      ? { errorMessage: truncateDiagnostic(first.message) }
+      : {}),
+    ...(typeof first.param === "string"
+      ? { errorParam: truncateDiagnostic(first.param, 120) }
+      : {}),
+  };
+}
+
+function cloudflareShaped(body: Record<string, unknown>): boolean {
+  return (
+    body.success === false ||
+    Array.isArray(body.errors) ||
+    body.internalCode !== undefined
+  );
+}
+
+function statusFailureSource(
+  status: number,
+): UpstreamFailureSource | undefined {
+  if (status === 400 || status === 422) return "invalid_request";
+  if (status === 401 || status === 403) return "auth_error";
+  if (status === 404) return "not_found";
+  if (status === 408 || status === 504 || status === 529)
+    return "upstream_unavailable";
+  if (status >= 500 && status <= 599) return "upstream_unavailable";
+  return undefined;
+}
+
+function usefulUpstreamHeaders(response: Response): {
+  readonly requestId?: string;
+  readonly retryAfter?: string;
+  readonly contentType?: string;
+  readonly statusText?: string;
+} {
+  const requestId =
+    response.headers.get("x-request-id") ??
+    response.headers.get("cf-ray") ??
+    response.headers.get("cf-aig-request-id") ??
+    response.headers.get("request-id") ??
+    undefined;
+  const retryAfter = response.headers.get("retry-after") ?? undefined;
+  const contentType = response.headers.get("content-type") ?? undefined;
+  return {
+    ...(requestId ? { requestId } : {}),
+    ...(retryAfter ? { retryAfter } : {}),
+    ...(contentType ? { contentType } : {}),
+    ...(response.statusText ? { statusText: response.statusText } : {}),
+  };
+}
+
+function sanitizedErrorBody(body: unknown): unknown {
+  if (body === null || body === undefined) return undefined;
+  if (typeof body === "string") return truncateDiagnostic(body, 500);
+  if (typeof body !== "object") return body;
+  const record = body as Record<string, unknown>;
+  const focused: Record<string, unknown> = {};
+  for (const key of [
+    "error",
+    "errors",
+    "message",
+    "code",
+    "type",
+    "status",
+    "statusCode",
+    "internalCode",
+    "success",
+    "param",
+  ]) {
+    if (key in record) focused[key] = record[key];
+  }
+  if (!Object.keys(focused).length) return redactDiagnosticValue(record);
+  return redactDiagnosticValue(focused);
+}
+
+export function diagnoseUpstreamLimit(
+  status: number,
+  body: unknown,
+): UpstreamFailureDiagnostics | undefined {
+  if (status !== 429) return undefined;
+  if (!body || typeof body !== "object" || Array.isArray(body))
+    return {
+      source: "unknown",
+      codes: [],
+      errorBody: sanitizedErrorBody(body),
+    };
+  const record = body as Record<string, unknown>;
+  const codes = diagnosticCodes(record);
+  const fields = diagnosticErrorFields(record);
+  const errorBody = sanitizedErrorBody(record);
+  if (codes.some((code) => code === "3036"))
+    return {
+      stopReason: "budget",
+      source: "cloudflare_workers_ai_budget",
+      codes,
+      ...fields,
+      errorBody,
+    };
+  if (codes.some((code) => code === "2041"))
+    return {
+      stopReason: "budget",
+      source: "cloudflare_ai_gateway_budget",
+      codes,
+      ...fields,
+      errorBody,
+    };
+  const providerLimit =
+    fields.errorType === "rate_limit_exceeded" ||
+    fields.errorType === "rate_limit_error" ||
+    fields.errorType === "insufficient_quota" ||
+    /rate.?limit|quota|too many requests/i.test(fields.errorMessage ?? "");
+  if (providerLimit)
+    return { source: "provider_rate_limit", codes, ...fields, errorBody };
+  if (cloudflareShaped(record))
+    return { source: "cloudflare_capacity", codes, ...fields, errorBody };
+  return { source: "unknown", codes, ...fields, errorBody };
+}
+
+export function diagnoseUpstreamFailure(
+  status: number,
+  body: unknown,
+): UpstreamFailureDiagnostics | undefined {
+  if (status >= 200 && status < 300) return undefined;
+  if (status === 429) return diagnoseUpstreamLimit(status, body);
+  const statusSource = statusFailureSource(status);
+  if (!body || typeof body !== "object" || Array.isArray(body))
+    return {
+      source: statusSource ?? "unknown",
+      codes: [],
+      ...(typeof body === "string"
+        ? {
+            errorMessage: truncateDiagnostic(body),
+            errorBody: sanitizedErrorBody(body),
+          }
+        : body
+          ? { errorBody: sanitizedErrorBody(body) }
+          : {}),
+    };
+  const record = body as Record<string, unknown>;
+  const codes = diagnosticCodes(record);
+  const fields = diagnosticErrorFields(record);
+  const errorBody = sanitizedErrorBody(record);
+  if (cloudflareShaped(record))
+    return {
+      source: statusSource === "auth_error" ? "auth_error" : "cloudflare_error",
+      codes,
+      ...fields,
+      errorBody,
+    };
+  if (
+    fields.errorType ||
+    fields.errorMessage ||
+    (record.error && typeof record.error === "object") ||
+    typeof record.error === "string"
+  ) {
+    const providerSource =
+      statusSource === "invalid_request" ||
+      statusSource === "auth_error" ||
+      statusSource === "not_found" ||
+      statusSource === "upstream_unavailable"
+        ? statusSource
+        : "provider_error";
+    return { source: providerSource, codes, ...fields, errorBody };
+  }
+  return {
+    source: statusSource ?? "unknown",
+    codes,
+    ...fields,
+    errorBody,
+  };
+}
+
+async function readUpstreamFailureDiagnostics(
+  response: Response,
+): Promise<UpstreamFailureDiagnostics | undefined> {
+  if (response.ok) return undefined;
+  const headers = usefulUpstreamHeaders(response);
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  if (contentType.includes("text/event-stream"))
+    return {
+      source: statusFailureSource(response.status) ?? "unknown",
+      codes: [],
+      ...headers,
+    };
+  try {
+    const text = await response.clone().text();
+    if (!text)
+      return {
+        source: statusFailureSource(response.status) ?? "unknown",
+        codes: [],
+        ...headers,
+      };
+    try {
+      const diagnosed = diagnoseUpstreamFailure(
+        response.status,
+        JSON.parse(text),
+      );
+      return diagnosed ? { ...diagnosed, ...headers } : undefined;
+    } catch {
+      return {
+        source: statusFailureSource(response.status) ?? "unknown",
+        codes: [],
+        errorMessage: truncateDiagnostic(text),
+        errorBody: truncateDiagnostic(text),
+        ...headers,
+      };
+    }
+  } catch {
+    return {
+      source: statusFailureSource(response.status) ?? "unknown",
+      codes: [],
+      ...headers,
+    };
+  }
+}
+
+function failureLogFields(
+  failure: UpstreamFailureDiagnostics,
+): Record<string, unknown> {
+  return {
+    source: failure.source,
+    stopReason: failure.stopReason ?? null,
+    codes: failure.codes,
+    ...(failure.errorType ? { errorType: failure.errorType } : {}),
+    ...(failure.errorMessage ? { errorMessage: failure.errorMessage } : {}),
+    ...(failure.errorParam ? { errorParam: failure.errorParam } : {}),
+    ...(failure.requestId ? { requestId: failure.requestId } : {}),
+    ...(failure.retryAfter ? { retryAfter: failure.retryAfter } : {}),
+    ...(failure.statusText ? { statusText: failure.statusText } : {}),
+    ...(failure.contentType ? { contentType: failure.contentType } : {}),
+    ...(failure.errorBody !== undefined
+      ? { errorBody: failure.errorBody }
+      : {}),
+  };
+}
+
+function applyFailureHeaders(
+  headers: Headers,
+  failure: UpstreamFailureDiagnostics | undefined,
+): void {
+  if (!failure) return;
+  if (failure.stopReason)
+    headers.set(modelStopReasonHeader, failure.stopReason);
+  headers.set(modelErrorSourceHeader, failure.source);
+  if (failure.errorType) headers.set(modelErrorTypeHeader, failure.errorType);
+  if (failure.errorMessage)
+    headers.set(
+      modelErrorMessageHeader,
+      truncateDiagnostic(failure.errorMessage, 200),
+    );
+  if (failure.codes.length)
+    headers.set(modelErrorCodesHeader, failure.codes.join(","));
+  if (failure.errorParam)
+    headers.set(
+      modelErrorParamHeader,
+      truncateDiagnostic(failure.errorParam, 120),
+    );
+  if (failure.requestId)
+    headers.set(modelUpstreamRequestIdHeader, failure.requestId);
+  if (failure.retryAfter)
+    headers.set(modelRetryAfterHeader, failure.retryAfter);
+}
+
+function logBrokerModelResponse(input: {
+  readonly details: Readonly<Record<string, unknown>>;
+  readonly response: Response;
+  readonly workload: string | null;
+  readonly role: string | null;
+  readonly failure?: UpstreamFailureDiagnostics;
+  readonly redactTranscript: boolean;
+}): void {
+  const { response, failure } = input;
+  const message = response.ok
+    ? "model_response_received"
+    : response.status === 429
+      ? "model_upstream_limited"
+      : "model_response_rejected";
+  const entry = {
+    message,
+    ...input.details,
+    workload: input.workload,
+    role: input.role,
+    status: response.status,
+    ok: response.ok,
+    ...(failure ? failureLogFields(failure) : {}),
+    // Conversation transcripts stay out of logs; failure diagnostics above are
+    // intentional Cloudflare observability for debugging provider/gateway errors.
+    ...(input.redactTranscript && response.ok ? { body: "[REDACTED]" } : {}),
+  };
+  if (response.ok) console.log(JSON.stringify(entry));
+  else console.error(JSON.stringify(entry));
 }
 
 function endpointProtocol(pathname: string): ModelProtocol | undefined {
@@ -672,6 +1100,8 @@ export async function brokerRequest(
         : await runUnified(env, route, body, ai);
   } catch (error) {
     const attemptId = request.headers.get("x-roundhouse-attempt-id");
+    const conversationId = request.headers.get("x-roundhouse-conversation-id");
+    const turnId = request.headers.get("x-roundhouse-turn-id");
     console.error(
       JSON.stringify({
         message: "api_request_failed",
@@ -681,14 +1111,26 @@ export async function brokerRequest(
             : "workers_ai",
         operation: "run_model",
         ...(attemptId ? { attemptId } : {}),
+        ...(conversationId ? { conversationId } : {}),
+        ...(turnId ? { turnId } : {}),
+        workload: request.headers.get("x-roundhouse-workload"),
+        role: request.headers.get("x-roundhouse-role"),
+        provider: route.provider,
         model: route.model,
+        protocol: route.protocol,
+        transport: route.transport ?? null,
+        rule: route.rule,
         error: error instanceof Error ? error.message : String(error),
       }),
     );
     return Response.json({ error: "model_upstream_failed" }, { status: 502 });
   }
   const attemptId = request.headers.get("x-roundhouse-attempt-id");
-  const stopReason = await cloudflareStopReason(response);
+  const conversationId = request.headers.get("x-roundhouse-conversation-id");
+  const turnId = request.headers.get("x-roundhouse-turn-id");
+  const workload = request.headers.get("x-roundhouse-workload");
+  const role = request.headers.get("x-roundhouse-role");
+  const failure = await readUpstreamFailureDiagnostics(response);
   const responseDetails = {
     api:
       route.transport === "cloudflare-provider-native"
@@ -696,25 +1138,28 @@ export async function brokerRequest(
         : "workers_ai",
     operation: "run_model",
     ...(attemptId ? { attemptId } : {}),
+    ...(conversationId ? { conversationId } : {}),
+    ...(turnId ? { turnId } : {}),
+    provider: route.provider,
     model: route.model,
+    protocol: route.protocol,
+    transport: route.transport ?? null,
+    rule: route.rule,
   };
-  const conversationWorkload =
-    request.headers.get("x-roundhouse-workload") === "conversation";
+  const conversationWorkload = workload === "conversation";
   const captured = conversationWorkload
     ? response
     : await observeResponse(response, responseDetails);
-  if (conversationWorkload)
-    console.log(
-      JSON.stringify({
-        message: "model_response_received",
-        ...responseDetails,
-        workload: "conversation",
-        status: response.status,
-        body: "[REDACTED]",
-      }),
-    );
+  logBrokerModelResponse({
+    details: responseDetails,
+    response: captured,
+    workload,
+    role,
+    ...(failure ? { failure } : {}),
+    redactTranscript: conversationWorkload,
+  });
   const headers = responseHeaders(captured, route);
-  if (stopReason) headers.set(modelStopReasonHeader, stopReason);
+  applyFailureHeaders(headers, failure);
   return new Response(captured.body, {
     status: captured.status,
     statusText: captured.statusText,
