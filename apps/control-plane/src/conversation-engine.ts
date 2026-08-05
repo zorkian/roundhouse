@@ -900,6 +900,8 @@ const modelCallRetryStatuses = new Set([408, 429, 503]);
 const modelCallMaxAttempts = 4;
 const modelCallBackoffBaseMs = 5_000;
 const modelCallBackoffCapMs = 60_000;
+/** Keep total in-turn sleeps under the ~15m queue consumer window. */
+const modelCallSleepBudgetMs = 8 * 60_000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -922,10 +924,18 @@ export function modelCallBackoffMs(
   retryAfter?: string | null,
 ): number {
   const fromHeader = parseRetryAfterSeconds(retryAfter);
-  if (fromHeader !== undefined) return fromHeader * 1000;
+  if (fromHeader !== undefined)
+    return Math.min(modelCallBackoffCapMs, Math.max(1_000, fromHeader * 1_000));
   return Math.min(
     modelCallBackoffCapMs,
     modelCallBackoffBaseMs * 2 ** Math.max(0, attempt - 1),
+  );
+}
+
+export function isConversationModelRateLimitError(errorCode: string): boolean {
+  return (
+    /conversation_model_http_(408|429|503)$/.test(errorCode) ||
+    /rate_limit|budget|wholesale|capacity/.test(errorCode)
   );
 }
 
@@ -934,13 +944,9 @@ export function conversationQueueRetryDelaySeconds(
   deliveryAttempts: number,
   retryAfter?: string | null,
 ): number | undefined {
+  if (!isConversationModelRateLimitError(errorCode)) return undefined;
   const fromHeader = parseRetryAfterSeconds(retryAfter);
   if (fromHeader !== undefined) return Math.max(1, fromHeader);
-  if (
-    !/conversation_model_http_(408|429|503)$/.test(errorCode) &&
-    !/rate_limit|budget|wholesale|capacity/.test(errorCode)
-  )
-    return undefined;
   return Math.min(300, 15 * 2 ** Math.max(0, deliveryAttempts - 1));
 }
 
@@ -953,9 +959,11 @@ async function callModel(input: {
   readonly turn: ConversationTurn;
   readonly callKind: ConversationCallUsage["callKind"];
   readonly renew?: () => Promise<unknown>;
+  readonly sleepBudget: { remainingMs: number };
 }): Promise<{
   readonly value: Record<string, unknown>;
   readonly usage: ConversationCallUsage;
+  readonly failedAttempts: readonly ConversationCallUsage[];
 }> {
   let lastError: ConversationModelCallError | undefined;
   const failedUsage: ConversationCallUsage[] = [];
@@ -991,7 +999,7 @@ async function callModel(input: {
       latencyMs: Date.now() - startedAt,
       outcome: response.ok ? "succeeded" : "failed",
     });
-    if (response.ok) return { value, usage };
+    if (response.ok) return { value, usage, failedAttempts: [...failedUsage] };
     const failureFields = {
       ...brokerFailureFields(response.headers),
       ...conversationModelErrorFields(value),
@@ -1027,7 +1035,27 @@ async function callModel(input: {
     );
     const retryable = modelCallRetryStatuses.has(response.status);
     if (!retryable || attempt >= modelCallMaxAttempts) throw lastError;
-    const delayMs = modelCallBackoffMs(attempt, retryAfter);
+    if (input.sleepBudget.remainingMs < 1_000) {
+      console.error(
+        JSON.stringify({
+          message: "conversation_model_call_backoff_budget_exhausted",
+          conversationId: input.conversation.id,
+          turnId: input.turn.id,
+          callKind: input.callKind,
+          status: response.status,
+          attempt,
+          remainingMs: input.sleepBudget.remainingMs,
+          provider: input.route.provider,
+          model: input.route.model,
+        }),
+      );
+      throw lastError;
+    }
+    const delayMs = Math.min(
+      modelCallBackoffMs(attempt, retryAfter),
+      input.sleepBudget.remainingMs,
+    );
+    input.sleepBudget.remainingMs -= delayMs;
     console.error(
       JSON.stringify({
         message: "conversation_model_call_backoff",
@@ -1038,6 +1066,7 @@ async function callModel(input: {
         attempt,
         nextAttempt: attempt + 1,
         delayMs,
+        remainingBudgetMs: input.sleepBudget.remainingMs,
         provider: input.route.provider,
         model: input.route.model,
         ...failureFields,
@@ -1237,6 +1266,7 @@ export async function executeConversationTurn(
     maxOutputTokens: turn.kind === "brief" ? 4_000 : 8_000,
   });
   const usage: ConversationCallUsage[] = [];
+  const sleepBudget = { remainingMs: modelCallSleepBudgetMs };
   try {
     for (let round = 0; round <= maxToolRounds; round += 1) {
       await renew?.();
@@ -1249,8 +1279,9 @@ export async function executeConversationTurn(
         turn,
         callKind,
         renew,
+        sleepBudget,
       });
-      usage.push(called.usage);
+      usage.push(...called.failedAttempts, called.usage);
       const parsed = adapter.parse(called.value);
       if (!parsed.calls.length) {
         if (!parsed.text) throw new Error("conversation_model_output_missing");

@@ -541,6 +541,41 @@ describe("conversation engine", () => {
     vi.useRealTimers();
   });
 
+  it("records failed usage rows when every in-turn retry is exhausted", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const limited = () =>
+      Response.json(
+        { error: { message: "rate limited", type: "rate_limit_exceeded" } },
+        { status: 429 },
+      );
+    const modelBroker = broker([
+      Response.json(responsesRoute),
+      limited(),
+      limited(),
+      limited(),
+      limited(),
+    ]);
+    const pending = expect(
+      executeConversationTurn(modelBroker, github, conversation, {
+        ...turn,
+        ordinal: 2,
+      }),
+    ).rejects.toMatchObject({
+      message: "conversation_model_http_429",
+      usage: [
+        expect.objectContaining({ outcome: "failed" }),
+        expect.objectContaining({ outcome: "failed" }),
+        expect.objectContaining({ outcome: "failed" }),
+        expect.objectContaining({ outcome: "failed" }),
+      ],
+    });
+    await vi.runAllTimersAsync();
+    await pending;
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
   it("retries a rate-limited model call with backoff then succeeds", async () => {
     vi.useFakeTimers();
     const error = vi
@@ -573,6 +608,12 @@ describe("conversation engine", () => {
     const result = await pending;
     expect(result.text).toBe("Recovered after backoff");
     expect(modelBroker.fetch).toHaveBeenCalledTimes(3);
+    expect(result.usage).toHaveLength(2);
+    expect(result.usage[0]).toMatchObject({ outcome: "failed" });
+    expect(result.usage[1]).toMatchObject({
+      outcome: "succeeded",
+      totalTokens: 3,
+    });
     expect(error.mock.calls.map((call) => JSON.parse(String(call[0])))).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -591,6 +632,8 @@ describe("conversation engine", () => {
     expect(modelCallBackoffMs(1)).toBe(5_000);
     expect(modelCallBackoffMs(3)).toBe(20_000);
     expect(modelCallBackoffMs(1, "7")).toBe(7_000);
+    expect(modelCallBackoffMs(1, "0")).toBe(1_000);
+    expect(modelCallBackoffMs(1, "300")).toBe(60_000);
     expect(
       conversationQueueRetryDelaySeconds("conversation_model_http_429", 1),
     ).toBe(15);
@@ -598,7 +641,21 @@ describe("conversation engine", () => {
       conversationQueueRetryDelaySeconds("conversation_model_http_429", 3),
     ).toBe(60);
     expect(
+      conversationQueueRetryDelaySeconds(
+        "conversation_model_http_429",
+        1,
+        "45",
+      ),
+    ).toBe(45);
+    expect(
       conversationQueueRetryDelaySeconds("conversation_first_reply_invalid", 1),
+    ).toBeUndefined();
+    expect(
+      conversationQueueRetryDelaySeconds(
+        "conversation_first_reply_invalid",
+        1,
+        "45",
+      ),
     ).toBeUndefined();
   });
 });
