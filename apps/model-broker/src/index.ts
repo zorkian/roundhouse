@@ -467,31 +467,139 @@ function runUnified(
   });
 }
 
-async function cloudflareStopReason(
+export type UpstreamLimitSource =
+  | "cloudflare_workers_ai_budget"
+  | "cloudflare_ai_gateway_budget"
+  | "cloudflare_capacity"
+  | "provider_rate_limit"
+  | "unknown";
+
+export interface UpstreamLimitDiagnostics {
+  readonly stopReason?: "budget";
+  readonly source: UpstreamLimitSource;
+  readonly codes: readonly string[];
+  readonly errorType?: string;
+  readonly errorMessage?: string;
+}
+
+function truncateDiagnostic(value: string, max = 240): string {
+  return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
+}
+
+function diagnosticCodes(body: Record<string, unknown>): string[] {
+  const gatewayErrorCodes = Array.isArray(body.error)
+    ? body.error.map((error: { code?: unknown }) => error.code)
+    : body.error && typeof body.error === "object"
+      ? [(body.error as { code?: unknown }).code]
+      : [];
+  return [
+    ...new Set(
+      [
+        body.internalCode,
+        ...(
+          (body.errors as readonly { code?: unknown }[] | undefined) ?? []
+        ).map((error) => error.code),
+        ...gatewayErrorCodes,
+      ]
+        .filter((code) => code !== undefined && code !== null && code !== "")
+        .map((code) => String(code)),
+    ),
+  ];
+}
+
+function diagnosticErrorFields(body: Record<string, unknown>): {
+  readonly errorType?: string;
+  readonly errorMessage?: string;
+} {
+  const error = body.error;
+  if (error && typeof error === "object" && !Array.isArray(error)) {
+    const record = error as Record<string, unknown>;
+    return {
+      ...(typeof record.type === "string"
+        ? { errorType: record.type }
+        : typeof record.code === "string"
+          ? { errorType: record.code }
+          : {}),
+      ...(typeof record.message === "string"
+        ? { errorMessage: truncateDiagnostic(record.message) }
+        : {}),
+    };
+  }
+  const first = Array.isArray(body.errors)
+    ? body.errors.find(
+        (item): item is Record<string, unknown> =>
+          Boolean(item) && typeof item === "object",
+      )
+    : Array.isArray(body.error)
+      ? body.error.find(
+          (item): item is Record<string, unknown> =>
+            Boolean(item) && typeof item === "object",
+        )
+      : undefined;
+  if (!first) {
+    return typeof body.message === "string"
+      ? { errorMessage: truncateDiagnostic(body.message) }
+      : {};
+  }
+  return {
+    ...(typeof first.type === "string"
+      ? { errorType: first.type }
+      : typeof first.code === "string" || typeof first.code === "number"
+        ? { errorType: String(first.code) }
+        : {}),
+    ...(typeof first.message === "string"
+      ? { errorMessage: truncateDiagnostic(first.message) }
+      : {}),
+  };
+}
+
+export function diagnoseUpstreamLimit(
+  status: number,
+  body: unknown,
+): UpstreamLimitDiagnostics | undefined {
+  if (status !== 429) return undefined;
+  if (!body || typeof body !== "object" || Array.isArray(body))
+    return { source: "unknown", codes: [] };
+  const record = body as Record<string, unknown>;
+  const codes = diagnosticCodes(record);
+  const fields = diagnosticErrorFields(record);
+  if (codes.some((code) => code === "3036"))
+    return {
+      stopReason: "budget",
+      source: "cloudflare_workers_ai_budget",
+      codes,
+      ...fields,
+    };
+  if (codes.some((code) => code === "2041"))
+    return {
+      stopReason: "budget",
+      source: "cloudflare_ai_gateway_budget",
+      codes,
+      ...fields,
+    };
+  const providerLimit =
+    fields.errorType === "rate_limit_exceeded" ||
+    fields.errorType === "rate_limit_error" ||
+    fields.errorType === "insufficient_quota" ||
+    /rate.?limit|quota|too many requests/i.test(fields.errorMessage ?? "");
+  if (providerLimit) return { source: "provider_rate_limit", codes, ...fields };
+  if (
+    record.success === false ||
+    Array.isArray(record.errors) ||
+    record.internalCode !== undefined
+  )
+    return { source: "cloudflare_capacity", codes, ...fields };
+  return { source: "unknown", codes, ...fields };
+}
+
+async function upstreamLimitDiagnostics(
   response: Response,
-): Promise<"budget" | undefined> {
+): Promise<UpstreamLimitDiagnostics | undefined> {
   if (response.status !== 429) return undefined;
   try {
-    const body = (await response.clone().json()) as {
-      errors?: readonly { code?: unknown }[];
-      error?: unknown;
-      internalCode?: unknown;
-    };
-    const gatewayErrorCodes = Array.isArray(body.error)
-      ? body.error.map((error: { code?: unknown }) => error.code)
-      : body.error && typeof body.error === "object"
-        ? [(body.error as { code?: unknown }).code]
-        : [];
-    const codes = [
-      body.internalCode,
-      ...(body.errors ?? []).map((error) => error.code),
-      ...gatewayErrorCodes,
-    ];
-    return codes.some((code) => ["3036", "2041"].includes(String(code)))
-      ? "budget"
-      : undefined;
+    return diagnoseUpstreamLimit(429, await response.clone().json());
   } catch {
-    return undefined;
+    return { source: "unknown", codes: [] };
   }
 }
 
@@ -688,7 +796,10 @@ export async function brokerRequest(
     return Response.json({ error: "model_upstream_failed" }, { status: 502 });
   }
   const attemptId = request.headers.get("x-roundhouse-attempt-id");
-  const stopReason = await cloudflareStopReason(response);
+  const conversationId = request.headers.get("x-roundhouse-conversation-id");
+  const turnId = request.headers.get("x-roundhouse-turn-id");
+  const limit = await upstreamLimitDiagnostics(response);
+  const stopReason = limit?.stopReason;
   const responseDetails = {
     api:
       route.transport === "cloudflare-provider-native"
@@ -696,17 +807,39 @@ export async function brokerRequest(
         : "workers_ai",
     operation: "run_model",
     ...(attemptId ? { attemptId } : {}),
+    ...(conversationId ? { conversationId } : {}),
+    ...(turnId ? { turnId } : {}),
+    provider: route.provider,
     model: route.model,
+    protocol: route.protocol,
+    transport: route.transport ?? null,
+    rule: route.rule,
   };
   const conversationWorkload =
     request.headers.get("x-roundhouse-workload") === "conversation";
   const captured = conversationWorkload
     ? response
     : await observeResponse(response, responseDetails);
-  if (conversationWorkload)
+  if (limit)
+    console.error(
+      JSON.stringify({
+        message: "model_upstream_limited",
+        ...responseDetails,
+        ...(conversationWorkload ? { workload: "conversation" } : {}),
+        status: response.status,
+        source: limit.source,
+        stopReason: limit.stopReason ?? null,
+        codes: limit.codes,
+        ...(limit.errorType ? { errorType: limit.errorType } : {}),
+        ...(limit.errorMessage ? { errorMessage: limit.errorMessage } : {}),
+      }),
+    );
+  else if (conversationWorkload)
     console.log(
       JSON.stringify({
-        message: "model_response_received",
+        message: response.ok
+          ? "model_response_received"
+          : "model_response_rejected",
         ...responseDetails,
         workload: "conversation",
         status: response.status,

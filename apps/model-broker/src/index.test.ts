@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { brokerRequest, resolveRoute, type BrokerEnv } from "./index.js";
+import {
+  brokerRequest,
+  diagnoseUpstreamLimit,
+  resolveRoute,
+  type BrokerEnv,
+} from "./index.js";
 
 const env = {
   AI: {} as Ai,
@@ -606,6 +611,128 @@ describe("model broker", () => {
     expect(entries).toContain("model_response_received");
     expect(entries).not.toContain("private transcript answer");
     expect(entries).not.toContain("private transcript question");
+  });
+
+  it("logs provider rate-limit diagnostics for conversation 429s", async () => {
+    const error = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const upstream = nativeUpstream(async () =>
+      Response.json(
+        {
+          error: {
+            message: "Rate limit reached for gpt-5.6-sol",
+            type: "rate_limit_exceeded",
+            code: "rate_limit_exceeded",
+          },
+        },
+        { status: 429 },
+      ),
+    );
+    const request = modelRequest("openai-responses", "conversation", {
+      input: [{ role: "user", content: "private transcript question" }],
+    });
+    request.headers.set("x-roundhouse-workload", "conversation");
+    request.headers.set(
+      "x-roundhouse-conversation-id",
+      "0d07f731-6088-4d09-be47-711246ccc533",
+    );
+    request.headers.set(
+      "x-roundhouse-turn-id",
+      "635f0835-51e6-40db-a235-c5ad0eae4ac1",
+    );
+    const response = await brokerRequest(
+      request,
+      env,
+      upstream.ai,
+      upstream.outboundFetch as unknown as typeof fetch,
+    );
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-roundhouse-model-stop-reason")).toBeNull();
+    const entries = error.mock.calls.map((call) => String(call[0]));
+    expect(entries).toHaveLength(1);
+    expect(JSON.parse(entries[0]!)).toMatchObject({
+      message: "model_upstream_limited",
+      workload: "conversation",
+      status: 429,
+      source: "provider_rate_limit",
+      stopReason: null,
+      provider: "openai",
+      model: "openai/gpt-5.6-sol",
+      api: "ai_gateway_provider_native",
+      conversationId: "0d07f731-6088-4d09-be47-711246ccc533",
+      turnId: "635f0835-51e6-40db-a235-c5ad0eae4ac1",
+      errorType: "rate_limit_exceeded",
+      errorMessage: "Rate limit reached for gpt-5.6-sol",
+    });
+    expect(entries[0]).not.toContain("private transcript question");
+  });
+
+  it("logs Cloudflare AI Gateway budget diagnostics for 429s", async () => {
+    const error = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const response = await brokerRequest(
+      modelRequest("openai-completions", "review-security", { messages: [] }),
+      env,
+      {
+        run: vi.fn(async () =>
+          Response.json(
+            {
+              success: false,
+              error: [{ code: 2041, message: "Spend limit exceeded" }],
+              internalCode: 2041,
+            },
+            { status: 429 },
+          ),
+        ),
+      },
+    );
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-roundhouse-model-stop-reason")).toBe(
+      "budget",
+    );
+    expect(JSON.parse(String(error.mock.calls[0]?.[0]))).toMatchObject({
+      message: "model_upstream_limited",
+      source: "cloudflare_ai_gateway_budget",
+      stopReason: "budget",
+      codes: expect.arrayContaining(["2041"]),
+      errorMessage: "Spend limit exceeded",
+    });
+  });
+
+  it("classifies Workers AI account limits, gateway budgets, and provider caps", () => {
+    expect(
+      diagnoseUpstreamLimit(429, {
+        success: false,
+        errors: [{ code: "3036", message: "Account limited" }],
+      }),
+    ).toMatchObject({
+      source: "cloudflare_workers_ai_budget",
+      stopReason: "budget",
+      codes: ["3036"],
+    });
+    expect(
+      diagnoseUpstreamLimit(429, {
+        error: {
+          type: "rate_limit_error",
+          message:
+            "Number of request tokens has exceeded your per-minute rate limit",
+        },
+      }),
+    ).toMatchObject({
+      source: "provider_rate_limit",
+      errorType: "rate_limit_error",
+    });
+    expect(
+      diagnoseUpstreamLimit(429, {
+        success: false,
+        errors: [{ code: 3040, message: "Out of capacity" }],
+      }),
+    ).toMatchObject({
+      source: "cloudflare_capacity",
+      codes: ["3040"],
+    });
   });
 
   it("marks an exhausted Workers AI account as a budget stop", async () => {

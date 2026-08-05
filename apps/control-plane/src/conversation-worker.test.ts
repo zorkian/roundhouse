@@ -105,6 +105,9 @@ describe("conversation Queue worker", () => {
   });
 
   it("does not persist either first-turn field when structured output is invalid", async () => {
+    const error = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
     const route = {
       provider: "openai",
       model: "openai/gpt-5.6-sol",
@@ -171,6 +174,14 @@ describe("conversation Queue worker", () => {
       "turn-1",
       "conversation_first_reply_invalid",
     );
+    expect(JSON.parse(String(error.mock.calls.at(-1)?.[0]))).toMatchObject({
+      message: "conversation_turn_retry",
+      conversationId: "b1f486ff-7744-49f9-ab78-f74e8409fc2b",
+      turnId: "turn-1",
+      deliveryAttempts: 1,
+      errorCode: "conversation_first_reply_invalid",
+    });
+    error.mockRestore();
   });
 
   it("turns at-least-once wakeups into one persisted title, reply, and usage calls", async () => {
