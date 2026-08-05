@@ -3,7 +3,14 @@
 
 import {
   isModelRoute,
+  modelErrorCodesHeader,
+  modelErrorMessageHeader,
+  modelErrorParamHeader,
+  modelErrorSourceHeader,
+  modelErrorTypeHeader,
+  modelRetryAfterHeader,
   modelStopReasonHeader,
+  modelUpstreamRequestIdHeader,
   normalizeRepositoryPath,
   type ModelRoute,
 } from "@roundhouse/core";
@@ -133,14 +140,32 @@ function brokerHeaders(
   return headers;
 }
 
-function truncateDiagnostic(value: string, max = 240): string {
-  return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
+function brokerFailureFields(response: Headers): Record<string, unknown> {
+  const source = response.get(modelErrorSourceHeader);
+  const errorType = response.get(modelErrorTypeHeader);
+  const errorMessage = response.get(modelErrorMessageHeader);
+  const codes = response.get(modelErrorCodesHeader);
+  const errorParam = response.get(modelErrorParamHeader);
+  const requestId = response.get(modelUpstreamRequestIdHeader);
+  const retryAfter = response.get(modelRetryAfterHeader);
+  const stopReason = response.get(modelStopReasonHeader);
+  return {
+    stopReason: stopReason ?? null,
+    ...(source ? { source } : {}),
+    ...(errorType ? { errorType } : {}),
+    ...(errorMessage ? { errorMessage } : {}),
+    ...(codes ? { codes: codes.split(",").filter(Boolean) } : {}),
+    ...(errorParam ? { errorParam } : {}),
+    ...(requestId ? { requestId } : {}),
+    ...(retryAfter ? { retryAfter } : {}),
+  };
 }
 
 function conversationModelErrorFields(value: Record<string, unknown>): {
   readonly errorType?: string;
   readonly errorMessage?: string;
   readonly codes?: readonly string[];
+  readonly errorParam?: string;
 } {
   const codes = [
     value.internalCode,
@@ -156,6 +181,11 @@ function conversationModelErrorFields(value: Record<string, unknown>): {
     .filter((code) => code !== undefined && code !== null && code !== "")
     .map((code) => String(code));
   const error = value.error;
+  if (typeof error === "string")
+    return {
+      ...(codes.length ? { codes } : {}),
+      errorMessage: error.slice(0, 500),
+    };
   if (error && typeof error === "object" && !Array.isArray(error)) {
     const record = error as Record<string, unknown>;
     return {
@@ -166,7 +196,10 @@ function conversationModelErrorFields(value: Record<string, unknown>): {
           ? { errorType: record.code }
           : {}),
       ...(typeof record.message === "string"
-        ? { errorMessage: truncateDiagnostic(record.message) }
+        ? { errorMessage: record.message.slice(0, 500) }
+        : {}),
+      ...(typeof record.param === "string"
+        ? { errorParam: record.param.slice(0, 120) }
         : {}),
     };
   }
@@ -193,9 +226,9 @@ function conversationModelErrorFields(value: Record<string, unknown>): {
         }
       : {}),
     ...(first && typeof first.message === "string"
-      ? { errorMessage: truncateDiagnostic(first.message) }
+      ? { errorMessage: first.message.slice(0, 500) }
       : typeof value.message === "string"
-        ? { errorMessage: truncateDiagnostic(value.message) }
+        ? { errorMessage: value.message.slice(0, 500) }
         : {}),
   };
 }
@@ -901,7 +934,6 @@ async function callModel(input: {
     outcome: response.ok ? "succeeded" : "failed",
   });
   if (!response.ok) {
-    const stopReason = response.headers.get(modelStopReasonHeader);
     console.error(
       JSON.stringify({
         message: "conversation_model_response_rejected",
@@ -914,8 +946,8 @@ async function callModel(input: {
         protocol: input.route.protocol,
         transport: input.route.transport ?? null,
         rule: input.route.rule,
-        stopReason: stopReason ?? null,
         latencyMs: Date.now() - startedAt,
+        ...brokerFailureFields(response.headers),
         ...conversationModelErrorFields(value),
       }),
     );

@@ -120,6 +120,14 @@ export const modelTransports = [
   "cloudflare-provider-native",
 ] as const;
 export const modelStopReasonHeader = "x-roundhouse-model-stop-reason";
+export const modelErrorSourceHeader = "x-roundhouse-model-error-source";
+export const modelErrorTypeHeader = "x-roundhouse-model-error-type";
+export const modelErrorMessageHeader = "x-roundhouse-model-error-message";
+export const modelErrorCodesHeader = "x-roundhouse-model-error-codes";
+export const modelErrorParamHeader = "x-roundhouse-model-error-param";
+export const modelUpstreamRequestIdHeader =
+  "x-roundhouse-model-upstream-request-id";
+export const modelRetryAfterHeader = "x-roundhouse-model-retry-after";
 
 export type ModelProtocol = (typeof modelProtocols)[number];
 export type ModelTransport = (typeof modelTransports)[number];

@@ -683,12 +683,102 @@ describe("model broker", () => {
       role: "review-security",
       status: 503,
       ok: false,
-      source: "provider_error",
+      source: "upstream_unavailable",
       errorType: "server_error",
       errorMessage: "The model is overloaded. Please try again later.",
       provider: "moonshotai",
       model: "moonshotai/kimi-k3",
+      errorBody: {
+        error: {
+          message: "The model is overloaded. Please try again later.",
+          type: "server_error",
+          code: "server_error",
+        },
+      },
     });
+    expect(failed.headers.get("x-roundhouse-model-error-source")).toBe(
+      "upstream_unavailable",
+    );
+  });
+
+  it("classifies auth, invalid request, and not-found failures", async () => {
+    const error = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const auth = await brokerRequest(
+      modelRequest("openai-completions", "review-security", { messages: [] }),
+      env,
+      {
+        run: vi.fn(async () =>
+          Response.json(
+            {
+              error: {
+                message: "Incorrect API key provided",
+                type: "invalid_request_error",
+                code: "invalid_api_key",
+              },
+            },
+            { status: 401 },
+          ),
+        ),
+      },
+    );
+    expect(auth.status).toBe(401);
+    expect(auth.headers.get("x-roundhouse-model-error-source")).toBe(
+      "auth_error",
+    );
+    expect(
+      error.mock.calls
+        .map((call) => JSON.parse(String(call[0])))
+        .find((entry) => entry.status === 401),
+    ).toMatchObject({
+      message: "model_response_rejected",
+      source: "auth_error",
+      errorType: "invalid_request_error",
+      errorMessage: "Incorrect API key provided",
+    });
+
+    const invalid = await brokerRequest(
+      modelRequest("openai-completions", "review-security", { messages: [] }),
+      env,
+      {
+        run: vi.fn(async () =>
+          Response.json(
+            {
+              error: {
+                message: "Invalid schema for response_format",
+                type: "invalid_request_error",
+                param: "response_format",
+                code: "invalid_request_error",
+              },
+            },
+            { status: 400 },
+          ),
+        ),
+      },
+    );
+    expect(invalid.headers.get("x-roundhouse-model-error-source")).toBe(
+      "invalid_request",
+    );
+    expect(invalid.headers.get("x-roundhouse-model-error-param")).toBe(
+      "response_format",
+    );
+
+    const missing = await brokerRequest(
+      modelRequest("openai-completions", "review-security", { messages: [] }),
+      env,
+      {
+        run: vi.fn(async () =>
+          Response.json(
+            { error: { message: "Model not found", type: "not_found_error" } },
+            { status: 404 },
+          ),
+        ),
+      },
+    );
+    expect(missing.headers.get("x-roundhouse-model-error-source")).toBe(
+      "not_found",
+    );
   });
 
   it("logs provider rate-limit diagnostics for conversation 429s", async () => {
@@ -744,9 +834,21 @@ describe("model broker", () => {
       turnId: "635f0835-51e6-40db-a235-c5ad0eae4ac1",
       errorType: "rate_limit_exceeded",
       errorMessage: "Rate limit reached for gpt-5.6-sol",
-      body: "[REDACTED]",
+      errorBody: {
+        error: {
+          message: "Rate limit reached for gpt-5.6-sol",
+          type: "rate_limit_exceeded",
+          code: "rate_limit_exceeded",
+        },
+      },
     });
     expect(entries[0]).not.toContain("private transcript question");
+    expect(response.headers.get("x-roundhouse-model-error-source")).toBe(
+      "provider_rate_limit",
+    );
+    expect(response.headers.get("x-roundhouse-model-error-type")).toBe(
+      "rate_limit_exceeded",
+    );
   });
 
   it("logs Cloudflare AI Gateway budget diagnostics for 429s", async () => {
@@ -824,7 +926,7 @@ describe("model broker", () => {
         error: { type: "server_error", message: "Overloaded" },
       }),
     ).toMatchObject({
-      source: "provider_error",
+      source: "upstream_unavailable",
       errorType: "server_error",
       errorMessage: "Overloaded",
     });
@@ -836,6 +938,23 @@ describe("model broker", () => {
     ).toMatchObject({
       source: "cloudflare_error",
       codes: ["1000"],
+    });
+    expect(
+      diagnoseUpstreamFailure(401, {
+        error: { type: "invalid_request_error", message: "bad key" },
+      }),
+    ).toMatchObject({ source: "auth_error" });
+    expect(
+      diagnoseUpstreamFailure(400, {
+        error: {
+          type: "invalid_request_error",
+          message: "bad schema",
+          param: "tools",
+        },
+      }),
+    ).toMatchObject({
+      source: "invalid_request",
+      errorParam: "tools",
     });
   });
 
