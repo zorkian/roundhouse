@@ -59,7 +59,11 @@ import {
   deliverPendingConversationReplies,
   publishPendingConversationWakeups,
 } from "./conversation-liveness.js";
-import { processConversationWakeup } from "./conversation-worker.js";
+import {
+  conversationWakeupRetryDelaySeconds,
+  conversationWakeupShouldRetry,
+  processConversationWakeup,
+} from "./conversation-worker.js";
 import {
   renderConversation,
   renderConversationIndex,
@@ -1784,8 +1788,12 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
             message.attempts,
             conversationAdapters,
           );
-          if (outcome === "retry") message.retry();
-          else message.ack();
+          if (conversationWakeupShouldRetry(outcome)) {
+            const delaySeconds = conversationWakeupRetryDelaySeconds(outcome);
+            message.retry(
+              delaySeconds === undefined ? undefined : { delaySeconds },
+            );
+          } else message.ack();
         } catch (error) {
           console.error(
             JSON.stringify({
@@ -1795,7 +1803,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
               error: error instanceof Error ? error.message : String(error),
             }),
           );
-          message.retry();
+          message.retry({ delaySeconds: 15 });
         }
       }
     }

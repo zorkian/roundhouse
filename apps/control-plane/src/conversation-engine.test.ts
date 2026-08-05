@@ -4,8 +4,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { runtimeCapabilitiesForModel } from "@roundhouse/core";
 import {
+  conversationQueueRetryDelaySeconds,
   executeConversationTurn,
   executeRepositoryTool,
+  modelCallBackoffMs,
+  parseRetryAfterSeconds,
   promotionIssueMarker,
   promotionStartMarker,
   renderDeliveryBrief,
@@ -480,21 +483,29 @@ describe("conversation engine", () => {
   });
 
   it("logs provider and status when a model call is rejected", async () => {
+    vi.useFakeTimers();
     const error = vi
       .spyOn(console, "error")
       .mockImplementation(() => undefined);
-    const limited = Response.json(
-      {
-        error: {
-          message: "Rate limit reached for gpt-5.6-sol",
-          type: "rate_limit_exceeded",
-          code: "rate_limit_exceeded",
+    const limited = () =>
+      Response.json(
+        {
+          error: {
+            message: "Rate limit reached for gpt-5.6-sol",
+            type: "rate_limit_exceeded",
+            code: "rate_limit_exceeded",
+          },
         },
-      },
-      { status: 429 },
-    );
-    const modelBroker = broker([Response.json(responsesRoute), limited]);
-    await expect(
+        { status: 429 },
+      );
+    const modelBroker = broker([
+      Response.json(responsesRoute),
+      limited(),
+      limited(),
+      limited(),
+      limited(),
+    ]);
+    const pending = expect(
       executeConversationTurn(modelBroker, github, conversation, {
         ...turn,
         ordinal: 2,
@@ -502,11 +513,19 @@ describe("conversation engine", () => {
     ).rejects.toMatchObject({
       message: "conversation_model_http_429",
     });
+    await vi.runAllTimersAsync();
+    await pending;
+    expect(modelBroker.fetch).toHaveBeenCalledTimes(5);
     const modelRequest = modelBroker.fetch.mock.calls[1]![0] as Request;
     expect(modelRequest.headers.get("x-roundhouse-conversation-id")).toBe(
       conversation.id,
     );
     expect(modelRequest.headers.get("x-roundhouse-turn-id")).toBe(turn.id);
+    expect(
+      error.mock.calls.some((call) =>
+        String(call[0]).includes("conversation_model_call_backoff"),
+      ),
+    ).toBe(true);
     expect(JSON.parse(String(error.mock.calls.at(-1)?.[0]))).toMatchObject({
       message: "conversation_model_response_rejected",
       conversationId: conversation.id,
@@ -519,5 +538,124 @@ describe("conversation engine", () => {
       errorMessage: "Rate limit reached for gpt-5.6-sol",
     });
     error.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it("records failed usage rows when every in-turn retry is exhausted", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const limited = () =>
+      Response.json(
+        { error: { message: "rate limited", type: "rate_limit_exceeded" } },
+        { status: 429 },
+      );
+    const modelBroker = broker([
+      Response.json(responsesRoute),
+      limited(),
+      limited(),
+      limited(),
+      limited(),
+    ]);
+    const pending = expect(
+      executeConversationTurn(modelBroker, github, conversation, {
+        ...turn,
+        ordinal: 2,
+      }),
+    ).rejects.toMatchObject({
+      message: "conversation_model_http_429",
+      usage: [
+        expect.objectContaining({ outcome: "failed" }),
+        expect.objectContaining({ outcome: "failed" }),
+        expect.objectContaining({ outcome: "failed" }),
+        expect.objectContaining({ outcome: "failed" }),
+      ],
+    });
+    await vi.runAllTimersAsync();
+    await pending;
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("retries a rate-limited model call with backoff then succeeds", async () => {
+    vi.useFakeTimers();
+    const error = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const limited = Response.json(
+      {
+        error: {
+          message: "Error 2018 wholesale rate limited",
+          type: "rate_limited",
+          code: "2018",
+        },
+      },
+      { status: 429 },
+    );
+    limited.headers.set("retry-after", "2");
+    const modelBroker = broker([
+      Response.json(responsesRoute),
+      limited,
+      Response.json({
+        output_text: "Recovered after backoff",
+        usage: { total_tokens: 3 },
+      }),
+    ]);
+    const pending = executeConversationTurn(modelBroker, github, conversation, {
+      ...turn,
+      ordinal: 2,
+    });
+    await vi.runAllTimersAsync();
+    const result = await pending;
+    expect(result.text).toBe("Recovered after backoff");
+    expect(modelBroker.fetch).toHaveBeenCalledTimes(3);
+    expect(result.usage).toHaveLength(2);
+    expect(result.usage[0]).toMatchObject({ outcome: "failed" });
+    expect(result.usage[1]).toMatchObject({
+      outcome: "succeeded",
+      totalTokens: 3,
+    });
+    expect(error.mock.calls.map((call) => JSON.parse(String(call[0])))).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: "conversation_model_call_backoff",
+          status: 429,
+          delayMs: 2000,
+        }),
+      ]),
+    );
+    error.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it("computes retry-after and queue backoff delays", () => {
+    expect(parseRetryAfterSeconds("12")).toBe(12);
+    expect(modelCallBackoffMs(1)).toBe(5_000);
+    expect(modelCallBackoffMs(3)).toBe(20_000);
+    expect(modelCallBackoffMs(1, "7")).toBe(7_000);
+    expect(modelCallBackoffMs(1, "0")).toBe(1_000);
+    expect(modelCallBackoffMs(1, "300")).toBe(60_000);
+    expect(
+      conversationQueueRetryDelaySeconds("conversation_model_http_429", 1),
+    ).toBe(15);
+    expect(
+      conversationQueueRetryDelaySeconds("conversation_model_http_429", 3),
+    ).toBe(60);
+    expect(
+      conversationQueueRetryDelaySeconds(
+        "conversation_model_http_429",
+        1,
+        "45",
+      ),
+    ).toBe(45);
+    expect(
+      conversationQueueRetryDelaySeconds("conversation_first_reply_invalid", 1),
+    ).toBeUndefined();
+    expect(
+      conversationQueueRetryDelaySeconds(
+        "conversation_first_reply_invalid",
+        1,
+        "45",
+      ),
+    ).toBeUndefined();
   });
 });
