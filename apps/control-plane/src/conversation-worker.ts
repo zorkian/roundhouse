@@ -1,7 +1,10 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import { executeConversationTurn } from "./conversation-engine.js";
+import {
+  conversationQueueRetryDelaySeconds,
+  executeConversationTurn,
+} from "./conversation-engine.js";
 import type { ConversationAdapter } from "./conversation-adapter.js";
 import { deliverPendingConversationReplies } from "./conversation-liveness.js";
 import { executeConversationPromotion } from "./conversation-promotion.js";
@@ -22,24 +25,46 @@ interface ConversationWorkerDependencies {
   readonly github?: GitHubApi;
 }
 
+export type ConversationWakeupResult =
+  | "completed"
+  | "ignored"
+  | "retry"
+  | { readonly type: "retry"; readonly delaySeconds: number };
+
 function executionMetadata(error: unknown): {
   readonly usage: readonly ConversationCallUsage[];
   readonly route?: NonNullable<
     Awaited<ReturnType<typeof executeConversationTurn>>["route"]
   >;
   readonly code: string;
+  readonly retryAfter?: string;
 } {
   if (!(error instanceof Error))
     return { usage: [], code: "conversation_execution_failed" };
   const enriched = error as Error & {
     usage?: readonly ConversationCallUsage[];
     route?: Awaited<ReturnType<typeof executeConversationTurn>>["route"];
+    retryAfter?: string;
   };
   return {
     usage: enriched.usage ?? [],
     ...(enriched.route ? { route: enriched.route } : {}),
     code: error.message.slice(0, 120),
+    ...(enriched.retryAfter ? { retryAfter: enriched.retryAfter } : {}),
   };
+}
+
+function retryResult(
+  deliveryAttempts: number,
+  errorCode: string,
+  retryAfter?: string,
+): ConversationWakeupResult {
+  const delaySeconds = conversationQueueRetryDelaySeconds(
+    errorCode,
+    deliveryAttempts,
+    retryAfter,
+  );
+  return delaySeconds === undefined ? "retry" : { type: "retry", delaySeconds };
 }
 
 export async function processConversationWakeup(
@@ -49,7 +74,7 @@ export async function processConversationWakeup(
   deliveryAttempts: number,
   adapters: ReadonlyMap<string, ConversationAdapter>,
   dependencies: ConversationWorkerDependencies = {},
-): Promise<"completed" | "retry" | "ignored"> {
+): Promise<ConversationWakeupResult> {
   if (wakeup.kind === "promotion") {
     const work = await repository.promotionForWork(wakeup.id);
     if (!work) {
@@ -202,6 +227,11 @@ export async function processConversationWakeup(
       await repository.completeWakeup(wakeup);
       return "completed";
     }
+    const queued = retryResult(
+      deliveryAttempts,
+      metadata.code,
+      metadata.retryAfter,
+    );
     console.error(
       JSON.stringify({
         message: "conversation_turn_retry",
@@ -212,9 +242,27 @@ export async function processConversationWakeup(
         errorCode: metadata.code,
         provider: metadata.route?.provider ?? null,
         model: metadata.route?.model ?? null,
+        delaySeconds: typeof queued === "object" ? queued.delaySeconds : null,
       }),
     );
     await repository.retryTurn(turn.id, metadata.code);
-    return "retry";
+    return queued;
   }
+}
+
+export function conversationWakeupShouldRetry(
+  result: ConversationWakeupResult,
+): boolean {
+  return (
+    result === "retry" ||
+    (typeof result === "object" && result.type === "retry")
+  );
+}
+
+export function conversationWakeupRetryDelaySeconds(
+  result: ConversationWakeupResult,
+): number | undefined {
+  return typeof result === "object" && result.type === "retry"
+    ? result.delaySeconds
+    : undefined;
 }

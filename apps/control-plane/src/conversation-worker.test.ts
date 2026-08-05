@@ -7,7 +7,11 @@ import { runtimeCapabilitiesForModel } from "@roundhouse/core";
 import { describe, expect, it, vi } from "vitest";
 import { webConversationAdapter } from "./conversation-adapter.js";
 import { D1ConversationRepository } from "./conversation-store.js";
-import { processConversationWakeup } from "./conversation-worker.js";
+import {
+  conversationWakeupRetryDelaySeconds,
+  conversationWakeupShouldRetry,
+  processConversationWakeup,
+} from "./conversation-worker.js";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
 import type { GitHubApi } from "./github.js";
 
@@ -180,8 +184,93 @@ describe("conversation Queue worker", () => {
       turnId: "turn-1",
       deliveryAttempts: 1,
       errorCode: "conversation_first_reply_invalid",
+      delaySeconds: null,
     });
     error.mockRestore();
+  });
+
+  it("requests delayed queue retry after model rate limits", async () => {
+    const error = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const route = {
+      provider: "openai",
+      model: "openai/gpt-5.6-sol",
+      protocol: "openai-responses",
+      transport: "cloudflare-provider-native",
+      thinkingLevel: "high",
+      runtime: runtimeCapabilitiesForModel("openai/gpt-5.6-sol"),
+      rule: "profile-conversation-v2",
+    };
+    const repository = {
+      turn: vi.fn(async () => ({ state: "pending" })),
+      claimTurn: vi.fn(async () => ({
+        id: "turn-1",
+        kind: "message",
+        ordinal: 2,
+      })),
+      getForTurn: vi.fn(async () => ({
+        id: "b1f486ff-7744-49f9-ab78-f74e8409fc2b",
+        repository: { name: "octo/project", installationId: 99 },
+        sourceCommit: "a".repeat(40),
+        profileHash: "b".repeat(64),
+        context: {
+          model: { id: "openai/gpt-5.6-sol", reasoning: "high" },
+          defaultBranch: "main",
+        },
+        messages: [],
+      })),
+      renewTurn: vi.fn(async () => true),
+      recordTurnRoute: vi.fn(async () => undefined),
+      recordModelUsage: vi.fn(async () => undefined),
+      retryTurn: vi.fn(async () => undefined),
+    } as unknown as D1ConversationRepository;
+    const broker = {
+      fetch: vi.fn(async (request: Request) => {
+        if (new URL(request.url).pathname === "/route")
+          return Response.json(route);
+        const response = Response.json(
+          {
+            error: {
+              message: "Error 2018 wholesale rate limited",
+              code: "2018",
+            },
+          },
+          { status: 429 },
+        );
+        response.headers.set("retry-after", "45");
+        return response;
+      }),
+    };
+    vi.useFakeTimers();
+    const pending = processConversationWakeup(
+      repository,
+      { MODEL_BROKER: broker } as never,
+      { kind: "turn", id: "turn-1" },
+      2,
+      new Map(),
+      {
+        github: {
+          get: vi.fn(async () => ({ private: false })),
+        } as unknown as GitHubApi,
+      },
+    );
+    await vi.runAllTimersAsync();
+    const outcome = await pending;
+    expect(conversationWakeupShouldRetry(outcome)).toBe(true);
+    expect(conversationWakeupRetryDelaySeconds(outcome)).toBe(45);
+    expect(repository.retryTurn).toHaveBeenCalledWith(
+      "turn-1",
+      "conversation_model_http_429",
+    );
+    expect(JSON.parse(String(error.mock.calls.at(-1)?.[0]))).toMatchObject({
+      message: "conversation_turn_retry",
+      errorCode: "conversation_model_http_429",
+      delaySeconds: 45,
+      deliveryAttempts: 2,
+    });
+    error.mockRestore();
+    vi.useRealTimers();
   });
 
   it("turns at-least-once wakeups into one persisted title, reply, and usage calls", async () => {
