@@ -120,6 +120,7 @@ function brokerHeaders(
     "content-type": "application/json",
     "x-roundhouse-research": research ? "enabled" : "disabled",
     "x-roundhouse-workload": "conversation",
+    "x-roundhouse-role": "conversation",
     "x-roundhouse-conversation-id": conversation.id,
     "x-roundhouse-turn-id": turn.id,
   });

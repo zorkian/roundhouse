@@ -4,6 +4,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   brokerRequest,
+  diagnoseUpstreamFailure,
   diagnoseUpstreamLimit,
   resolveRoute,
   type BrokerEnv,
@@ -607,10 +608,87 @@ describe("model broker", () => {
       upstream.outboundFetch as unknown as typeof fetch,
     );
     await expect(response.json()).resolves.toMatchObject({ id: "response_1" });
-    const entries = log.mock.calls.map((call) => String(call[0])).join("\n");
-    expect(entries).toContain("model_response_received");
-    expect(entries).not.toContain("private transcript answer");
-    expect(entries).not.toContain("private transcript question");
+    const entries = log.mock.calls.map((call) => String(call[0]));
+    expect(JSON.parse(entries[0]!)).toMatchObject({
+      message: "model_response_received",
+      workload: "conversation",
+      role: "conversation",
+      ok: true,
+      status: 200,
+      body: "[REDACTED]",
+      provider: "openai",
+      model: "openai/gpt-5.6-sol",
+    });
+    expect(entries.join("\n")).not.toContain("private transcript answer");
+    expect(entries.join("\n")).not.toContain("private transcript question");
+  });
+
+  it("logs structured attempt successes and provider failures to Cloudflare logs", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const error = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const successRequest = modelRequest(
+      "openai-completions",
+      "review-security",
+      {
+        messages: [],
+      },
+    );
+    successRequest.headers.set("x-roundhouse-workload", "attempt");
+    const success = await brokerRequest(successRequest, env, {
+      run: vi.fn(async () => Response.json({ id: "chat_1", choices: [] })),
+    });
+    expect(success.status).toBe(200);
+    expect(
+      log.mock.calls
+        .map((call) => JSON.parse(String(call[0])))
+        .some(
+          (entry) =>
+            entry.message === "model_response_received" &&
+            entry.workload === "attempt" &&
+            entry.ok === true &&
+            entry.model === "moonshotai/kimi-k3",
+        ),
+    ).toBe(true);
+
+    const failedRequest = modelRequest(
+      "openai-completions",
+      "review-security",
+      { messages: [] },
+    );
+    failedRequest.headers.set("x-roundhouse-workload", "attempt");
+    const failed = await brokerRequest(failedRequest, env, {
+      run: vi.fn(async () =>
+        Response.json(
+          {
+            error: {
+              message: "The model is overloaded. Please try again later.",
+              type: "server_error",
+              code: "server_error",
+            },
+          },
+          { status: 503 },
+        ),
+      ),
+    });
+    expect(failed.status).toBe(503);
+    expect(
+      error.mock.calls
+        .map((call) => JSON.parse(String(call[0])))
+        .find((entry) => entry.message === "model_response_rejected"),
+    ).toMatchObject({
+      message: "model_response_rejected",
+      workload: "attempt",
+      role: "review-security",
+      status: 503,
+      ok: false,
+      source: "provider_error",
+      errorType: "server_error",
+      errorMessage: "The model is overloaded. Please try again later.",
+      provider: "moonshotai",
+      model: "moonshotai/kimi-k3",
+    });
   });
 
   it("logs provider rate-limit diagnostics for conversation 429s", async () => {
@@ -654,6 +732,8 @@ describe("model broker", () => {
     expect(JSON.parse(entries[0]!)).toMatchObject({
       message: "model_upstream_limited",
       workload: "conversation",
+      role: "conversation",
+      ok: false,
       status: 429,
       source: "provider_rate_limit",
       stopReason: null,
@@ -664,6 +744,7 @@ describe("model broker", () => {
       turnId: "635f0835-51e6-40db-a235-c5ad0eae4ac1",
       errorType: "rate_limit_exceeded",
       errorMessage: "Rate limit reached for gpt-5.6-sol",
+      body: "[REDACTED]",
     });
     expect(entries[0]).not.toContain("private transcript question");
   });
@@ -692,12 +773,17 @@ describe("model broker", () => {
     expect(response.headers.get("x-roundhouse-model-stop-reason")).toBe(
       "budget",
     );
-    expect(JSON.parse(String(error.mock.calls[0]?.[0]))).toMatchObject({
+    expect(
+      error.mock.calls
+        .map((call) => JSON.parse(String(call[0])))
+        .find((entry) => entry.message === "model_upstream_limited"),
+    ).toMatchObject({
       message: "model_upstream_limited",
       source: "cloudflare_ai_gateway_budget",
       stopReason: "budget",
       codes: expect.arrayContaining(["2041"]),
       errorMessage: "Spend limit exceeded",
+      ok: false,
     });
   });
 
@@ -732,6 +818,24 @@ describe("model broker", () => {
     ).toMatchObject({
       source: "cloudflare_capacity",
       codes: ["3040"],
+    });
+    expect(
+      diagnoseUpstreamFailure(503, {
+        error: { type: "server_error", message: "Overloaded" },
+      }),
+    ).toMatchObject({
+      source: "provider_error",
+      errorType: "server_error",
+      errorMessage: "Overloaded",
+    });
+    expect(
+      diagnoseUpstreamFailure(500, {
+        success: false,
+        errors: [{ code: 1000, message: "Internal error" }],
+      }),
+    ).toMatchObject({
+      source: "cloudflare_error",
+      codes: ["1000"],
     });
   });
 

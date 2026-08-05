@@ -250,6 +250,7 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
   headers.delete("x-api-key");
   headers.delete("x-roundhouse-attempt-capability");
   headers.set("x-roundhouse-role", attempt.role);
+  headers.set("x-roundhouse-workload", "attempt");
   headers.set(
     "x-roundhouse-research",
     attemptHasCapability(attempt, "research.public") ? "enabled" : "disabled",
@@ -312,10 +313,31 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
     attemptId,
   };
   if (!response.ok) {
+    const stopReason = response.headers.get(modelStopReasonHeader);
     await recordModelEvent(repository, attemptId, "model_response_rejected", {
       status: response.status,
       hasBody: Boolean(response.body),
+      provider: route.provider,
+      model: route.model,
+      protocol: route.protocol,
+      transport: route.transport ?? null,
+      stopReason: stopReason ?? null,
     });
+    console.error(
+      JSON.stringify({
+        message: "model_response_rejected",
+        api: "model_broker",
+        operation: `${request.method} ${requestedUrl.pathname}`,
+        attemptId,
+        status: response.status,
+        provider: route.provider,
+        model: route.model,
+        protocol: route.protocol,
+        transport: route.transport ?? null,
+        rule: route.rule,
+        stopReason: stopReason ?? null,
+      }),
+    );
   }
   if (response.headers.get(modelStopReasonHeader) === "budget") {
     const paused = await pauseForModelBudget(repository, attempt);
