@@ -16,12 +16,14 @@ import {
   modelErrorSourceHeader,
   modelErrorTypeHeader,
   modelRetryAfterHeader,
+  resolveSecretText,
   modelStopReasonHeader,
   modelUpstreamRequestIdHeader,
   type Attempt,
   type ModelRoute,
   type ModelUsage,
   type RunRepository,
+  type SecretText,
 } from "@roundhouse/core";
 import { observeResponse } from "@roundhouse/response-observer";
 import {
@@ -63,7 +65,7 @@ interface AttemptAssignment extends Attempt {
 export interface AttemptContainerEnv {
   readonly DB: D1Like;
   readonly MODEL_BROKER: Fetcher;
-  readonly CALLBACK_SIGNING_SECRET: string;
+  readonly CALLBACK_SIGNING_SECRET: SecretText;
 }
 
 interface PreparedAttempt {
@@ -202,7 +204,10 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
     attemptId &&
     capability &&
     (await verifyCallback(
-      runtime.CALLBACK_SIGNING_SECRET,
+      await resolveSecretText(
+        runtime.CALLBACK_SIGNING_SECRET,
+        "callback_signing_secret_missing",
+      ),
       attemptId,
       capability,
     ));

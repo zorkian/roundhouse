@@ -12,9 +12,11 @@ import {
 } from "./callback.js";
 import {
   annotateProtectedPathProposal,
+  resolveSecretText,
   type Attempt,
   type CompetitionJudgement,
   type RunSnapshot,
+  type SecretText,
 } from "@roundhouse/core";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
 import {
@@ -62,10 +64,13 @@ export interface AttemptPublicationResult {
   readonly sandboxName?: string;
 }
 
-export type AttemptSettlementEnv = Cloudflare.Env &
+export type AttemptSettlementEnv = Omit<
+  Cloudflare.Env,
+  "CALLBACK_SIGNING_SECRET" | "ROUNDHOUSE_GITHUB_CLIENT_SECRET"
+> &
   GitHubEnv & {
     readonly DB: D1Like;
-    readonly CALLBACK_SIGNING_SECRET: string;
+    readonly CALLBACK_SIGNING_SECRET: SecretText;
     readonly ATTEMPT_SANDBOXES: SandboxNamespace;
   };
 
@@ -84,7 +89,13 @@ async function recordedCallback(
   const recorded = await repository.getAttemptCompletion(completion.attemptId);
   if (!recorded || callbackPayload(recorded) !== callbackPayload(completion))
     return undefined;
-  return callbackForCompletion(env.CALLBACK_SIGNING_SECRET, completion);
+  return callbackForCompletion(
+    await resolveSecretText(
+      env.CALLBACK_SIGNING_SECRET,
+      "callback_signing_secret_missing",
+    ),
+    completion,
+  );
 }
 
 async function settlementResult(
@@ -622,7 +633,10 @@ export async function settleAttempt(
 ): Promise<AttemptSettlementResult> {
   const { signature, ...completion } = input;
   const attemptSecret = await signCallback(
-    env.CALLBACK_SIGNING_SECRET,
+    await resolveSecretText(
+      env.CALLBACK_SIGNING_SECRET,
+      "callback_signing_secret_missing",
+    ),
     input.attemptId,
   );
   if (

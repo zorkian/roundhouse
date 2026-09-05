@@ -7,12 +7,14 @@ import {
   isModelRoute,
   profileModelForAttempt,
   requiredWorkflowAgentInputs,
+  resolveSecretText,
   reviewerForRole,
   type Attempt,
   type ModelRoute,
   type Reviewer,
   type RunRepository,
   type RunSnapshot,
+  type SecretText,
   type WorkflowAgent,
   type WorkflowCompetition,
   type WorkflowModel,
@@ -40,10 +42,13 @@ import {
   type SandboxNamespace,
 } from "./attempt-runtime.js";
 
-export type AttemptPreparationEnv = Cloudflare.Env & {
+export type AttemptPreparationEnv = Omit<
+  Cloudflare.Env,
+  "CALLBACK_SIGNING_SECRET" | "ROUNDHOUSE_GITHUB_CLIENT_SECRET"
+> & {
   readonly DB: D1Like;
   readonly ATTEMPT_SANDBOXES: SandboxNamespace;
-  readonly CALLBACK_SIGNING_SECRET: string;
+  readonly CALLBACK_SIGNING_SECRET: SecretText;
   readonly CONTROL_PLANE_ORIGIN: string;
   readonly MODEL_BROKER: Fetcher;
 };
@@ -732,7 +737,10 @@ class SandboxAttemptPreparer {
       sandboxName(attempt),
     );
     const attemptSecret = await signCallback(
-      this.env.CALLBACK_SIGNING_SECRET,
+      await resolveSecretText(
+        this.env.CALLBACK_SIGNING_SECRET,
+        "callback_signing_secret_missing",
+      ),
       attempt.id,
     );
     const syncArtifact = artifactNeedsSync(artifactRepository, attempt, run);

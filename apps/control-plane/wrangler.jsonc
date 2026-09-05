@@ -113,8 +113,6 @@
     "GITHUB_CLIENT_ID": "Iv23liaPflwJhKpGfxvB",
     "GITHUB_START_COMMAND": "/roundhouse-dev start",
     "SANDBOX_TRANSPORT": "rpc",
-    "BACKUP_BUCKET_NAME": "roundhouse-v2-development-workspaces",
-    "CLOUDFLARE_R2_ACCOUNT_ID": "07ff5b32b60ae3e5d613b90ddde90069",
   },
   "observability": {
     "enabled": true,
@@ -184,6 +182,18 @@
         },
       ],
       "browser": { "binding": "BROWSER" },
+      "secrets_store_secrets": [
+        {
+          "binding": "CALLBACK_SIGNING_SECRET",
+          "store_id": "ba2c9da053a64e33879014c5fa473a73",
+          "secret_name": "roundhouse-v2-production-callback-signing-secret",
+        },
+        {
+          "binding": "ROUNDHOUSE_GITHUB_CLIENT_SECRET",
+          "store_id": "ba2c9da053a64e33879014c5fa473a73",
+          "secret_name": "roundhouse-v2-production-github-client-secret",
+        },
+      ],
       "services": [
         {
           "binding": "MODEL_BROKER",
@@ -229,8 +239,6 @@
         "GITHUB_CLIENT_ID": "Iv000000000000000000",
         "GITHUB_START_COMMAND": "/roundhouse start",
         "SANDBOX_TRANSPORT": "rpc",
-        "BACKUP_BUCKET_NAME": "roundhouse-v2-production-workspaces",
-        "CLOUDFLARE_R2_ACCOUNT_ID": "00000000000000000000000000000000",
       },
       "observability": {
         "enabled": true,

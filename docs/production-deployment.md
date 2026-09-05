@@ -77,8 +77,11 @@ Artifacts namespace, Workflow, or AI Gateway.
    pnpm exec wrangler r2 bucket create roundhouse-v2-production-workspaces
    ```
 
-   Create a dedicated R2 API credential limited to this bucket. The access key
-   and secret become the GitHub Environment secrets listed below.
+   Create a dedicated R2 API credential limited to this bucket. Store the
+   access key and secret directly on the production runtime-host Worker during
+   the pre-cutover bootstrap below. The Sandbox SDK reads these two bindings
+   synchronously during Durable Object construction, so they cannot use an
+   asynchronous Secrets Store binding.
 
 4. Create the `roundhouse-v2-production` Artifacts namespace and AI Gateway in
    the Cloudflare dashboard. Wrangler 4.112.0 can inspect Artifacts namespaces
@@ -100,14 +103,58 @@ Artifacts namespace, Workflow, or AI Gateway.
    client secret for V2.
 
 6. Keep the existing Cloudflare Access application on the production hostname.
-   Before cutover, verify the GitHub App's current webhook URL and create an
-   exact path-specific Access bypass for that path if one is not present. The
-   current Cloudflare inventory has no separate webhook-path Access
-   application. Keep all UI paths protected. Confirm the production Access
-   service token can request `/health` using `CF-Access-Client-Id` and
-   `CF-Access-Client-Secret` headers.
+   The `Roundhouse GitHub webhook` application already owns exact destinations
+   for both development and production `/v1/github/webhook` paths and bypasses
+   Access for those endpoints only. Keep all UI paths protected. Confirm the
+   production Access service token can request `/health` using
+   `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers.
 
-7. Populate the protected GitHub Environment `roundhouse-production`. Keep its
+7. Populate the account's existing Cloudflare Secrets Store
+   (`default_secrets_store`, ID `ba2c9da053a64e33879014c5fa473a73`)
+   with the following secrets, each scoped to `workers`. Enter values through
+   the Cloudflare dashboard or Wrangler's interactive prompt; never pass a
+   value with the `--value` flag.
+
+   - `roundhouse-v2-production-ai-gateway-token`
+   - `roundhouse-v2-production-callback-signing-secret`
+   - `roundhouse-v2-production-github-client-secret`
+
+   For example:
+
+   ```sh
+   pnpm exec wrangler secrets-store secret create \
+     ba2c9da053a64e33879014c5fa473a73 \
+     --name roundhouse-v2-production-github-client-secret \
+     --scopes workers \
+     --remote
+   ```
+
+   The callback value must be newly generated random key material. The
+   production config binds these values directly from Secrets Store; their
+   plaintext never enters GitHub Actions.
+
+8. From the reviewed merge commit, render the production configuration and
+   pre-deploy the non-public model-broker and runtime-host Workers. Then enter
+   the R2 credentials directly into Wrangler's interactive secret prompts for
+   the runtime-host Worker:
+
+   ```sh
+   pnpm render:production-config
+   pnpm exec wrangler deploy --env production \
+     --config apps/model-broker/wrangler.production.jsonc --strict
+   pnpm exec wrangler deploy --env production \
+     --config apps/runtime-host/wrangler.production.jsonc \
+     --containers-rollout immediate --strict
+   pnpm exec wrangler secret put R2_ACCESS_KEY_ID --env production \
+     --config apps/runtime-host/wrangler.production.jsonc
+   pnpm exec wrangler secret put R2_SECRET_ACCESS_KEY --env production \
+     --config apps/runtime-host/wrangler.production.jsonc
+   ```
+
+   Neither Worker has a public route. This bootstrap lets the promotion fail
+   before cutover if the Cloudflare-hosted secret metadata is incomplete.
+
+9. Populate the protected GitHub Environment `roundhouse-production`. Keep its
    required reviewer and `main` deployment-branch policy.
 
    Variables:
@@ -124,19 +171,27 @@ Artifacts namespace, Workflow, or AI Gateway.
    - `CLOUDFLARE_API_TOKEN`
    - `CLOUDFLARE_ACCESS_CLIENT_ID`
    - `CLOUDFLARE_ACCESS_CLIENT_SECRET`
+
+   After the Cloudflare-hosted replacements are verified, delete these obsolete
+   GitHub Environment secrets:
+
    - `ROUNDHOUSE_AI_GATEWAY_TOKEN`
    - `ROUNDHOUSE_CALLBACK_SIGNING_SECRET`
+   - `ROUNDHOUSE_GITHUB_CLIENT_SECRET`
    - `ROUNDHOUSE_R2_ACCESS_KEY_ID`
    - `ROUNDHOUSE_R2_SECRET_ACCESS_KEY`
-   - `ROUNDHOUSE_GITHUB_CLIENT_SECRET`
+
+The Cloudflare API token needs Workers deployment permissions and Secrets Store
+Edit permission because attaching a secret to a Worker is a write against the
+secret binding. The Access credentials are used only for the post-deploy health
+check. No Worker-consumed secret belongs in the GitHub Environment.
 
 The existing `ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY` and
-`ROUNDHOUSE_GITHUB_WEBHOOK_SECRET` bindings stay attached to
-`roundhouse-prod-control-plane`. The promotion workflow verifies both names
-before its first deployment and deliberately omits them from its secret file;
-Cloudflare preserves omitted secrets from the Worker's previous version. Use a
-new random callback-signing secret. Do not copy Worker secrets into checked-in
-config or workflow logs.
+`ROUNDHOUSE_GITHUB_WEBHOOK_SECRET` per-Worker secrets stay attached to
+`roundhouse-prod-control-plane`; Cloudflare preserves omitted per-Worker
+secrets from its previous version. The runtime host similarly retains its two
+R2 per-Worker secrets after bootstrap. Do not copy Worker secrets into
+checked-in config, GitHub, or workflow logs.
 
 ## Promotion and cutover
 
@@ -154,9 +209,9 @@ To promote that exact merge commit after production approval:
 
 The workflow verifies the receipt and source commit, checks that the commit is
 on `main`, reruns the complete local checks, renders production config, and
-verifies the two retained GitHub App secrets. It then deploys the model broker,
-deploys the runtime host and container, applies D1 migrations, and finally
-replaces the existing control-plane Worker with V2. A
+verifies all Cloudflare-hosted secret bindings by name and scope. It then
+deploys the model broker, deploys the runtime host and container, applies D1
+migrations, and finally replaces the existing control-plane Worker with V2. A
 service-token-authenticated `/health` request must succeed before the workflow
 records a production deployment receipt.
 

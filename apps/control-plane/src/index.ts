@@ -5,9 +5,11 @@ import {
   compileWorkflow,
   attemptHasCapability,
   immutableAttemptId,
+  resolveSecretText,
   runSchemaVersion,
   type Attempt,
   type RunSnapshot,
+  type SecretText,
   type Wakeup,
 } from "@roundhouse/core";
 import { competitionPromoter } from "./attempt-settlement.js";
@@ -437,16 +439,19 @@ export function validAttemptProgress(
     (typeof exitCode === "number" && Number.isInteger(exitCode))
   );
 }
-type RuntimeEnv = Cloudflare.Env & {
+type RuntimeEnv = Omit<
+  Cloudflare.Env,
+  "CALLBACK_SIGNING_SECRET" | "ROUNDHOUSE_GITHUB_CLIENT_SECRET"
+> & {
   DB: D1Like;
   CONVERSATION_TURNS: Queue<ConversationWakeup>;
   ATTEMPT_SANDBOXES: SandboxNamespace;
   BROWSER: Fetcher;
   BACKUP_BUCKET: R2Bucket;
-  CALLBACK_SIGNING_SECRET: string;
+  CALLBACK_SIGNING_SECRET: SecretText;
   GITHUB_APP_ID: string;
   GITHUB_CLIENT_ID: string;
-  ROUNDHOUSE_GITHUB_CLIENT_SECRET: string;
+  ROUNDHOUSE_GITHUB_CLIENT_SECRET: SecretText;
   ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY: string;
   ROUNDHOUSE_GITHUB_WEBHOOK_SECRET: string;
 };
@@ -1204,7 +1209,10 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
         !attemptId ||
         !capability ||
         !(await verifyCallback(
-          env.CALLBACK_SIGNING_SECRET,
+          await resolveSecretText(
+            env.CALLBACK_SIGNING_SECRET,
+            "callback_signing_secret_missing",
+          ),
           attemptId,
           capability,
         ))
@@ -1280,7 +1288,10 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
         !attemptId ||
         !capability ||
         !(await verifyCallback(
-          env.CALLBACK_SIGNING_SECRET,
+          await resolveSecretText(
+            env.CALLBACK_SIGNING_SECRET,
+            "callback_signing_secret_missing",
+          ),
           attemptId,
           capability,
         ))
@@ -1316,7 +1327,10 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
         !attemptId ||
         !capability ||
         !(await verifyCallback(
-          env.CALLBACK_SIGNING_SECRET,
+          await resolveSecretText(
+            env.CALLBACK_SIGNING_SECRET,
+            "callback_signing_secret_missing",
+          ),
           attemptId,
           capability,
         ))
@@ -1384,7 +1398,10 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
         !attemptId ||
         !capability ||
         !(await verifyCallback(
-          env.CALLBACK_SIGNING_SECRET,
+          await resolveSecretText(
+            env.CALLBACK_SIGNING_SECRET,
+            "callback_signing_secret_missing",
+          ),
           attemptId,
           capability,
         ))
