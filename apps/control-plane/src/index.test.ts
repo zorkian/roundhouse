@@ -723,7 +723,8 @@ describe("V2 control plane", () => {
       "img-src https://avatars.githubusercontent.com",
     );
     const body = await response.text();
-    expect(body).toContain("Development runs across enrolled repositories");
+    expect(body).toContain("Runs across enrolled repositories");
+    expect(body).not.toContain("Development");
     expect(body).toContain('<a href="/usage">Model usage</a>');
     expect(body).toContain('<a class="site-brand" href="/">Roundhouse</a>');
     expect(body).toContain('<a href="/">Runs</a>');
