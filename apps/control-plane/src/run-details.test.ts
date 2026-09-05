@@ -307,6 +307,8 @@ describe("run details", () => {
       expect(html).not.toContain("Reproduction");
       expect(html).toContain("<dt>Allowed paths</dt>");
       expect(html).toContain("<dt>Protected paths</dt>");
+      expect(html).toContain("<dt>Execution environment</dt>");
+      expect(html).not.toContain("Development environment");
       expect(html).toContain(".github/workflows/**");
     }
   });

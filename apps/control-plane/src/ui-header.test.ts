@@ -21,13 +21,8 @@ describe("site header", () => {
       '<span class="site-login">octo&lt;script&gt;</span>',
     );
     expect(html).toContain('class="site-account"');
-    expect(html.match(/class="env-badge"/g)).toHaveLength(1);
-    expect(html).toContain(">Development</span>");
-    expect(html).toContain('</div><span class="env-badge">Development</span>');
-    expect(sharedHeaderStyles).toContain(
-      ".site-header>.env-badge{position:absolute",
-    );
-    expect(sharedHeaderStyles).toContain("left:50%");
-    expect(sharedHeaderStyles).toContain("transform:translateX(-50%)");
+    expect(html).not.toContain('class="env-badge"');
+    expect(html).not.toContain("Development");
+    expect(sharedHeaderStyles).not.toContain("env-badge");
   });
 });
