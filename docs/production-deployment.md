@@ -14,6 +14,15 @@ place so it can retain the existing production GitHub App's write-only private
 key and webhook secret. V2 still uses fresh data and execution resources; it
 does not migrate or delete V1 data.
 
+That Worker already has the Durable Object migration tag
+`execution-container-v1`. The production Wrangler environment retains that tag
+as its terminal migration entry, causing Wrangler to apply no control-plane
+Durable Object lifecycle changes during cutover. Do not substitute the V2
+development migration history: those short-lived control-plane classes were
+never deployed on this Worker, and the final V2 Durable Object class belongs to
+the separately named runtime-host Worker. The promotion workflow verifies the
+deployed production tag before making any production changes.
+
 ## Production topology
 
 | Resource                   | Production value                                                                                  |

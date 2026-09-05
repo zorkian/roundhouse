@@ -125,19 +125,28 @@ jobs:
           ROUNDHOUSE_GITHUB_CLIENT_ID: ${{ vars.ROUNDHOUSE_GITHUB_CLIENT_ID }}
         run: pnpm render:production-config
 
-      - name: Verify retained production GitHub App secrets
+      - name: Verify retained production Worker state
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
-          pnpm exec wrangler secret list \
+          CONTROL_PLANE_VERSION_ID="$(
+            pnpm exec wrangler deployments status \
+              --env production \
+              --config apps/control-plane/wrangler.production.jsonc \
+              --json \
+              | jq -er \
+                '.versions | select(length == 1) | .[0] | select(.percentage == 100) | .version_id'
+          )"
+          pnpm exec wrangler versions view "$CONTROL_PLANE_VERSION_ID" \
             --env production \
             --config apps/control-plane/wrangler.production.jsonc \
-            > "$RUNNER_TEMP/control-plane-secrets-before-deploy.json"
-          jq -e \
-            '([.[].name] | index("ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY")) != null and
-             ([.[].name] | index("ROUNDHOUSE_GITHUB_WEBHOOK_SECRET")) != null' \
-            "$RUNNER_TEMP/control-plane-secrets-before-deploy.json" \
+            --json \
+            | jq -e \
+              '.resources.script_runtime.migration_tag == "execution-container-v1" and
+               ([.resources.bindings[] | select(.type == "secret_text") | .name] |
+                 index("ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY") != null and
+                 index("ROUNDHOUSE_GITHUB_WEBHOOK_SECRET") != null)' \
             > /dev/null
 
       - name: Write deployment secret files

@@ -207,18 +207,13 @@
         ],
       },
       "migrations": [
+        // This is the existing production Worker's terminal migration tag.
+        // Keep it as the final entry so Wrangler applies no V2 control-plane
+        // migrations when replacing the Worker in place. The V2 Durable
+        // Object classes live on the separately named runtime-host Worker.
         {
-          "tag": "v2-phase-1",
-          "new_sqlite_classes": ["RoundhouseAttemptContainer"],
-        },
-        {
-          "tag": "resumable-visual-workspaces",
-          "new_sqlite_classes": ["RoundhouseAttemptSandbox"],
-          "deleted_classes": ["RoundhouseAttemptContainer"],
-        },
-        {
-          "tag": "runtime-host-split",
-          "deleted_classes": ["RoundhouseAttemptSandbox"],
+          "tag": "execution-container-v1",
+          "new_sqlite_classes": ["RoundhouseExecutionContainer"],
         },
       ],
       "triggers": { "crons": ["*/5 * * * *"] },
