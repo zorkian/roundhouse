@@ -714,6 +714,63 @@ describe("run details", () => {
     expect(html).toContain("<h2>Outcome</h2>");
     expect(html).toContain("<dt>Waiting on</dt><dd>plan approval</dd>");
   });
+
+  it("surfaces the infrastructure error when automatic retries are exhausted", () => {
+    const html = renderRunDetails(
+      detailsFixture({
+        run: { status: "waiting", waitingReason: "retry_exhausted" },
+        attempts: [
+          attemptFixture({
+            state: "failed",
+            outcome: {
+              kind: "execution_interrupted",
+              source: "attempt_workflow",
+              code: "docker_builder_registry_ca_verification_failed",
+              detail: "OCI runtime failure <cgroup missing>",
+            },
+          }),
+        ],
+      }),
+    );
+
+    expect(html).toContain("Waiting on</dt><dd>retry exhausted");
+    expect(html).toContain("Last infrastructure failure:");
+    expect(html).toContain("OCI runtime failure &lt;cgroup missing&gt;");
+  });
+
+  it("surfaces an exhausted interruption before a later sibling attempt", () => {
+    const html = renderRunDetails(
+      detailsFixture({
+        run: { status: "waiting", waitingReason: "retry_exhausted" },
+        attempts: [
+          attemptFixture({
+            id: "failed-reviewer",
+            stage: "review",
+            role: "review-security",
+            state: "failed",
+            createdAt: 1,
+            outcome: {
+              kind: "execution_interrupted",
+              source: "attempt_workflow",
+              code: "docker_start_timeout",
+              detail: "Docker never became ready",
+            },
+          }),
+          attemptFixture({
+            id: "later-reviewer",
+            stage: "review",
+            role: "review-data",
+            state: "dispatched",
+            createdAt: 2,
+            updatedAt: 3,
+          }),
+        ],
+      }),
+    );
+
+    expect(html).toContain("Last infrastructure failure:");
+    expect(html).toContain("Docker never became ready");
+  });
 });
 
 describe("run details competitions", () => {

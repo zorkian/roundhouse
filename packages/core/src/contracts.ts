@@ -87,6 +87,8 @@ export type AttemptOutcome =
   | {
       readonly kind: "execution_interrupted";
       readonly source: "attempt_recovery" | "attempt_workflow";
+      readonly code?: string;
+      readonly detail?: string;
     }
   | {
       readonly kind: "checkpoint_rejected";

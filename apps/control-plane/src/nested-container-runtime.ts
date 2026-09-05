@@ -1,7 +1,7 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
-import type { Process } from "@cloudflare/sandbox";
+import type { ExecResult, Process } from "@cloudflare/sandbox";
 import type { NestedContainerRuntimeHost } from "./attempt-sandbox-components.js";
 
 const containerCa = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
@@ -14,6 +14,13 @@ const dockerBuilderContainer = `buildx_buildkit_${dockerBuilder}0`;
 interface BuilderRegistryCaVerification {
   readonly success: boolean;
   readonly error: string;
+}
+
+function commandFailureDetail(result: ExecResult): string {
+  return [result.stderr.trim(), result.stdout.trim()]
+    .filter(Boolean)
+    .join("\n")
+    .slice(-1_000);
 }
 
 export class NestedContainerRuntime {
@@ -337,7 +344,7 @@ export class NestedContainerRuntime {
 
     if (!caVerification.success)
       throw new Error(
-        `docker_builder_registry_ca_missing: ${caVerification.error}`,
+        `docker_builder_registry_ca_verification_failed: ${caVerification.error}`,
       );
     await this.host.trace(attemptId, "docker_builder_ready", startedAt, {
       builder: dockerBuilder,
@@ -454,16 +461,18 @@ export class NestedContainerRuntime {
         timeout: 5_000,
       }),
       this.host.exec(
-        `docker exec ${dockerBuilderContainer} sha256sum /etc/buildkit/certs/ghcr.io/cloudflare-containers-ca.crt`,
+        `temporary=$(mktemp) && trap 'rm -f "$temporary"' EXIT && docker cp ${dockerBuilderContainer}:/etc/buildkit/certs/ghcr.io/cloudflare-containers-ca.crt "$temporary" && sha256sum "$temporary"`,
         { origin: "internal", timeout: 5_000 },
       ),
       this.host.exec(
-        `docker exec ${dockerBuilderContainer} cat /etc/buildkit/buildkitd.toml`,
+        `temporary=$(mktemp) && trap 'rm -f "$temporary"' EXIT && docker cp ${dockerBuilderContainer}:/etc/buildkit/buildkitd.toml "$temporary" && cat "$temporary"`,
         { origin: "internal", timeout: 5_000 },
       ),
     ]);
     const outerHash = outerCa.stdout.trim().split(/\s+/, 1)[0] ?? "";
-    const innerHash = innerCa.stdout.trim().split(/\s+/, 1)[0] ?? "";
+    const innerHash = innerCa.success
+      ? (innerCa.stdout.trim().split(/\s+/, 1)[0] ?? "")
+      : "";
     const success =
       outerCa.success &&
       innerCa.success &&
@@ -472,13 +481,13 @@ export class NestedContainerRuntime {
       outerHash === innerHash;
     const error = [
       !outerCa.success
-        ? `outer_ca_exit=${outerCa.exitCode}: ${outerCa.stderr.slice(-500)}`
+        ? `outer_ca_exit=${outerCa.exitCode}: ${commandFailureDetail(outerCa)}`
         : "",
       !innerCa.success
-        ? `inner_ca_exit=${innerCa.exitCode}: ${innerCa.stderr.slice(-500)}`
+        ? `inner_ca_exit=${innerCa.exitCode}: ${commandFailureDetail(innerCa)}`
         : "",
       !builderConfig.success
-        ? `builder_config_exit=${builderConfig.exitCode}: ${builderConfig.stderr.slice(-500)}`
+        ? `builder_config_exit=${builderConfig.exitCode}: ${commandFailureDetail(builderConfig)}`
         : "",
       outerCa.success && outerHash.length === 0 ? "outer_ca_hash_missing" : "",
       innerCa.success && innerHash.length === 0 ? "inner_ca_hash_missing" : "",
@@ -500,19 +509,21 @@ export class NestedContainerRuntime {
           success: outerCa.success,
           exitCode: outerCa.exitCode,
           hash: outerHash,
-          error: outerCa.stderr.slice(-500),
+          error: outerCa.success ? "" : commandFailureDetail(outerCa),
         },
         innerCa: {
           success: innerCa.success,
           exitCode: innerCa.exitCode,
           hash: innerHash,
-          error: innerCa.stderr.slice(-500),
+          error: innerCa.success ? "" : commandFailureDetail(innerCa),
         },
         builderConfig: {
           success: builderConfig.success,
           exitCode: builderConfig.exitCode,
           detail: builderConfig.stdout.slice(-4_000),
-          error: builderConfig.stderr.slice(-500),
+          error: builderConfig.success
+            ? ""
+            : commandFailureDetail(builderConfig),
         },
         error,
       },

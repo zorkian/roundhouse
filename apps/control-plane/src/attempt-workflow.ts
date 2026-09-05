@@ -96,13 +96,17 @@ async function recordTerminalWorkflowFailure(
   const { attemptId, mode, sandboxName } = event.payload;
   const repository = new D1RunRepository(env.DB);
   const attempt = await repository.getAttempt(attemptId);
+  const failureDetail = error instanceof Error ? error.message : String(error);
+  const failureCode =
+    /^([a-z][a-z0-9_]{0,127})(?::|$)/.exec(failureDetail)?.[1] ??
+    "attempt_workflow_failed";
   const payload = {
     phase: "attempt_workflow_terminal_failure",
     workflowInstanceId: event.instanceId,
     mode: mode ?? "execute",
     attemptState: attempt?.state ?? "missing",
     errorType: error instanceof Error ? error.constructor.name : typeof error,
-    error: error instanceof Error ? error.message : String(error),
+    error: failureDetail,
   };
   console.error(
     JSON.stringify({
@@ -131,6 +135,8 @@ async function recordTerminalWorkflowFailure(
       {
         kind: "execution_interrupted",
         source: "attempt_workflow",
+        code: failureCode,
+        detail: failureDetail.slice(-4_000),
       },
     );
   } else {

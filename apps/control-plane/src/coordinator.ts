@@ -53,6 +53,7 @@ const judgeCapabilities: readonly WorkflowCapability[] = [
   "repository.read",
   "context.read",
 ];
+const maxConsecutiveExecutionInterruptions = 3;
 
 export function effectiveAttemptCapabilities(
   node: WorkflowNode,
@@ -80,6 +81,7 @@ function implementationNode(run: RunSnapshot): [string, WorkflowNode] {
 export function attemptOutcomeTransition(
   run: RunSnapshot,
   attempt: Attempt,
+  consecutiveInterruptions = 1,
 ): RunTransition {
   if (!attempt.outcome) throw new Error("attempt_outcome_missing");
   if (attempt.outcome.kind === "branch_superseded") {
@@ -97,6 +99,16 @@ export function attemptOutcomeTransition(
       },
     };
   }
+  if (
+    attempt.outcome.kind === "execution_interrupted" &&
+    consecutiveInterruptions >= maxConsecutiveExecutionInterruptions
+  )
+    return {
+      status: "waiting",
+      stage: run.stage,
+      currentNodeId: run.currentNodeId,
+      waitingReason: "retry_exhausted",
+    };
   return {
     status: "active",
     stage: run.stage,
@@ -104,11 +116,43 @@ export function attemptOutcomeTransition(
   };
 }
 
+function executionInterruptionKey(attempt: Attempt): string | undefined {
+  return attempt.outcome?.kind === "execution_interrupted"
+    ? `${attempt.outcome.source}:${attempt.outcome.code ?? "unclassified"}`
+    : undefined;
+}
+
+async function consecutiveExecutionInterruptions(
+  repository: RunRepository,
+  attempt: Attempt,
+): Promise<number> {
+  const key = executionInterruptionKey(attempt);
+  if (!key) return 0;
+  let count = 1;
+  for (
+    let revision = attempt.runRevision - 1;
+    revision > 0 && count < maxConsecutiveExecutionInterruptions;
+    revision -= 1
+  ) {
+    const previous = (
+      await repository.attemptsForRevision(attempt.runId, revision)
+    ).find(
+      (candidate) =>
+        candidate.nodeId === attempt.nodeId &&
+        executionInterruptionKey(candidate) === key,
+    );
+    if (!previous) break;
+    count += 1;
+  }
+  return count;
+}
+
 async function recordAttemptOutcomeTransition(
   repository: RunRepository,
   run: RunSnapshot,
   attempt: Attempt,
   next: RunSnapshot,
+  consecutiveInterruptions: number,
 ): Promise<void> {
   const payload = {
     outcome: attempt.outcome,
@@ -118,6 +162,12 @@ async function recordAttemptOutcomeTransition(
     toRevision: next.revision,
     inputHead: run.currentHead,
     outputHead: next.currentHead,
+    ...(attempt.outcome?.kind === "execution_interrupted"
+      ? {
+          consecutiveInterruptions,
+          retryExhausted: next.waitingReason === "retry_exhausted",
+        }
+      : {}),
   };
   console.log(
     JSON.stringify({
@@ -133,6 +183,34 @@ async function recordAttemptOutcomeTransition(
     "attempt_outcome_reconciled",
     payload,
   );
+}
+
+async function reconcileAttemptOutcome(
+  repository: RunRepository,
+  run: RunSnapshot,
+  attempt: Attempt,
+  reporter?: AttemptReporter,
+): Promise<"dispatched" | "stale"> {
+  const interruptionCount = await consecutiveExecutionInterruptions(
+    repository,
+    attempt,
+  );
+  const next = await repository.transition(
+    run.id,
+    run.revision,
+    attemptOutcomeTransition(run, attempt, interruptionCount),
+  );
+  if (!next) return "stale";
+  await recordAttemptOutcomeTransition(
+    repository,
+    run,
+    attempt,
+    next,
+    interruptionCount,
+  );
+  if (next.status === "waiting" && reporter)
+    await reporter.report(next, attempt);
+  return "dispatched";
 }
 
 async function recordIssuedCapabilities(
@@ -1583,21 +1661,13 @@ export async function coordinate(
     const review = currentWorkflowNode.review!;
     let current = await repository.attemptsForRevision(run.id, run.revision);
     const operationalOutcome = current.find((attempt) => attempt.outcome);
-    if (operationalOutcome) {
-      const next = await repository.transition(
-        run.id,
-        run.revision,
-        attemptOutcomeTransition(run, operationalOutcome),
-      );
-      if (!next) return "stale";
-      await recordAttemptOutcomeTransition(
+    if (operationalOutcome)
+      return reconcileAttemptOutcome(
         repository,
         run,
         operationalOutcome,
-        next,
+        reporter,
       );
-      return "dispatched";
-    }
     const required = new Set(
       review.reviewers
         .filter((reviewer) => reviewer.activation === "always")
@@ -1761,16 +1831,8 @@ export async function coordinate(
   }
   const attemptId = immutableAttemptId(run.id, run.revision);
   const previous = await repository.getAttempt(attemptId);
-  if (previous?.outcome) {
-    const next = await repository.transition(
-      run.id,
-      run.revision,
-      attemptOutcomeTransition(run, previous),
-    );
-    if (!next) return "stale";
-    await recordAttemptOutcomeTransition(repository, run, previous, next);
-    return "dispatched";
-  }
+  if (previous?.outcome)
+    return reconcileAttemptOutcome(repository, run, previous, reporter);
   if (previous?.state === "completed") {
     const transition = graphCompletedTransition(run, previous);
     const next = await repository.transition(run.id, run.revision, transition);

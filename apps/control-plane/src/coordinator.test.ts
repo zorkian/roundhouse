@@ -313,6 +313,199 @@ describe("single coordinator", () => {
     });
   });
 
+  it("waits after three consecutive interruptions with the same infrastructure code", async () => {
+    const store = new MemoryRunRepository();
+    const run = runFixture({
+      revision: 3,
+      stage: "reproduce",
+      currentNodeId: "investigate",
+    });
+    await store.create(run);
+    for (const revision of [1, 2, 3])
+      store.attempts.set(
+        `run_slice_rev_${revision}`,
+        attemptFixture({
+          id: `run_slice_rev_${revision}`,
+          runRevision: revision,
+          nodeId: "investigate",
+          executor: "agent.read",
+          stage: "reproduce",
+          role: "investigate",
+          state: "failed",
+          outcome: {
+            kind: "execution_interrupted",
+            source: "attempt_workflow",
+            code: "docker_builder_registry_ca_verification_failed",
+            detail: `OCI failure from attempt ${revision}`,
+          },
+        }),
+      );
+    const report = vi.fn(async () => undefined);
+
+    await expect(
+      coordinate(
+        store,
+        { submit: async () => undefined },
+        { runId: input.id, expectedRevision: 3 },
+        100,
+        undefined,
+        { report },
+      ),
+    ).resolves.toBe("dispatched");
+
+    await expect(store.get(input.id)).resolves.toMatchObject({
+      status: "waiting",
+      stage: "reproduce",
+      currentNodeId: "investigate",
+      revision: 4,
+      waitingReason: "retry_exhausted",
+    });
+    expect(report).toHaveBeenCalledOnce();
+    expect(store.events.at(-1)).toMatchObject({
+      kind: "attempt_outcome_reconciled",
+      payload: {
+        consecutiveInterruptions: 3,
+        retryExhausted: true,
+      },
+    });
+  });
+
+  it("waits after three consecutive legacy interruptions without a code", async () => {
+    const store = new MemoryRunRepository();
+    const run = runFixture({
+      revision: 3,
+      stage: "reproduce",
+      currentNodeId: "investigate",
+    });
+    await store.create(run);
+    for (const revision of [1, 2, 3])
+      store.attempts.set(
+        `run_slice_rev_${revision}`,
+        attemptFixture({
+          id: `run_slice_rev_${revision}`,
+          runRevision: revision,
+          nodeId: "investigate",
+          executor: "agent.read",
+          stage: "reproduce",
+          role: "investigate",
+          state: "failed",
+          outcome: {
+            kind: "execution_interrupted",
+            source: "attempt_recovery",
+          },
+        }),
+      );
+
+    await expect(
+      coordinate(
+        store,
+        { submit: async () => undefined },
+        { runId: input.id, expectedRevision: 3 },
+        100,
+      ),
+    ).resolves.toBe("dispatched");
+    await expect(store.get(input.id)).resolves.toMatchObject({
+      status: "waiting",
+      revision: 4,
+      waitingReason: "retry_exhausted",
+    });
+  });
+
+  it("counts the same infrastructure interruption across review roles", async () => {
+    const store = new MemoryRunRepository();
+    const run = runFixture({
+      revision: 3,
+      stage: "review",
+      currentNodeId: "review",
+      currentHead: "b".repeat(40),
+    });
+    await store.create(run);
+    for (const [revision, role] of [
+      [1, "review-holistic"],
+      [2, "review-security"],
+      [3, "review-data"],
+    ] as const)
+      store.attempts.set(
+        `review_${revision}_${role}`,
+        attemptFixture({
+          id: `review_${revision}_${role}`,
+          runRevision: revision,
+          nodeId: "review",
+          executor: "agent.read",
+          stage: "review",
+          role,
+          state: "failed",
+          expectedHead: run.currentHead,
+          outcome: {
+            kind: "execution_interrupted",
+            source: "attempt_workflow",
+            code: "docker_start_timeout",
+          },
+        }),
+      );
+
+    await expect(
+      coordinate(
+        store,
+        { submit: async () => undefined },
+        { runId: input.id, expectedRevision: 3 },
+        100,
+      ),
+    ).resolves.toBe("dispatched");
+    await expect(store.get(input.id)).resolves.toMatchObject({
+      status: "waiting",
+      stage: "review",
+      currentNodeId: "review",
+      revision: 4,
+      waitingReason: "retry_exhausted",
+    });
+  });
+
+  it("retries when the preceding interruption has a different code", async () => {
+    const store = new MemoryRunRepository();
+    const run = runFixture({
+      revision: 3,
+      stage: "reproduce",
+      currentNodeId: "investigate",
+    });
+    await store.create(run);
+    for (const [revision, code] of [
+      [1, "docker_start_timeout"],
+      [2, "docker_start_timeout"],
+      [3, "docker_builder_registry_ca_verification_failed"],
+    ] as const)
+      store.attempts.set(
+        `run_slice_rev_${revision}`,
+        attemptFixture({
+          id: `run_slice_rev_${revision}`,
+          runRevision: revision,
+          nodeId: "investigate",
+          executor: "agent.read",
+          stage: "reproduce",
+          role: "investigate",
+          state: "failed",
+          outcome: {
+            kind: "execution_interrupted",
+            source: "attempt_workflow",
+            code,
+          },
+        }),
+      );
+
+    await expect(
+      coordinate(
+        store,
+        { submit: async () => undefined },
+        { runId: input.id, expectedRevision: 3 },
+        100,
+      ),
+    ).resolves.toBe("dispatched");
+    await expect(store.get(input.id)).resolves.toMatchObject({
+      status: "active",
+      revision: 4,
+    });
+  });
+
   it("fails a holistic review that omits a specialist decision", async () => {
     const store = new MemoryRunRepository();
     const run = runFixture({
