@@ -53,7 +53,7 @@ development processes while Roundhouse retains a small security kernel.
 
 ## 2. Deployed behavior
 
-The development deployment currently supports:
+The production deployment currently supports:
 
 - GitHub issue intake, comments, pull requests, checks, and merge;
 - public repositories enrolled through the Roundhouse GitHub App and a

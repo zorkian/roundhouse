@@ -12,7 +12,7 @@ inventing new ones.
 Do **not** write code, open PRs, or spend tokens on implementation unless the
 user explicitly asks you to build, fix, change, or land something.
 
-- **Debug / investigate / explain** requests are read-only: use D1, wrangler,
+- **Debug / investigate / explain** requests are read-only: use D1, Wrangler,
   GitHub, and the codebase to report what happened and why. Stop after the
   diagnosis. Do not “helpfully” implement a fix, retry policy, UI copy, or
   speculative hardening.
@@ -26,16 +26,15 @@ user explicitly asks you to build, fix, change, or land something.
 The repo requires Node 24 (`.node-version` pins `24.20.0`). That is configured
 in the Cursor Cloud environment install (dashboard), including beating
 `/exec-daemon/node` (v22) on `PATH`. Use plain commands (`pnpm check`,
-`pnpm exec wrangler …`) — do not wrap them in `bash -lc`. If
-`node --version` is not `v24.x`, fix the Cloud environment, not individual
-commands.
+`pnpm exec wrangler …`) — do not wrap them in `bash -lc`. If `node --version`
+is not `v24.x`, fix the Cloud environment, not individual commands.
 
 ### There is no local dev server
 
 This product has no `pnpm dev` / local run mode. The documented local
-end-to-end path is `pnpm check` (README). Workers run in the shared Cloudflare
-**development** deployment; use GitHub Actions + wrangler (below) to inspect
-that environment rather than trying to boot the product locally.
+end-to-end path is `pnpm check` (README). The release path deploys directly to
+production after a commit reaches `main`; use tests for local validation and
+GitHub Actions + Wrangler for authorized live inspection.
 
 `wrangler dev` cannot boot the control-plane Worker locally: `workerd` rejects
 `apps/control-plane/src/index.ts` because it exports a non-function constant
@@ -47,143 +46,119 @@ deploys fine to Cloudflare. Validate Worker logic through the test suite, not
 `@roundhouse/core` (`parseProfile` / `compileWorkflow`) can be run against the
 repo's own `.roundhouse/profile.yaml` + `workflow.yaml`.
 
-### Development environment, GitHub Actions, and wrangler
+### Production environment, GitHub Actions, and Wrangler
 
-Use these tools when asked to debug the live development deployment, check
-whether `main` has shipped, inspect Worker logs, or query development state.
+Use these tools when asked to check whether `main` has shipped, inspect Worker
+logs, or query live state.
 
 #### Topology
 
-| Piece                     | Value                                                                                                       |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| Public UI / control plane | `https://roundhouse-dev.rm-rf.rip` (Cloudflare Access — agents cannot sign in)                              |
-| Control-plane workers.dev | `https://roundhouse-v2-control-plane.default-07f.workers.dev` (also Access-gated for UI routes)             |
-| Workers                   | `roundhouse-v2-control-plane`, `roundhouse-v2-runtime-host`, `roundhouse-v2-model-broker`                   |
-| Wrangler configs          | `apps/control-plane/wrangler.jsonc`, `apps/runtime-host/wrangler.jsonc`, `apps/model-broker/wrangler.jsonc` |
-| D1 database               | `roundhouse-v2-development` (id in control-plane wrangler config)                                           |
-| GitHub Actions workflow   | `.github/workflows/ci.yml` (`CI`)                                                                           |
-| Deploy GitHub Environment | `roundhouse-development`                                                                                    |
+| Piece                     | Value                                                                                                                                        |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Public UI / control plane | `https://roundhouse.rm-rf.rip` (Cloudflare Access — agents cannot sign in)                                                                   |
+| Workers                   | `roundhouse-prod-control-plane`, `roundhouse-v2-runtime-host-production`, `roundhouse-v2-model-broker-production`                            |
+| Generated configs         | `apps/control-plane/wrangler.production.jsonc`, `apps/runtime-host/wrangler.production.jsonc`, `apps/model-broker/wrangler.production.jsonc` |
+| D1 database               | `roundhouse-v2-production`                                                                                                                   |
+| GitHub Actions workflow   | `.github/workflows/ci.yml` (`CI`)                                                                                                            |
+| Deploy GitHub Environment | `roundhouse-production`                                                                                                                      |
 
-Deploy scripts (root `package.json`):
+The checked-in `wrangler.jsonc` files contain `env.production` templates.
+`pnpm render:production-config` validates GitHub Environment variables and
+writes ignored `wrangler.production.jsonc` files with the live identifiers.
 
-- `pnpm deploy:development` — build + runtime host + model broker/D1
-  migrations/control plane
-- `pnpm deploy:development:runtime` — runtime host only
-- `pnpm deploy:development:control-plane` — model broker, remote D1
-  migrations, then control plane
+#### How production gets deployed
 
-#### How development gets deployed
+`.github/workflows/ci.yml` is the only release workflow:
 
-There is no continuous deploy-from-`main` push workflow. Development deploys
-when a pull request is **merged into `main`**:
+1. Pull requests run **Check** (`pnpm check`) and never deploy.
+2. A merge or direct push to `main` runs **Check** again on that exact commit.
+3. **Deploy production** runs only after the `main` check succeeds. It uses the
+   `roundhouse-production` GitHub Environment, serializes deployments, and
+   never cancels an in-progress deployment.
+4. The job builds, renders production config, verifies retained Worker secrets
+   and Cloudflare Secrets Store bindings, deploys the model broker and runtime
+   container, applies remote D1 migrations, deploys the control plane, checks
+   `/health` through Cloudflare Access, and uploads a production receipt.
 
-1. Workflow `CI` (`.github/workflows/ci.yml`) runs on `pull_request`.
-2. Job **Check** always runs `pnpm check` (and also runs for the merge-commit
-   checkout when a PR closed into `main` is merged).
-3. Job **Deploy development** runs only when
-   `github.event.action == 'closed'`, the PR is merged, and
-   `base.ref == 'main'`. It uses GitHub Environment `roundhouse-development`
-   and Cloudflare credentials from that environment.
-4. Runtime-host deploy is conditional: the workflow diffs the merge commit
-   against its first parent and skips `pnpm deploy:development:runtime`
-   unless runtime-related paths changed (see the workflow's path list).
-   Control-plane deploy (`pnpm deploy:development:control-plane`) always runs
-   on those merge deploys.
-
-`workflow_dispatch` can run the workflow manually; it still only runs Check
-unless the event matches the merge conditions above.
+There is no shared-development deployment or manual promotion in the active
+release path. Old development resources may still exist in Cloudflare; do not
+modify or delete them without explicit authorization.
 
 #### Checking whether `main` has deployed
 
-Prefer GitHub Actions first, then corroborate with wrangler if needed.
+Prefer GitHub Actions first, then corroborate with Wrangler if needed.
 
 ```bash
-# Recent CI runs (merge deploys and PR checks both appear as pull_request)
 gh run list --workflow=ci.yml --limit 20
 
-# Inspect a run: Deploy development is success on merge deploys, often
-# skipped on ordinary PR checks
 gh run view <run-id> --json jobs,displayTitle,conclusion,url,headBranch,createdAt \
   --jq '{title: .displayTitle, conclusion, url, branch: .headBranch, createdAt, jobs: [.jobs[] | {name, conclusion, status, completedAt}]}'
 
-# Failed job logs
 gh run view <run-id> --log-failed
-
-# Recent merges into main (what should have triggered deploy)
 gh pr list --state merged --base main --limit 10
 ```
 
-Cross-check the live Worker version timestamps:
+A successful `main` run must show both **Check** and **Deploy production** as
+successful. Ordinary pull-request runs show the deployment job as skipped.
+
+When production configs have already been rendered for an authorized task,
+cross-check live Worker timestamps with them:
 
 ```bash
-pnpm exec wrangler deployments status --config apps/control-plane/wrangler.jsonc
-pnpm exec wrangler deployments list --config apps/control-plane/wrangler.jsonc
-pnpm exec wrangler deployments status --config apps/runtime-host/wrangler.jsonc
-pnpm exec wrangler deployments status --config apps/model-broker/wrangler.jsonc
+pnpm exec wrangler deployments status --env production \
+  --config apps/control-plane/wrangler.production.jsonc
+pnpm exec wrangler deployments status --env production \
+  --config apps/runtime-host/wrangler.production.jsonc
+pnpm exec wrangler deployments status --env production \
+  --config apps/model-broker/wrangler.production.jsonc
 ```
-
-A successful merge deploy should show a **Deploy development** job conclusion
-of `success` (not `skipped`), and the control-plane deployment timestamp
-should be at or after that job's completion.
 
 #### Wrangler CLI
 
-`wrangler` is a root `devDependency` (pinned in `package.json`). It is usually
-**not** on global `PATH`; invoke it via `pnpm exec wrangler` or the `pnpm
-deploy:development*` scripts. Auth in this Cloud environment is typically an
-Account API Token from `CLOUDFLARE_API_TOKEN` (confirm with `pnpm exec
-wrangler whoami`).
+`wrangler` is a root `devDependency` pinned in `package.json`; invoke it via
+`pnpm exec wrangler`. Auth in this Cloud environment is typically an Account
+API Token from `CLOUDFLARE_API_TOKEN` (confirm with `pnpm exec wrangler
+whoami`). Set `WRANGLER_LOG_PATH` to a writable directory such as
+`/tmp/roundhouse-wrangler-logs` for every command that may invoke Wrangler.
 
-Useful read-oriented commands:
+Useful read-only commands:
 
 ```bash
 pnpm exec wrangler whoami
 
-# Live logs (Ctrl-C / kill when done; use --format=json for scraping)
-pnpm exec wrangler tail --config apps/control-plane/wrangler.jsonc --format=json
-pnpm exec wrangler tail --config apps/control-plane/wrangler.jsonc --status=error
-pnpm exec wrangler tail --config apps/runtime-host/wrangler.jsonc --format=json
-pnpm exec wrangler tail --config apps/model-broker/wrangler.jsonc --format=json
+pnpm exec wrangler tail --env production \
+  --config apps/control-plane/wrangler.production.jsonc --format=json
+pnpm exec wrangler tail --env production \
+  --config apps/runtime-host/wrangler.production.jsonc --format=json
+pnpm exec wrangler tail --env production \
+  --config apps/model-broker/wrangler.production.jsonc --format=json
 
-# Remote D1 (read-only SELECTs preferred unless the user asked for a write)
-pnpm exec wrangler d1 execute roundhouse-v2-development --remote \
-  --config apps/control-plane/wrangler.jsonc \
+pnpm exec wrangler d1 execute roundhouse-v2-production --env production \
+  --remote --config apps/control-plane/wrangler.production.jsonc \
   --command "SELECT id, status, stage, current_node_id, updated_at FROM runs ORDER BY updated_at DESC LIMIT 20;"
-
-pnpm exec wrangler d1 execute roundhouse-v2-development --remote \
-  --config apps/control-plane/wrangler.jsonc \
-  --command "SELECT id, status, updated_at FROM conversations ORDER BY updated_at DESC LIMIT 20;"
 ```
 
-Schema for those tables lives under `apps/control-plane/migrations/`.
-`D1RunRepository.detailsByIssue` in `apps/control-plane/src/d1-store.ts`
-shows how the UI joins the same data.
+Schema for live tables is under `apps/control-plane/migrations/`.
+`D1RunRepository.detailsByIssue` in `apps/control-plane/src/d1-store.ts` shows
+how the UI joins the same data.
 
-Cloudflare MCP servers (`Cloudflare-observability`, `Cloudflare-builds`,
-`Cloudflare-bindings`) may be present but often require separate IDE auth.
-When `CLOUDFLARE_API_TOKEN` works, prefer **wrangler** over those MCPs for
-deployments, tails, and D1. `Cloudflare-docs` search is fine for platform
-questions. Repo `gh` access in Cloud agents is **read-only** (list/view runs
-and logs; do not expect `gh` write operations to succeed).
+Cloudflare MCP servers may require separate IDE auth. When
+`CLOUDFLARE_API_TOKEN` works, prefer the repository-pinned Wrangler for
+deployments, tails, and D1. Cloudflare docs search is fine for platform
+questions.
 
-#### Debugging a live issue / run (D1, not the browser)
+#### Debugging a live issue / run
 
-The run-details links Roundhouse posts on GitHub issues
-(`https://roundhouse-dev.rm-rf.rip/repositories/.../issues/N`) and the same
-paths on workers.dev sit behind **Cloudflare Access**. Agents cannot complete
-Access login and will only ever see the email-code sign-in page. Do **not**
-fetch those URLs, chase mirrors, or try to automate Access codes — use remote
-D1 (and optionally `wrangler tail`) instead.
+Run-detail URLs are behind Cloudflare Access. Agents cannot complete Access
+login and should not try to automate Access codes. Use remote D1, Worker logs,
+and GitHub issue/PR comments instead. D1 is authoritative for whether a run is
+active, waiting, leased, or wedged.
 
-GitHub issue/PR comments (`gh issue view N --comments`) are useful timeline
-hints (stage reports, PR links, visual-feedback prompts), but **D1 is
-authoritative** for whether a run is active, waiting, leased, or wedged.
-
-**Find the current run for an issue** (replace `491`):
+Find the current run for an issue (replace `491`):
 
 ```bash
-pnpm exec wrangler d1 execute roundhouse-v2-development --remote \
-  --config apps/control-plane/wrangler.jsonc \
+pnpm exec wrangler d1 execute roundhouse-v2-production --env production \
+  --remote --config apps/control-plane/wrangler.production.jsonc \
   --json --command "SELECT w.issue_number, w.current_run_id, r.status, r.stage,
     r.current_node_id, r.revision, r.lease_attempt_id, r.lease_expires_at,
     datetime(r.updated_at/1000, 'unixepoch') AS updated_utc,
@@ -194,84 +169,27 @@ pnpm exec wrangler d1 execute roundhouse-v2-development --remote \
   WHERE w.issue_number = 491;"
 ```
 
-**Attempt history** (failures, outcomes, current dispatch) and **recent
-events** (liveness):
-
-```bash
-# attempts for a run id from the query above
-pnpm exec wrangler d1 execute roundhouse-v2-development --remote \
-  --config apps/control-plane/wrangler.jsonc \
-  --json --command "SELECT id, run_revision, node_id, role, state,
-    datetime(deadline_at/1000, 'unixepoch') AS deadline_utc,
-    datetime(updated_at/1000, 'unixepoch') AS updated_utc,
-    substr(COALESCE(outcome_json, ''), 1, 400) AS outcome,
-    json_extract(result_json, '\$.review.status') AS review_status
-  FROM attempts WHERE run_id = 'run_…' ORDER BY created_at ASC, id ASC;"
-
-pnpm exec wrangler d1 execute roundhouse-v2-development --remote \
-  --config apps/control-plane/wrangler.jsonc \
-  --json --command "SELECT attempt_id, kind, substr(payload_json, 1, 300) AS payload,
-    datetime(created_at/1000, 'unixepoch') AS created_utc
-  FROM events WHERE run_id = 'run_…'
-  ORDER BY created_at DESC, id DESC LIMIT 40;"
-```
-
-**Stuck vs progressing (quick read):**
-
-- Progressing: `status='active'`, current attempt `state` in
-  `created`/`dispatched`/`executed`, `lease_expires_at` still in the future,
-  and recent `events` for that attempt (model/tool progress).
-- Waiting on a human: `waiting_reason` set (e.g. `visual_feedback`) and the
-  stage/node at an approval / human boundary — check GitHub comments for the
-  operator prompt.
-- Likely stuck / needs recovery: lease expired with no new events, attempt
-  left in `dispatched`/`executed` without completion, or repeated
-  `outcome_json` kinds such as `execution_interrupted`, `branch_superseded`,
-  or `checkpoint_rejected`.
-
 Key tables: `work_items`, `runs` (`document_json` snapshot), `attempts`
-(`outcome_json` / `result_json`), `events`, `outbox`.
+(`outcome_json` / `result_json`), `events`, and `outbox`.
 
-#### Safety when debugging the shared development environment
+#### Production safety
 
-- Prefer read-only actions: `gh run …`, `wrangler whoami`, `deployments
-list|status`, `tail`, and D1 `SELECT`s.
-- Do **not** run `pnpm deploy:development*` / `wrangler deploy`,
-  `wrangler rollback`, `wrangler secret …`, `wrangler delete`, destructive D1
-  SQL, or queue/purge mutations unless the user explicitly asks for that
-  change.
-- Do not print secret values, API tokens, or `.dev.vars` contents into chat
-  or commit them.
-- This development deployment is shared: avoid write experiments that corrupt
-  runs, conversations, or auth sessions.
-
-### Production deployment
-
-Production is an isolated V2 stack promoted manually through
-`.github/workflows/promote-production.yml`; it is never deployed automatically
-from `main`. The workflow accepts the run ID of a successful development deploy,
-verifies that deployment's receipt and exact merge commit, and then waits at the
-required-reviewer gate on the `roundhouse-production` GitHub Environment.
-
-Production Worker and resource names use the `roundhouse-v2-*-production`
-scheme. The public hostname is `https://roundhouse.rm-rf.rip`; it currently
-belongs to the archived V1 Worker until an approved V2 cutover. Dynamic public
-identifiers are rendered into ignored `wrangler.production.jsonc` files by
-`pnpm render:production-config`. `pnpm check` only dry-runs those production
-configs locally.
-
-Read `docs/production-deployment.md` before production work. Do not create
-production resources, dispatch or approve the promotion workflow, apply
-production migrations, upload secrets, change Access/GitHub App settings, or
-move the production hostname unless the user explicitly authorizes that exact
-production change. A request to prepare or validate repository code/config is
-not production-change authorization.
+- Prefer read-only actions: `gh run …`, `wrangler whoami`, deployment
+  `list|status`, `tail`, and D1 `SELECT`s.
+- Do **not** run `wrangler deploy`, `wrangler rollback`, `wrangler secret …`,
+  `wrangler delete`, destructive D1 SQL, queue mutations, or workflow dispatches
+  unless the user explicitly asks for that production change.
+- Do not print secret values, API tokens, or `.dev.vars` contents into chat or
+  commit them.
+- Read `docs/production-deployment.md` before production work. A request to
+  prepare or validate repository code/config is not authorization to mutate
+  production.
 
 ### Other notes
 
 - The runner test suite creates `.runner-test-workspaces/` at the repo root. If a
   run is interrupted it may be left behind and cause `ENOTEMPTY` on the next run;
-  `rm -rf .runner-test-workspaces` before retrying.
+  remove that task-owned directory before retrying.
 - `pnpm install` prints "Ignored build scripts" (esbuild, workerd, sharp, etc.).
   This is intentional (`onlyBuiltDependencies: []` in `pnpm-workspace.yaml`); do
   not run the interactive `pnpm approve-builds`.

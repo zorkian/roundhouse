@@ -108,7 +108,7 @@ V1 is preserved at the `v1-poc-final` tag.
 | [Conversational entry](docs/conversational-entry-proposal.md)                          | how the ask-first conversation surface works                            |
 | [Conversational implementation plan](docs/conversational-entry-implementation-plan.md) | the v0 persistence, adapter, and test contracts                         |
 | [Future improvements](docs/future-improvements.md)                                     | deferred ideas that are explicitly not approved work                    |
-| [Production deployment](docs/production-deployment.md)                                 | isolated V2 production bootstrap, promotion, cutover, and rollback      |
+| [Production deployment](docs/production-deployment.md)                                 | production bootstrap and continuous deployment from `main`              |
 | [AGENTS.md](AGENTS.md)                                                                 | notes for automated agents working in this repository                   |
 
 ## Repository layout
@@ -140,10 +140,9 @@ pnpm check
 runner, and runs tests. Individual commands: `pnpm test`, `pnpm typecheck`,
 `pnpm format:check`.
 
-Deploying to the Cloudflare development environment is separate and requires
-authenticated Cloudflare, GitHub App, and AI Gateway credentials. See the
-[V2 plan](docs/v2-plan.md) and `package.json` scripts if you need that path.
-Production uses a separate, manually approved promotion; see
+Pull requests run `pnpm check` without deploying. Once a commit reaches `main`,
+the same CI workflow checks it again and deploys it directly to production.
+There is currently no shared-development deployment in the release path; see
 [Production deployment](docs/production-deployment.md).
 
 ## License

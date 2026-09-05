@@ -3,16 +3,15 @@
 
 # Production deployment
 
-Production is an explicit promotion, not a continuous deployment target. Do
-not provision resources, change GitHub or Access settings, run migrations, or
-dispatch the production workflow until the production owner approves the
-cutover.
+Production deploys automatically after a commit reaches `main` and passes the
+same `pnpm check` suite used by pull requests. Do not provision resources,
+change GitHub or Access settings, or run production mutations outside that
+workflow unless the production owner explicitly requests it.
 
-The current `roundhouse.rm-rf.rip` hostname serves the V1 Worker
-`roundhouse-prod-control-plane`. The V2 deployment replaces that Worker in
-place so it can retain the existing production GitHub App's write-only private
-key and webhook secret. V2 uses fresh data and execution resources and does not
-migrate V1 data.
+The `roundhouse.rm-rf.rip` hostname serves the V2 application through the
+existing `roundhouse-prod-control-plane` Worker. The in-place cutover retained
+the production GitHub App's write-only private key and webhook secret. V2 uses
+its own data and execution resources; V1 data was not migrated.
 
 That Worker already has the Durable Object migration tag
 `execution-container-v1`. The production Wrangler environment retains that
@@ -21,7 +20,7 @@ unused `RoundhouseExecutionContainer` namespace and all of its V1 data. Do not
 substitute the V2 development migration history: those short-lived
 control-plane classes were never deployed on this Worker, and the final V2
 Durable Object class belongs to the separately named runtime-host Worker. The
-promotion workflow accepts the before- or after-cutover tag and rejects any
+deployment workflow accepts the before- or after-cutover tag and rejects any
 other deployed migration lineage before making production changes.
 
 ## Production topology
@@ -151,11 +150,13 @@ Artifacts namespace, Workflow, or AI Gateway.
      --config apps/runtime-host/wrangler.production.jsonc
    ```
 
-   Neither Worker has a public route. This bootstrap lets the promotion fail
-   before cutover if the Cloudflare-hosted secret metadata is incomplete.
+   Neither Worker has a public route. This bootstrap lets the deployment fail
+   before updating the public control plane if Cloudflare-hosted secret
+   metadata is incomplete.
 
-9. Populate the protected GitHub Environment `roundhouse-production`. Keep its
-   required reviewer and `main` deployment-branch policy.
+9. Populate the GitHub Environment `roundhouse-production`. Keep its `main`
+   deployment-branch policy. Do not configure required reviewers while
+   production is intended to deploy continuously from `main`.
 
    Variables:
 
@@ -193,27 +194,24 @@ secrets from its previous version. The runtime host similarly retains its two
 R2 per-Worker secrets after bootstrap. Do not copy Worker secrets into
 checked-in config, GitHub, or workflow logs.
 
-## Promotion and cutover
+## Continuous deployment
 
-A merged pull request first passes `pnpm check` and deploys to the shared
-development environment through `.github/workflows/ci.yml`. After that deploy
-succeeds, CI emits a provenance-bound deployment receipt as the
-`roundhouse-v2-development-<run-id>` Actions artifact.
+`.github/workflows/ci.yml` is the only deployment workflow:
 
-To promote that exact merge commit after production approval:
+1. Pull requests run the **Check** job and do not deploy.
+2. A merge or direct push to `main` runs **Check** again on the exact production
+   commit.
+3. A successful check starts **Deploy production** in the
+   `roundhouse-production` GitHub Environment. Production deployments are
+   serialized and never cancel an in-progress deployment.
 
-1. Exercise it in development and record the successful CI run ID.
-2. Manually dispatch **Promote production** with that run ID.
-3. Review the pending `roundhouse-production` Environment deployment. Approval
-   starts all production mutations; rejection leaves production untouched.
-
-The workflow verifies the receipt and source commit, checks that the commit is
-on `main`, reruns the complete local checks, renders production config, and
-verifies all Cloudflare-hosted secret bindings by name and scope. It then
+The production job builds the application, renders the production configs,
+verifies the retained Worker credentials and Cloudflare-hosted secret bindings,
 deploys the model broker, deploys the runtime host and container, applies D1
-migrations, and finally replaces the existing control-plane Worker with V2. A
-service-token-authenticated `/health` request must succeed before the workflow
-records a production deployment receipt.
+migrations, and deploys the control plane. A service-token-authenticated
+`/health` request must succeed before CI records a
+`roundhouse-v2-production-<run-id>` deployment receipt.
 
-After the health check succeeds, send a test webhook from the existing GitHub
-App. Verify the webhook response and Worker logs before announcing the cutover.
+The old shared-development deployment and manual receipt-promotion workflow are
+not part of the release path. Their Cloudflare resources may remain until a
+separate, explicitly authorized cleanup.
