@@ -125,6 +125,19 @@ jobs:
           ROUNDHOUSE_GITHUB_CLIENT_ID: ${{ vars.ROUNDHOUSE_GITHUB_CLIENT_ID }}
         run: pnpm render:production-config
 
+      - name: Verify required GitHub credentials
+        env:
+          ACCESS_CLIENT_ID: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_ID }}
+          ACCESS_CLIENT_SECRET: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_SECRET }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          for name in ACCESS_CLIENT_ID ACCESS_CLIENT_SECRET CLOUDFLARE_API_TOKEN; do
+            if [[ -z "${!name}" ]]; then
+              echo "Required production secret $name is empty" >&2
+              exit 1
+            fi
+          done
+
       - name: Verify retained production Worker state
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
@@ -150,51 +163,15 @@ jobs:
                  index("ROUNDHOUSE_GITHUB_WEBHOOK_SECRET") != null)' \
             > /dev/null
 
-      - name: Write deployment secret files
+      - name: Verify Cloudflare-hosted production secrets
         env:
-          ACCESS_CLIENT_ID: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_ID }}
-          ACCESS_CLIENT_SECRET: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_SECRET }}
-          AI_GATEWAY_TOKEN: ${{ secrets.ROUNDHOUSE_AI_GATEWAY_TOKEN }}
-          CALLBACK_SIGNING_SECRET: ${{ secrets.ROUNDHOUSE_CALLBACK_SIGNING_SECRET }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          GITHUB_CLIENT_SECRET: ${{ secrets.ROUNDHOUSE_GITHUB_CLIENT_SECRET }}
-          R2_ACCESS_KEY_ID: ${{ secrets.ROUNDHOUSE_R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.ROUNDHOUSE_R2_SECRET_ACCESS_KEY }}
         run: |
-          for name in \
-            ACCESS_CLIENT_ID \
-            ACCESS_CLIENT_SECRET \
-            AI_GATEWAY_TOKEN \
-            CALLBACK_SIGNING_SECRET \
-            CLOUDFLARE_API_TOKEN \
-            GITHUB_CLIENT_SECRET \
-            R2_ACCESS_KEY_ID \
-            R2_SECRET_ACCESS_KEY; do
-            if [[ -z "${!name}" ]]; then
-              echo "Required production secret $name is empty" >&2
-              exit 1
-            fi
-          done
-
-          umask 077
-          jq -n \
-            --arg AI_GATEWAY_TOKEN "$AI_GATEWAY_TOKEN" \
-            '{AI_GATEWAY_TOKEN: $AI_GATEWAY_TOKEN}' \
-            > "$RUNNER_TEMP/model-broker-secrets.json"
-          jq -n \
-            --arg CALLBACK_SIGNING_SECRET "$CALLBACK_SIGNING_SECRET" \
-            '{CALLBACK_SIGNING_SECRET: $CALLBACK_SIGNING_SECRET}' \
-            > "$RUNNER_TEMP/runtime-host-secrets.json"
-          jq -n \
-            --arg CALLBACK_SIGNING_SECRET "$CALLBACK_SIGNING_SECRET" \
-            --arg R2_ACCESS_KEY_ID "$R2_ACCESS_KEY_ID" \
-            --arg R2_SECRET_ACCESS_KEY "$R2_SECRET_ACCESS_KEY" \
-            --arg ROUNDHOUSE_GITHUB_CLIENT_SECRET "$GITHUB_CLIENT_SECRET" \
-            '{CALLBACK_SIGNING_SECRET: $CALLBACK_SIGNING_SECRET,
-              R2_ACCESS_KEY_ID: $R2_ACCESS_KEY_ID,
-              R2_SECRET_ACCESS_KEY: $R2_SECRET_ACCESS_KEY,
-              ROUNDHOUSE_GITHUB_CLIENT_SECRET: $ROUNDHOUSE_GITHUB_CLIENT_SECRET}' \
-            > "$RUNNER_TEMP/control-plane-secrets.json"
+          node scripts/verify-production-secrets.mjs \
+            apps/control-plane/wrangler.production.jsonc \
+            apps/runtime-host/wrangler.production.jsonc \
+            apps/model-broker/wrangler.production.jsonc
 
       - name: Deploy model broker
         env:
@@ -204,7 +181,6 @@ jobs:
           pnpm exec wrangler deploy \
             --env production \
             --config apps/model-broker/wrangler.production.jsonc \
-            --secrets-file "$RUNNER_TEMP/model-broker-secrets.json" \
             --strict
 
       - name: Deploy runtime host
@@ -215,7 +191,6 @@ jobs:
           pnpm exec wrangler deploy \
             --env production \
             --config apps/runtime-host/wrangler.production.jsonc \
-            --secrets-file "$RUNNER_TEMP/runtime-host-secrets.json" \
             --containers-rollout immediate \
             --strict
 
@@ -237,7 +212,6 @@ jobs:
           pnpm exec wrangler deploy \
             --env production \
             --config apps/control-plane/wrangler.production.jsonc \
-            --secrets-file "$RUNNER_TEMP/control-plane-secrets.json" \
             --strict
 
       - name: Verify production health

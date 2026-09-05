@@ -321,10 +321,21 @@ describe("model broker", () => {
     const upstream = nativeUpstream(
       async () => new Response("event: done\n\n"),
     );
+    const getGatewayToken = vi.fn().mockResolvedValue("gateway-token");
+    const secretStoreEnv = {
+      ...env,
+      AI_GATEWAY_TOKEN: { get: getGatewayToken },
+    } satisfies BrokerEnv;
     const body = { model: "untrusted", input: "Research this", stream: true };
     const response = await brokerRequest(
-      modelRequest("openai-responses", "review-data", body, env, true),
-      env,
+      modelRequest(
+        "openai-responses",
+        "review-data",
+        body,
+        secretStoreEnv,
+        true,
+      ),
+      secretStoreEnv,
       upstream.ai,
       upstream.outboundFetch as unknown as typeof fetch,
     );
@@ -340,6 +351,7 @@ describe("model broker", () => {
     const headers = new Headers(
       upstream.outboundFetch.mock.calls[0]?.[1]?.headers,
     );
+    expect(getGatewayToken).toHaveBeenCalledOnce();
     expect(headers.get("cf-aig-authorization")).toBe("Bearer gateway-token");
     expect(headers.get("cf-aig-collect-log")).toBe("true");
     expect(headers.get("cf-aig-collect-log-payload")).toBe("false");

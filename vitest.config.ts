@@ -34,6 +34,7 @@ export default defineConfig({
       "apps/**/*.test.mjs",
       "containers/**/*.test.mjs",
       "packages/**/*.test.ts",
+      "scripts/**/*.test.mjs",
     ],
     // Git-heavy agent-runner fixtures can take ~20-30s on slower disks.
     testTimeout: 60_000,

@@ -14,10 +14,12 @@ import {
   modelUpstreamRequestIdHeader,
   modelProtocols,
   modelTransports,
+  resolveSecretText,
   runtimeCapabilitiesForModel,
   type ModelProtocol,
   type ModelRoute,
   type ModelTransport,
+  type SecretText,
 } from "@roundhouse/core";
 import { observeResponse } from "@roundhouse/response-observer";
 
@@ -31,11 +33,11 @@ const routeHeaders = {
 } as const;
 export type BrokerEnv = Omit<
   Cloudflare.Env,
-  "ROUTING_ROUTES" | "ROUTING_MODELS"
+  "AI_GATEWAY_TOKEN" | "ROUTING_ROUTES" | "ROUTING_MODELS"
 > & {
   readonly ROUTING_ROUTES?: string;
   readonly ROUTING_MODELS?: string;
-  readonly AI_GATEWAY_TOKEN?: string;
+  readonly AI_GATEWAY_TOKEN?: SecretText;
 };
 
 interface RawAiBinding {
@@ -398,15 +400,18 @@ function nativePath(request: Request, route: ModelRoute): string {
   return `/${match[1]}/models/${nativeModel(route)}${match[2]}${source.search}`;
 }
 
-function nativeHeaders(
+async function nativeHeaders(
   request: Request,
   env: BrokerEnv,
   route: ModelRoute,
-): Headers {
-  if (!env.AI_GATEWAY_TOKEN) throw new Error("ai_gateway_token_missing");
+): Promise<Headers> {
+  const gatewayToken = await resolveSecretText(
+    env.AI_GATEWAY_TOKEN,
+    "ai_gateway_token_missing",
+  );
   const headers = new Headers({
     "content-type": request.headers.get("content-type") ?? "application/json",
-    "cf-aig-authorization": `Bearer ${env.AI_GATEWAY_TOKEN}`,
+    "cf-aig-authorization": `Bearer ${gatewayToken}`,
     "cf-aig-collect-log": "true",
     "cf-aig-collect-log-payload": "false",
     "cf-aig-skip-cache": "true",
@@ -445,7 +450,7 @@ async function runProviderNative(
     `${baseUrl.replace(/\/$/, "")}${nativePath(request, route)}`,
     {
       method: "POST",
-      headers: nativeHeaders(request, env, route),
+      headers: await nativeHeaders(request, env, route),
       body: JSON.stringify(body),
       redirect: "manual",
       signal: request.signal,

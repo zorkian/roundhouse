@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { observeResponse } from "@roundhouse/response-observer";
+import { resolveSecretText, type SecretText } from "@roundhouse/core";
 import { developmentBadge, developmentBadgeStyles } from "./ui-header.js";
 import type { D1Like } from "./d1-store.js";
 
@@ -9,7 +10,7 @@ export interface UiAuthEnv {
   readonly DB: D1Like;
   readonly PUBLIC_ORIGIN: string;
   readonly GITHUB_CLIENT_ID: string;
-  readonly ROUNDHOUSE_GITHUB_CLIENT_SECRET: string;
+  readonly ROUNDHOUSE_GITHUB_CLIENT_SECRET: SecretText;
 }
 
 export interface UiSession {
@@ -364,6 +365,10 @@ export async function handleGitHubCallback(
       html(renderSignInPage("Sign-in expired. Please try again.")),
     );
   }
+  const clientSecret = await resolveSecretText(
+    env.ROUNDHOUSE_GITHUB_CLIENT_SECRET,
+    "github_client_secret_missing",
+  );
   const tokenResponse = await observeResponse(
     await fetch("https://github.com/login/oauth/access_token", {
       method: "POST",
@@ -373,7 +378,7 @@ export async function handleGitHubCallback(
       },
       body: JSON.stringify({
         client_id: env.GITHUB_CLIENT_ID,
-        client_secret: env.ROUNDHOUSE_GITHUB_CLIENT_SECRET,
+        client_secret: clientSecret,
         code,
         redirect_uri: new URL(
           "/auth/github/callback",
@@ -428,10 +433,7 @@ export async function handleGitHubCallback(
         JSON.stringify(repositoryIds),
         expiresAt,
         Date.now(),
-        await encryptUiAccessToken(
-          accessToken,
-          env.ROUNDHOUSE_GITHUB_CLIENT_SECRET,
-        ),
+        await encryptUiAccessToken(accessToken, clientSecret),
         Date.now(),
       )
       .run();
@@ -536,7 +538,10 @@ export async function validateUiSession(
     const accessToken = row.github_access_token
       ? await decryptUiAccessToken(
           row.github_access_token,
-          env.ROUNDHOUSE_GITHUB_CLIENT_SECRET,
+          await resolveSecretText(
+            env.ROUNDHOUSE_GITHUB_CLIENT_SECRET,
+            "github_client_secret_missing",
+          ),
         )
       : undefined;
     if (!accessToken) {
@@ -637,7 +642,10 @@ export async function uiGitHubAccessToken(
     return undefined;
   return decryptUiAccessToken(
     row.github_access_token,
-    env.ROUNDHOUSE_GITHUB_CLIENT_SECRET,
+    await resolveSecretText(
+      env.ROUNDHOUSE_GITHUB_CLIENT_SECRET,
+      "github_client_secret_missing",
+    ),
   );
 }
 
@@ -692,7 +700,10 @@ export async function uiGitHubPostForSessionHash<T>(
     throw new Error("ui_github_token_unavailable");
   const accessToken = await decryptUiAccessToken(
     row.github_access_token,
-    env.ROUNDHOUSE_GITHUB_CLIENT_SECRET,
+    await resolveSecretText(
+      env.ROUNDHOUSE_GITHUB_CLIENT_SECRET,
+      "github_client_secret_missing",
+    ),
   );
   const response = await observeResponse(
     await fetch(`https://api.github.com${path}`, {

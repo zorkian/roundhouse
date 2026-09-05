@@ -58,7 +58,10 @@ export interface AttemptNamespace {
 
 export type SandboxNamespace = DurableObjectNamespace<RoundhouseRuntimeSandbox>;
 
-export type AttemptRuntimeEnv = Cloudflare.Env &
+export type AttemptRuntimeEnv = Omit<
+  Cloudflare.Env,
+  "CALLBACK_SIGNING_SECRET" | "ROUNDHOUSE_GITHUB_CLIENT_SECRET"
+> &
   GitHubEnv & {
     readonly DB: D1Like;
   };
