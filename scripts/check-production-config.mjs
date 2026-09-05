@@ -46,6 +46,10 @@ try {
           tag: "execution-container-v1",
           new_sqlite_classes: ["RoundhouseExecutionContainer"],
         },
+        {
+          tag: "v2-production-control-plane-cutover",
+          deleted_classes: ["RoundhouseExecutionContainer"],
+        },
       ]);
     }
     const { stderr, stdout } = await run(

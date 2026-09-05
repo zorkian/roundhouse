@@ -207,13 +207,16 @@
         ],
       },
       "migrations": [
-        // This is the existing production Worker's terminal migration tag.
-        // Keep it as the final entry so Wrangler applies no V2 control-plane
-        // migrations when replacing the Worker in place. The V2 Durable
-        // Object classes live on the separately named runtime-host Worker.
+        // Anchor the existing production Worker's migration history, then
+        // remove its unused V1 namespace. The V2 Durable Object classes live
+        // on the separately named runtime-host Worker.
         {
           "tag": "execution-container-v1",
           "new_sqlite_classes": ["RoundhouseExecutionContainer"],
+        },
+        {
+          "tag": "v2-production-control-plane-cutover",
+          "deleted_classes": ["RoundhouseExecutionContainer"],
         },
       ],
       "triggers": { "crons": ["*/5 * * * *"] },

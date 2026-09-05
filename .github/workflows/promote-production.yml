@@ -143,7 +143,8 @@ jobs:
             --config apps/control-plane/wrangler.production.jsonc \
             --json \
             | jq -e \
-              '.resources.script_runtime.migration_tag == "execution-container-v1" and
+              '(.resources.script_runtime.migration_tag |
+                IN("execution-container-v1", "v2-production-control-plane-cutover")) and
                ([.resources.bindings[] | select(.type == "secret_text") | .name] |
                  index("ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY") != null and
                  index("ROUNDHOUSE_GITHUB_WEBHOOK_SECRET") != null)' \
