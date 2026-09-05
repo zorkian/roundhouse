@@ -125,6 +125,21 @@ jobs:
           ROUNDHOUSE_GITHUB_CLIENT_ID: ${{ vars.ROUNDHOUSE_GITHUB_CLIENT_ID }}
         run: pnpm render:production-config
 
+      - name: Verify retained production GitHub App secrets
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          pnpm exec wrangler secret list \
+            --env production \
+            --config apps/control-plane/wrangler.production.jsonc \
+            > "$RUNNER_TEMP/control-plane-secrets-before-deploy.json"
+          jq -e \
+            '([.[].name] | index("ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY")) != null and
+             ([.[].name] | index("ROUNDHOUSE_GITHUB_WEBHOOK_SECRET")) != null' \
+            "$RUNNER_TEMP/control-plane-secrets-before-deploy.json" \
+            > /dev/null
+
       - name: Write deployment secret files
         env:
           ACCESS_CLIENT_ID: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_ID }}
@@ -132,9 +147,7 @@ jobs:
           AI_GATEWAY_TOKEN: ${{ secrets.ROUNDHOUSE_AI_GATEWAY_TOKEN }}
           CALLBACK_SIGNING_SECRET: ${{ secrets.ROUNDHOUSE_CALLBACK_SIGNING_SECRET }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          GITHUB_APP_PRIVATE_KEY: ${{ secrets.ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY }}
           GITHUB_CLIENT_SECRET: ${{ secrets.ROUNDHOUSE_GITHUB_CLIENT_SECRET }}
-          GITHUB_WEBHOOK_SECRET: ${{ secrets.ROUNDHOUSE_GITHUB_WEBHOOK_SECRET }}
           R2_ACCESS_KEY_ID: ${{ secrets.ROUNDHOUSE_R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.ROUNDHOUSE_R2_SECRET_ACCESS_KEY }}
         run: |
@@ -144,9 +157,7 @@ jobs:
             AI_GATEWAY_TOKEN \
             CALLBACK_SIGNING_SECRET \
             CLOUDFLARE_API_TOKEN \
-            GITHUB_APP_PRIVATE_KEY \
             GITHUB_CLIENT_SECRET \
-            GITHUB_WEBHOOK_SECRET \
             R2_ACCESS_KEY_ID \
             R2_SECRET_ACCESS_KEY; do
             if [[ -z "${!name}" ]]; then
@@ -168,15 +179,11 @@ jobs:
             --arg CALLBACK_SIGNING_SECRET "$CALLBACK_SIGNING_SECRET" \
             --arg R2_ACCESS_KEY_ID "$R2_ACCESS_KEY_ID" \
             --arg R2_SECRET_ACCESS_KEY "$R2_SECRET_ACCESS_KEY" \
-            --arg ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY "$GITHUB_APP_PRIVATE_KEY" \
             --arg ROUNDHOUSE_GITHUB_CLIENT_SECRET "$GITHUB_CLIENT_SECRET" \
-            --arg ROUNDHOUSE_GITHUB_WEBHOOK_SECRET "$GITHUB_WEBHOOK_SECRET" \
             '{CALLBACK_SIGNING_SECRET: $CALLBACK_SIGNING_SECRET,
               R2_ACCESS_KEY_ID: $R2_ACCESS_KEY_ID,
               R2_SECRET_ACCESS_KEY: $R2_SECRET_ACCESS_KEY,
-              ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY: $ROUNDHOUSE_GITHUB_APP_PRIVATE_KEY,
-              ROUNDHOUSE_GITHUB_CLIENT_SECRET: $ROUNDHOUSE_GITHUB_CLIENT_SECRET,
-              ROUNDHOUSE_GITHUB_WEBHOOK_SECRET: $ROUNDHOUSE_GITHUB_WEBHOOK_SECRET}' \
+              ROUNDHOUSE_GITHUB_CLIENT_SECRET: $ROUNDHOUSE_GITHUB_CLIENT_SECRET}' \
             > "$RUNNER_TEMP/control-plane-secrets.json"
 
       - name: Deploy model broker

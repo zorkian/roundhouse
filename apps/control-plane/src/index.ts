@@ -102,6 +102,16 @@ export {
 
 export const controlPlaneService = "roundhouse-v2-control-plane";
 
+export function isGitHubWebhookRequest(
+  method: string,
+  pathname: string,
+): boolean {
+  return (
+    method === "POST" &&
+    (pathname === "/github/webhook" || pathname === "/v1/github/webhook")
+  );
+}
+
 function json(value: unknown, status = 200, headers?: HeadersInit): Response {
   return Response.json(value, {
     status,
@@ -1713,7 +1723,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
         }
       }
     }
-    if (url.pathname === "/github/webhook" && request.method === "POST") {
+    if (isGitHubWebhookRequest(request.method, url.pathname)) {
       const repository = new D1RunRepository(env.DB);
       const enqueue = async (wakeup: Wakeup) => {
         await publishWakeup(repository, env.RUN_WAKEUPS, wakeup);
