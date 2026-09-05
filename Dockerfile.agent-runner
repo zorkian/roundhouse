@@ -1,9 +1,9 @@
 # Copyright 2026 Mark Smith
 # SPDX-License-Identifier: Apache-2.0
 
-FROM node:24.18.0-alpine@sha256:4ba75f835bb8802193e4c114572113d4b26f95f6f094f4b5229d2a77773e0afc AS node-runtime
+FROM node:24.20.0-alpine@sha256:4caaaf42195bcd6f6f3559a413b20cb8f8ad089e231ee874cf7701643966689f AS node-runtime
 
-FROM node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d AS inner-agent-runtime
+FROM node:24.20.0-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e AS inner-agent-runtime
 
 RUN corepack enable pnpm && corepack prepare pnpm@10.13.1 --activate
 

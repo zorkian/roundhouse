@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -114,3 +115,29 @@ jobs:
 
       - name: Deploy control plane
         run: pnpm deploy:development:control-plane
+
+      - name: Record successful development deployment
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          jq -n \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg pullRequestHeadCommit "$HEAD_SHA" \
+            --arg sourceCommit "$MERGE_SHA" \
+            --arg workflowRunId "$RUN_ID" \
+            --arg workflowRunAttempt "$RUN_ATTEMPT" \
+            --arg deployedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{schemaVersion: 1, environment: "roundhouse-development", repository: $repository, pullRequestHeadCommit: $pullRequestHeadCommit, sourceCommit: $sourceCommit, workflowRunId: $workflowRunId, workflowRunAttempt: $workflowRunAttempt, deployedAt: $deployedAt}' \
+            > "$RUNNER_TEMP/development-deployment.json"
+
+      - name: Upload development deployment receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: roundhouse-v2-development-${{ github.run_id }}
+          path: ${{ runner.temp }}/development-deployment.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 90

@@ -987,7 +987,7 @@ describe("V2 agent runner", () => {
               hostname: "127.0.0.1",
               port: address.port,
               method: "POST",
-              path: "http://runner/assign",
+              path: `http://127.0.0.1:${address.port}/assign`,
               headers: {
                 "content-type": "application/json",
                 "x-roundhouse-control-plane-url": "https://control.invalid",

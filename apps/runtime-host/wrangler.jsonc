@@ -57,4 +57,62 @@
   "observability": {
     "enabled": true,
   },
+  "env": {
+    "production": {
+      "name": "roundhouse-v2-runtime-host-production",
+      "workers_dev": false,
+      "preview_urls": false,
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "roundhouse-v2-production",
+          "database_id": "00000000-0000-0000-0000-000000000000",
+        },
+      ],
+      "services": [
+        {
+          "binding": "MODEL_BROKER",
+          "service": "roundhouse-v2-model-broker-production",
+        },
+      ],
+      "containers": [
+        {
+          "class_name": "RoundhouseRuntimeSandbox",
+          "image": "../../Dockerfile.agent-runner",
+          "instance_type": {
+            "vcpu": 1,
+            "memory_mib": 10240,
+            "disk_mb": 20000,
+          },
+          "max_instances": 10,
+          "rollout_active_grace_period": 3600,
+        },
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "ATTEMPT_SANDBOXES",
+            "class_name": "RoundhouseRuntimeSandbox",
+          },
+        ],
+      },
+      "migrations": [
+        {
+          "tag": "runtime-host-v1",
+          "new_sqlite_classes": ["RoundhouseAttemptSandbox"],
+        },
+        {
+          "tag": "runtime-host-v2",
+          "new_sqlite_classes": ["RoundhouseRuntimeSandbox"],
+        },
+        {
+          "tag": "runtime-host-v3",
+          "deleted_classes": ["RoundhouseAttemptSandbox"],
+        },
+      ],
+      "observability": {
+        "enabled": true,
+      },
+    },
+  },
 }

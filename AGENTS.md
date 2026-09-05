@@ -23,7 +23,7 @@ user explicitly asks you to build, fix, change, or land something.
 
 ### Node version
 
-The repo requires Node 24 (`.node-version` pins `24.18.0`). That is configured
+The repo requires Node 24 (`.node-version` pins `24.20.0`). That is configured
 in the Cursor Cloud environment install (dashboard), including beating
 `/exec-daemon/node` (v22) on `PATH`. Use plain commands (`pnpm check`,
 `pnpm exec wrangler …`) — do not wrap them in `bash -lc`. If
@@ -244,6 +244,28 @@ list|status`, `tail`, and D1 `SELECT`s.
   or commit them.
 - This development deployment is shared: avoid write experiments that corrupt
   runs, conversations, or auth sessions.
+
+### Production deployment
+
+Production is an isolated V2 stack promoted manually through
+`.github/workflows/promote-production.yml`; it is never deployed automatically
+from `main`. The workflow accepts the run ID of a successful development deploy,
+verifies that deployment's receipt and exact merge commit, and then waits at the
+required-reviewer gate on the `roundhouse-production` GitHub Environment.
+
+Production Worker and resource names use the `roundhouse-v2-*-production`
+scheme. The public hostname is `https://roundhouse.rm-rf.rip`; it currently
+belongs to the archived V1 Worker until an approved V2 cutover. Dynamic public
+identifiers are rendered into ignored `wrangler.production.jsonc` files by
+`pnpm render:production-config`. `pnpm check` only dry-runs those production
+configs locally.
+
+Read `docs/production-deployment.md` before production work. Do not create
+production resources, dispatch or approve the promotion workflow, apply
+production migrations, upload secrets, change Access/GitHub App settings, or
+move the production hostname unless the user explicitly authorizes that exact
+production change. A request to prepare or validate repository code/config is
+not production-change authorization.
 
 ### Graphify knowledge graph
 

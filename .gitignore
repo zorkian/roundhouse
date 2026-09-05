@@ -6,6 +6,7 @@ coverage/
 !.env.example
 .dev.vars
 .wrangler/
+apps/*/wrangler.production*.jsonc
 .roundhouse/artifacts/
 .runner-test-workspaces/
 .runtime/
