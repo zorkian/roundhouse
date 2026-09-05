@@ -124,7 +124,9 @@
   // fail resource lookup instead of targeting development resources.
   "env": {
     "production": {
-      "name": "roundhouse-v2-control-plane-production",
+      // Reuse the existing production Worker so its write-only GitHub App
+      // private-key and webhook-secret bindings survive the V2 deployment.
+      "name": "roundhouse-prod-control-plane",
       "workers_dev": true,
       "routes": [
         {
@@ -223,7 +225,7 @@
       "vars": {
         "ARTIFACTS_NAMESPACE": "roundhouse-v2-production",
         "ARTIFACTS_REMOTE_ORIGIN": "https://00000000000000000000000000000000.artifacts.cloudflare.net",
-        "CONTROL_PLANE_ORIGIN": "https://roundhouse-v2-control-plane-production.replace-me.workers.dev",
+        "CONTROL_PLANE_ORIGIN": "https://roundhouse-prod-control-plane.replace-me.workers.dev",
         "PUBLIC_ORIGIN": "https://roundhouse.rm-rf.rip",
         "GITHUB_APP_ID": "9999999",
         "GITHUB_CLIENT_ID": "Iv000000000000000000",

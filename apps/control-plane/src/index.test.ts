@@ -26,6 +26,7 @@ import {
   attemptArtifactAccess,
   attemptContext,
   handleRequest,
+  isGitHubWebhookRequest,
   recoverExpiredAttempts,
   resolveWorkflowAgentInputs,
   sandboxPreviewPath,
@@ -65,6 +66,20 @@ nodes:
 `,
   workflowCommit,
 );
+
+describe("GitHub webhook routing", () => {
+  it.each(["/github/webhook", "/v1/github/webhook"])(
+    "accepts POST requests at %s",
+    (pathname) => {
+      expect(isGitHubWebhookRequest("POST", pathname)).toBe(true);
+    },
+  );
+
+  it("rejects other methods and paths", () => {
+    expect(isGitHubWebhookRequest("GET", "/v1/github/webhook")).toBe(false);
+    expect(isGitHubWebhookRequest("POST", "/v1/github/webhooks")).toBe(false);
+  });
+});
 
 function workflowRun(
   id: string,
