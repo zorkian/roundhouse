@@ -272,6 +272,8 @@ describe("attempt execution Workflow", () => {
       {
         kind: "execution_interrupted",
         source: "attempt_workflow",
+        code: "runner_connection_lost",
+        detail: "runner_connection_lost",
       },
     );
     expect(publishWakeup).toHaveBeenCalledWith(

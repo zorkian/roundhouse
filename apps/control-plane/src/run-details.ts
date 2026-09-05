@@ -133,6 +133,12 @@ function stageResultSummary(attempt: Attempt): string {
   return `${stage} is in progress.`;
 }
 
+function executionInterruptionDetail(attempt: Attempt): string | undefined {
+  return attempt.outcome?.kind === "execution_interrupted"
+    ? (attempt.outcome.detail ?? attempt.outcome.code)
+    : undefined;
+}
+
 function runStatusSummary(status: RunStatus, stage: string): string {
   switch (status) {
     case "active":
@@ -656,6 +662,14 @@ ${workflowEvidence(details, attempt)}<h4>Model routing</h4>${value(attempt.routi
   if (run.status === "waiting" && run.waitingReason)
     outcomeParts.push(
       `<dl><dt>Waiting on</dt><dd>${escapeHtml(run.waitingReason.replaceAll("_", " "))}</dd></dl>`,
+    );
+  const interruption = [...chronological]
+    .reverse()
+    .map(executionInterruptionDetail)
+    .find((detail) => detail !== undefined);
+  if (run.waitingReason === "retry_exhausted" && interruption)
+    outcomeParts.push(
+      `<p><strong>Last infrastructure failure:</strong> ${escapeHtml(interruption)}</p>`,
     );
   if (
     latestAttempt &&
