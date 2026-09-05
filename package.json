@@ -9,13 +9,14 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "check": "prettier --check . && node scripts/check-license-headers.mjs && tsc -b --pretty false && node --check containers/agent-runner/runner.mjs && vitest run",
+    "check": "prettier --check . && node scripts/check-license-headers.mjs && tsc -b --pretty false && node --check containers/agent-runner/runner.mjs && vitest run && node scripts/check-production-config.mjs",
     "deploy:development": "pnpm build && pnpm deploy:development:runtime && pnpm deploy:development:control-plane",
     "deploy:development:runtime": "wrangler deploy --config apps/runtime-host/wrangler.jsonc",
     "deploy:development:control-plane": "wrangler deploy --config apps/model-broker/wrangler.jsonc && wrangler d1 migrations apply roundhouse-v2-development --remote --config apps/control-plane/wrangler.jsonc && wrangler deploy --config apps/control-plane/wrangler.jsonc",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "license:check": "node scripts/check-license-headers.mjs",
+    "render:production-config": "node scripts/render-production-config.mjs",
     "runner:check": "node --check containers/agent-runner/runner.mjs",
     "test": "vitest run",
     "typecheck": "tsc -b --pretty false"

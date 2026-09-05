@@ -6,12 +6,8 @@ coverage/
 !.env.example
 .dev.vars
 .wrangler/
+apps/*/wrangler.production*.jsonc
 .roundhouse/artifacts/
 .runner-test-workspaces/
 .runtime/
 *.tsbuildinfo
-# Graphify local/transient outputs. Commit the live graph artifacts
-# (graph.json, GRAPH_REPORT.md, labels, etc.); ignore rebuild cache and
-# dated pre-overwrite safety snapshots created by `graphify update`.
-graphify-out/cache/
-graphify-out/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/

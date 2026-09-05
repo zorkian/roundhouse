@@ -108,6 +108,7 @@ V1 is preserved at the `v1-poc-final` tag.
 | [Conversational entry](docs/conversational-entry-proposal.md)                          | how the ask-first conversation surface works                            |
 | [Conversational implementation plan](docs/conversational-entry-implementation-plan.md) | the v0 persistence, adapter, and test contracts                         |
 | [Future improvements](docs/future-improvements.md)                                     | deferred ideas that are explicitly not approved work                    |
+| [Production deployment](docs/production-deployment.md)                                 | isolated V2 production bootstrap, promotion, cutover, and rollback      |
 | [AGENTS.md](AGENTS.md)                                                                 | notes for automated agents working in this repository                   |
 
 ## Repository layout
@@ -126,7 +127,7 @@ V1 is preserved at the `v1-poc-final` tag.
 Roundhouse is a pnpm monorepo of Cloudflare Workers. There is no local product
 dev server; the usual local path is install and check.
 
-You need Git, Node.js 24 (see `.node-version`), Corepack, and pnpm 10.13.1.
+You need Git, Node.js 24.20.0 (see `.node-version`), Corepack, and pnpm 10.13.1.
 
 ```sh
 corepack enable
@@ -142,6 +143,8 @@ runner, and runs tests. Individual commands: `pnpm test`, `pnpm typecheck`,
 Deploying to the Cloudflare development environment is separate and requires
 authenticated Cloudflare, GitHub App, and AI Gateway credentials. See the
 [V2 plan](docs/v2-plan.md) and `package.json` scripts if you need that path.
+Production uses a separate, manually approved promotion; see
+[Production deployment](docs/production-deployment.md).
 
 ## License
 

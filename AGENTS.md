@@ -23,7 +23,7 @@ user explicitly asks you to build, fix, change, or land something.
 
 ### Node version
 
-The repo requires Node 24 (`.node-version` pins `24.18.0`). That is configured
+The repo requires Node 24 (`.node-version` pins `24.20.0`). That is configured
 in the Cursor Cloud environment install (dashboard), including beating
 `/exec-daemon/node` (v22) on `PATH`. Use plain commands (`pnpm check`,
 `pnpm exec wrangler …`) — do not wrap them in `bash -lc`. If
@@ -245,29 +245,27 @@ list|status`, `tail`, and D1 `SELECT`s.
 - This development deployment is shared: avoid write experiments that corrupt
   runs, conversations, or auth sessions.
 
-### Graphify knowledge graph
+### Production deployment
 
-The repo commits a Graphify code knowledge graph under `graphify-out/`.
-`graphify-out/cache/` and dated `graphify-out/YYYY-MM-DD/` pre-overwrite
-safety snapshots are gitignored; commit the live artifacts (`graph.json`,
-`GRAPH_REPORT.md`, labels, manifest, and related sidecar files). Agents should
-prefer `graphify query` / `path` / `explain` for codebase exploration when the
-CLI is available — see `.cursor/rules/graphify.mdc`.
+Production is an isolated V2 stack promoted manually through
+`.github/workflows/promote-production.yml`; it is never deployed automatically
+from `main`. The workflow accepts the run ID of a successful development deploy,
+verifies that deployment's receipt and exact merge commit, and then waits at the
+required-reviewer gate on the `roundhouse-production` GitHub Environment.
 
-**Keep the graph in sync with code changes.** After modifying source files (and
-before you finish the turn / open or update a PR):
+Production Worker and resource names use the `roundhouse-v2-*-production`
+scheme. The public hostname is `https://roundhouse.rm-rf.rip`; it currently
+belongs to the archived V1 Worker until an approved V2 cutover. Dynamic public
+identifiers are rendered into ignored `wrangler.production.jsonc` files by
+`pnpm render:production-config`. `pnpm check` only dry-runs those production
+configs locally.
 
-1. Run `graphify update .` (AST-only, no API key).
-2. Stage and **commit the resulting live `graphify-out/` artifacts with the
-   same change set** (or a follow-up commit on the same branch) — do not leave
-   a dirty tracked graph working tree. Leave ignored cache/backup folders
-   untracked.
-
-Do **not** regenerate the graph during Cursor Cloud environment install. The
-install script (dashboard) should only ensure the Graphify CLI is present;
-regenerating on every build dirties the reused git checkout. If install still
-runs `graphify update` / `graphify extract`, remove that from the dashboard
-config.
+Read `docs/production-deployment.md` before production work. Do not create
+production resources, dispatch or approve the promotion workflow, apply
+production migrations, upload secrets, change Access/GitHub App settings, or
+move the production hostname unless the user explicitly authorizes that exact
+production change. A request to prepare or validate repository code/config is
+not production-change authorization.
 
 ### Other notes
 

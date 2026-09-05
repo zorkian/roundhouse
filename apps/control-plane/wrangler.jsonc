@@ -119,4 +119,122 @@
   "observability": {
     "enabled": true,
   },
+  // Production is rendered to wrangler.production.jsonc before use. The
+  // syntactically valid sentinels below make an accidental direct deployment
+  // fail resource lookup instead of targeting development resources.
+  "env": {
+    "production": {
+      "name": "roundhouse-v2-control-plane-production",
+      "workers_dev": true,
+      "routes": [
+        {
+          "pattern": "roundhouse.rm-rf.rip",
+          "custom_domain": true,
+        },
+      ],
+      "preview_urls": false,
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "roundhouse-v2-production",
+          "database_id": "00000000-0000-0000-0000-000000000000",
+          "migrations_dir": "migrations",
+        },
+      ],
+      "queues": {
+        "producers": [
+          {
+            "binding": "RUN_WAKEUPS",
+            "queue": "roundhouse-v2-production-wakeups",
+          },
+          {
+            "binding": "CONVERSATION_TURNS",
+            "queue": "roundhouse-v2-production-conversation-turns",
+          },
+        ],
+        "consumers": [
+          {
+            "queue": "roundhouse-v2-production-wakeups",
+            "dead_letter_queue": "roundhouse-v2-production-wakeups-dlq",
+            "max_batch_size": 10,
+            "max_batch_timeout": 5,
+            "max_retries": 5,
+            "retry_delay": 15,
+          },
+          {
+            "queue": "roundhouse-v2-production-conversation-turns",
+            "dead_letter_queue": "roundhouse-v2-production-conversation-turns-dlq",
+            "max_batch_size": 5,
+            "max_batch_timeout": 1,
+            "max_retries": 5,
+            "retry_delay": 15,
+          },
+        ],
+      },
+      "artifacts": [
+        { "binding": "ARTIFACTS", "namespace": "roundhouse-v2-production" },
+      ],
+      "r2_buckets": [
+        {
+          "binding": "BACKUP_BUCKET",
+          "bucket_name": "roundhouse-v2-production-workspaces",
+          "remote": true,
+        },
+      ],
+      "browser": { "binding": "BROWSER" },
+      "services": [
+        {
+          "binding": "MODEL_BROKER",
+          "service": "roundhouse-v2-model-broker-production",
+        },
+      ],
+      "workflows": [
+        {
+          "name": "roundhouse-v2-production-attempt-execution",
+          "binding": "ATTEMPT_EXECUTIONS",
+          "class_name": "AttemptExecutionWorkflow",
+        },
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "ATTEMPT_SANDBOXES",
+            "class_name": "RoundhouseRuntimeSandbox",
+            "script_name": "roundhouse-v2-runtime-host-production",
+          },
+        ],
+      },
+      "migrations": [
+        {
+          "tag": "v2-phase-1",
+          "new_sqlite_classes": ["RoundhouseAttemptContainer"],
+        },
+        {
+          "tag": "resumable-visual-workspaces",
+          "new_sqlite_classes": ["RoundhouseAttemptSandbox"],
+          "deleted_classes": ["RoundhouseAttemptContainer"],
+        },
+        {
+          "tag": "runtime-host-split",
+          "deleted_classes": ["RoundhouseAttemptSandbox"],
+        },
+      ],
+      "triggers": { "crons": ["*/5 * * * *"] },
+      "vars": {
+        "ARTIFACTS_NAMESPACE": "roundhouse-v2-production",
+        "ARTIFACTS_REMOTE_ORIGIN": "https://00000000000000000000000000000000.artifacts.cloudflare.net",
+        "CONTROL_PLANE_ORIGIN": "https://roundhouse-v2-control-plane-production.replace-me.workers.dev",
+        "PUBLIC_ORIGIN": "https://roundhouse.rm-rf.rip",
+        "GITHUB_APP_ID": "9999999",
+        "GITHUB_CLIENT_ID": "Iv000000000000000000",
+        "GITHUB_START_COMMAND": "/roundhouse start",
+        "SANDBOX_TRANSPORT": "rpc",
+        "BACKUP_BUCKET_NAME": "roundhouse-v2-production-workspaces",
+        "CLOUDFLARE_R2_ACCOUNT_ID": "00000000000000000000000000000000",
+      },
+      "observability": {
+        "enabled": true,
+      },
+    },
+  },
 }
