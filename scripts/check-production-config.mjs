@@ -2,11 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, unlink } from "node:fs/promises";
+import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { parse } from "jsonc-parser";
 
 import {
   productionConfigs,
@@ -37,6 +39,19 @@ try {
       dirname(resolve(repositoryRoot, relativePath)),
       outputName,
     );
+    if (service === "control-plane") {
+      const parsed = parse(await readFile(config, "utf8"));
+      assert.deepEqual(parsed.env.production.migrations, [
+        {
+          tag: "execution-container-v1",
+          new_sqlite_classes: ["RoundhouseExecutionContainer"],
+        },
+        {
+          tag: "v2-production-control-plane-cutover",
+          deleted_classes: ["RoundhouseExecutionContainer"],
+        },
+      ]);
+    }
     const { stderr, stdout } = await run(
       resolve(repositoryRoot, "node_modules/.bin/wrangler"),
       [

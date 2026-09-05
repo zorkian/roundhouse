@@ -207,18 +207,16 @@
         ],
       },
       "migrations": [
+        // Anchor the existing production Worker's migration history, then
+        // remove its unused V1 namespace. The V2 Durable Object classes live
+        // on the separately named runtime-host Worker.
         {
-          "tag": "v2-phase-1",
-          "new_sqlite_classes": ["RoundhouseAttemptContainer"],
+          "tag": "execution-container-v1",
+          "new_sqlite_classes": ["RoundhouseExecutionContainer"],
         },
         {
-          "tag": "resumable-visual-workspaces",
-          "new_sqlite_classes": ["RoundhouseAttemptSandbox"],
-          "deleted_classes": ["RoundhouseAttemptContainer"],
-        },
-        {
-          "tag": "runtime-host-split",
-          "deleted_classes": ["RoundhouseAttemptSandbox"],
+          "tag": "v2-production-control-plane-cutover",
+          "deleted_classes": ["RoundhouseExecutionContainer"],
         },
       ],
       "triggers": { "crons": ["*/5 * * * *"] },
