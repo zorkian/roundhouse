@@ -267,30 +267,6 @@ move the production hostname unless the user explicitly authorizes that exact
 production change. A request to prepare or validate repository code/config is
 not production-change authorization.
 
-### Graphify knowledge graph
-
-The repo commits a Graphify code knowledge graph under `graphify-out/`.
-`graphify-out/cache/` and dated `graphify-out/YYYY-MM-DD/` pre-overwrite
-safety snapshots are gitignored; commit the live artifacts (`graph.json`,
-`GRAPH_REPORT.md`, labels, manifest, and related sidecar files). Agents should
-prefer `graphify query` / `path` / `explain` for codebase exploration when the
-CLI is available — see `.cursor/rules/graphify.mdc`.
-
-**Keep the graph in sync with code changes.** After modifying source files (and
-before you finish the turn / open or update a PR):
-
-1. Run `graphify update .` (AST-only, no API key).
-2. Stage and **commit the resulting live `graphify-out/` artifacts with the
-   same change set** (or a follow-up commit on the same branch) — do not leave
-   a dirty tracked graph working tree. Leave ignored cache/backup folders
-   untracked.
-
-Do **not** regenerate the graph during Cursor Cloud environment install. The
-install script (dashboard) should only ensure the Graphify CLI is present;
-regenerating on every build dirties the reused git checkout. If install still
-runs `graphify update` / `graphify extract`, remove that from the dashboard
-config.
-
 ### Other notes
 
 - The runner test suite creates `.runner-test-workspaces/` at the repo root. If a
