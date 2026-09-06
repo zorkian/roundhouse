@@ -18,9 +18,9 @@ FROM docker.io/library/docker:29.6.2-dind-rootless@sha256:9ca5d2d7f364f7c48579ba
 
 USER root
 
-COPY --from=docker.io/cloudflare/sandbox:0.12.4-musl /container-server/sandbox /sandbox
-COPY --from=docker.io/cloudflare/sandbox:0.12.4-musl /usr/lib/libstdc++.so.6 /usr/lib/libstdc++.so.6
-COPY --from=docker.io/cloudflare/sandbox:0.12.4-musl /usr/lib/libgcc_s.so.1 /usr/lib/libgcc_s.so.1
+COPY --from=docker.io/cloudflare/sandbox:0.12.9-musl /container-server/sandbox /sandbox
+COPY --from=docker.io/cloudflare/sandbox:0.12.9-musl /usr/lib/libstdc++.so.6 /usr/lib/libstdc++.so.6
+COPY --from=docker.io/cloudflare/sandbox:0.12.9-musl /usr/lib/libgcc_s.so.1 /usr/lib/libgcc_s.so.1
 
 COPY --from=node-runtime /usr/local /opt/node24
 COPY --from=inner-agent-runtime /usr/local /opt/inner-node24

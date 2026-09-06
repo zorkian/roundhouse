@@ -9,5 +9,6 @@ coverage/
 apps/*/wrangler.production*.jsonc
 .roundhouse/artifacts/
 .runner-test-workspaces/
+.fastembed_cache/
 .runtime/
 *.tsbuildinfo
