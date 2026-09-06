@@ -1,6 +1,7 @@
 // Copyright 2026 Mark Smith
 // SPDX-License-Identifier: Apache-2.0
 
+import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
@@ -46,73 +47,83 @@ function sqliteD1(database: DatabaseSync): D1Like {
 describe("model usage persistence", () => {
   it("round-trips delivery provenance, deduplicates calls, and joins only authorized usage", async () => {
     const sqlite = new DatabaseSync(":memory:");
-    sqlite.exec(`
-      CREATE TABLE repositories (id TEXT PRIMARY KEY, github_id TEXT NOT NULL, profile_json TEXT NOT NULL);
-      CREATE TABLE work_items (id TEXT PRIMARY KEY, repository_id TEXT NOT NULL, issue_number INTEGER NOT NULL, current_run_id TEXT);
-      CREATE TABLE runs (id TEXT PRIMARY KEY, work_item_id TEXT NOT NULL, document_json TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
-      CREATE TABLE attempts (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, run_revision INTEGER NOT NULL, kind TEXT NOT NULL, node_id TEXT, executor TEXT, stage TEXT NOT NULL, role TEXT NOT NULL, state TEXT NOT NULL, deadline_at INTEGER NOT NULL, base_commit TEXT NOT NULL, expected_head TEXT NOT NULL, accepted_head TEXT, result_json TEXT, routing_json TEXT, capabilities_json TEXT, outcome_json TEXT, competition_json TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
-      CREATE TABLE events (id INTEGER PRIMARY KEY, run_id TEXT, attempt_id TEXT, kind TEXT, payload_json TEXT, created_at INTEGER);
-      CREATE TABLE model_usage (call_id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL, model TEXT NOT NULL, provider TEXT, requested_model TEXT, resolved_model TEXT, provider_reported_model TEXT, configured_model TEXT, routing_rule TEXT, requested_effort TEXT, resolved_effort TEXT, provider_reported_effort TEXT, outcome TEXT, latency_ms INTEGER, tool_call_count INTEGER, input_tokens INTEGER, cached_input_tokens INTEGER, cache_creation_input_tokens INTEGER, reasoning_tokens INTEGER, output_tokens INTEGER, total_tokens INTEGER, cost_usd REAL, created_at INTEGER NOT NULL);
-      CREATE TABLE conversations (id TEXT PRIMARY KEY, repository_id TEXT NOT NULL);
-      CREATE TABLE conversation_model_usage (call_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, turn_id TEXT NOT NULL, model TEXT NOT NULL, provider TEXT, requested_model TEXT, resolved_model TEXT, provider_reported_model TEXT, configured_model TEXT, routing_rule TEXT, requested_effort TEXT, resolved_effort TEXT, provider_reported_effort TEXT, outcome TEXT, latency_ms INTEGER, tool_call_count INTEGER, input_tokens INTEGER, cached_input_tokens INTEGER, cache_creation_input_tokens INTEGER, reasoning_tokens INTEGER, output_tokens INTEGER, total_tokens INTEGER, cost_usd REAL, created_at INTEGER NOT NULL);
-    `);
+    const migrations = new URL("../migrations/", import.meta.url);
+    for (const migration of readdirSync(migrations)
+      .filter((name) => name.endsWith(".sql"))
+      .sort())
+      sqlite.exec(readFileSync(new URL(migration, migrations), "utf8"));
     sqlite
-      .prepare("INSERT INTO repositories VALUES (?1,?2,?3)")
+      .prepare(
+        "INSERT INTO repositories (id,github_id,profile_version,profile_json,created_at) VALUES (?1,?2,?3,?4,?5)",
+      )
       .run(
         "repo-authorized",
         "123",
+        "profile",
         JSON.stringify({ repository: "octo/project" }),
+        10,
       );
     sqlite
-      .prepare("INSERT INTO repositories VALUES (?1,?2,?3)")
+      .prepare(
+        "INSERT INTO repositories (id,github_id,profile_version,profile_json,created_at) VALUES (?1,?2,?3,?4,?5)",
+      )
       .run(
         "repo-other",
         "456",
+        "profile",
         JSON.stringify({ repository: "other/project" }),
+        10,
       );
     sqlite
-      .prepare("INSERT INTO work_items VALUES (?1,?2,?3,?4)")
+      .prepare(
+        "INSERT INTO work_items (id,repository_id,issue_number,current_run_id) VALUES (?1,?2,?3,?4)",
+      )
       .run("work-1", "repo-authorized", 42, "run-1");
     sqlite
-      .prepare("INSERT INTO runs VALUES (?1,?2,?3,?4,?5)")
-      .run("run-1", "work-1", JSON.stringify({ id: "run-1" }), 10, 10);
+      .prepare(
+        "INSERT INTO runs (id,work_item_id,status,stage,revision,document_json,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+      )
+      .run(
+        "run-1",
+        "work-1",
+        "active",
+        "implement",
+        1,
+        JSON.stringify({ id: "run-1" }),
+        10,
+        10,
+      );
     sqlite
       .prepare(
-        "INSERT INTO attempts VALUES (?1,?2,1,'agent','node','agent','implement','writer','completed',100,'base','head',NULL,NULL,NULL,NULL,NULL,NULL,10,10)",
+        "INSERT INTO attempts (id,run_id,run_revision,kind,stage,role,state,deadline_at,expected_head,created_at,updated_at) VALUES (?1,?2,1,'agent','implement','writer','completed',100,'head',10,10)",
       )
       .run("attempt-1", "run-1");
     sqlite
-      .prepare("INSERT INTO conversations VALUES (?1,?2)")
+      .prepare(
+        "INSERT INTO conversations (id,repository_id,creator_github_user_id,creator_github_login,origin_adapter,origin_adapter_installation,origin_external_message_id,status,source_commit,profile_hash,context_json,created_at,updated_at) VALUES (?1,?2,7,'octocat','web','ui','origin','open','head','hash','{}',10,10)",
+      )
       .run("conversation-1", "repo-authorized");
     sqlite
       .prepare(
-        "INSERT INTO conversation_model_usage VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24)",
+        "INSERT INTO conversation_turns (id,conversation_id,kind,state,source_commit,configured_model,configured_reasoning,ordinal,created_at,updated_at) VALUES ('turn-1','conversation-1','message','succeeded','head','conversation-configured','high',1,10,10)",
+      )
+      .run();
+    sqlite
+      .prepare(
+        "INSERT INTO conversation_model_usage (call_id,provider,conversation_id,turn_id,call_kind,model,configured_model,protocol,reasoning_level,routing_rule,input_tokens,cached_input_tokens,cache_creation_input_tokens,reasoning_tokens,output_tokens,total_tokens,cost_usd,latency_ms,outcome,created_at,requested_effort,resolved_effort,tool_call_count,requested_model,resolved_model,provider_reported_model,provider_reported_effort) VALUES (?1,?2,?3,?4,'conversation',?5,?6,'protocol','high',?7,3,4,5,6,7,16,0.16,21,'succeeded',11,'medium','high',2,?8,?9,?10,?11)",
       )
       .run(
         "conversation-call",
+        "conversation-provider",
         "conversation-1",
         "turn-1",
         "conversation-model",
-        "conversation-provider",
+        "conversation-configured",
+        "conversation-rule",
         "conversation-requested",
         "conversation-resolved",
         "conversation-reported",
-        "conversation-configured",
-        "conversation-rule",
-        "medium",
-        "high",
         "conversation-effort",
-        "succeeded",
-        21,
-        2,
-        3,
-        4,
-        5,
-        6,
-        7,
-        16,
-        0.16,
-        11,
       );
 
     const repository = new D1RunRepository(sqliteD1(sqlite), () => 10);
@@ -144,15 +155,23 @@ describe("model usage persistence", () => {
       "created",
     );
     await expect(repository.recordModelUsage(delivery)).resolves.toBe("exists");
+    const otherProvider = { ...delivery, provider: "other-provider" };
+    await expect(repository.recordModelUsage(otherProvider)).resolves.toBe(
+      "created",
+    );
 
     const details = await repository.detailsByIssue("octo/project", 42, [
       "123",
     ]);
     expect(details?.usage).toContainEqual(expect.objectContaining(delivery));
+    expect(details?.usage).toContainEqual(
+      expect.objectContaining(otherProvider),
+    );
     const authorized = await repository.usageForRepositories(["123"], 0, 20);
     expect(authorized).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ ...delivery, source: "delivery" }),
+        expect.objectContaining({ ...otherProvider, source: "delivery" }),
         expect.objectContaining({
           callId: "conversation-call",
           source: "conversation",
@@ -161,7 +180,7 @@ describe("model usage persistence", () => {
         }),
       ]),
     );
-    expect(authorized).toHaveLength(2);
+    expect(authorized).toHaveLength(3);
     await expect(
       repository.usageForRepositories(["456"], 0, 20),
     ).resolves.toEqual([]);
