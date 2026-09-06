@@ -290,6 +290,7 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
   headers.set("x-roundhouse-routing-rule", route.rule);
   const requestedUrl = new URL(request.url);
   let response: Response;
+  const modelRequestStartedAt = Date.now();
   try {
     response = await runtime.MODEL_BROKER.fetch(
       new Request(
@@ -406,6 +407,9 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
             provider: route.provider,
             protocol: route.protocol,
             routingRule: route.rule,
+            requestedEffort: route.requestedEffort,
+            resolvedEffort: route.thinkingLevel,
+            latencyMs: Date.now() - modelRequestStartedAt,
           })
         : undefined;
       if (usage) {
@@ -430,6 +434,11 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
             status: response.status,
             usageFound: Boolean(usage),
             callId: usage?.callId ?? null,
+            requestedEffort: usage?.requestedEffort ?? null,
+            resolvedEffort: usage?.resolvedEffort ?? null,
+            latencyMs: usage?.latencyMs ?? null,
+            toolCallCount: usage?.toolCallCount ?? null,
+            durationMs: Date.now() - modelRequestStartedAt,
           },
         );
     },
@@ -444,6 +453,9 @@ export function extractModelUsage(
     provider?: string;
     protocol?: ModelRoute["protocol"];
     routingRule?: string;
+    requestedEffort?: ModelRoute["thinkingLevel"];
+    resolvedEffort?: ModelRoute["thinkingLevel"];
+    latencyMs?: number;
   } = {},
 ): ModelUsage | undefined {
   const candidates = text.trim().startsWith("{")
@@ -463,6 +475,7 @@ export function extractModelUsage(
   let outputTokens: number | undefined;
   let totalTokens: number | undefined;
   let directCost: number | undefined;
+  let toolCallCount: number | undefined;
   const number = (value: unknown) =>
     typeof value === "number" && Number.isFinite(value) ? value : undefined;
   for (const candidate of candidates) {
@@ -512,6 +525,33 @@ export function extractModelUsage(
         number(outputDetails.reasoning_tokens) ?? reasoningTokens;
       totalTokens = number(usage.total_tokens) ?? totalTokens;
       directCost = number(usage.cost_usd ?? usage.cost) ?? directCost;
+      const output = Array.isArray(current.output) ? current.output : undefined;
+      const content = Array.isArray(current.content)
+        ? current.content
+        : undefined;
+      const choices = Array.isArray(current.choices)
+        ? current.choices
+        : undefined;
+      const choiceCalls =
+        choices?.[0] && typeof choices[0] === "object"
+          ? (choices[0] as { message?: { tool_calls?: unknown } }).message
+              ?.tool_calls
+          : undefined;
+      if (output)
+        toolCallCount = output.filter(
+          (item) =>
+            Boolean(item) &&
+            typeof item === "object" &&
+            (item as Record<string, unknown>).type === "function_call",
+        ).length;
+      else if (content)
+        toolCallCount = content.filter(
+          (item) =>
+            Boolean(item) &&
+            typeof item === "object" &&
+            (item as Record<string, unknown>).type === "tool_use",
+        ).length;
+      else if (Array.isArray(choiceCalls)) toolCallCount = choiceCalls.length;
     } catch {
       /* ignore non-JSON stream fields */
     }
@@ -548,6 +588,16 @@ export function extractModelUsage(
     configuredModel: routedModel,
     ...(routing.provider ? { provider: routing.provider } : {}),
     ...(routing.routingRule ? { routingRule: routing.routingRule } : {}),
+    ...(routing.requestedEffort
+      ? { requestedEffort: routing.requestedEffort }
+      : {}),
+    ...(routing.resolvedEffort
+      ? { resolvedEffort: routing.resolvedEffort }
+      : {}),
+    ...(routing.latencyMs === undefined
+      ? {}
+      : { latencyMs: routing.latencyMs }),
+    ...(toolCallCount === undefined ? {} : { toolCallCount }),
     ...(inputTokens === undefined ? {} : { inputTokens }),
     ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
     ...(cacheCreationInputTokens === undefined

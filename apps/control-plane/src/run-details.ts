@@ -154,14 +154,45 @@ function runStatusSummary(status: RunStatus, stage: string): string {
   }
 }
 
-function usageTable(items: NonNullable<RunDetails["usage"]>): string {
+function usageDetails(items: NonNullable<RunDetails["usage"]>): string {
   if (!items.length) return '<p class="muted">No model calls recorded.</p>';
-  return `<table><thead><tr><th>Provider</th><th>Configured model</th><th>Actual model</th><th>Tokens</th><th>Cost</th></tr></thead><tbody>${items
+  return `<div class="model-usage-list">${items
     .map((item) => {
       const priced = withEstimatedUsageCost(item);
-      return `<tr><td>${escapeHtml(item.provider ?? "Unavailable")}</td><td>${escapeHtml(item.configuredModel ?? "Unavailable")}</td><td>${escapeHtml(item.model)}</td><td>${escapeHtml(formatUsage([priced]))}</td><td>${escapeHtml(priced.costUsd === undefined ? "Unavailable" : `$${priced.costUsd.toFixed(6)}`)}</td></tr>`;
+      const fields = [
+        ["Provider", item.provider ?? "Unavailable"],
+        ["Configured model", item.configuredModel ?? "Unavailable"],
+        ["Actual model", item.model],
+        ["Requested effort", item.requestedEffort ?? "Unavailable"],
+        ["Resolved effort", item.resolvedEffort ?? "Unavailable"],
+        ["Token breakdown", formatUsageBreakdown([priced])],
+        [
+          "Cost",
+          priced.costUsd === undefined
+            ? "Unavailable"
+            : `$${priced.costUsd.toFixed(6)}`,
+        ],
+        [
+          "Latency",
+          item.latencyMs === undefined
+            ? "Unavailable"
+            : `${item.latencyMs.toLocaleString("en-US")} ms`,
+        ],
+        [
+          "Tool calls",
+          item.toolCallCount === undefined
+            ? "Unavailable"
+            : String(item.toolCallCount),
+        ],
+      ];
+      return `<dl class="model-usage-details">${fields
+        .map(
+          ([label, fieldValue]) =>
+            `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(fieldValue)}</dd></div>`,
+        )
+        .join("")}</dl>`;
     })
-    .join("")}</tbody></table>`;
+    .join("")}</div>`;
 }
 
 const statusLabels: Record<RunStatus, string> = {
@@ -598,13 +629,16 @@ function competitionPanels(details: RunDetails): string {
       )?.model;
       const score = scoreFor(candidateId);
       const winner = judgement?.selected === candidateId;
-      return `<tr>${winner ? "<td><strong>Selected</strong></td>" : "<td></td>"}<td><code>${escapeHtml(candidateId)}</code></td><td>${escapeHtml(configuredModel ? `${configuredModel.id} (${configuredModel.reasoning})` : "Unavailable")}</td><td>${escapeHtml(attempt?.routing?.model ?? "Unavailable")}</td><td>${escapeHtml(attempt?.state ?? "pending")}</td><td>${escapeHtml(score ? String(score.score) : "Unavailable")}</td><td>${escapeHtml(score?.rationale ?? "Unavailable")}</td><td>${usageDisplay(usage.filter((item) => item.attemptId === attempt?.id))}</td></tr>`;
+      const candidateUsage = usage.filter(
+        (item) => item.attemptId === attempt?.id,
+      );
+      return `<tr>${winner ? "<td><strong>Selected</strong></td>" : "<td></td>"}<td><code>${escapeHtml(candidateId)}</code></td><td>${escapeHtml(configuredModel ? `${configuredModel.id} (${configuredModel.reasoning})` : "Unavailable")}</td><td>${escapeHtml(attempt?.routing?.model ?? "Unavailable")}</td><td>${escapeHtml(attempt?.state ?? "pending")}</td><td>${escapeHtml(score ? String(score.score) : "Unavailable")}</td><td>${escapeHtml(score?.rationale ?? "Unavailable")}</td><td><details class="candidate-usage"><summary>${escapeHtml(formatUsage(candidateUsage))} · Per-call details</summary>${usageDetails(candidateUsage)}</details></td></tr>`;
     });
     const judgeModel = configured?.judge.model;
     const judgeUsage = usage.filter(
       (item) => item.attemptId === group.judge?.id,
     );
-    const judgeRow = `<h4>Judge</h4><dl><dt>Configured model</dt><dd>${escapeHtml(judgeModel ? `${judgeModel.id} (${judgeModel.reasoning})` : "Unavailable")}</dd><dt>Actual model</dt><dd>${escapeHtml(group.judge?.routing?.model ?? "Unavailable")}</dd><dt>Status</dt><dd>${escapeHtml(group.judge?.state ?? "pending")}</dd><dt>Selected candidate</dt><dd><code>${escapeHtml(judgement?.selected ?? "Unavailable")}</code></dd><dt>Usage</dt><dd>${usageDisplay(judgeUsage)}</dd></dl>${usageTable(judgeUsage)}`;
+    const judgeRow = `<h4>Judge</h4><dl><dt>Configured model</dt><dd>${escapeHtml(judgeModel ? `${judgeModel.id} (${judgeModel.reasoning})` : "Unavailable")}</dd><dt>Actual model</dt><dd>${escapeHtml(group.judge?.routing?.model ?? "Unavailable")}</dd><dt>Status</dt><dd>${escapeHtml(group.judge?.state ?? "pending")}</dd><dt>Selected candidate</dt><dd><code>${escapeHtml(judgement?.selected ?? "Unavailable")}</code></dd><dt>Usage</dt><dd>${usageDisplay(judgeUsage)}</dd></dl>${usageDetails(judgeUsage)}`;
     return `<details class="diagnostics" open><summary class="diagnostics-summary">Model competition · ${escapeHtml(group.nodeId ?? group.baseRole)}</summary><table><thead><tr><th></th><th>Candidate</th><th>Configured model</th><th>Actual model</th><th>Status</th><th>Score</th><th>Rationale</th><th>Usage</th></tr></thead><tbody>${rows.join("")}</tbody></table>${judgeRow}</details>`;
   });
   return `<section><h2>Model competitions</h2>${panels.join("")}</section>`;
@@ -649,7 +683,7 @@ export function renderRunDetails(
         : `<h3>${escapeHtml(stageLabel(attempt.stage))}</h3><p class="stage-result">${escapeHtml(stageResultSummary(attempt))}</p><dl><dt>Status</dt><dd>${escapeHtml(attempt.state)}</dd><dt>Started</dt><dd>${escapeHtml(timestamp(attempt.createdAt))}</dd><dt>Updated</dt><dd>${escapeHtml(timestamp(attempt.updatedAt))}</dd><dt>Elapsed</dt><dd>${escapeHtml(elapsed(attempt.createdAt, attempt.updatedAt))}</dd></dl>`;
       return `<details class="attempt"><summary class="attempt-summary"><span><span class="label">Revision</span>${escapeHtml(attempt.runRevision ?? "Unavailable")}</span><span class="phase">${escapeHtml(phase)}</span><span><span class="label">Started</span>${escapeHtml(timestamp(attempt.createdAt))}</span><span><span class="label">Elapsed</span>${escapeHtml(elapsed(attempt.createdAt, attempt.updatedAt))}</span><span><span class="label">Status</span>${escapeHtml(attempt.state)}</span></summary><div class="attempt-details">${presentation}
 ${executionDisplay(details, attempt)}${attemptLinks(attempt)}<details class="diagnostics"><summary class="diagnostics-summary">Diagnostics</summary>${attempt.outcome ? `<h4>Executor outcome</h4>${value(attempt.outcome)}` : ""}${attempt.result === undefined ? "" : `<h4>Result</h4>${attemptResult(attempt)}`}<dl><dt>Role</dt><dd>${escapeHtml(attempt.role ?? "Unavailable")}</dd><dt>Revision</dt><dd>${escapeHtml(attempt.runRevision ?? "Unavailable")}</dd><dt>Base commit</dt><dd><code>${escapeHtml(attempt.baseCommit ?? "Unavailable")}</code></dd><dt>Expected head</dt><dd><code>${escapeHtml(attempt.expectedHead ?? "Unavailable")}</code></dd><dt>Accepted head</dt><dd><code>${escapeHtml(attempt.acceptedHead ?? "Unavailable")}</code></dd><dt>Effective capabilities</dt><dd>${value(attempt.capabilities ?? [])}</dd></dl>
-${workflowEvidence(details, attempt)}<h4>Model routing</h4>${value(attempt.routing)}<h4>Model usage total</h4><p>${usageDisplay(attemptUsage)}</p>${usageTable(attemptUsage)}</details></div></details>`;
+${workflowEvidence(details, attempt)}<h4>Model routing</h4>${value(attempt.routing)}<h4>Model usage total</h4><p>${usageDisplay(attemptUsage)}</p>${usageDetails(attemptUsage)}</details></div></details>`;
     })
     .join("");
   const latestAttempt = chronological[chronological.length - 1];
@@ -704,7 +738,7 @@ ${workflowEvidence(details, attempt)}<h4>Model routing</h4>${value(attempt.routi
     run.profile?.workflow && repositoryOwner && repositoryName
       ? `<dt>Workflow</dt><dd><a href="/repositories/${encodeURIComponent(repositoryOwner)}/${encodeURIComponent(repositoryName)}/issues/${run.issueNumber}/workflow">View workflow for this run</a></dd>`
       : "";
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(issueTitle)}</title><style>${sharedHeaderStyles}body{font:16px system-ui;line-height:1.5;margin:0;color:#202124}.page{max-width:1000px;margin:2rem auto;padding:0 1rem}h1,h2{line-height:1.2}section{border-top:1px solid #ddd;padding:1rem 0}details.attempt{border-top:1px solid #ddd}summary.attempt-summary{cursor:pointer;display:grid;grid-template-columns:.6fr 1.2fr 2fr 1fr 1fr;gap:1rem;padding:1rem;align-items:center}summary.attempt-summary:hover{background:#f6f8fa}details.diagnostics{border:1px solid #ddd;border-radius:.35rem;margin:.75rem 0;padding:0 1rem}summary.diagnostics-summary{cursor:pointer;font-weight:600;padding:.75rem 0}details.diagnostics[open] summary.diagnostics-summary{border-bottom:1px solid #ddd;margin-bottom:.75rem}details.diagnostics details.diagnostics{margin:.5rem 0}.phase{font-weight:700}.review-summary{border:1px solid #dde3ea;border-radius:.35rem;margin-top:1rem;padding:.75rem 1rem}.review-summary h3{margin-top:0}.review-presentation{margin:.75rem 0}.review-presentation h4{margin:1rem 0 .35rem}.review-markdown{overflow-wrap:anywhere}.review-markdown>*:first-child{margin-top:0}.review-markdown>*:last-child{margin-bottom:0}.review-markdown a{color:#175cd3}.review-markdown pre{max-width:100%;overflow-x:auto}.review-findings,.review-decisions{padding-left:1.4rem}.review-findings>li,.review-decisions>li{margin:.65rem 0}.label{display:block;color:#666;font-size:.75rem;text-transform:uppercase}.attempt-details{padding:0 1rem 1rem 2rem;border-left:3px solid #ddd;margin-left:1rem}dl{display:grid;grid-template-columns:10rem 1fr;gap:.35rem 1rem}dt{font-weight:600}dd{margin:0;overflow-wrap:anywhere}table{border-collapse:collapse;width:100%}th,td{text-align:left;border-bottom:1px solid #ddd;padding:.4rem}pre{background:#f6f8fa;padding:1rem;overflow:auto;white-space:pre-wrap}.muted{color:#666}code{overflow-wrap:anywhere}${statusPillStyles}.usage-hint{border-bottom:1px dotted currentColor;cursor:help;display:inline-block;position:relative}.usage-breakdown{background:#202124;border-radius:.25rem;bottom:calc(100% + .35rem);color:#fff;display:none;font-size:.875rem;left:0;padding:.4rem .6rem;pointer-events:none;position:absolute;white-space:nowrap;z-index:1}.usage-hint:hover .usage-breakdown,.usage-hint:focus .usage-breakdown,.usage-hint:focus-within .usage-breakdown{display:block}@media(max-width:700px){.page{box-sizing:border-box;margin:1rem auto;max-width:none;padding:0 .75rem;width:100%}summary.attempt-summary{grid-template-columns:1fr 1fr}.phase{grid-column:auto}details.diagnostics{padding:0 .5rem;min-width:0}dl{grid-template-columns:minmax(0,1fr)}dd{margin-bottom:.5rem}.attempt-details{padding:0 0 1rem .75rem;margin-left:0;min-width:0}table{display:block;overflow-x:auto}.usage-breakdown{max-width:calc(100vw - 2rem);white-space:normal}}</style></head><body>${renderSiteHeader(user)}
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(issueTitle)}</title><style>${sharedHeaderStyles}body{font:16px system-ui;line-height:1.5;margin:0;color:#202124}.page{max-width:1000px;margin:2rem auto;padding:0 1rem}h1,h2{line-height:1.2}section{border-top:1px solid #ddd;padding:1rem 0}details.attempt{border-top:1px solid #ddd}summary.attempt-summary{cursor:pointer;display:grid;grid-template-columns:.6fr 1.2fr 2fr 1fr 1fr;gap:1rem;padding:1rem;align-items:center}summary.attempt-summary:hover{background:#f6f8fa}details.diagnostics{border:1px solid #ddd;border-radius:.35rem;margin:.75rem 0;padding:0 1rem}summary.diagnostics-summary{cursor:pointer;font-weight:600;padding:.75rem 0}details.diagnostics[open] summary.diagnostics-summary{border-bottom:1px solid #ddd;margin-bottom:.75rem}details.diagnostics details.diagnostics{margin:.5rem 0}.phase{font-weight:700}.review-summary{border:1px solid #dde3ea;border-radius:.35rem;margin-top:1rem;padding:.75rem 1rem}.review-summary h3{margin-top:0}.review-presentation{margin:.75rem 0}.review-presentation h4{margin:1rem 0 .35rem}.review-markdown{overflow-wrap:anywhere}.review-markdown>*:first-child{margin-top:0}.review-markdown>*:last-child{margin-bottom:0}.review-markdown a{color:#175cd3}.review-markdown pre{max-width:100%;overflow-x:auto}.review-findings,.review-decisions{padding-left:1.4rem}.review-findings>li,.review-decisions>li{margin:.65rem 0}.label{display:block;color:#666;font-size:.75rem;text-transform:uppercase}.attempt-details{padding:0 1rem 1rem 2rem;border-left:3px solid #ddd;margin-left:1rem}dl{display:grid;grid-template-columns:10rem 1fr;gap:.35rem 1rem}dt{font-weight:600}dd{margin:0;overflow-wrap:anywhere}table{border-collapse:collapse;width:100%}th,td{text-align:left;border-bottom:1px solid #ddd;padding:.4rem}.model-usage-list{display:grid;gap:.75rem}.model-usage-details{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.5rem 1rem;margin:.5rem 0}.model-usage-details>div{min-width:0}.model-usage-details dt{color:#666;font-size:.75rem;text-transform:uppercase}.candidate-usage summary{cursor:pointer}.candidate-usage[open] summary{margin-bottom:.5rem}.candidate-usage .model-usage-details{grid-template-columns:1fr}pre{background:#f6f8fa;padding:1rem;overflow:auto;white-space:pre-wrap}.muted{color:#666}code{overflow-wrap:anywhere}${statusPillStyles}.usage-hint{border-bottom:1px dotted currentColor;cursor:help;display:inline-block;position:relative}.usage-breakdown{background:#202124;border-radius:.25rem;bottom:calc(100% + .35rem);color:#fff;display:none;font-size:.875rem;left:0;padding:.4rem .6rem;pointer-events:none;position:absolute;white-space:nowrap;z-index:1}.usage-hint:hover .usage-breakdown,.usage-hint:focus .usage-breakdown,.usage-hint:focus-within .usage-breakdown{display:block}@media(max-width:700px){.page{box-sizing:border-box;margin:1rem auto;max-width:none;padding:0 .75rem;width:100%}summary.attempt-summary{grid-template-columns:1fr 1fr}.phase{grid-column:auto}details.diagnostics{padding:0 .5rem;min-width:0}dl{grid-template-columns:minmax(0,1fr)}.model-usage-details{grid-template-columns:minmax(0,1fr)}dd{margin-bottom:.5rem}.attempt-details{padding:0 0 1rem .75rem;margin-left:0;min-width:0}table{display:block;overflow-x:auto}.usage-breakdown{max-width:calc(100vw - 2rem);white-space:normal}}</style></head><body>${renderSiteHeader(user)}
 <main class="page"><h1>${escapeHtml(issueTitle)}</h1><p>${escapeHtml(run.repository)} issue ${escapeHtml(run.issueNumber)}</p>
 <dl><dt>Status</dt><dd><span class="status ${runStatusTone(run.status)}">${escapeHtml(statusLabels[run.status])}</span></dd><dt>Current stage</dt><dd>${escapeHtml(currentStage)}</dd><dt>Elapsed</dt><dd>${escapeHtml(elapsed(details.createdAt, details.updatedAt))}</dd><dt>Total usage</dt><dd>${usageDisplay(usage)}</dd><dt>Source issue</dt><dd>${link(run.issue?.url, `Issue #${run.issueNumber}`)}</dd>${prRow}${workflowRow}<dt>Created</dt><dd>${escapeHtml(new Date(details.createdAt).toISOString())}</dd><dt>Updated</dt><dd>${escapeHtml(new Date(details.updatedAt).toISOString())}</dd></dl>
 ${outcomeSection}${competitionPanels(details)}<section><h2>Attempt history</h2>${rows || '<p class="muted">No attempts recorded.</p>'}</section><section><h2>Diagnostics</h2>${runDiagnostics}${reviewWorkflowEvidence(details)}${boundaryWorkflowEvidence(details)}${profileSection}</section></main></body></html>`;

@@ -929,7 +929,8 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
         startAt,
         endAt,
       );
-      const summary = summarizeModelUsage(calls, endAt);
+      const effort = url.searchParams.get("effort") || undefined;
+      const summary = summarizeModelUsage(calls, endAt, 30, effort);
       console.log(
         JSON.stringify({
           message: "ui_authorized_query",
@@ -937,6 +938,7 @@ const worker: ExportedHandler<RuntimeEnv, Wakeup | ConversationWakeup> = {
           outcome: "completed",
           calls: summary.calls,
           models: summary.models.length,
+          effort: effort ?? null,
           startAt: summary.startAt,
           endAt: summary.endAt,
           durationMs: Date.now() - queryStartedAt,

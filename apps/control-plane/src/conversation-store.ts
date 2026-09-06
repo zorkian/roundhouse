@@ -164,7 +164,11 @@ export interface ConversationCallUsage {
   readonly model: string;
   readonly configuredModel: string;
   readonly protocol: string;
+  // reasoningLevel remains the legacy persisted compatibility field.
   readonly reasoningLevel: string;
+  readonly requestedEffort?: string;
+  readonly resolvedEffort?: string;
+  readonly toolCallCount?: number;
   readonly routingRule: string;
   readonly inputTokens?: number;
   readonly cachedInputTokens?: number;
@@ -1242,23 +1246,55 @@ export class D1ConversationRepository {
   ): Promise<void> {
     if (!items.length) return;
     await this.db.batch(
-      items.map((usage) =>
-        this.db
+      items.map((usage) => {
+        const metadata =
+          usage.requestedEffort !== undefined ||
+          usage.resolvedEffort !== undefined ||
+          usage.toolCallCount !== undefined;
+        const values = [
+          usage.callId,
+          usage.provider,
+          usage.conversationId,
+          usage.turnId,
+          usage.callKind,
+          usage.model,
+          usage.configuredModel,
+          usage.protocol,
+          usage.reasoningLevel,
+        ];
+        if (metadata) {
+          return this.db
+            .prepare(
+              `INSERT OR IGNORE INTO conversation_model_usage
+          (call_id,provider,conversation_id,turn_id,call_kind,model,configured_model,protocol,reasoning_level,requested_effort,resolved_effort,routing_rule,input_tokens,cached_input_tokens,cache_creation_input_tokens,reasoning_tokens,output_tokens,total_tokens,cost_usd,latency_ms,tool_call_count,outcome,created_at)
+          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23)`,
+            )
+            .bind(
+              ...values,
+              usage.requestedEffort ?? null,
+              usage.resolvedEffort ?? null,
+              usage.routingRule,
+              usage.inputTokens ?? null,
+              usage.cachedInputTokens ?? null,
+              usage.cacheCreationInputTokens ?? null,
+              usage.reasoningTokens ?? null,
+              usage.outputTokens ?? null,
+              usage.totalTokens ?? null,
+              usage.costUsd ?? null,
+              usage.latencyMs,
+              usage.toolCallCount ?? null,
+              usage.outcome,
+              usage.createdAt,
+            );
+        }
+        return this.db
           .prepare(
             `INSERT OR IGNORE INTO conversation_model_usage
-             (call_id,provider,conversation_id,turn_id,call_kind,model,configured_model,protocol,reasoning_level,routing_rule,input_tokens,cached_input_tokens,cache_creation_input_tokens,reasoning_tokens,output_tokens,total_tokens,cost_usd,latency_ms,outcome,created_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)`,
+        (call_id,provider,conversation_id,turn_id,call_kind,model,configured_model,protocol,reasoning_level,routing_rule,input_tokens,cached_input_tokens,cache_creation_input_tokens,reasoning_tokens,output_tokens,total_tokens,cost_usd,latency_ms,outcome,created_at)
+        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)`,
           )
           .bind(
-            usage.callId,
-            usage.provider,
-            usage.conversationId,
-            usage.turnId,
-            usage.callKind,
-            usage.model,
-            usage.configuredModel,
-            usage.protocol,
-            usage.reasoningLevel,
+            ...values,
             usage.routingRule,
             usage.inputTokens ?? null,
             usage.cachedInputTokens ?? null,
@@ -1270,8 +1306,8 @@ export class D1ConversationRepository {
             usage.latencyMs,
             usage.outcome,
             usage.createdAt,
-          ),
-      ),
+          );
+      }),
     );
   }
 

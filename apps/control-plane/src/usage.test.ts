@@ -22,6 +22,50 @@ describe("model usage", () => {
     });
   });
 
+  it("persists effort, latency, and provider tool calls at the delivery usage boundary", () => {
+    const usage = extractModelUsage(
+      JSON.stringify({
+        id: "resp_effort",
+        model: "openai/gpt-5",
+        output: [
+          { type: "function_call", call_id: "call_1" },
+          { type: "function_call", call_id: "call_2" },
+        ],
+        usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+      }),
+      "attempt_effort",
+      "openai/gpt-5",
+      {
+        provider: "openai",
+        requestedEffort: "high",
+        resolvedEffort: "max",
+        latencyMs: 321,
+      },
+    );
+    expect(usage).toMatchObject({
+      requestedEffort: "high",
+      resolvedEffort: "max",
+      latencyMs: 321,
+      toolCallCount: 2,
+    });
+  });
+
+  it("leaves effort and latency unavailable when delivery metadata is absent", () => {
+    const usage = extractModelUsage(
+      JSON.stringify({
+        id: "resp_historical",
+        model: "openai/gpt-5",
+        usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+      }),
+      "attempt_historical",
+      "openai/gpt-5",
+    );
+    expect(usage?.requestedEffort).toBeUndefined();
+    expect(usage?.resolvedEffort).toBeUndefined();
+    expect(usage?.latencyMs).toBeUndefined();
+    expect(usage?.toolCallCount).toBeUndefined();
+  });
+
   it("calculates cost for the configured routing model", () => {
     const usage = extractModelUsage(
       JSON.stringify({

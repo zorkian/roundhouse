@@ -217,6 +217,52 @@ describe("summarizeModelUsage", () => {
     );
   });
 
+  it("groups and filters calls by resolved effort without changing cost", () => {
+    const calls = [
+      call("openai/gpt-5", endAt - day, {
+        resolvedEffort: "high",
+        latencyMs: 100,
+        reasoningTokens: 2,
+        outputTokens: 10,
+      }),
+      call("openai/gpt-5", endAt - day, {
+        resolvedEffort: "max",
+        latencyMs: 300,
+        reasoningTokens: 5,
+        outputTokens: 10,
+      }),
+      call("openai/gpt-5", endAt - day, {
+        latencyMs: undefined,
+        reasoningTokens: undefined,
+      }),
+    ];
+    const summary = summarizeModelUsage(calls, endAt);
+    expect(summary.models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          model: "openai/gpt-5",
+          resolvedEffort: "high",
+          averageLatencyMs: 100,
+          reasoningTokenShare: 0.2,
+        }),
+        expect.objectContaining({
+          model: "openai/gpt-5",
+          resolvedEffort: "max",
+          averageLatencyMs: 300,
+          reasoningTokenShare: 0.5,
+        }),
+        expect.objectContaining({
+          model: "openai/gpt-5",
+          resolvedEffort: "unknown",
+        }),
+      ]),
+    );
+    expect(summarizeModelUsage(calls, endAt, 30, "high").calls).toBe(1);
+    const html = renderModelUsage(summary, { githubLogin: "octocat" });
+    expect(html).toContain("Effort is explanatory metadata");
+    expect(html).toContain("Reasoning share");
+  });
+
   it("reports an empty window without collapsing totals to zero", () => {
     const summary = summarizeModelUsage([], endAt);
     expect(summary.calls).toBe(0);

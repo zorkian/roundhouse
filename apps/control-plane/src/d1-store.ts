@@ -113,6 +113,10 @@ type UsageRow = {
   provider: string | null;
   configured_model: string | null;
   routing_rule: string | null;
+  requested_effort: string | null;
+  resolved_effort: string | null;
+  latency_ms: number | null;
+  tool_call_count: number | null;
   input_tokens: number | null;
   cached_input_tokens: number | null;
   cache_creation_input_tokens: number | null;
@@ -137,6 +141,18 @@ const usageFromRow = (
     ? {}
     : { configuredModel: row.configured_model }),
   ...(row.routing_rule === null ? {} : { routingRule: row.routing_rule }),
+  ...(row.requested_effort == null
+    ? {}
+    : {
+        requestedEffort: row.requested_effort as ModelUsage["requestedEffort"],
+      }),
+  ...(row.resolved_effort == null
+    ? {}
+    : { resolvedEffort: row.resolved_effort as ModelUsage["resolvedEffort"] }),
+  ...(row.latency_ms == null ? {} : { latencyMs: row.latency_ms }),
+  ...(row.tool_call_count == null
+    ? {}
+    : { toolCallCount: row.tool_call_count }),
   ...(row.input_tokens === null ? {} : { inputTokens: row.input_tokens }),
   ...(row.cached_input_tokens === null
     ? {}
@@ -445,7 +461,7 @@ export class D1RunRepository implements RunRepository {
   ): Promise<readonly (ModelUsage & { readonly createdAt?: number })[]> {
     const result = await this.db
       .prepare(
-        "SELECT u.call_id,u.attempt_id,u.model,u.provider,u.configured_model,u.routing_rule,u.input_tokens,u.cached_input_tokens,u.cache_creation_input_tokens,u.reasoning_tokens,u.output_tokens,u.total_tokens,u.cost_usd,u.created_at FROM model_usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.run_id=?1 ORDER BY u.created_at,u.call_id",
+        "SELECT u.call_id,u.attempt_id,u.model,u.provider,u.configured_model,u.routing_rule,u.requested_effort,u.resolved_effort,u.latency_ms,u.tool_call_count,u.input_tokens,u.cached_input_tokens,u.cache_creation_input_tokens,u.reasoning_tokens,u.output_tokens,u.total_tokens,u.cost_usd,u.created_at FROM model_usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.run_id=?1 ORDER BY u.created_at,u.call_id",
       )
       .bind(runId)
       .all<UsageRow>();
@@ -473,6 +489,7 @@ export class D1RunRepository implements RunRepository {
       .prepare(
         `SELECT * FROM (
            SELECT u.call_id,u.attempt_id,u.model,u.provider,u.configured_model,u.routing_rule,
+                  u.requested_effort,u.resolved_effort,u.latency_ms,u.tool_call_count,
                   u.input_tokens,u.cached_input_tokens,u.cache_creation_input_tokens,
                   u.reasoning_tokens,u.output_tokens,u.total_tokens,u.cost_usd,u.created_at,
                   'delivery' AS source
@@ -485,7 +502,8 @@ export class D1RunRepository implements RunRepository {
              AND p.github_id IN (${placeholders})
            UNION ALL
            SELECT u.call_id,u.turn_id AS attempt_id,u.model,u.provider,u.configured_model,
-                  u.routing_rule,u.input_tokens,u.cached_input_tokens,
+                  u.routing_rule,u.requested_effort,u.resolved_effort,u.latency_ms,
+                  u.tool_call_count,u.input_tokens,u.cached_input_tokens,
                   u.cache_creation_input_tokens,u.reasoning_tokens,u.output_tokens,
                   u.total_tokens,u.cost_usd,u.created_at,'conversation' AS source
            FROM conversation_model_usage u
@@ -503,7 +521,7 @@ export class D1RunRepository implements RunRepository {
   async recordModelUsage(usage: ModelUsage): Promise<"created" | "exists"> {
     const result = await this.db
       .prepare(
-        "INSERT OR IGNORE INTO model_usage (call_id,attempt_id,model,provider,configured_model,routing_rule,input_tokens,cached_input_tokens,cache_creation_input_tokens,reasoning_tokens,output_tokens,total_tokens,cost_usd,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+        "INSERT OR IGNORE INTO model_usage (call_id,attempt_id,model,provider,configured_model,routing_rule,requested_effort,resolved_effort,latency_ms,tool_call_count,input_tokens,cached_input_tokens,cache_creation_input_tokens,reasoning_tokens,output_tokens,total_tokens,cost_usd,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
       )
       .bind(
         usage.callId,
@@ -512,6 +530,10 @@ export class D1RunRepository implements RunRepository {
         usage.provider ?? "",
         usage.configuredModel ?? null,
         usage.routingRule ?? null,
+        usage.requestedEffort ?? null,
+        usage.resolvedEffort ?? null,
+        usage.latencyMs ?? null,
+        usage.toolCallCount ?? null,
         usage.inputTokens ?? null,
         usage.cachedInputTokens ?? null,
         usage.cacheCreationInputTokens ?? null,
@@ -531,6 +553,10 @@ export class D1RunRepository implements RunRepository {
           callId: usage.callId,
           model: usage.model,
           totalTokens: usage.totalTokens ?? null,
+          requestedEffort: usage.requestedEffort ?? null,
+          resolvedEffort: usage.resolvedEffort ?? null,
+          latencyMs: usage.latencyMs ?? null,
+          toolCallCount: usage.toolCallCount ?? null,
         },
       );
     return outcome;

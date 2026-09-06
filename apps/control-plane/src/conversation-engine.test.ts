@@ -351,6 +351,7 @@ describe("conversation engine", () => {
         .json()) as Record<string, unknown>;
       if (protocol === "openai-completions")
         expect(requestBody).toMatchObject({
+          reasoning_effort: "high",
           response_format: {
             json_schema: {
               name: "conversation_first_reply",
@@ -358,8 +359,12 @@ describe("conversation engine", () => {
             },
           },
         });
-      if (protocol === "anthropic-messages")
+      if (protocol === "anthropic-messages") {
         expect(requestBody.system).toContain("conversation_first_reply");
+        expect(requestBody).toMatchObject({
+          thinking: { type: "enabled", effort: "high" },
+        });
+      }
       if (protocol === "google-generative-ai")
         expect(requestBody).toMatchObject({
           generationConfig: {
@@ -369,6 +374,53 @@ describe("conversation engine", () => {
         });
     },
   );
+
+  it("maps and records Moonshot/Kimi effort through the Chat Completions adapter", async () => {
+    const route = {
+      ...responsesRoute,
+      provider: "moonshotai",
+      model: "moonshotai/kimi-k3",
+      protocol: "openai-completions" as const,
+      runtime: runtimeCapabilitiesForModel("moonshotai/kimi-k3")!,
+      requestedEffort: "high" as const,
+    };
+    const modelBroker = broker([
+      Response.json(route),
+      Response.json({
+        id: "kimi-response",
+        model: "kimi-k3",
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              content: JSON.stringify({
+                title: "Explain Kimi effort mapping",
+                reply: "Kimi answer",
+              }),
+            },
+          },
+        ],
+        usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5 },
+      }),
+    ]);
+
+    const result = await executeConversationTurn(
+      modelBroker,
+      github,
+      conversation,
+      turn,
+    );
+
+    const request = modelBroker.fetch.mock.calls[1]![0] as Request;
+    await expect(request.clone().json()).resolves.toMatchObject({
+      reasoning_effort: "high",
+    });
+    expect(result.usage[0]).toMatchObject({
+      model: "moonshotai/kimi-k3",
+      requestedEffort: "high",
+      resolvedEffort: "high",
+    });
+  });
 
   it("creates a validated editable brief and deterministic promotion markers", async () => {
     const brief = {
