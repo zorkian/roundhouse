@@ -244,6 +244,41 @@ async function callbackFor(
 }
 
 describe("single coordinator", () => {
+  it("persists completed boundary attempt results when they are created", async () => {
+    const store = new D1RunRepository(new LocalD1() as never);
+    const acceptedHead = "b".repeat(40);
+    await store.create(runFixture());
+    await store.createAttempt(
+      attemptFixture({
+        kind: "external",
+        nodeId: "approval",
+        executor: "human",
+        stage: "review",
+        role: "approval",
+        acceptedHead,
+        result: {
+          human: {
+            status: "answered",
+            actor: "operator",
+            body: "LGTM",
+          },
+        },
+      }),
+    );
+
+    await expect(store.getAttempt("run_slice_rev_1")).resolves.toMatchObject({
+      state: "completed",
+      acceptedHead,
+      result: {
+        human: {
+          status: "answered",
+          actor: "operator",
+          body: "LGTM",
+        },
+      },
+    });
+  });
+
   it("mints node authority and only attenuates the read-only integration review", () => {
     const investigate = workflow.nodes.investigate!;
     expect(
@@ -3016,10 +3051,9 @@ nodes:
     });
   });
 
-  // Same interrupted-promotion scenario against the D1-backed store, which
-  // drops the in-memory-only result/acceptedHead on attempt creation. The
-  // recovered canonical attempt must still complete with the winner's result
-  // and accepted commit, reconstructed from the durable winner attempt.
+  // Same interrupted-promotion scenario against the D1-backed store. The
+  // canonical selection must retain the winner's result and accepted commit,
+  // and recovery must still finish publication after the interruption.
   it("recovers the winner result and head from durable state after an interrupted publication", async () => {
     const competition = await competitionInput();
     const store = new D1RunRepository(new LocalD1() as never);
@@ -3070,9 +3104,11 @@ nodes:
     await expect(step(102)).rejects.toThrow("publication_interrupted");
     const recorded = await store.getAttempt("run_competition_rev_1");
     expect(recorded?.competition?.purpose).toBe("selected");
-    expect(recorded?.result).toBeUndefined();
-    // Recovery completes the canonical attempt with the winner's result and
-    // accepted head even though the selection row never stored them.
+    expect(recorded?.acceptedHead).toBe(winnerHead);
+    expect(recorded?.result).toEqual(
+      qualificationResult("qualify-candidate-alpha"),
+    );
+    // Recovery completes publication using the durable canonical selection.
     failPromotion = false;
     await expect(step(103)).resolves.toBe("dispatched");
     expect(promoted).toEqual([submitted[0]!.id]);
