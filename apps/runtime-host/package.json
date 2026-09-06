@@ -5,7 +5,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@cloudflare/sandbox": "0.12.4",
+    "@cloudflare/sandbox": "0.12.9",
     "@roundhouse/core": "workspace:*",
     "@roundhouse/response-observer": "workspace:*"
   }
