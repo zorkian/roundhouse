@@ -135,8 +135,9 @@ export type ModelProtocol = (typeof modelProtocols)[number];
 export type ModelTransport = (typeof modelTransports)[number];
 
 export interface ModelRoute {
-  // Present only when the workflow/profile explicitly requested an effort.
-  // thinkingLevel is the validated normalized effort sent to the provider.
+  // Present only when the workflow/profile explicitly requested a value.
+  // `model` and `thinkingLevel` are the validated route sent to the provider.
+  readonly requestedModel?: string;
   readonly requestedEffort?: ModelThinkingLevel;
   readonly provider: string;
   readonly model: string;
@@ -156,6 +157,9 @@ export function isModelRoute(value: unknown): value is ModelRoute {
   const thinkingLevelMap = runtime?.thinkingLevelMap as
     Record<string, unknown> | undefined;
   return (
+    (route.requestedModel === undefined ||
+      (typeof route.requestedModel === "string" &&
+        /^[a-z0-9._-]+\/[A-Za-z0-9._/-]+$/.test(route.requestedModel))) &&
     (route.requestedEffort === undefined ||
       modelThinkingLevels.includes(
         route.requestedEffort as ModelThinkingLevel,
@@ -203,12 +207,20 @@ export function parseModelRoute(value: string | null | undefined) {
 export interface ModelUsage {
   readonly callId: string;
   readonly attemptId: string;
+  // Canonical accounting identity: provider-reported model when present,
+  // otherwise the resolved route. It is intentionally never a guessed model.
   readonly model: string;
   readonly provider?: string;
+  // These preserve the selection trail without changing legacy `model` data.
+  readonly requestedModel?: string;
+  readonly resolvedModel?: string;
+  readonly providerReportedModel?: string;
   readonly configuredModel?: string;
   readonly routingRule?: string;
   readonly requestedEffort?: ModelThinkingLevel;
   readonly resolvedEffort?: ModelThinkingLevel;
+  readonly providerReportedEffort?: string;
+  readonly outcome?: "succeeded" | "failed";
   readonly latencyMs?: number;
   readonly toolCallCount?: number;
   readonly inputTokens?: number;

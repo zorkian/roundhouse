@@ -4,7 +4,10 @@
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { normalizeModelId } from "./model-identity.js";
+import {
+  normalizeModelId,
+  providerReportedIdentity,
+} from "./model-identity.js";
 
 describe("normalizeModelId", () => {
   it("is idempotent, preserves qualified IDs, and uses provider before configured model", () => {
@@ -33,6 +36,18 @@ describe("normalizeModelId", () => {
     expect(normalizeModelId({ model: "unresolved-model" })).toBe(
       "unresolved-model",
     );
+  });
+
+  it("retains only literal model and effort values supplied by a provider", () => {
+    expect(
+      providerReportedIdentity({
+        modelVersion: "gemini-3.5-flash-001",
+        reasoning: { effort: "high" },
+      }),
+    ).toEqual({ model: "gemini-3.5-flash-001", effort: "high" });
+    expect(
+      providerReportedIdentity({ model: 42, reasoning_effort: null }),
+    ).toEqual({});
   });
 });
 

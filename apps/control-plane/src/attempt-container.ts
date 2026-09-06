@@ -37,7 +37,10 @@ import { PreviewTransport } from "./preview-transport.js";
 import { WorkspaceLifecycle } from "./workspace-lifecycle.js";
 import { attemptInactivityMilliseconds } from "./attempt-timeouts.js";
 import { D1RunRepository, type D1Like } from "./d1-store.js";
-import { normalizeModelId } from "./model-identity.js";
+import {
+  normalizeModelId,
+  providerReportedIdentity,
+} from "./model-identity.js";
 import { estimateModelCostUsd } from "./model-prices.js";
 
 interface AttemptAssignment extends Attempt {
@@ -261,6 +264,8 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
   headers.delete("authorization");
   headers.delete("x-api-key");
   headers.delete("x-roundhouse-attempt-capability");
+  headers.delete("x-roundhouse-requested-model");
+  headers.delete("x-roundhouse-requested-effort");
   headers.set("x-roundhouse-role", attempt.role);
   headers.set("x-roundhouse-workload", "attempt");
   headers.set(
@@ -281,6 +286,10 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
             : "validation",
   );
   headers.set("x-roundhouse-complexity", "unknown");
+  if (route.requestedModel)
+    headers.set("x-roundhouse-requested-model", route.requestedModel);
+  if (route.requestedEffort)
+    headers.set("x-roundhouse-requested-effort", route.requestedEffort);
   headers.set("x-roundhouse-routing-provider", route.provider);
   headers.set("x-roundhouse-routing-model", route.model);
   headers.set("x-roundhouse-routing-protocol", route.protocol);
@@ -399,19 +408,19 @@ async function modelEgress(request: Request, env: Cloudflare.Env) {
   let responseText = "";
   return observeResponse(response, responseLogFields, {
     onText(text) {
-      if (response.ok) responseText += text;
+      responseText += text;
     },
     async onComplete() {
-      const usage = response.ok
-        ? extractModelUsage(responseText, attemptId, route.model, {
-            provider: route.provider,
-            protocol: route.protocol,
-            routingRule: route.rule,
-            requestedEffort: route.requestedEffort,
-            resolvedEffort: route.thinkingLevel,
-            latencyMs: Date.now() - modelRequestStartedAt,
-          })
-        : undefined;
+      const usage = extractModelUsage(responseText, attemptId, route.model, {
+        provider: route.provider,
+        protocol: route.protocol,
+        routingRule: route.rule,
+        requestedModel: route.requestedModel,
+        requestedEffort: route.requestedEffort,
+        resolvedEffort: route.thinkingLevel,
+        outcome: response.ok ? "succeeded" : "failed",
+        latencyMs: Date.now() - modelRequestStartedAt,
+      });
       if (usage) {
         try {
           await repository.recordModelUsage(usage);
@@ -453,8 +462,10 @@ export function extractModelUsage(
     provider?: string;
     protocol?: ModelRoute["protocol"];
     routingRule?: string;
+    requestedModel?: string;
     requestedEffort?: ModelRoute["thinkingLevel"];
     resolvedEffort?: ModelRoute["thinkingLevel"];
+    outcome?: ModelUsage["outcome"];
     latencyMs?: number;
   } = {},
 ): ModelUsage | undefined {
@@ -468,6 +479,8 @@ export function extractModelUsage(
   let response: Record<string, unknown> | undefined;
   let callId: string | undefined;
   let model = routedModel;
+  let providerReportedModel: string | undefined;
+  let providerReportedEffort: string | undefined;
   let inputTokens: number | undefined;
   let cachedInputTokens: number | undefined;
   let cacheCreationInputTokens: number | undefined;
@@ -476,28 +489,60 @@ export function extractModelUsage(
   let totalTokens: number | undefined;
   let directCost: number | undefined;
   let toolCallCount: number | undefined;
+  let providerOutcome: ModelUsage["outcome"] | undefined;
   const number = (value: unknown) =>
     typeof value === "number" && Number.isFinite(value) ? value : undefined;
   for (const candidate of candidates) {
     try {
       const event = JSON.parse(candidate) as Record<string, unknown>;
-      const value =
-        event.type === "response.completed" ? event.response : event;
+      const terminalResponseEvent =
+        event.type === "response.completed" ||
+        event.type === "response.failed" ||
+        event.type === "response.incomplete" ||
+        event.type === "response.cancelled";
+      const value = terminalResponseEvent ? event.response : event;
       if (!value || typeof value !== "object") continue;
       const current = value as Record<string, unknown>;
+      const status =
+        typeof current.status === "string" ? current.status : undefined;
+      const terminalStatus =
+        status === "completed" ||
+        status === "failed" ||
+        status === "incomplete" ||
+        status === "cancelled";
       if (event.type === "message_start" && event.message) {
         response = event.message as Record<string, unknown>;
-      } else if (current.usage) {
+      } else if (
+        terminalResponseEvent ||
+        terminalStatus ||
+        event.type === "error" ||
+        current.usage ||
+        current.usageMetadata
+      ) {
         response = current;
       }
+      if (event.type === "error") providerOutcome = "failed";
+      else if (terminalResponseEvent)
+        providerOutcome =
+          event.type === "response.completed" ? "succeeded" : "failed";
+      else if (terminalStatus)
+        providerOutcome = status === "completed" ? "succeeded" : "failed";
       const identity =
         event.type === "message_start" && event.message
           ? (event.message as Record<string, unknown>)
           : current;
       if (typeof identity.id === "string") callId = identity.id;
-      if (typeof identity.model === "string") model = identity.model;
-      const usage = (current.usage ?? identity.usage) as
-        Record<string, unknown> | undefined;
+      const providerResponse = providerReportedIdentity(identity);
+      if (providerResponse.model) {
+        providerReportedModel = providerResponse.model;
+        model = providerResponse.model;
+      }
+      if (providerResponse.effort)
+        providerReportedEffort = providerResponse.effort;
+      const usage = (current.usage ??
+        identity.usage ??
+        current.usageMetadata ??
+        identity.usageMetadata) as Record<string, unknown> | undefined;
       if (!usage) continue;
       const inputDetails = (usage.input_tokens_details ??
         usage.prompt_tokens_details ??
@@ -506,12 +551,15 @@ export function extractModelUsage(
         usage.completion_tokens_details ??
         {}) as Record<string, unknown>;
       inputTokens =
-        number(usage.input_tokens ?? usage.prompt_tokens) ?? inputTokens;
+        number(
+          usage.input_tokens ?? usage.prompt_tokens ?? usage.promptTokenCount,
+        ) ?? inputTokens;
       cachedInputTokens =
         number(
           inputDetails.cached_tokens ??
             usage.cache_read_input_tokens ??
-            usage.prompt_cache_hit_tokens,
+            usage.prompt_cache_hit_tokens ??
+            usage.cachedContentTokenCount,
         ) ?? cachedInputTokens;
       cacheCreationInputTokens =
         number(
@@ -519,11 +567,20 @@ export function extractModelUsage(
             inputDetails.cache_write_tokens ??
             usage.cache_creation_input_tokens,
         ) ?? cacheCreationInputTokens;
+      const googleOutputTokens = number(usage.candidatesTokenCount);
+      const googleReasoningTokens = number(usage.thoughtsTokenCount);
       outputTokens =
-        number(usage.output_tokens ?? usage.completion_tokens) ?? outputTokens;
+        number(usage.output_tokens ?? usage.completion_tokens) ??
+        (googleOutputTokens === undefined
+          ? undefined
+          : googleOutputTokens + (googleReasoningTokens ?? 0)) ??
+        outputTokens;
       reasoningTokens =
-        number(outputDetails.reasoning_tokens) ?? reasoningTokens;
-      totalTokens = number(usage.total_tokens) ?? totalTokens;
+        number(outputDetails.reasoning_tokens) ??
+        googleReasoningTokens ??
+        reasoningTokens;
+      totalTokens =
+        number(usage.total_tokens ?? usage.totalTokenCount) ?? totalTokens;
       directCost = number(usage.cost_usd ?? usage.cost) ?? directCost;
       const output = Array.isArray(current.output) ? current.output : undefined;
       const content = Array.isArray(current.content)
@@ -579,12 +636,23 @@ export function extractModelUsage(
     directCostUsd: directCost,
   });
   callId =
-    callId ?? (typeof response.id === "string" ? response.id : undefined);
+    callId ??
+    (typeof response.id === "string"
+      ? response.id
+      : typeof response.responseId === "string"
+        ? response.responseId
+        : undefined);
   if (!callId) return undefined;
+  const outcome = providerOutcome ?? routing.outcome;
   return {
     callId,
     attemptId,
     model,
+    ...(routing.requestedModel
+      ? { requestedModel: routing.requestedModel }
+      : {}),
+    resolvedModel: routedModel,
+    ...(providerReportedModel ? { providerReportedModel } : {}),
     configuredModel: routedModel,
     ...(routing.provider ? { provider: routing.provider } : {}),
     ...(routing.routingRule ? { routingRule: routing.routingRule } : {}),
@@ -594,6 +662,8 @@ export function extractModelUsage(
     ...(routing.resolvedEffort
       ? { resolvedEffort: routing.resolvedEffort }
       : {}),
+    ...(providerReportedEffort ? { providerReportedEffort } : {}),
+    ...(outcome ? { outcome } : {}),
     ...(routing.latencyMs === undefined
       ? {}
       : { latencyMs: routing.latencyMs }),

@@ -895,9 +895,14 @@ describe("run details competitions", () => {
             attemptId: "candidate-alpha",
             provider: "openai",
             configuredModel: "openai/gpt-alpha",
+            requestedModel: "openai/gpt-alpha",
+            resolvedModel: "openai/gpt-alpha",
+            providerReportedModel: "gpt-alpha-actual",
             model: "gpt-alpha-actual",
             requestedEffort: "medium",
             resolvedEffort: "low",
+            providerReportedEffort: "medium",
+            outcome: "succeeded",
             inputTokens: 60,
             outputTokens: 40,
             totalTokens: 100,
@@ -909,6 +914,7 @@ describe("run details competitions", () => {
             callId: "c2",
             attemptId: "candidate-beta",
             model: "claude-beta",
+            configuredModel: "anthropic/claude-configured",
             totalTokens: 200,
             costUsd: 0.02,
           },
@@ -937,10 +943,13 @@ describe("run details competitions", () => {
     );
     expect(html).toContain('class="model-usage-details"');
     expect(html).toContain(
-      "<dt>Provider</dt><dd>openai</dd></div><div><dt>Configured model</dt><dd>openai/gpt-alpha</dd></div><div><dt>Actual model</dt><dd>gpt-alpha-actual</dd>",
+      "<dt>Provider</dt><dd>openai</dd></div><div><dt>Requested model</dt><dd>openai/gpt-alpha</dd></div><div><dt>Resolved model</dt><dd>openai/gpt-alpha</dd></div><div><dt>Provider-reported model</dt><dd>gpt-alpha-actual</dd>",
     );
     expect(html).toContain(
-      "<dt>Requested effort</dt><dd>medium</dd></div><div><dt>Resolved effort</dt><dd>low</dd>",
+      "<dt>Requested effort</dt><dd>medium</dd></div><div><dt>Resolved effort</dt><dd>low</dd></div><div><dt>Provider-reported effort</dt><dd>medium</dd></div><div><dt>Outcome</dt><dd>succeeded</dd>",
+    );
+    expect(html).toContain(
+      "<dt>Requested model</dt><dd>Unavailable</dd></div><div><dt>Resolved model</dt><dd>anthropic/claude-configured</dd>",
     );
     expect(html).toContain(
       "<dt>Token breakdown</dt><dd>60 input, unavailable cached input, unavailable cache creation input, unavailable reasoning, 40 output</dd>",

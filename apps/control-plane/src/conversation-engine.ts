@@ -22,7 +22,10 @@ import type {
   DeliveryBrief,
 } from "./conversation-store.js";
 import type { GitHubApi } from "./github.js";
-import { normalizeModelId } from "./model-identity.js";
+import {
+  normalizeModelId,
+  providerReportedIdentity,
+} from "./model-identity.js";
 import { estimateModelCostUsd } from "./model-prices.js";
 
 type Broker = Pick<Fetcher, "fetch">;
@@ -34,6 +37,8 @@ const maxFileBytes = 200_000;
 const maxTranscriptCharacters = 80_000;
 
 const routeHeaders = {
+  requestedModel: "x-roundhouse-requested-model",
+  requestedEffort: "x-roundhouse-requested-effort",
   provider: "x-roundhouse-routing-provider",
   model: "x-roundhouse-routing-model",
   protocol: "x-roundhouse-routing-protocol",
@@ -131,6 +136,10 @@ function brokerHeaders(
     "x-roundhouse-conversation-id": conversation.id,
     "x-roundhouse-turn-id": turn.id,
   });
+  if (route.requestedModel)
+    headers.set(routeHeaders.requestedModel, route.requestedModel);
+  if (route.requestedEffort)
+    headers.set(routeHeaders.requestedEffort, route.requestedEffort);
   headers.set(routeHeaders.provider, route.provider);
   headers.set(routeHeaders.model, route.model);
   headers.set(routeHeaders.protocol, route.protocol);
@@ -854,26 +863,23 @@ function usageForResponse(input: {
       inputDetails.cache_write_tokens ??
       usage.cache_creation_input_tokens,
   );
-  const outputTokens = number(
-    usage.output_tokens ??
-      usage.completion_tokens ??
-      usage.candidatesTokenCount,
-  );
+  const googleOutputTokens = number(usage.candidatesTokenCount);
   const reasoningTokens = number(
     outputDetails.reasoning_tokens ?? usage.thoughtsTokenCount,
   );
+  const outputTokens =
+    number(usage.output_tokens ?? usage.completion_tokens) ??
+    (googleOutputTokens === undefined
+      ? undefined
+      : googleOutputTokens + (reasoningTokens ?? 0));
   const totalTokens =
     number(usage.total_tokens ?? usage.totalTokenCount) ??
     (inputTokens !== undefined && outputTokens !== undefined
       ? inputTokens + outputTokens
       : undefined);
+  const providerResponse = providerReportedIdentity(value);
   const model = normalizeModelId({
-    model:
-      typeof value.model === "string"
-        ? value.model
-        : typeof value.modelVersion === "string"
-          ? value.modelVersion
-          : input.route.model,
+    model: providerResponse.model ?? input.route.model,
     provider: input.route.provider,
     configuredModel: input.turn.configuredModel,
   });
@@ -901,6 +907,13 @@ function usageForResponse(input: {
     turnId: input.turn.id,
     callKind: input.callKind,
     model,
+    ...(input.route.requestedModel
+      ? { requestedModel: input.route.requestedModel }
+      : {}),
+    resolvedModel: input.route.model,
+    ...(providerResponse.model
+      ? { providerReportedModel: providerResponse.model }
+      : {}),
     configuredModel: input.turn.configuredModel,
     protocol: input.route.protocol,
     reasoningLevel: input.route.thinkingLevel,
@@ -908,6 +921,9 @@ function usageForResponse(input: {
       ? { requestedEffort: input.route.requestedEffort }
       : {}),
     resolvedEffort: input.route.thinkingLevel,
+    ...(providerResponse.effort
+      ? { providerReportedEffort: providerResponse.effort }
+      : {}),
     ...(toolCallCount(value) === undefined
       ? {}
       : { toolCallCount: toolCallCount(value) }),
@@ -925,6 +941,29 @@ function usageForResponse(input: {
     outcome: input.outcome,
     createdAt: Date.now(),
   };
+}
+
+function terminalOutcome(
+  value: Record<string, unknown>,
+  responseOk: boolean,
+): ConversationCallUsage["outcome"] {
+  if (value.status === "completed") return "succeeded";
+  if (
+    value.status === "failed" ||
+    value.status === "cancelled" ||
+    value.status === "incomplete"
+  )
+    return "failed";
+  return responseOk ? "succeeded" : "failed";
+}
+
+function acceptsConversationOutput(
+  value: Record<string, unknown>,
+  responseOk: boolean,
+): boolean {
+  if (!responseOk) return false;
+  if (value.status === "failed" || value.status === "cancelled") return false;
+  return value.status !== "incomplete" || (toolCallCount(value) ?? 0) === 0;
 }
 
 export class ConversationModelCallError extends Error {
@@ -1033,6 +1072,7 @@ async function callModel(input: {
     } catch {
       value = {};
     }
+    const outcome = terminalOutcome(value, response.ok);
     const usage = usageForResponse({
       value,
       route: input.route,
@@ -1040,9 +1080,10 @@ async function callModel(input: {
       turn: input.turn,
       callKind: input.callKind,
       latencyMs: Date.now() - startedAt,
-      outcome: response.ok ? "succeeded" : "failed",
+      outcome,
     });
-    if (response.ok) return { value, usage, failedAttempts: [...failedUsage] };
+    if (acceptsConversationOutput(value, response.ok))
+      return { value, usage, failedAttempts: [...failedUsage] };
     const failureFields = {
       ...brokerFailureFields(response.headers),
       ...conversationModelErrorFields(value),
