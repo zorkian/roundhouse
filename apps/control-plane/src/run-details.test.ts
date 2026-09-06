@@ -914,6 +914,7 @@ describe("run details competitions", () => {
             callId: "c2",
             attemptId: "candidate-beta",
             model: "claude-beta",
+            configuredModel: "anthropic/claude-configured",
             totalTokens: 200,
             costUsd: 0.02,
           },
@@ -946,6 +947,9 @@ describe("run details competitions", () => {
     );
     expect(html).toContain(
       "<dt>Requested effort</dt><dd>medium</dd></div><div><dt>Resolved effort</dt><dd>low</dd></div><div><dt>Provider-reported effort</dt><dd>medium</dd></div><div><dt>Outcome</dt><dd>succeeded</dd>",
+    );
+    expect(html).toContain(
+      "<dt>Requested model</dt><dd>Unavailable</dd></div><div><dt>Resolved model</dt><dd>anthropic/claude-configured</dd>",
     );
     expect(html).toContain(
       "<dt>Token breakdown</dt><dd>60 input, unavailable cached input, unavailable cache creation input, unavailable reasoning, 40 output</dd>",

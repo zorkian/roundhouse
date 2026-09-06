@@ -28,11 +28,16 @@ never includes another repository merely because its run is recent.
    when a provider sends it, token categories, direct cost, latency, tool-call
    count, and terminal outcome. A recognized terminal provider response with a
    usable ID is recorded even when its HTTP status is non-successful; supplied
-   usage is retained, while absent usage stays unknown. A transport failure or
-   delivery response without a usable provider call ID remains unknown rather
-   than becoming a fabricated token total. Conversation attempts retain their
-   own generated request identifier when a provider omits one, with all absent
-   token fields still left unknown.
+   usage is retained, while absent usage stays unknown. Buffered and streamed
+   provider statuses have the same binary meaning: `completed` is succeeded;
+   `failed`, `cancelled`, and `incomplete` are failed because they did not
+   complete. Google responses use `responseId`, `modelVersion`, and
+   `usageMetadata`; candidate and thought tokens are combined as output tokens,
+   while thought tokens are also retained as reasoning metadata. A transport
+   failure or delivery response without a usable provider call ID remains
+   unknown rather than becoming a fabricated token total. Conversation attempts
+   retain their own generated request identifier when a provider omits one,
+   with all absent token fields still left unknown.
 6. D1 stores delivery rows in `model_usage` and conversation rows in
    `conversation_model_usage`. Their rolling-window union is filtered by the
    stable GitHub repository IDs in the UI session before dashboard aggregation.
@@ -73,4 +78,6 @@ separate provider calls when they have separate IDs, and are counted
 separately; this avoids both dropping billable retry usage and double-counting
 a replay of the same response. Network failures, abandoned streams, and
 delivery responses without a usable identifier cannot be converted into known
-token or cost data.
+token or cost data. Consequently, recorded failed-call totals are a lower
+bound when a failed delivery never reaches accounting with a usable call ID or
+usage record.

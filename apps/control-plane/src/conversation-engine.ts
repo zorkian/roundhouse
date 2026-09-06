@@ -863,14 +863,15 @@ function usageForResponse(input: {
       inputDetails.cache_write_tokens ??
       usage.cache_creation_input_tokens,
   );
-  const outputTokens = number(
-    usage.output_tokens ??
-      usage.completion_tokens ??
-      usage.candidatesTokenCount,
-  );
+  const googleOutputTokens = number(usage.candidatesTokenCount);
   const reasoningTokens = number(
     outputDetails.reasoning_tokens ?? usage.thoughtsTokenCount,
   );
+  const outputTokens =
+    number(usage.output_tokens ?? usage.completion_tokens) ??
+    (googleOutputTokens === undefined
+      ? undefined
+      : googleOutputTokens + (reasoningTokens ?? 0));
   const totalTokens =
     number(usage.total_tokens ?? usage.totalTokenCount) ??
     (inputTokens !== undefined && outputTokens !== undefined
@@ -940,6 +941,20 @@ function usageForResponse(input: {
     outcome: input.outcome,
     createdAt: Date.now(),
   };
+}
+
+function terminalOutcome(
+  value: Record<string, unknown>,
+  responseOk: boolean,
+): ConversationCallUsage["outcome"] {
+  if (value.status === "completed") return "succeeded";
+  if (
+    value.status === "failed" ||
+    value.status === "cancelled" ||
+    value.status === "incomplete"
+  )
+    return "failed";
+  return responseOk ? "succeeded" : "failed";
 }
 
 export class ConversationModelCallError extends Error {
@@ -1048,6 +1063,7 @@ async function callModel(input: {
     } catch {
       value = {};
     }
+    const outcome = terminalOutcome(value, response.ok);
     const usage = usageForResponse({
       value,
       route: input.route,
@@ -1055,9 +1071,10 @@ async function callModel(input: {
       turn: input.turn,
       callKind: input.callKind,
       latencyMs: Date.now() - startedAt,
-      outcome: response.ok ? "succeeded" : "failed",
+      outcome,
     });
-    if (response.ok) return { value, usage, failedAttempts: [...failedUsage] };
+    if (outcome === "succeeded")
+      return { value, usage, failedAttempts: [...failedUsage] };
     const failureFields = {
       ...brokerFailureFields(response.headers),
       ...conversationModelErrorFields(value),

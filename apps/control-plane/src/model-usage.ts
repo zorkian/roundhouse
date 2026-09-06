@@ -51,7 +51,7 @@ const outcomeLabel = (item: {
       `${item.unknownOutcomeCalls.toLocaleString("en-US")} unknown`,
   ]
     .filter(Boolean)
-    .join(" · ");
+    .join(" · ") || "0 recorded";
 const displayEffort = (effort: string) =>
   effort === "unknown" ? "Unknown (not recorded)" : effort;
 

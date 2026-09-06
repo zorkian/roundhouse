@@ -115,6 +115,8 @@ describe("conversation Queue worker", () => {
     const route = {
       provider: "openai",
       model: "openai/gpt-5.6-sol",
+      requestedModel: "openai/gpt-5.6-sol-requested",
+      requestedEffort: "medium",
       protocol: "openai-responses",
       transport: "cloudflare-provider-native",
       thinkingLevel: "high",
@@ -350,6 +352,8 @@ describe("conversation Queue worker", () => {
     const route = {
       provider: "openai",
       model: "openai/gpt-5.6-sol",
+      requestedModel: "openai/gpt-5.6-sol-requested",
+      requestedEffort: "medium",
       protocol: "openai-responses",
       transport: "cloudflare-provider-native",
       thinkingLevel: "high",
@@ -358,6 +362,16 @@ describe("conversation Queue worker", () => {
     };
     const responses = [
       Response.json(route),
+      Response.json(
+        {
+          id: "response-retry-failed",
+          model: "gpt-5.6-sol-retry",
+          reasoning: { effort: "low" },
+          status: "failed",
+          usage: { input_tokens: 2, output_tokens: 3, total_tokens: 5 },
+        },
+        { status: 429 },
+      ),
       Response.json({
         id: "response-tool",
         output: [
@@ -372,6 +386,8 @@ describe("conversation Queue worker", () => {
       }),
       Response.json({
         id: "response-1",
+        model: "gpt-5.6-sol-success",
+        reasoning: { effort: "high" },
         output_text: JSON.stringify({
           title: "Clarify conversation delivery status",
           reply: "Yes. I have not started delivery.",
@@ -409,16 +425,18 @@ describe("conversation Queue worker", () => {
         throw new Error(`unexpected_github_path:${path}`);
       }),
     } as unknown as GitHubApi;
-    await expect(
-      processConversationWakeup(
-        repository,
-        env as never,
-        { kind: "turn", id: "turn-1" },
-        1,
-        adapters,
-        { github },
-      ),
-    ).resolves.toBe("completed");
+    vi.useFakeTimers();
+    const firstWakeup = processConversationWakeup(
+      repository,
+      env as never,
+      { kind: "turn", id: "turn-1" },
+      1,
+      adapters,
+      { github },
+    );
+    await vi.runAllTimersAsync();
+    await expect(firstWakeup).resolves.toBe("completed");
+    vi.useRealTimers();
     await expect(
       processConversationWakeup(
         repository,
@@ -442,20 +460,100 @@ describe("conversation Queue worker", () => {
       sqlite
         .prepare("SELECT COUNT(*) AS count FROM conversation_model_usage")
         .get(),
-    ).toEqual({ count: 2 });
+    ).toEqual({ count: 3 });
     const usage = await new D1RunRepository(
       sqliteD1(sqlite),
-    ).usageForRepositories(["123"], 0, Date.now() + 1_000);
-    expect(usage).toHaveLength(2);
+    ).usageForRepositories(["123"], 0, Number.MAX_SAFE_INTEGER);
+    expect(usage).toHaveLength(3);
+    expect(usage).toContainEqual(
+      expect.objectContaining({
+        callId: "response-retry-failed",
+        outcome: "failed",
+        requestedModel: "openai/gpt-5.6-sol-requested",
+        resolvedModel: "openai/gpt-5.6-sol",
+        providerReportedModel: "gpt-5.6-sol-retry",
+        requestedEffort: "medium",
+        resolvedEffort: "high",
+        providerReportedEffort: "low",
+      }),
+    );
     expect(usage).toContainEqual(
       expect.objectContaining({
         callId: "response-1",
         source: "conversation",
+        outcome: "succeeded",
+        providerReportedModel: "gpt-5.6-sol-success",
+        providerReportedEffort: "high",
         totalTokens: 17,
         costUsd: expect.any(Number),
       }),
     );
-    expect(broker.fetch).toHaveBeenCalledTimes(3);
+    expect(broker.fetch).toHaveBeenCalledTimes(4);
+
+    await expect(
+      repository.appendUserTurn({
+        conversationId,
+        creatorGithubUserId: 7,
+        turnId: "turn-exhausted",
+        messageId: "message-exhausted",
+        message: {
+          adapter: "roundhouse.web",
+          adapterInstallation: "roundhouse.web",
+          externalConversationId: conversationId,
+          externalMessageId: "external-exhausted",
+          verifiedActorId: "7",
+          verifiedActorLogin: "octocat",
+          body: "Try again until it exhausts.",
+          sentAt: 101,
+        },
+      }),
+    ).resolves.toBe("created");
+    responses.push(
+      Response.json(route),
+      ...Array.from({ length: 4 }, (_, index) =>
+        Response.json(
+          {
+            id: `response-exhausted-${index + 1}`,
+            model: `gpt-5.6-sol-exhausted-${index + 1}`,
+            status: "failed",
+            usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+          },
+          { status: 429 },
+        ),
+      ),
+    );
+    vi.useFakeTimers();
+    const exhaustedWakeup = processConversationWakeup(
+      repository,
+      env as never,
+      { kind: "turn", id: "turn-exhausted" },
+      5,
+      adapters,
+      { github },
+    );
+    await vi.runAllTimersAsync();
+    await expect(exhaustedWakeup).resolves.toBe("completed");
+    vi.useRealTimers();
+    const exhausted = await new D1RunRepository(
+      sqliteD1(sqlite),
+    ).usageForRepositories(["123"], 0, Number.MAX_SAFE_INTEGER);
+    expect(
+      exhausted.filter((item) => item.callId.startsWith("response-exhausted-")),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          callId: "response-exhausted-1",
+          outcome: "failed",
+        }),
+        expect.objectContaining({
+          callId: "response-exhausted-4",
+          outcome: "failed",
+        }),
+      ]),
+    );
+    expect(
+      exhausted.filter((item) => item.callId.startsWith("response-exhausted-")),
+    ).toHaveLength(4);
     sqlite.close();
   });
 });

@@ -83,6 +83,59 @@ describe("model usage", () => {
     });
   });
 
+  it("records Google delivery identities and token categories", () => {
+    const usage = extractModelUsage(
+      JSON.stringify({
+        responseId: "google-response",
+        modelVersion: "gemini-2.5-pro-001",
+        usageMetadata: {
+          promptTokenCount: 4,
+          cachedContentTokenCount: 1,
+          candidatesTokenCount: 5,
+          thoughtsTokenCount: 3,
+          totalTokenCount: 12,
+        },
+      }),
+      "attempt-google",
+      "google/gemini-2.5-pro",
+      { provider: "google", outcome: "succeeded" },
+    );
+    expect(usage).toMatchObject({
+      callId: "google-response",
+      model: "google/gemini-2.5-pro-001",
+      providerReportedModel: "gemini-2.5-pro-001",
+      inputTokens: 4,
+      cachedInputTokens: 1,
+      outputTokens: 8,
+      reasoningTokens: 3,
+      totalTokens: 12,
+    });
+  });
+
+  it("treats buffered statuses and Anthropic stream errors as failures", () => {
+    const buffered = extractModelUsage(
+      JSON.stringify({
+        id: "buffered-failed",
+        status: "incomplete",
+        usage: { input_tokens: 1, output_tokens: 2 },
+      }),
+      "attempt-buffered",
+      "openai/gpt-5",
+      { outcome: "succeeded" },
+    );
+    const anthropic = extractModelUsage(
+      `data: ${JSON.stringify({ type: "message_start", message: { id: "message-error", model: "claude-opus-5" } })}\n\ndata: ${JSON.stringify({ type: "error", error: { type: "api_error" } })}\n\ndata: [DONE]\n`,
+      "attempt-anthropic",
+      "anthropic/claude-opus-5",
+      { provider: "anthropic", outcome: "succeeded" },
+    );
+    expect(buffered?.outcome).toBe("failed");
+    expect(anthropic).toMatchObject({
+      callId: "message-error",
+      outcome: "failed",
+    });
+  });
+
   it("leaves effort and latency unavailable when delivery metadata is absent", () => {
     const usage = extractModelUsage(
       JSON.stringify({

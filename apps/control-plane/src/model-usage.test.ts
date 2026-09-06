@@ -358,6 +358,9 @@ describe("summarizeModelUsage", () => {
     expect(summary.models).toEqual([]);
     expect(summary.overall.totalTokens).toBeUndefined();
     expect(summary.days).toHaveLength(31);
+    expect(renderModelUsage(summary, { githubLogin: "octocat" })).toContain(
+      "0 recorded",
+    );
   });
 });
 
