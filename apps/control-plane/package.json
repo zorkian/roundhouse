@@ -5,11 +5,11 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@cloudflare/playwright": "1.3.0",
+    "@cloudflare/playwright": "1.3.6",
     "@cloudflare/sandbox": "0.12.9",
     "@roundhouse/core": "workspace:*",
     "@roundhouse/response-observer": "workspace:*",
-    "cytoscape": "^3.34.0",
-    "marked": "18.0.5"
+    "cytoscape": "^3.34.2",
+    "marked": "18.0.11"
   }
 }
