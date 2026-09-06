@@ -37,16 +37,49 @@ describe("model usage", () => {
       "openai/gpt-5",
       {
         provider: "openai",
+        requestedModel: "openai/gpt-5",
         requestedEffort: "high",
         resolvedEffort: "max",
         latencyMs: 321,
       },
     );
     expect(usage).toMatchObject({
+      requestedModel: "openai/gpt-5",
+      resolvedModel: "openai/gpt-5",
+      providerReportedModel: "openai/gpt-5",
       requestedEffort: "high",
       resolvedEffort: "max",
       latencyMs: 321,
       toolCallCount: 2,
+    });
+  });
+
+  it("retains provider-reported provenance and usage from a failed response", () => {
+    const usage = extractModelUsage(
+      `data: ${JSON.stringify({ type: "response.failed", response: { id: "resp_failed", model: "gpt-5.6-sol-2026-08-01", reasoning: { effort: "high" }, usage: { input_tokens: 12, output_tokens: 3, total_tokens: 15 } } })}\n\ndata: [DONE]\n`,
+      "attempt_failed",
+      "openai/gpt-5.6-sol",
+      {
+        provider: "openai",
+        requestedModel: "openai/gpt-5.6-sol",
+        requestedEffort: "max",
+        resolvedEffort: "max",
+        // A streamed terminal provider result is authoritative over the HTTP
+        // transport status, which can still be successful for SSE responses.
+        outcome: "succeeded",
+      },
+    );
+    expect(usage).toMatchObject({
+      callId: "resp_failed",
+      model: "openai/gpt-5.6-sol-2026-08-01",
+      requestedModel: "openai/gpt-5.6-sol",
+      resolvedModel: "openai/gpt-5.6-sol",
+      providerReportedModel: "gpt-5.6-sol-2026-08-01",
+      requestedEffort: "max",
+      resolvedEffort: "max",
+      providerReportedEffort: "high",
+      outcome: "failed",
+      totalTokens: 15,
     });
   });
 

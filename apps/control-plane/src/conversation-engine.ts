@@ -22,7 +22,10 @@ import type {
   DeliveryBrief,
 } from "./conversation-store.js";
 import type { GitHubApi } from "./github.js";
-import { normalizeModelId } from "./model-identity.js";
+import {
+  normalizeModelId,
+  providerReportedIdentity,
+} from "./model-identity.js";
 import { estimateModelCostUsd } from "./model-prices.js";
 
 type Broker = Pick<Fetcher, "fetch">;
@@ -34,6 +37,8 @@ const maxFileBytes = 200_000;
 const maxTranscriptCharacters = 80_000;
 
 const routeHeaders = {
+  requestedModel: "x-roundhouse-requested-model",
+  requestedEffort: "x-roundhouse-requested-effort",
   provider: "x-roundhouse-routing-provider",
   model: "x-roundhouse-routing-model",
   protocol: "x-roundhouse-routing-protocol",
@@ -131,6 +136,10 @@ function brokerHeaders(
     "x-roundhouse-conversation-id": conversation.id,
     "x-roundhouse-turn-id": turn.id,
   });
+  if (route.requestedModel)
+    headers.set(routeHeaders.requestedModel, route.requestedModel);
+  if (route.requestedEffort)
+    headers.set(routeHeaders.requestedEffort, route.requestedEffort);
   headers.set(routeHeaders.provider, route.provider);
   headers.set(routeHeaders.model, route.model);
   headers.set(routeHeaders.protocol, route.protocol);
@@ -867,13 +876,9 @@ function usageForResponse(input: {
     (inputTokens !== undefined && outputTokens !== undefined
       ? inputTokens + outputTokens
       : undefined);
+  const providerResponse = providerReportedIdentity(value);
   const model = normalizeModelId({
-    model:
-      typeof value.model === "string"
-        ? value.model
-        : typeof value.modelVersion === "string"
-          ? value.modelVersion
-          : input.route.model,
+    model: providerResponse.model ?? input.route.model,
     provider: input.route.provider,
     configuredModel: input.turn.configuredModel,
   });
@@ -901,6 +906,13 @@ function usageForResponse(input: {
     turnId: input.turn.id,
     callKind: input.callKind,
     model,
+    ...(input.route.requestedModel
+      ? { requestedModel: input.route.requestedModel }
+      : {}),
+    resolvedModel: input.route.model,
+    ...(providerResponse.model
+      ? { providerReportedModel: providerResponse.model }
+      : {}),
     configuredModel: input.turn.configuredModel,
     protocol: input.route.protocol,
     reasoningLevel: input.route.thinkingLevel,
@@ -908,6 +920,9 @@ function usageForResponse(input: {
       ? { requestedEffort: input.route.requestedEffort }
       : {}),
     resolvedEffort: input.route.thinkingLevel,
+    ...(providerResponse.effort
+      ? { providerReportedEffort: providerResponse.effort }
+      : {}),
     ...(toolCallCount(value) === undefined
       ? {}
       : { toolCallCount: toolCallCount(value) }),

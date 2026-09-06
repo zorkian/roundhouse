@@ -67,7 +67,7 @@ describe("D1 conversation repository", () => {
     const sqlite = new DatabaseSync(":memory:");
     sqlite.exec("PRAGMA foreign_keys=ON");
     sqlite.exec(
-      "CREATE TABLE repositories (id TEXT PRIMARY KEY, github_id TEXT NOT NULL UNIQUE, profile_version TEXT NOT NULL, profile_json TEXT NOT NULL, created_at INTEGER NOT NULL); CREATE TABLE runs (id TEXT PRIMARY KEY, status TEXT NOT NULL, updated_at INTEGER NOT NULL)",
+      "CREATE TABLE repositories (id TEXT PRIMARY KEY, github_id TEXT NOT NULL UNIQUE, profile_version TEXT NOT NULL, profile_json TEXT NOT NULL, created_at INTEGER NOT NULL); CREATE TABLE runs (id TEXT PRIMARY KEY, status TEXT NOT NULL, updated_at INTEGER NOT NULL); CREATE TABLE model_usage (call_id TEXT PRIMARY KEY)",
     );
     sqlite.exec(
       readFileSync(
@@ -84,6 +84,21 @@ describe("D1 conversation repository", () => {
     sqlite.exec(
       readFileSync(
         new URL("../migrations/0019_delivery_brief_body.sql", import.meta.url),
+        "utf8",
+      ),
+    );
+    sqlite.exec(
+      readFileSync(
+        new URL("../migrations/0021_model_usage_effort.sql", import.meta.url),
+        "utf8",
+      ),
+    );
+    sqlite.exec(
+      readFileSync(
+        new URL(
+          "../migrations/0022_model_usage_provenance.sql",
+          import.meta.url,
+        ),
         "utf8",
       ),
     );
@@ -152,17 +167,42 @@ describe("D1 conversation repository", () => {
         turnId: "turn-1",
         callKind: "conversation",
         model: "openai/gpt-5.6-sol",
+        requestedModel: "openai/gpt-5.6-sol",
+        resolvedModel: "openai/gpt-5.6-sol",
+        providerReportedModel: "gpt-5.6-sol-2026-08-01",
         configuredModel: "openai/gpt-5.6-sol",
         protocol: "openai-responses",
         reasoningLevel: "high",
+        requestedEffort: "high",
+        resolvedEffort: "high",
+        providerReportedEffort: "medium",
         routingRule: "profile-conversation-v2",
         inputTokens: 10,
         outputTokens: 5,
         totalTokens: 15,
         costUsd: 0.001,
         latencyMs: 20,
+        toolCallCount: 2,
         outcome: "succeeded",
         createdAt: now,
+      },
+    ]);
+    expect(
+      sqlite
+        .prepare(
+          "SELECT call_id,requested_model,resolved_model,provider_reported_model,requested_effort,resolved_effort,provider_reported_effort,tool_call_count FROM conversation_model_usage",
+        )
+        .all(),
+    ).toEqual([
+      {
+        call_id: "call-1",
+        requested_model: "openai/gpt-5.6-sol",
+        resolved_model: "openai/gpt-5.6-sol",
+        provider_reported_model: "gpt-5.6-sol-2026-08-01",
+        requested_effort: "high",
+        resolved_effort: "high",
+        provider_reported_effort: "medium",
+        tool_call_count: 2,
       },
     ]);
     await expect(
@@ -423,7 +463,7 @@ describe("D1 conversation repository", () => {
     const sqlite = new DatabaseSync(":memory:");
     sqlite.exec("PRAGMA foreign_keys=ON");
     sqlite.exec(
-      "CREATE TABLE repositories (id TEXT PRIMARY KEY, github_id TEXT NOT NULL UNIQUE, profile_version TEXT NOT NULL, profile_json TEXT NOT NULL, created_at INTEGER NOT NULL); CREATE TABLE runs (id TEXT PRIMARY KEY, status TEXT NOT NULL, updated_at INTEGER NOT NULL)",
+      "CREATE TABLE repositories (id TEXT PRIMARY KEY, github_id TEXT NOT NULL UNIQUE, profile_version TEXT NOT NULL, profile_json TEXT NOT NULL, created_at INTEGER NOT NULL); CREATE TABLE runs (id TEXT PRIMARY KEY, status TEXT NOT NULL, updated_at INTEGER NOT NULL); CREATE TABLE model_usage (call_id TEXT PRIMARY KEY)",
     );
     sqlite.exec(
       readFileSync(
@@ -440,6 +480,21 @@ describe("D1 conversation repository", () => {
     sqlite.exec(
       readFileSync(
         new URL("../migrations/0019_delivery_brief_body.sql", import.meta.url),
+        "utf8",
+      ),
+    );
+    sqlite.exec(
+      readFileSync(
+        new URL("../migrations/0021_model_usage_effort.sql", import.meta.url),
+        "utf8",
+      ),
+    );
+    sqlite.exec(
+      readFileSync(
+        new URL(
+          "../migrations/0022_model_usage_provenance.sql",
+          import.meta.url,
+        ),
         "utf8",
       ),
     );

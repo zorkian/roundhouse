@@ -300,6 +300,15 @@ describe("conversation Queue worker", () => {
         "utf8",
       ),
     );
+    sqlite.exec(
+      readFileSync(
+        new URL(
+          "../migrations/0022_model_usage_provenance.sql",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    );
     sqlite
       .prepare("INSERT INTO repositories VALUES (?1,?2,?3,?4,?5)")
       .run(

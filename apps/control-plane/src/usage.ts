@@ -63,9 +63,12 @@ export function formatUsage(items: readonly ModelUsage[]): string {
 export interface ModelUsageModelTotal {
   readonly model: string;
   readonly calls: number;
+  readonly succeededCalls: number;
+  readonly failedCalls: number;
+  readonly unknownOutcomeCalls: number;
   readonly total: UsageTotal;
-  // Omitted for legacy-only summaries to preserve their existing shape.
-  readonly resolvedEffort?: string;
+  // `unknown` means a legacy row or provider response did not record effort.
+  readonly resolvedEffort: string;
   readonly averageLatencyMs?: number;
   readonly latencyCalls?: number;
   readonly reasoningTokenShare?: number;
@@ -74,6 +77,9 @@ export interface ModelUsageModelTotal {
 export interface ModelUsageSourceTotal {
   readonly source: "delivery" | "conversation";
   readonly calls: number;
+  readonly succeededCalls: number;
+  readonly failedCalls: number;
+  readonly unknownOutcomeCalls: number;
   readonly total: UsageTotal;
 }
 export interface ModelUsageDay {
@@ -86,6 +92,9 @@ export interface ModelUsageSummary {
   readonly startAt: number;
   readonly endAt: number;
   readonly calls: number;
+  readonly succeededCalls: number;
+  readonly failedCalls: number;
+  readonly unknownOutcomeCalls: number;
   readonly overall: UsageTotal;
   readonly models: readonly ModelUsageModelTotal[];
   readonly sources: readonly ModelUsageSourceTotal[];
@@ -104,14 +113,17 @@ const effortLabel = (call: Pick<ModelUsage, "resolvedEffort">) =>
   call.resolvedEffort ?? "unknown";
 const groupLabel = (
   call: Pick<ModelUsage, "model" | "resolvedEffort">,
-  includeEffort: boolean,
-) => (includeEffort ? `${call.model} · ${effortLabel(call)}` : call.model);
+): string => `${call.model} · ${effortLabel(call)}`;
 function metrics(items: readonly ModelUsage[]) {
   const latency = items.filter((item) => typeof item.latencyMs === "number");
   const reasoning = items.filter(
     (item) =>
       typeof item.reasoningTokens === "number" &&
       typeof item.outputTokens === "number",
+  );
+  const reasoningOutputTokens = reasoning.reduce(
+    (sum, item) => sum + item.outputTokens!,
+    0,
   );
   return {
     ...(latency.length
@@ -122,15 +134,27 @@ function metrics(items: readonly ModelUsage[]) {
           latencyCalls: latency.length,
         }
       : {}),
-    ...(reasoning.length
+    ...(reasoning.length && reasoningOutputTokens > 0
       ? {
           reasoningTokenShare:
             reasoning.reduce((sum, item) => sum + item.reasoningTokens!, 0) /
-            reasoning.reduce((sum, item) => sum + item.outputTokens!, 0),
+            reasoningOutputTokens,
           reasoningCalls: reasoning.length,
         }
       : {}),
   };
+}
+
+function outcomes(items: readonly ModelUsage[]) {
+  let succeededCalls = 0;
+  let failedCalls = 0;
+  let unknownOutcomeCalls = 0;
+  for (const item of items) {
+    if (item.outcome === "succeeded") succeededCalls += 1;
+    else if (item.outcome === "failed") failedCalls += 1;
+    else unknownOutcomeCalls += 1;
+  }
+  return { succeededCalls, failedCalls, unknownOutcomeCalls };
 }
 
 // Aggregates by actual model and resolved effort. The `unknown` effort bucket
@@ -151,13 +175,10 @@ export function summarizeModelUsage(
   const inWindow = windowed
     .filter((call) => effort === undefined || effortLabel(call) === effort)
     .map((call) => ({ ...call, ...withEstimatedUsageCost(call) }));
-  const includeEffort = windowed.some(
-    (call) => call.resolvedEffort !== undefined,
-  );
   const byModel = new Map<string, ModelUsage[]>();
   const bySource = new Map<"delivery" | "conversation", ModelUsage[]>();
   for (const call of inWindow) {
-    const key = groupLabel(call, includeEffort);
+    const key = groupLabel(call);
     byModel.set(key, [...(byModel.get(key) ?? []), call]);
     const source = call.source ?? "delivery";
     bySource.set(source, [...(bySource.get(source) ?? []), call]);
@@ -176,7 +197,7 @@ export function summarizeModelUsage(
     const bucket =
       buckets[Math.floor(call.createdAt! / dayMilliseconds) - firstDay]!;
     if (typeof call.totalTokens === "number") {
-      const key = groupLabel(call, includeEffort);
+      const key = groupLabel(call);
       bucket.tokensByModel[key] =
         (bucket.tokensByModel[key] ?? 0) + call.totalTokens;
     } else bucket.callsWithoutTokens += 1;
@@ -185,22 +206,23 @@ export function summarizeModelUsage(
     startAt,
     endAt,
     calls: inWindow.length,
+    ...outcomes(inWindow),
     overall: totalUsage(inWindow),
     models: [...byModel.entries()]
-      .map(([label, items]) => {
+      .map(([, items]) => {
         const sample = items[0]!;
         return {
           model: sample.model,
           calls: items.length,
+          ...outcomes(items),
           total: totalUsage(items),
-          ...(includeEffort
-            ? { resolvedEffort: effortLabel(sample), ...metrics(items) }
-            : {}),
+          resolvedEffort: effortLabel(sample),
+          ...metrics(items),
         };
       })
       .sort((a, b) =>
-        `${a.model}\0${a.resolvedEffort ?? ""}`.localeCompare(
-          `${b.model}\0${b.resolvedEffort ?? ""}`,
+        `${a.model}\0${a.resolvedEffort}`.localeCompare(
+          `${b.model}\0${b.resolvedEffort}`,
         ),
       ),
     sources: (["conversation", "delivery"] as const)
@@ -208,6 +230,7 @@ export function summarizeModelUsage(
       .map((source) => ({
         source,
         calls: bySource.get(source)!.length,
+        ...outcomes(bySource.get(source)!),
         total: totalUsage(bySource.get(source)!),
       })),
     days: buckets.map((bucket) => ({

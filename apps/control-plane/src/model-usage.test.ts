@@ -58,11 +58,19 @@ describe("summarizeModelUsage", () => {
       {
         model: "claude-a",
         calls: 2,
+        succeededCalls: 0,
+        failedCalls: 0,
+        unknownOutcomeCalls: 2,
+        resolvedEffort: "unknown",
         total: expect.objectContaining({ totalTokens: 150, costUsd: 1.5 }),
       },
       {
         model: "gpt-5",
         calls: 1,
+        succeededCalls: 0,
+        failedCalls: 0,
+        unknownOutcomeCalls: 1,
+        resolvedEffort: "unknown",
         total: expect.objectContaining({ totalTokens: 25, costUsd: 0.25 }),
       },
     ]);
@@ -96,6 +104,10 @@ describe("summarizeModelUsage", () => {
       {
         model: "openai/gpt-5.6-sol",
         calls: 2,
+        succeededCalls: 0,
+        failedCalls: 0,
+        unknownOutcomeCalls: 2,
+        resolvedEffort: "unknown",
         total: expect.objectContaining({ costUsd: 0.016 }),
       },
     ]);
@@ -129,11 +141,17 @@ describe("summarizeModelUsage", () => {
       {
         source: "conversation",
         calls: 1,
+        succeededCalls: 0,
+        failedCalls: 0,
+        unknownOutcomeCalls: 1,
         total: expect.objectContaining({ totalTokens: 100, costUsd: 1 }),
       },
       {
         source: "delivery",
         calls: 1,
+        succeededCalls: 0,
+        failedCalls: 0,
+        unknownOutcomeCalls: 1,
         total: expect.objectContaining({ totalTokens: 50, costUsd: 0.5 }),
       },
     ]);
@@ -164,7 +182,7 @@ describe("summarizeModelUsage", () => {
     expect(claudeFree?.total.totalTokens).toBeUndefined();
     // The chart still reflects the known tokens and discloses the missing call.
     const charted = summary.days.reduce(
-      (total, day) => total + (day.tokensByModel["gpt-5"] ?? 0),
+      (total, day) => total + (day.tokensByModel["gpt-5 · unknown"] ?? 0),
       0,
     );
     expect(charted).toBe(100);
@@ -208,16 +226,34 @@ describe("summarizeModelUsage", () => {
     // The rolling window runs noon to noon, so it spans 31 calendar dates.
     expect(summary.days).toHaveLength(31);
     const bucket = summary.days.find(
-      (day) => (day.tokensByModel["gpt-5"] ?? 0) > 0,
+      (day) => (day.tokensByModel["gpt-5 · unknown"] ?? 0) > 0,
     );
-    expect(bucket?.tokensByModel["gpt-5"]).toBe(40);
+    expect(bucket?.tokensByModel["gpt-5 · unknown"]).toBe(40);
     // The bucket label is the exact UTC date of the call.
     expect(bucket?.day).toBe(
       new Date(endAt - 5 * day).toISOString().slice(0, 10),
     );
   });
 
-  it("groups and filters calls by resolved effort without changing cost", () => {
+  it("groups absent effort as unknown in legacy-only and mixed windows", () => {
+    const legacyCalls = [
+      call("openai/gpt-5", endAt - day, {
+        latencyMs: 250,
+        reasoningTokens: 2,
+        outputTokens: 10,
+      }),
+    ];
+    const legacyOnly = summarizeModelUsage(legacyCalls, endAt);
+    expect(legacyOnly.models).toEqual([
+      expect.objectContaining({
+        model: "openai/gpt-5",
+        resolvedEffort: "unknown",
+        averageLatencyMs: 250,
+        reasoningTokenShare: 0.2,
+      }),
+    ]);
+    expect(legacyOnly.efforts).toEqual(["unknown"]);
+
     const calls = [
       call("openai/gpt-5", endAt - day, {
         resolvedEffort: "high",
@@ -232,8 +268,9 @@ describe("summarizeModelUsage", () => {
         outputTokens: 10,
       }),
       call("openai/gpt-5", endAt - day, {
-        latencyMs: undefined,
-        reasoningTokens: undefined,
+        latencyMs: 250,
+        reasoningTokens: 2,
+        outputTokens: 10,
       }),
     ];
     const summary = summarizeModelUsage(calls, endAt);
@@ -254,13 +291,65 @@ describe("summarizeModelUsage", () => {
         expect.objectContaining({
           model: "openai/gpt-5",
           resolvedEffort: "unknown",
+          averageLatencyMs: 250,
+          reasoningTokenShare: 0.2,
         }),
       ]),
     );
+    const unknownOnly = summarizeModelUsage(calls, endAt, 30, "unknown");
+    expect(unknownOnly.calls).toBe(1);
+    expect(unknownOnly.models).toEqual([
+      expect.objectContaining({ resolvedEffort: "unknown" }),
+    ]);
     expect(summarizeModelUsage(calls, endAt, 30, "high").calls).toBe(1);
     const html = renderModelUsage(summary, { githubLogin: "octocat" });
     expect(html).toContain("Effort is explanatory metadata");
+    expect(html).toContain("Unknown (not recorded)");
     expect(html).toContain("Reasoning share");
+  });
+
+  it("does not render a reasoning share when known output tokens sum to zero", () => {
+    const summary = summarizeModelUsage(
+      [
+        call("openai/gpt-5", endAt - day, {
+          reasoningTokens: 4,
+          outputTokens: 0,
+          totalTokens: 10,
+        }),
+      ],
+      endAt,
+    );
+    expect(summary.models[0]).toMatchObject({ resolvedEffort: "unknown" });
+    expect(summary.models[0]).not.toHaveProperty("reasoningTokenShare");
+    const html = renderModelUsage(summary, { githubLogin: "octocat" });
+    expect(html).toContain("unavailable");
+    expect(html).not.toContain("NaN");
+    expect(html).not.toContain("Infinity");
+  });
+
+  it("keeps terminal outcomes separate from token totals", () => {
+    const summary = summarizeModelUsage(
+      [
+        call("openai/gpt-5", endAt - day, { outcome: "succeeded" }),
+        call("openai/gpt-5", endAt - day, {
+          outcome: "failed",
+          totalTokens: undefined,
+          costUsd: undefined,
+        }),
+        call("openai/gpt-5", endAt - day),
+      ],
+      endAt,
+    );
+    expect(summary).toMatchObject({
+      calls: 3,
+      succeededCalls: 1,
+      failedCalls: 1,
+      unknownOutcomeCalls: 1,
+      overall: { totalTokens: undefined, costUsd: 0.0200625 },
+    });
+    expect(renderModelUsage(summary, { githubLogin: "octocat" })).toContain(
+      "1 succeeded · 1 failed · 1 unknown",
+    );
   });
 
   it("reports an empty window without collapsing totals to zero", () => {
@@ -295,8 +384,10 @@ describe("renderModelUsage", () => {
     expect(html).toContain("<svg");
     expect(html).toContain("Daily tokens used per model");
     expect(html).toContain('class="legend"');
+    expect(html.match(/class="table-scroll"/g)).toHaveLength(2);
+    expect(html).toContain("scroll horizontally to view all columns");
     expect(html).toContain("aria-label");
-    expect(html).toContain("Usage by model for the past 30 days");
+    expect(html).toContain("Usage by accounting model for the past 30 days");
     expect(html).toContain('<a href="/">Runs</a>');
     expect(html).toContain('src="https://avatars.githubusercontent.com/u/7"');
     expect(html).toContain(`alt="octocat's GitHub avatar"`);
@@ -321,7 +412,7 @@ describe("renderModelUsage", () => {
     expect(html).toContain("cost totals are partial");
     expect(html).toContain("not shown in the chart");
     expect(html).toContain(
-      '<th scope="row">Delivery runs</th><td>2</td><td>unavailable (partial data)</td><td>unavailable (partial data)</td>',
+      '<th scope="row">Delivery runs</th><td>2</td><td>2 unknown</td><td>unavailable (partial data)</td><td>unavailable (partial data)</td>',
     );
   });
 

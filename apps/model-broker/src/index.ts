@@ -24,6 +24,8 @@ import {
 import { observeResponse } from "@roundhouse/response-observer";
 
 const routeHeaders = {
+  requestedModel: "x-roundhouse-requested-model",
+  requestedEffort: "x-roundhouse-requested-effort",
   provider: "x-roundhouse-routing-provider",
   model: "x-roundhouse-routing-model",
   protocol: "x-roundhouse-routing-protocol",
@@ -295,6 +297,9 @@ export function resolveRoute(
   )
     throw new Error("invalid_routing_configuration");
   return {
+    ...(envelope.requestedModel
+      ? { requestedModel: envelope.requestedModel }
+      : {}),
     ...(envelope.requestedReasoning
       ? { requestedEffort: envelope.requestedReasoning }
       : {}),
@@ -327,6 +332,18 @@ function routeFromHeaders(request: Request): ModelRoute {
     ].some((value) => !value)
   )
     throw new Error("missing_route");
+  if (
+    values.requestedModel !== null &&
+    !/^[a-z0-9._-]+\/[A-Za-z0-9._/-]+$/.test(values.requestedModel)
+  )
+    throw new Error("invalid_route_requested_model");
+  if (
+    values.requestedEffort !== null &&
+    !modelThinkingLevels.includes(
+      values.requestedEffort as ModelRoute["thinkingLevel"],
+    )
+  )
+    throw new Error("invalid_route_requested_effort");
   if (!modelProtocols.includes(values.protocol as ModelProtocol))
     throw new Error("invalid_route_protocol");
   const transport = values.transport ?? defaultTransport(values.provider!);
@@ -356,6 +373,13 @@ function routeFromHeaders(request: Request): ModelRoute {
   )
     throw new Error("invalid_route_model_capabilities");
   return {
+    ...(values.requestedModel ? { requestedModel: values.requestedModel } : {}),
+    ...(values.requestedEffort
+      ? {
+          requestedEffort:
+            values.requestedEffort as ModelRoute["thinkingLevel"],
+        }
+      : {}),
     provider: values.provider!,
     model: values.model!,
     protocol: values.protocol as ModelProtocol,
@@ -368,8 +392,10 @@ function routeFromHeaders(request: Request): ModelRoute {
 
 function responseHeaders(response: Response, route: ModelRoute): Headers {
   const headers = new Headers(response.headers);
-  for (const [key, header] of Object.entries(routeHeaders))
-    headers.set(header, String(route[key as keyof ModelRoute]));
+  for (const [key, header] of Object.entries(routeHeaders)) {
+    const value = route[key as keyof ModelRoute];
+    if (value !== undefined) headers.set(header, String(value));
+  }
   return headers;
 }
 

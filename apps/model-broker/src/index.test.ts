@@ -601,6 +601,27 @@ describe("model broker", () => {
     );
   });
 
+  it("preserves requested route provenance through a model request", async () => {
+    const request = modelRequest("openai-responses", "review-data", {
+      input: [],
+    });
+    request.headers.set("x-roundhouse-requested-model", "openai/gpt-5.6-sol");
+    request.headers.set("x-roundhouse-requested-effort", "high");
+    const upstream = nativeUpstream(async () =>
+      Response.json({ id: "response_1", output: [] }),
+    );
+    const response = await brokerRequest(
+      request,
+      env,
+      upstream.ai,
+      upstream.outboundFetch as unknown as typeof fetch,
+    );
+    expect(response.headers.get("x-roundhouse-requested-model")).toBe(
+      "openai/gpt-5.6-sol",
+    );
+    expect(response.headers.get("x-roundhouse-requested-effort")).toBe("high");
+  });
+
   it("does not write conversation model output into general logs", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const upstream = nativeUpstream(async () =>

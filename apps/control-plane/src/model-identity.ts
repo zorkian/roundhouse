@@ -20,3 +20,26 @@ export function normalizeModelId(input: {
     input.provider?.trim() || providerFromModel(input.configuredModel);
   return provider ? `${provider}/${input.model}` : input.model;
 }
+
+// Providers use different response shapes, but these values are provenance,
+// not routing instructions: retain them only when a response supplies them.
+export function providerReportedIdentity(value: Record<string, unknown>): {
+  readonly model?: string;
+  readonly effort?: string;
+} {
+  const reasoning = value.reasoning as Record<string, unknown> | undefined;
+  const outputConfig = value.output_config as
+    Record<string, unknown> | undefined;
+  const model =
+    typeof value.model === "string"
+      ? value.model
+      : typeof value.modelVersion === "string"
+        ? value.modelVersion
+        : undefined;
+  const effort =
+    reasoning?.effort ?? value.reasoning_effort ?? outputConfig?.effort;
+  return {
+    ...(model ? { model } : {}),
+    ...(typeof effort === "string" && effort.length > 0 ? { effort } : {}),
+  };
+}

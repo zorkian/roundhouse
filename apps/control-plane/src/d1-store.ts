@@ -111,10 +111,15 @@ type UsageRow = {
   attempt_id: string;
   model: string;
   provider: string | null;
+  requested_model: string | null;
+  resolved_model: string | null;
+  provider_reported_model: string | null;
   configured_model: string | null;
   routing_rule: string | null;
   requested_effort: string | null;
   resolved_effort: string | null;
+  provider_reported_effort: string | null;
+  outcome: "succeeded" | "failed" | null;
   latency_ms: number | null;
   tool_call_count: number | null;
   input_tokens: number | null;
@@ -137,6 +142,13 @@ const usageFromRow = (
   attemptId: row.attempt_id,
   model: row.model,
   ...(row.provider === null ? {} : { provider: row.provider }),
+  ...(row.requested_model == null
+    ? {}
+    : { requestedModel: row.requested_model }),
+  ...(row.resolved_model == null ? {} : { resolvedModel: row.resolved_model }),
+  ...(row.provider_reported_model == null
+    ? {}
+    : { providerReportedModel: row.provider_reported_model }),
   ...(row.configured_model === null
     ? {}
     : { configuredModel: row.configured_model }),
@@ -149,6 +161,10 @@ const usageFromRow = (
   ...(row.resolved_effort == null
     ? {}
     : { resolvedEffort: row.resolved_effort as ModelUsage["resolvedEffort"] }),
+  ...(row.provider_reported_effort == null
+    ? {}
+    : { providerReportedEffort: row.provider_reported_effort }),
+  ...(row.outcome == null ? {} : { outcome: row.outcome }),
   ...(row.latency_ms == null ? {} : { latencyMs: row.latency_ms }),
   ...(row.tool_call_count == null
     ? {}
@@ -461,7 +477,7 @@ export class D1RunRepository implements RunRepository {
   ): Promise<readonly (ModelUsage & { readonly createdAt?: number })[]> {
     const result = await this.db
       .prepare(
-        "SELECT u.call_id,u.attempt_id,u.model,u.provider,u.configured_model,u.routing_rule,u.requested_effort,u.resolved_effort,u.latency_ms,u.tool_call_count,u.input_tokens,u.cached_input_tokens,u.cache_creation_input_tokens,u.reasoning_tokens,u.output_tokens,u.total_tokens,u.cost_usd,u.created_at FROM model_usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.run_id=?1 ORDER BY u.created_at,u.call_id",
+        "SELECT u.call_id,u.attempt_id,u.model,u.provider,u.requested_model,u.resolved_model,u.provider_reported_model,u.configured_model,u.routing_rule,u.requested_effort,u.resolved_effort,u.provider_reported_effort,u.outcome,u.latency_ms,u.tool_call_count,u.input_tokens,u.cached_input_tokens,u.cache_creation_input_tokens,u.reasoning_tokens,u.output_tokens,u.total_tokens,u.cost_usd,u.created_at FROM model_usage u JOIN attempts a ON a.id=u.attempt_id WHERE a.run_id=?1 ORDER BY u.created_at,u.call_id",
       )
       .bind(runId)
       .all<UsageRow>();
@@ -488,8 +504,9 @@ export class D1RunRepository implements RunRepository {
     const result = await this.db
       .prepare(
         `SELECT * FROM (
-           SELECT u.call_id,u.attempt_id,u.model,u.provider,u.configured_model,u.routing_rule,
-                  u.requested_effort,u.resolved_effort,u.latency_ms,u.tool_call_count,
+           SELECT u.call_id,u.attempt_id,u.model,u.provider,u.requested_model,u.resolved_model,
+                  u.provider_reported_model,u.configured_model,u.routing_rule,u.requested_effort,
+                  u.resolved_effort,u.provider_reported_effort,u.outcome,u.latency_ms,u.tool_call_count,
                   u.input_tokens,u.cached_input_tokens,u.cache_creation_input_tokens,
                   u.reasoning_tokens,u.output_tokens,u.total_tokens,u.cost_usd,u.created_at,
                   'delivery' AS source
@@ -501,8 +518,9 @@ export class D1RunRepository implements RunRepository {
            WHERE u.created_at>=?1 AND u.created_at<=?2
              AND p.github_id IN (${placeholders})
            UNION ALL
-           SELECT u.call_id,u.turn_id AS attempt_id,u.model,u.provider,u.configured_model,
-                  u.routing_rule,u.requested_effort,u.resolved_effort,u.latency_ms,
+           SELECT u.call_id,u.turn_id AS attempt_id,u.model,u.provider,u.requested_model,u.resolved_model,
+                  u.provider_reported_model,u.configured_model,u.routing_rule,u.requested_effort,
+                  u.resolved_effort,u.provider_reported_effort,u.outcome,u.latency_ms,
                   u.tool_call_count,u.input_tokens,u.cached_input_tokens,
                   u.cache_creation_input_tokens,u.reasoning_tokens,u.output_tokens,
                   u.total_tokens,u.cost_usd,u.created_at,'conversation' AS source
@@ -521,17 +539,22 @@ export class D1RunRepository implements RunRepository {
   async recordModelUsage(usage: ModelUsage): Promise<"created" | "exists"> {
     const result = await this.db
       .prepare(
-        "INSERT OR IGNORE INTO model_usage (call_id,attempt_id,model,provider,configured_model,routing_rule,requested_effort,resolved_effort,latency_ms,tool_call_count,input_tokens,cached_input_tokens,cache_creation_input_tokens,reasoning_tokens,output_tokens,total_tokens,cost_usd,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
+        "INSERT OR IGNORE INTO model_usage (call_id,attempt_id,model,provider,requested_model,resolved_model,provider_reported_model,configured_model,routing_rule,requested_effort,resolved_effort,provider_reported_effort,outcome,latency_ms,tool_call_count,input_tokens,cached_input_tokens,cache_creation_input_tokens,reasoning_tokens,output_tokens,total_tokens,cost_usd,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23)",
       )
       .bind(
         usage.callId,
         usage.attemptId,
         usage.model,
         usage.provider ?? "",
+        usage.requestedModel ?? null,
+        usage.resolvedModel ?? null,
+        usage.providerReportedModel ?? null,
         usage.configuredModel ?? null,
         usage.routingRule ?? null,
         usage.requestedEffort ?? null,
         usage.resolvedEffort ?? null,
+        usage.providerReportedEffort ?? null,
+        usage.outcome ?? null,
         usage.latencyMs ?? null,
         usage.toolCallCount ?? null,
         usage.inputTokens ?? null,

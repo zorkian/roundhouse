@@ -161,10 +161,26 @@ function usageDetails(items: NonNullable<RunDetails["usage"]>): string {
       const priced = withEstimatedUsageCost(item);
       const fields = [
         ["Provider", item.provider ?? "Unavailable"],
-        ["Configured model", item.configuredModel ?? "Unavailable"],
-        ["Actual model", item.model],
+        [
+          "Requested model",
+          item.requestedModel ?? item.configuredModel ?? "Unavailable",
+        ],
+        [
+          "Resolved model",
+          item.resolvedModel ?? item.configuredModel ?? "Unavailable",
+        ],
+        [
+          "Provider-reported model",
+          item.providerReportedModel ?? "Unavailable",
+        ],
+        ["Accounting model", item.model],
         ["Requested effort", item.requestedEffort ?? "Unavailable"],
         ["Resolved effort", item.resolvedEffort ?? "Unavailable"],
+        [
+          "Provider-reported effort",
+          item.providerReportedEffort ?? "Unavailable",
+        ],
+        ["Outcome", item.outcome ?? "Unavailable"],
         ["Token breakdown", formatUsageBreakdown([priced])],
         [
           "Cost",

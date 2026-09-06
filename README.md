@@ -107,6 +107,7 @@ V1 is preserved at the `v1-poc-final` tag.
 | [V2 plan](docs/v2-plan.md)                                                             | the product contract, architecture, security kernel, and acceptance bar |
 | [Conversational entry](docs/conversational-entry-proposal.md)                          | how the ask-first conversation surface works                            |
 | [Conversational implementation plan](docs/conversational-entry-implementation-plan.md) | the v0 persistence, adapter, and test contracts                         |
+| [Model usage provenance](docs/model-usage.md)                                          | how model and effort selections become dashboard usage                  |
 | [Future improvements](docs/future-improvements.md)                                     | deferred ideas that are explicitly not approved work                    |
 | [Production deployment](docs/production-deployment.md)                                 | production bootstrap and continuous deployment from `main`              |
 | [AGENTS.md](AGENTS.md)                                                                 | notes for automated agents working in this repository                   |

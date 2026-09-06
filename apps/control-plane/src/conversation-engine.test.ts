@@ -382,6 +382,7 @@ describe("conversation engine", () => {
       model: "moonshotai/kimi-k3",
       protocol: "openai-completions" as const,
       runtime: runtimeCapabilitiesForModel("moonshotai/kimi-k3")!,
+      requestedModel: "openai/gpt-5.6-sol",
       requestedEffort: "high" as const,
     };
     const modelBroker = broker([
@@ -389,6 +390,7 @@ describe("conversation engine", () => {
       Response.json({
         id: "kimi-response",
         model: "kimi-k3",
+        reasoning_effort: "high",
         choices: [
           {
             message: {
@@ -417,8 +419,12 @@ describe("conversation engine", () => {
     });
     expect(result.usage[0]).toMatchObject({
       model: "moonshotai/kimi-k3",
+      requestedModel: "openai/gpt-5.6-sol",
+      resolvedModel: "moonshotai/kimi-k3",
+      providerReportedModel: "kimi-k3",
       requestedEffort: "high",
       resolvedEffort: "high",
+      providerReportedEffort: "high",
     });
   });
 
