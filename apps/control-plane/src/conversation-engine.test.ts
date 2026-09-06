@@ -540,6 +540,233 @@ describe("conversation engine", () => {
     expect(result.usage[0]!.costUsd).toBeCloseTo(0.0005, 12);
   });
 
+  it("accepts an incomplete Responses text reply while recording its failed outcome", async () => {
+    const modelBroker = broker([
+      Response.json(responsesRoute),
+      Response.json({
+        id: "response-incomplete-text",
+        status: "incomplete",
+        output: [
+          {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "Partial answer" }],
+          },
+        ],
+        usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 },
+      }),
+    ]);
+
+    const result = await executeConversationTurn(
+      modelBroker,
+      github,
+      conversation,
+      { ...turn, ordinal: 2 },
+    );
+
+    expect(result.text).toBe("Partial answer");
+    expect(result.usage).toMatchObject([
+      { callId: "response-incomplete-text", outcome: "failed" },
+    ]);
+    expect(modelBroker.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["failed", "cancelled"] as const)(
+    "rejects a terminal %s response even when it contains text",
+    async (status) => {
+      const error = vi
+        .spyOn(console, "error")
+        .mockImplementation(() => undefined);
+      const modelBroker = broker([
+        Response.json(responsesRoute),
+        Response.json({
+          id: `response-${status}`,
+          status,
+          output_text: "Must not be accepted",
+          usage: { total_tokens: 5 },
+        }),
+      ]);
+
+      await expect(
+        executeConversationTurn(modelBroker, github, conversation, {
+          ...turn,
+          ordinal: 2,
+        }),
+      ).rejects.toMatchObject({
+        message: "conversation_model_http_200",
+        usage: [{ callId: `response-${status}`, outcome: "failed" }],
+      });
+      expect(modelBroker.fetch).toHaveBeenCalledTimes(2);
+      error.mockRestore();
+    },
+  );
+
+  it("rejects a completed body from a non-successful HTTP transport", async () => {
+    const error = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const modelBroker = broker([
+      Response.json(responsesRoute),
+      Response.json(
+        {
+          id: "response-completed-error-transport",
+          status: "completed",
+          output_text: "Must not be accepted",
+          usage: { total_tokens: 5 },
+        },
+        { status: 500 },
+      ),
+    ]);
+
+    await expect(
+      executeConversationTurn(modelBroker, github, conversation, {
+        ...turn,
+        ordinal: 2,
+      }),
+    ).rejects.toMatchObject({
+      message: "conversation_model_http_500",
+      usage: [
+        {
+          callId: "response-completed-error-transport",
+          outcome: "succeeded",
+        },
+      ],
+    });
+    expect(modelBroker.fetch).toHaveBeenCalledTimes(2);
+    error.mockRestore();
+  });
+
+  it("does not execute tools from an incomplete response", async () => {
+    const error = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const modelBroker = broker([
+      Response.json(responsesRoute),
+      Response.json({
+        id: "response-incomplete-tool",
+        status: "incomplete",
+        output: [
+          {
+            type: "function_call",
+            name: "read_repository_file",
+            arguments: '{"path":"src/dashboard.ts"}',
+            call_id: "call-incomplete",
+          },
+        ],
+        usage: { total_tokens: 5 },
+      }),
+    ]);
+    const repositoryApi = { get: vi.fn() } as unknown as GitHubApi;
+
+    await expect(
+      executeConversationTurn(modelBroker, repositoryApi, conversation, {
+        ...turn,
+        ordinal: 2,
+      }),
+    ).rejects.toMatchObject({
+      message: "conversation_model_http_200",
+      usage: [{ callId: "response-incomplete-tool", outcome: "failed" }],
+    });
+    expect(repositoryApi.get).not.toHaveBeenCalled();
+    expect(modelBroker.fetch).toHaveBeenCalledTimes(2);
+    error.mockRestore();
+  });
+
+  it("retains incomplete no-text usage when reply parsing fails", async () => {
+    const modelBroker = broker([
+      Response.json(responsesRoute),
+      Response.json({
+        id: "response-incomplete-empty",
+        status: "incomplete",
+        output: [],
+        usage: { total_tokens: 5 },
+      }),
+    ]);
+
+    await expect(
+      executeConversationTurn(modelBroker, github, conversation, {
+        ...turn,
+        ordinal: 2,
+      }),
+    ).rejects.toMatchObject({
+      message: "conversation_model_output_missing",
+      usage: [{ callId: "response-incomplete-empty", outcome: "failed" }],
+    });
+    expect(modelBroker.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("accepts a valid structured first reply from an incomplete response", async () => {
+    const modelBroker = broker([
+      Response.json(responsesRoute),
+      Response.json({
+        id: "response-incomplete-valid-structured",
+        status: "incomplete",
+        output: [
+          {
+            type: "message",
+            role: "assistant",
+            content: [
+              {
+                type: "output_text",
+                text: JSON.stringify({
+                  title: "Explain dashboard rendering location",
+                  reply:
+                    "The response stopped early, but this answer is usable.",
+                }),
+              },
+            ],
+          },
+        ],
+        usage: { total_tokens: 5 },
+      }),
+    ]);
+
+    const result = await executeConversationTurn(
+      modelBroker,
+      github,
+      conversation,
+      turn,
+    );
+
+    expect(result.firstReply).toEqual({
+      title: "Explain dashboard rendering location",
+      reply: "The response stopped early, but this answer is usable.",
+    });
+    expect(result.usage).toMatchObject([
+      { callId: "response-incomplete-valid-structured", outcome: "failed" },
+    ]);
+  });
+
+  it("keeps first-reply validation for an incomplete structured response", async () => {
+    const modelBroker = broker([
+      Response.json(responsesRoute),
+      Response.json({
+        id: "response-incomplete-invalid-structured",
+        status: "incomplete",
+        output: [
+          {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "not JSON" }],
+          },
+        ],
+        usage: { total_tokens: 5 },
+      }),
+    ]);
+
+    await expect(
+      executeConversationTurn(modelBroker, github, conversation, turn),
+    ).rejects.toMatchObject({
+      message: "conversation_first_reply_invalid",
+      usage: [
+        {
+          callId: "response-incomplete-invalid-structured",
+          outcome: "failed",
+        },
+      ],
+    });
+  });
+
   it("logs provider and status when a model call is rejected", async () => {
     vi.useFakeTimers();
     const error = vi

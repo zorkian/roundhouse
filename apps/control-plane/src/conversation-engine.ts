@@ -957,6 +957,15 @@ function terminalOutcome(
   return responseOk ? "succeeded" : "failed";
 }
 
+function acceptsConversationOutput(
+  value: Record<string, unknown>,
+  responseOk: boolean,
+): boolean {
+  if (!responseOk) return false;
+  if (value.status === "failed" || value.status === "cancelled") return false;
+  return value.status !== "incomplete" || (toolCallCount(value) ?? 0) === 0;
+}
+
 export class ConversationModelCallError extends Error {
   constructor(
     message: string,
@@ -1073,7 +1082,7 @@ async function callModel(input: {
       latencyMs: Date.now() - startedAt,
       outcome,
     });
-    if (outcome === "succeeded")
+    if (acceptsConversationOutput(value, response.ok))
       return { value, usage, failedAttempts: [...failedUsage] };
     const failureFields = {
       ...brokerFailureFields(response.headers),

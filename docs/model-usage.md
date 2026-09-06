@@ -31,7 +31,13 @@ never includes another repository merely because its run is recent.
    usage is retained, while absent usage stays unknown. Buffered and streamed
    provider statuses have the same binary meaning: `completed` is succeeded;
    `failed`, `cancelled`, and `incomplete` are failed because they did not
-   complete. Google responses use `responseId`, `modelVersion`, and
+   complete. Accounting outcome is separate from conversation reply acceptance:
+   after a successful HTTP transport, an incomplete response may supply a
+   normal text reply only when it has no tool calls and passes the ordinary
+   first-reply or brief validation. It is still recorded as failed. Failed or
+   cancelled responses, non-successful HTTP transports, incomplete tool calls,
+   missing text, and malformed structured replies are never accepted as a
+   conversation reply. Google responses use `responseId`, `modelVersion`, and
    `usageMetadata`; candidate and thought tokens are combined as output tokens,
    while thought tokens are also retained as reasoning metadata. A transport
    failure or delivery response without a usable provider call ID remains
